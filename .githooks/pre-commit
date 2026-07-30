@@ -1,0 +1,41 @@
+#!/bin/sh
+
+# ThreadSnap WORKLOG backstop.
+# Fail open on unexpected Git/runtime errors; fail closed only when a staged
+# code-affecting file is detected without a staged WORKLOG.md update.
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+cd "$root" 2>/dev/null || exit 0
+
+changed=$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null) || exit 0
+
+code_changed=0
+worklog_changed=0
+
+while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    case "$path" in
+        WORKLOG.md)
+            worklog_changed=1
+            ;;
+        *.py|*.pyi|*.js|*.jsx|*.mjs|*.cjs|*.ts|*.tsx|*.vue|*.svelte|*.sql|*.html|*.css|*.scss|*.less|*.sh|*.ps1|*.bat|*.cmd|*.go|*.rs|*.java|*.kt|*.cs|*.cpp|*.c|*.h|*.hpp|Dockerfile|*/Dockerfile|compose*.yml|compose*.yaml|package.json|package-lock.json|pnpm-lock.yaml|yarn.lock|pyproject.toml|requirements*.txt|uv.lock|poetry.lock|.githooks/*)
+            code_changed=1
+            ;;
+    esac
+done <<EOF
+$changed
+EOF
+
+if [ "$code_changed" -eq 1 ] && [ "$worklog_changed" -ne 1 ]; then
+    cat >&2 <<'EOF'
+ThreadSnap: detected staged code changes without a staged WORKLOG.md update.
+Add or update the newest WORKLOG entry with:
+  - the task goal;
+  - current status and verification evidence;
+  - the exact next step and necessary boundaries.
+Then stage WORKLOG.md and retry the commit.
+EOF
+    exit 1
+fi
+
+exit 0
