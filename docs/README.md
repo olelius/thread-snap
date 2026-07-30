@@ -17,7 +17,11 @@
 | 功能范围、业务规则、验收条件 | `docs/design/product-design.md` |
 | 已确认技术边界、候选方案和部署规则 | `docs/design/technical-route.md` |
 | 已接受的具体架构决策 | `docs/adr/` |
-| 当前阶段、已完成、下一步、阻塞项 | `docs/project-notes/current-progress.md` |
+| 当前活动任务、验证证据、下一步、用户待裁决项 | `WORKLOG.md` |
+| 跨任务工作线的当前口径和决策链 | `docs/chains/` |
+| 流程控制、验证阶梯和 Agent 回执 | `docs/process/` |
+| 已证实的可复用根因、坑和杠杆 | `docs/memories/` |
+| 已冻结且确有保留价值的历史记录 | `docs/project-notes/` |
 | PoC 样本、阶段、指标和结果格式 | `docs/research/collector-stack-poc-plan.md` |
 | 通用技术背景与方案比较 | `docs/research/collection-and-antibot-landscape.md` |
 | 甲方输入模板 | `docs/templates/poc/` |
@@ -32,7 +36,7 @@
 
 1. 当前 Git 状态；
 2. `AGENTS.md`；
-3. `docs/project-notes/current-progress.md`；
+3. `WORKLOG.md` 最新条目；
 4. `docs/design/product-design.md`。
 
 ### 3.2 需求、功能或验收设计
@@ -41,7 +45,7 @@
 
 1. `CONTEXT.md`；
 2. `docs/design/product-design.md`；
-3. `docs/project-notes/current-progress.md`；
+3. `WORKLOG.md` 最新条目；
 4. 与变更相关的已接受 ADR。
 
 ### 3.3 技术设计、实现、重构或部署
@@ -51,17 +55,20 @@
 1. `CONTEXT.md`；
 2. `docs/design/product-design.md`；
 3. `docs/design/technical-route.md`；
-4. `docs/project-notes/current-progress.md`；
+4. `WORKLOG.md` 最新条目；
 5. 与实现范围相关的已接受 ADR。
+
+触及跨任务工作线时，还必须读取 `docs/chains/` 中对应链档。
 
 ### 3.4 PoC、平台采集器或性能测试
 
 必须读取：
 
 1. 技术实现任务要求的全部文件；
-2. `docs/research/collector-stack-poc-plan.md`；
-3. `docs/templates/poc/README.md`；
-4. 甲方已填写并保存在本地 `artifacts/poc/inputs/` 的真实清单。
+2. `docs/chains/first-platform-delivery.md`；
+3. `docs/research/collector-stack-poc-plan.md`；
+4. `docs/templates/poc/README.md`；
+5. 甲方已填写并保存在本地 `artifacts/poc/inputs/` 的真实清单。
 
 `docs/research/collection-and-antibot-landscape.md`用于了解候选技术背景，不直接替代 PoC 计划和已接受决策。
 
@@ -73,6 +80,7 @@
 | `docs/adr/0002-plaintext-platform-credentials-for-internal-validation.md` | 内部验证版允许受控的明文平台凭证持久化 |
 | `docs/adr/0003-package-poc-for-linux-before-formal-development.md` | 正式功能开发前完成 Linux PoC 打包与最终主机测试 |
 | `docs/adr/0004-treat-platform-controls-as-poc-outcome-gate.md` | 平台风控影响按 PoC 结果门禁判定 |
+| `docs/adr/0005-adopt-forged-in-prod-workflow-control.md` | 采用 forged-in-prod 方法并按 Codex 能力建立唯一账本和流程门禁 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 
@@ -100,12 +108,14 @@ artifacts/poc/
 
 ## 6. 文档维护规则
 
-- 修改功能范围或验收条件时，同步更新产品设计和当前进度。
-- 修改技术决策时，同步更新技术路线、相关 ADR 和当前进度。
-- 修改 PoC 阶段、指标、输入或结果结构时，同步更新 PoC 计划、模板说明和当前进度。
-- 详细执行过程写入进度文档或阶段记录，不堆入 `AGENTS.md`。
+- 动代码时更新 `WORKLOG.md` 最新条目；纯文档或只读任务不为凑流程追加账本。
+- 修改功能范围或验收条件时，同步更新产品设计和相关链档。
+- 修改技术决策时，同步更新技术路线、相关 ADR 和相关链档。
+- 修改 PoC 阶段、指标、输入或结果结构时，同步更新 PoC 计划、模板说明和 `docs/chains/first-platform-delivery.md`。
+- 详细执行过程和长日志写入被忽略的 `artifacts/runtime/`，账本只保留恢复所需证据入口。
 - 调研结论成为正式决策前，必须经过真实样本或环境验证并写入技术路线或 ADR。
-- 发现文档冲突时，先修正文档并记录取舍，再开始或继续实现。
+- 项目记忆只记录已发生、可复用的根因、坑和杠杆，不记录普通提交历史。
+- 发现文档冲突时，先修正唯一 owner 文档并记录取舍，再开始或继续实现。
 
 ## 7. 新任务启动检查
 
@@ -113,7 +123,9 @@ artifacts/poc/
 
 1. 工作目录为正确的 ThreadSnap 仓库；
 2. 当前分支、远程同步状态和工作区修改已检查；
-3. 已按任务读取矩阵加载相关文档；
-4. 未确认的平台接口、字段、访问条件和性能结论仍标记为待验证；
-5. 本次修改会同步更新对应设计和进度文档；
-6. PoC 原始输入、测试包和结果仍位于 `artifacts/poc/`，没有进入 Git。
+3. 已读取 `AGENTS.md` 和 `WORKLOG.md` 最新条目；
+4. 已按任务读取矩阵加载 owner 文档和相关链档；
+5. 未确认的平台接口、字段、访问条件和性能结论仍标记为待验证；
+6. 已确定当前阶段门、关键路径、写 owner 和验证路径，再判断是否需要并行；
+7. 本次代码修改会同步更新账本，对应口径修改会同步更新唯一 owner 文档；
+8. PoC 原始输入、测试包和结果仍位于 `artifacts/poc/`，runtime 证据仍位于 `artifacts/runtime/`，没有进入 Git。

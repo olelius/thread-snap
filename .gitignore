@@ -1,2 +1,5 @@
 # PoC 测试包和原始结果统一放在该目录，只在本地保存
 /artifacts/poc/
+
+# 多 Agent 和长任务的详细临时证据，不作为长期事实源
+/artifacts/runtime/
