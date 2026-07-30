@@ -51,6 +51,8 @@
 - 已确认需求中的“必须绕过风控”按 PoC 结果门禁执行：限流、验证码、挑战页、登录失效或其他平台控制导致任一 URL 未在一小时内完整完成时，该轮失败；在同一窗口内自动恢复并完整完成时可计为通过。
 - 已确认不单独验收某种所谓“绕过”技术；三轮通过结论绑定候选版本、测试包、样本、访问模式、网络、最终 Linux 主机和测试时间，条件实质变化后重新验证。
 - 已完成 `grill-with-docs` 需求与设计访谈；后续 Linux 环境值、甲方真实清单、平台接口和技术栈结论属于 PoC 输入或实测结果，不属于尚未回答的产品设计问题。
+- 已新增 `docs/README.md` 统一文档索引，并在 `AGENTS.md` 中建立按任务类型强制读取 Git 状态、领域词汇、产品设计、技术路线、当前进度、相关 ADR 和 PoC 计划的顺序。
+- 已明确当前分支的 Git 状态和仓库文档优先于历史对话、全局记忆和旧分支内容；调研、模板与 ZIP 不自动成为实现规范。
 - 已确定现有后端通过监听 `127.0.0.1` 的 `/internal/v1` HTTP/JSON 接口调用提取功能服务。
 - 已确定本机内部接口不额外使用共享令牌，并接受同机其他进程可能调用的剩余风险。
 - 已确定第一版需要逐条访问帖子链接，并提取帖子正文及评论等相关内容。
@@ -116,11 +118,13 @@
 - 当前仓库在文档创建前为空仓库；
 - 尚无应用代码和自动化测试。
 - `grill-with-docs` 文档一致性检查、全部 ADR 状态检查、模板字段检查、ZIP 内容检查、PoC 路径忽略规则检查和 `git diff --check` 已通过。
+- 文档路由变更已通过 UTF-8 编码、引用路径、ADR 状态、PoC 本地产物忽略规则和 `git diff --check` 检查。
 
 ## 相关文档
 
 - `AGENTS.md`
 - `CONTEXT.md`
+- `docs/README.md`
 - `docs/adr/0001-extraction-service-owns-extraction-data.md`
 - `docs/adr/0002-plaintext-platform-credentials-for-internal-validation.md`
 - `docs/adr/0003-package-poc-for-linux-before-formal-development.md`

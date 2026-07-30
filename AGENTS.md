@@ -4,12 +4,30 @@
 
 本文件只记录长期稳定、跨阶段有效的项目规则，不记录完整开发日志、临时结论、提交号、测试次数或逐项完成历史。
 
+- 文档索引与读取顺序：`docs/README.md`
+- 领域词汇：`CONTEXT.md`
 - 功能设计：`docs/design/product-design.md`
 - 技术路线：`docs/design/technical-route.md`
 - 当前进度：`docs/project-notes/current-progress.md`
 - 进度记录规则：`docs/project-notes/README.md`
+- 已接受决策：`docs/adr/`
+- PoC 执行计划：`docs/research/collector-stack-poc-plan.md`
 
-回答“当前进度”“下一步做什么”或准备开始新功能前，必须同时检查当前 Git 状态、功能设计和当前进度文档，不能只依据本文件。
+### 1.1 强制读取顺序
+
+- 所有项目任务：先检查当前 Git 状态，再读取本文件和 `docs/project-notes/current-progress.md`。
+- 回答“当前进度”或“下一步做什么”：同时读取 `docs/design/product-design.md`。
+- 需求、功能或验收变更：读取 `CONTEXT.md`、`docs/design/product-design.md` 和相关已接受 ADR。
+- 技术设计、实现、重构或部署：读取 `CONTEXT.md`、产品设计、技术路线和相关已接受 ADR。
+- PoC、采集器或性能测试：额外读取 `docs/research/collector-stack-poc-plan.md` 及相关模板说明。
+- 开始编码前必须完成上述任务对应的读取，不能只依据本文件、历史对话、单个进度文档或全局记忆。
+
+### 1.2 当前事实与冲突处理
+
+- 当前分支的 Git 状态和仓库文档是项目事实来源；历史对话、全局记忆和旧分支内容只作为检索线索。
+- 功能范围和验收以产品设计为准；技术决策以已接受 ADR 和技术路线为准；当前完成情况以 Git 状态和当前进度文档共同为准。
+- 技术调研只提供参考，不自动成为实现规范；模板和 ZIP 只用于输入或交付。
+- 文档之间出现冲突时，先停止实现并同步修正文档，不得自行选择有利版本继续开发。
 
 ## 2. 项目目标
 
