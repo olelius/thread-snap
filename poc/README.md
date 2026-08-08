@@ -93,3 +93,32 @@ npm.cmd --prefix .\poc\candidate-b run diagnose -- `
 当系统代理使用 fake-IP DNS 时，可从可信 DNS 独立解析目标地址，并通过
 `--direct-ip <IP>` 做进程级直连对照。该参数只映射当前输入主机且禁用该浏览器
 进程的代理，不修改系统代理；地址不写入诊断 JSONL。
+
+登录成功后可通过 `--profile-dir <目录>` 复用候选自己的持久浏览器配置；该目录
+必须位于被 Git 忽略的 `artifacts/poc/profiles/`，诊断命令不再需要账号密码。
+
+## 登录会话初始化
+
+两个候选都从进程环境变量读取同一套测试凭证，凭证值不会写入结果文件：
+
+```powershell
+$env:THREADSNAP_PLATFORM_ACCOUNT = '<测试账号>'
+$env:THREADSNAP_PLATFORM_PASSWORD = '<测试密码>'
+
+.\.vevn\Scripts\python.exe .\poc\candidate-a\src\login.py `
+  --probe-url '<样本 URL>' `
+  --profile-dir .\artifacts\poc\profiles\candidate-a-auth `
+  --output .\artifacts\poc\results\candidate-a\login-001\result.json `
+  --headless
+
+npm.cmd --prefix .\poc\candidate-b run login -- `
+  --probe-url '<样本 URL>' `
+  --profile-dir ..\..\artifacts\poc\profiles\candidate-b-auth `
+  --output ..\..\artifacts\poc\results\candidate-b\login-001\result.json `
+  --headless
+
+Remove-Item Env:THREADSNAP_PLATFORM_ACCOUNT
+Remove-Item Env:THREADSNAP_PLATFORM_PASSWORD
+```
+
+候选配置目录彼此隔离，测试时按 A、B 顺序运行，避免同一账号的并发登录干扰。

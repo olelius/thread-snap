@@ -432,6 +432,7 @@ PoC 原型默认是验证代码。只有经代码审查、测试和结构评估�
 - Linux 测试完成后由项目负责人只把完整轮次结果目录复制到当前开发电脑的 `artifacts/poc/results/<candidate>/<round>-<timestamp>/`，用于复核和技术选型；
 - 每轮结果统一使用 `environment.json`、`summary.json`、`input-urls.txt`、`url-results.jsonl`、`request-events.jsonl`、`resource-metrics.csv`、`run.log` 和 `SHA256SUMS`；
 - 当前开发环境的候选 A 固定使用 Python 3.11.4、Scrapling 0.4.12；候选 B 固定使用 Node.js 22.17.0、Crawlee 3.18.0、Playwright 1.62.1。上述是当前阶段 1 原型版本，不自动等同于最终 Linux 测试包版本；
+- Windows 登录阶段 1 已确认：两个候选使用同一授权条件均能自动完成密码登录与 SSO 回调，并在清除凭证环境后复用各自的持久浏览器配置；四层样本均为 3 条真实帖子成功、同一条服务器 404。下一步先核对固定输入的现时有效性，再进入中等批量正确性预筛；
 
 ### 11.2 待确认
 
