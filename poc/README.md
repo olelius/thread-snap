@@ -67,3 +67,29 @@ npm.cmd --prefix .\poc\candidate-b run smoke -- `
 ```
 
 校验器只在结果满足统一字段、URL 对应、状态一致性、帖子 ID 匹配和内容证明规则时退出 0。登录页、验证码、挑战页、限流页和异常空响应不会计为成功。
+
+## 重定向与会话诊断
+
+以下命令保持候选组件不变，只增加框架原生会话、主文档重定向链和 XHR/fetch 摘要：
+
+```powershell
+.\.vevn\Scripts\python.exe .\poc\candidate-a\src\diagnose.py `
+  --input .\artifacts\poc\inputs\round-1-urls.txt `
+  --output-dir .\artifacts\poc\results\candidate-a\diagnostic-001 `
+  --limit 3
+
+npm.cmd --prefix .\poc\candidate-b run diagnose -- `
+  --input ..\..\artifacts\poc\inputs\round-1-urls.txt `
+  --output-dir ..\..\artifacts\poc\results\candidate-b\diagnostic-001 `
+  --limit 3
+```
+
+诊断文件只保存占位化路径、HTTP 状态、Cookie 数量、Cookie 名称哈希和子请求聚合，不保存 Cookie 值、授权头值、请求体或完整目标 URL。
+
+如需隔离框架内置 Chromium 与本机正式 Chrome，可在两条诊断命令末尾统一追加
+`--browser-engine real-chrome`；仍分别由 Scrapling `DynamicSession` 与 Crawlee
+`PlaywrightCrawler` 执行，不改变候选技术。
+
+当系统代理使用 fake-IP DNS 时，可从可信 DNS 独立解析目标地址，并通过
+`--direct-ip <IP>` 做进程级直连对照。该参数只映射当前输入主机且禁用该浏览器
+进程的代理，不修改系统代理；地址不写入诊断 JSONL。
