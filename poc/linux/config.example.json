@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "account": "<测试账号>",
+  "password": "<测试密码>",
+  "input_file": "input-urls.txt",
+  "expected_count": 2000,
+  "window_seconds": 3600,
+  "headless": true,
+  "wait_ms": 1000,
+  "request_timeout_ms": 45000,
+  "max_attempts": 2,
+  "retry_delay_ms": 1500,
+  "candidate_a": {
+    "concurrency": 8,
+    "profile_dir": "profiles/candidate-a",
+    "real_chrome": false
+  },
+  "candidate_b": {
+    "concurrency": 8,
+    "profile_dir": "profiles/candidate-b"
+  }
+}

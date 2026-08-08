@@ -59,6 +59,58 @@ class ContractTests(unittest.TestCase):
         errors = validate_result(record, "candidate-a")
         self.assertTrue(any("success" in error for error in errors))
 
+    def test_deadline_not_started_allows_zero_request_count(self) -> None:
+        url = "https://TARGET/ugc/article/1234567890123456789"
+        now = datetime.now(timezone.utc).isoformat()
+        record = {
+            "schema_version": "1.0",
+            "candidate": "candidate-a",
+            "url": url,
+            "url_sha256": url_sha256(url),
+            "input_post_id": "1234567890123456789",
+            "observed_post_id": None,
+            "post_id_matches": False,
+            "title_present": False,
+            "body_present": False,
+            "response_class": "error",
+            "control_hit": False,
+            "channel": "browser-dom",
+            "status": "failed",
+            "request_count": 0,
+            "started_at": now,
+            "ended_at": now,
+            "duration_ms": 0,
+            "http_status": None,
+            "error_category": "deadline_not_started",
+        }
+        self.assertEqual([], validate_result(record, "candidate-a"))
+
+    def test_login_initialization_failure_allows_zero_request_count(self) -> None:
+        url = "https://TARGET/ugc/article/1234567890123456789"
+        now = datetime.now(timezone.utc).isoformat()
+        record = {
+            "schema_version": "1.0",
+            "candidate": "candidate-a",
+            "url": url,
+            "url_sha256": url_sha256(url),
+            "input_post_id": "1234567890123456789",
+            "observed_post_id": None,
+            "post_id_matches": False,
+            "title_present": False,
+            "body_present": False,
+            "response_class": "login",
+            "control_hit": True,
+            "channel": "browser-dom",
+            "status": "blocked",
+            "request_count": 0,
+            "started_at": now,
+            "ended_at": now,
+            "duration_ms": 0,
+            "http_status": None,
+            "error_category": "login_initialization_failed",
+        }
+        self.assertEqual([], validate_result(record, "candidate-a"))
+
 
 if __name__ == "__main__":
     unittest.main()

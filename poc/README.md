@@ -122,3 +122,26 @@ Remove-Item Env:THREADSNAP_PLATFORM_PASSWORD
 ```
 
 候选配置目录彼此隔离，测试时按 A、B 顺序运行，避免同一账号的并发登录干扰。
+
+## Linux 2000 条认证吞吐运行器
+
+Linux 入口、明文配置模板、安装/健康检查、资源采样和结果目录说明见
+`poc/linux/README.md`。两个固定候选分别使用：
+
+```text
+poc/candidate-a/src/throughput.py
+poc/candidate-b/src/throughput.ts
+```
+
+在 Windows 生成标准源码压缩包及可直接复制目录：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-linux-poc-package.ps1 `
+  -Version <版本> `
+  -RuntimeConfig .\artifacts\poc\inputs\linux-run-config.json `
+  -InputFile .\artifacts\poc\inputs\round-1-urls.txt
+```
+
+标准压缩包不含账号密码；`copy-to-linux/config.json` 是本地明文 sidecar，整个
+`artifacts/poc/` 均由 Git 忽略。目标 Linux 的真实结果必须由脚本生成，不用本机
+单条合成端到端或理论吞吐替代。
