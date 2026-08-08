@@ -118,6 +118,10 @@
 
 功能覆盖样本用于验证不同模块、数据状态和字段正确性。甲方已确认可以提供至少 2000 个不同、且在测试开始前已知有效的真实帖子 URL；吞吐样本从该输入池中形成。重复 URL 必须单独统计，不得通过重复请求少量 URL 放大完成数量。
 
+2026-08-08 已收到 `ICAR v27 垂媒监测日报-0804.xlsx`。只读取其中“懂车帝”工作表：2698 行原始 URL 经协议、路径、查询参数和帖子身份规范化后得到 2694 个不同帖子 URL；排除 2 条账号主页，合并 2 条重复帖子记录。规范化清单保存在本地 `artifacts/poc/inputs/throughput-urls.txt`，SHA-256 为 `82d7f4bdb766ba8d7246b04ab18e7a0a358c92616398f3eab576ef711f3f2701`。
+
+该工作簿提供标题、账号和评论数等来源字段，但没有人工确认的可见状态、正文存在性、登录要求和确认时间，因此当前只完成吞吐输入池，不把这些来源字段冒充功能验收期望；`functional-samples.csv` 仍需人工确认后形成。
+
 甲方填写模板已经固定：
 
 - `docs/templates/poc/throughput-urls-template.txt`：每行一个完整 URL，甲方删除占位内容后提供至少 2000 个不同且有效的 URL；
@@ -425,14 +429,14 @@ PoC 原型默认是验证代码。只有经代码审查、测试和结构评估�
 
 ### 11.1 已确认
 
-- 甲方已确认可在目标 Linux 主机提供 `cat /etc/os-release`、`uname -m` 和 `ldd --version` 的完整输出，无需为采集这些信息额外安装工具；具体值待主机确定后记录；
+- 目标主机环境截图已确认：CentOS Stream 10（Coughlan）、x86_64、glibc 2.39；截图保存在本地 `artifacts/poc/inputs/linux-environment-centos-stream-10.png`；
 - PoC 部署人员具有 `sudo` 或 root 权限，可以安装语言运行时、浏览器系统库等主机级依赖；
 - Linux 测试完成后由项目负责人只把完整轮次结果目录复制到当前开发电脑的 `artifacts/poc/results/<candidate>/<round>-<timestamp>/`，用于复核和技术选型；
 - 每轮结果统一使用 `environment.json`、`summary.json`、`input-urls.txt`、`url-results.jsonl`、`request-events.jsonl`、`resource-metrics.csv`、`run.log` 和 `SHA256SUMS`；
 
 ### 11.2 待确认
 
-- 目标 Linux 的发行版、版本和主机规格；
-- 目标 Linux 的 CPU 架构、libc、语言运行时及可预装的浏览器系统依赖；
-- 甲方固定清单的模板字段和模块分组；
+- 目标 Linux 的 CPU 型号与核心数、内存、磁盘和剩余空间；
+- 目标 Linux 的语言运行时、可预装的浏览器系统依赖和进程管理机制；
+- 功能样本的人工期望状态、正文存在性、登录要求和确认时间；
 - 如果未登录模式不足，合法登录会话的具体提供方式；

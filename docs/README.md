@@ -23,6 +23,7 @@
 | 已证实的可复用根因、坑和杠杆 | `docs/memories/` |
 | 已冻结且确有保留价值的历史记录 | `docs/project-notes/` |
 | PoC 样本、阶段、指标和结果格式 | `docs/research/collector-stack-poc-plan.md` |
+| 已接收 PoC 输入的数量、环境摘要和哈希 | `docs/research/poc-input-intake-2026-08-08.md` |
 | 通用技术背景与方案比较 | `docs/research/collection-and-antibot-landscape.md` |
 | 甲方输入模板 | `docs/templates/poc/` |
 
