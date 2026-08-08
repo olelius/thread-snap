@@ -107,6 +107,16 @@
 
 该工作簿提供标题、账号和评论数等来源字段，但当前 PoC 不需要甲方另行提供 `functional-samples.csv`。工作簿中的来源字段可用于异常复核，不作为程序运行后的正式测试结果。
 
+首轮 2000 条清单已按以下条件固定：
+
+- 随机种子：`threadsnap-poc-round-1-20260808-v1`；
+- 抽样算法：按 `SHA-256(seed + NUL + UTF-8 URL)` 升序排列，相同哈希时按 URL 升序，取前 2000 条；
+- 实际清单 SHA-256：`4558a54cbe96259c1a64d6fda02658b3b344b8a269fcd85ea32a793572ea5d70`；
+- 本地文件：`artifacts/poc/inputs/round-1-urls.txt`；
+- 本地元数据：`artifacts/poc/inputs/round-1-manifest.json`。
+
+脚本固定使用 UTF-8/LF 写出，避免 Windows 与 Linux 换行差异改变清单哈希。完整 URL 和清单元数据继续只保存在被 Git 忽略的本地输入目录；Git 仅记录种子、算法、数量和哈希。
+
 甲方填写模板已经固定：
 
 - `docs/templates/poc/throughput-urls-template.txt`：每行一个完整 URL，甲方删除占位内容后提供至少 2000 个不同且有效的 URL；
@@ -416,6 +426,7 @@ PoC 原型默认是验证代码。只有经代码审查、测试和结构评估�
 - PoC 部署人员具有 `sudo` 或 root 权限，可以安装语言运行时、浏览器系统库等主机级依赖；
 - Linux 测试完成后由项目负责人只把完整轮次结果目录复制到当前开发电脑的 `artifacts/poc/results/<candidate>/<round>-<timestamp>/`，用于复核和技术选型；
 - 每轮结果统一使用 `environment.json`、`summary.json`、`input-urls.txt`、`url-results.jsonl`、`request-events.jsonl`、`resource-metrics.csv`、`run.log` 和 `SHA256SUMS`；
+- 当前开发环境的候选 A 固定使用 Python 3.11.4、Scrapling 0.4.12；候选 B 固定使用 Node.js 22.17.0、Crawlee 3.18.0、Playwright 1.62.1。上述是当前阶段 1 原型版本，不自动等同于最终 Linux 测试包版本；
 
 ### 11.2 待确认
 

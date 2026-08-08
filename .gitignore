@@ -3,3 +3,13 @@
 
 # 多 Agent 和长任务的详细临时证据，不作为长期事实源
 /artifacts/runtime/
+
+# 项目 Python 虚拟环境
+/.vevn/
+
+# PoC 本地依赖、缓存与构建产物
+**/__pycache__/
+*.py[cod]
+/poc/candidate-b/node_modules/
+/poc/candidate-b/storage/
+/poc/candidate-b/dist/
