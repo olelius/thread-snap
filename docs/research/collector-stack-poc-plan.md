@@ -211,6 +211,8 @@
 - `README.md`：记录支持的运行时版本、配置步骤、启动命令和已知限制；
 - 测试包的 SHA-256 校验值。
 
+为满足人工直接复制到 Linux 的操作要求，标准 `tar.gz` 旁可以生成一个本地 `copy-to-linux/` 目录：目录内包含压缩包及校验值、明文 `config.json`、真实 `input-urls.txt` 和只负责校验/解压/复制 sidecar 的 `deploy.sh`。账号密码 sidecar 不进入标准压缩包、Git、运行日志或结果文件；复制目录整体继续位于被 Git 忽略的 `artifacts/poc/packages/`。
+
 测试包不得包含：
 
 - Windows 虚拟环境、`.venv` 或 `node_modules`；

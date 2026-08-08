@@ -7,6 +7,7 @@
     "diagnose": "tsx src/diagnose.ts",
     "login": "tsx src/login.ts",
     "smoke": "tsx src/smoke.ts",
+    "throughput": "tsx src/throughput.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
   },

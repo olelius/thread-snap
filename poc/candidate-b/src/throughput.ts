@@ -1,0 +1,370 @@
+/** 候选 B：使用 Crawlee/Playwright 持久认证会话执行定量吞吐测试。 */
+
+import { createHash } from 'node:crypto';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, resolve } from 'node:path';
+import { performance } from 'node:perf_hooks';
+import { PlaywrightCrawler } from 'crawlee';
+import { classifyDocument, CONTROL_CLASSES, extractInputPostId, urlSha256, type Classification } from './contract.js';
+
+interface CandidateConfig {
+  concurrency?: number;
+  profile_dir?: string;
+}
+
+interface TestConfig {
+  account: string;
+  password: string;
+  input_file: string;
+  expected_count: number;
+  window_seconds: number;
+  headless?: boolean;
+  wait_ms?: number;
+  max_attempts?: number;
+  retry_delay_ms?: number;
+  request_timeout_ms?: number;
+  candidate_b: CandidateConfig;
+}
+
+interface CliOptions {
+  config: string;
+  outputDir: string;
+}
+
+interface Attempt extends Classification {
+  schema_version: '1.0';
+  candidate: 'candidate-b';
+  url: string;
+  url_sha256: string;
+  attempt: number;
+  channel: 'browser-dom';
+  started_at: string;
+  ended_at: string;
+  duration_ms: number;
+  http_status: number | null;
+  final_url_sha256: string | null;
+  error_category: string | null;
+}
+
+interface FinalResult {
+  schema_version: '1.0';
+  candidate: 'candidate-b';
+  url: string;
+  url_sha256: string;
+  input_post_id: string;
+  observed_post_id: string | null;
+  post_id_matches: boolean;
+  title_present: boolean;
+  body_present: boolean;
+  response_class: Classification['response_class'];
+  control_hit: boolean;
+  channel: 'browser-dom';
+  status: Classification['status'];
+  request_count: number;
+  started_at: string;
+  ended_at: string;
+  duration_ms: number;
+  http_status: number | null;
+  error_category: string | null;
+}
+
+function parseArgs(argv: string[]): CliOptions {
+  const values = new Map<string, string>();
+  for (let index = 0; index < argv.length; index += 2) {
+    const key = argv[index];
+    const value = argv[index + 1];
+    if (!key?.startsWith('--') || value === undefined) throw new Error(`参数格式错误: ${key ?? ''}`);
+    values.set(key, value);
+  }
+  const config = values.get('--config');
+  const outputDir = values.get('--output-dir');
+  if (!config || !outputDir) throw new Error('缺少 --config 或 --output-dir');
+  return { config: resolve(config), outputDir: resolve(outputDir) };
+}
+
+function positiveInt(value: unknown, name: string, min = 1, max = Number.MAX_SAFE_INTEGER): number {
+  if (!Number.isInteger(value) || (value as number) < min || (value as number) > max) {
+    throw new Error(`${name} 必须是 ${min}..${max} 的整数`);
+  }
+  return value as number;
+}
+
+function loadConfig(path: string): TestConfig {
+  const value = JSON.parse(readFileSync(path, 'utf8')) as Partial<TestConfig>;
+  if (!value || typeof value !== 'object') throw new Error('配置根节点必须是对象');
+  if (typeof value.account !== 'string' || !value.account) throw new Error('account 必须是非空字符串');
+  if (typeof value.password !== 'string' || !value.password) throw new Error('password 必须是非空字符串');
+  if (typeof value.input_file !== 'string' || !value.input_file) throw new Error('input_file 必须是非空字符串');
+  positiveInt(value.expected_count, 'expected_count');
+  positiveInt(value.window_seconds, 'window_seconds');
+  if (!value.candidate_b || typeof value.candidate_b !== 'object') throw new Error('candidate_b 必须是对象');
+  positiveInt(value.candidate_b.concurrency ?? 8, 'candidate_b.concurrency', 1, 64);
+  return value as TestConfig;
+}
+
+function relativeToConfig(configPath: string, value: string): string {
+  return isAbsolute(value) ? value : resolve(dirname(configPath), value);
+}
+
+function loadUrls(configPath: string, config: TestConfig): { inputPath: string; urls: string[] } {
+  const inputPath = relativeToConfig(configPath, config.input_file);
+  const all = readFileSync(inputPath, 'utf8').replace(/^\uFEFF/, '').split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+  if (all.length < config.expected_count) {
+    throw new Error(`输入只有 ${all.length} 条，少于 expected_count=${config.expected_count}`);
+  }
+  const urls = all.slice(0, config.expected_count);
+  if (new Set(urls).size !== urls.length) throw new Error('测试范围内含重复 URL');
+  for (const url of urls) extractInputPostId(url);
+  return { inputPath, urls };
+}
+
+function utcNow(): string {
+  return new Date().toISOString();
+}
+
+function appendJsonl(path: string, record: object): void {
+  appendFileSync(path, `${JSON.stringify(record)}\n`, 'utf8');
+}
+
+function loadCompleted(path: string): Set<string> {
+  const completed = new Set<string>();
+  try {
+    const lines = readFileSync(path, 'utf8').split(/\r?\n/u).filter((line) => line.trim());
+    for (const [index, line] of lines.entries()) {
+      const value = JSON.parse(line) as { url?: unknown };
+      if (typeof value.url !== 'string') throw new Error(`已有结果第 ${index + 1} 行缺少 URL`);
+      if (completed.has(value.url)) throw new Error(`已有结果第 ${index + 1} 行 URL 重复`);
+      completed.add(value.url);
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT') throw error;
+  }
+  return completed;
+}
+
+function failedResult(url: string, requestCount: number, category: string, startedAt = utcNow(), durationMs = 0): FinalResult {
+  return {
+    schema_version: '1.0', candidate: 'candidate-b', url, url_sha256: urlSha256(url),
+    input_post_id: extractInputPostId(url), observed_post_id: null, post_id_matches: false,
+    title_present: false, body_present: false, response_class: 'error', control_hit: false,
+    channel: 'browser-dom', status: 'failed', request_count: requestCount,
+    started_at: startedAt, ended_at: utcNow(), duration_ms: durationMs,
+    http_status: null, error_category: category,
+  };
+}
+
+function loginFailureResult(url: string, responseClass: Classification['response_class']): FinalResult {
+  const isControl = CONTROL_CLASSES.has(responseClass);
+  return {
+    ...failedResult(url, 0, 'login_initialization_failed'),
+    response_class: isControl ? responseClass : 'error',
+    control_hit: isControl,
+    status: isControl ? 'blocked' : 'failed',
+  };
+}
+
+async function verifyLogin(
+  config: TestConfig, profileDir: string, probeUrl: string, outputDir: string,
+): Promise<Record<string, unknown>> {
+  let result: Record<string, unknown> | undefined;
+  const crawler = new PlaywrightCrawler({
+    maxConcurrency: 1,
+    maxRequestRetries: 0,
+    retryOnBlocked: false,
+    useSessionPool: false,
+    requestHandlerTimeoutSecs: 90,
+    launchContext: {
+      userDataDir: profileDir,
+      launchOptions: { headless: config.headless ?? true },
+    },
+    requestHandler: async ({ page }) => {
+      await page.waitForTimeout(2_000);
+      let submitted = false;
+      if (page.url().includes('/login-required')) {
+        if (await page.locator('input[name="code"]').count()) {
+          await page.locator('button').last().click({ timeout: 5_000 });
+          await page.waitForTimeout(500);
+        }
+        await page.locator('input[name="account"]').fill(config.account);
+        await page.locator('input[name="password"]').fill(config.password);
+        await page.getByRole('button', { name: '登录', exact: true }).click({ timeout: 10_000 });
+        submitted = true;
+        await page.waitForTimeout(10_000);
+      }
+      const document = await page.content();
+      const classification = classifyDocument(page.url(), 200, document, extractInputPostId(probeUrl));
+      const verificationRequired = ['captcha', '验证码', '验证中心'].some((marker) => document.toLowerCase().includes(marker));
+      result = {
+        schema_version: '1.0', candidate: 'candidate-b', submitted,
+        logged_in: classification.status === 'success' && !verificationRequired,
+        verification_required: verificationRequired,
+        response_class: classification.response_class,
+        status: classification.status,
+      };
+    },
+  });
+  await crawler.run([{ url: probeUrl, uniqueKey: `login:${urlSha256(probeUrl)}` }]);
+  if (!result) throw new Error('候选 B 登录运行未生成结果');
+  writeFileSync(resolve(outputDir, 'login-result.json'), `${JSON.stringify(result, null, 2)}\n`, 'utf8');
+  return result;
+}
+
+async function main(): Promise<number> {
+  const runStarted = performance.now();
+  const options = parseArgs(process.argv.slice(2));
+  const config = loadConfig(options.config);
+  const { inputPath, urls } = loadUrls(options.config, config);
+  const candidate = config.candidate_b;
+  const concurrency = candidate.concurrency ?? 8;
+  const maxAttempts = positiveInt(config.max_attempts ?? 2, 'max_attempts', 1, 5);
+  const waitMs = positiveInt(config.wait_ms ?? 1_000, 'wait_ms', 0, 60_000);
+  const requestTimeoutMs = positiveInt(config.request_timeout_ms ?? 45_000, 'request_timeout_ms', 1_000, 300_000);
+  mkdirSync(options.outputDir, { recursive: true });
+  const resultsPath = resolve(options.outputDir, 'url-results.jsonl');
+  const eventsPath = resolve(options.outputDir, 'request-events.jsonl');
+  const completed = loadCompleted(resultsPath);
+  const urlSet = new Set(urls);
+  for (const url of completed) if (!urlSet.has(url)) throw new Error('已有结果包含本轮清单外 URL');
+  const pending = urls.filter((url) => !completed.has(url));
+  const profileDir = relativeToConfig(options.config, candidate.profile_dir ?? 'profiles/candidate-b');
+  mkdirSync(profileDir, { recursive: true });
+  process.env['CRAWLEE_STORAGE_DIR'] = resolve(options.outputDir, 'crawlee-storage');
+
+  const environment = {
+    schema_version: '1.0', candidate: 'candidate-b', access_mode: 'authenticated',
+    node_version: process.version, input_file: inputPath, expected_count: urls.length,
+    concurrency, window_seconds: config.window_seconds,
+    package_lock_sha256: createHash('sha256').update(readFileSync(resolve(import.meta.dirname, '..', 'package-lock.json'))).digest('hex'),
+  };
+  writeFileSync(resolve(options.outputDir, 'runner-environment.json'), `${JSON.stringify(environment, null, 2)}\n`, 'utf8');
+
+  const loginResult = await verifyLogin(config, profileDir, urls[0]!, options.outputDir);
+  if (loginResult['logged_in'] !== true) {
+    const rawClass = String(loginResult['response_class'] ?? 'error');
+    const responseClass = ['post', 'rate_limited', 'captcha', 'challenge', 'login', 'empty', 'error'].includes(rawClass)
+      ? rawClass as Classification['response_class']
+      : 'error';
+    for (const url of pending) appendJsonl(resultsPath, loginFailureResult(url, responseClass));
+    return 4;
+  }
+
+  const startedByUrl = new Map<string, { iso: string; perf: number }>();
+  const controlHits = new Map<string, boolean>();
+  const finalized = new Set(completed);
+  let deadlineReached = false;
+  const requests = pending.map((url) => ({ url, uniqueKey: `throughput:${urlSha256(url)}` }));
+
+  const crawler = new PlaywrightCrawler({
+    minConcurrency: Math.min(2, concurrency),
+    maxConcurrency: concurrency,
+    maxRequestRetries: maxAttempts - 1,
+    retryOnBlocked: false,
+    useSessionPool: false,
+    requestHandlerTimeoutSecs: Math.ceil(requestTimeoutMs / 1000) + 10,
+    launchContext: {
+      userDataDir: profileDir,
+      launchOptions: { headless: config.headless ?? true },
+    },
+    preNavigationHooks: [
+      async ({ page }) => {
+        await page.route('**/*', async (route) => {
+          const kind = route.request().resourceType();
+          if (['image', 'media', 'font', 'stylesheet'].includes(kind)) await route.abort();
+          else await route.continue();
+        });
+      },
+    ],
+    requestHandler: async ({ request, page, response }) => {
+      const url = request.url;
+      const timing = startedByUrl.get(url) ?? { iso: utcNow(), perf: performance.now() };
+      startedByUrl.set(url, timing);
+      const attemptStartedAt = utcNow();
+      const attemptStarted = performance.now();
+      await page.waitForTimeout(waitMs);
+      const document = await page.content();
+      const httpStatus = response?.status() ?? null;
+      const classification = classifyDocument(page.url(), httpStatus, document, extractInputPostId(url));
+      const attempt = request.retryCount + 1;
+      const event: Attempt = {
+        schema_version: '1.0', candidate: 'candidate-b', url, url_sha256: urlSha256(url), attempt,
+        channel: 'browser-dom', started_at: attemptStartedAt, ended_at: utcNow(),
+        duration_ms: Math.round(performance.now() - attemptStarted), http_status: httpStatus,
+        final_url_sha256: urlSha256(page.url()), ...classification,
+        error_category: classification.status === 'success' ? null : classification.response_class,
+      };
+      appendJsonl(eventsPath, event);
+      const hadControl = (controlHits.get(url) ?? false) || CONTROL_CLASSES.has(classification.response_class);
+      controlHits.set(url, hadControl);
+      const retryable = classification.status !== 'success'
+        && !(httpStatus !== null && httpStatus >= 400 && httpStatus < 500 && httpStatus !== 429
+          && !CONTROL_CLASSES.has(classification.response_class))
+        && attempt < maxAttempts
+        && !deadlineReached;
+      if (retryable) throw new Error(`retry:${classification.response_class}`);
+      const result: FinalResult = {
+        schema_version: '1.0', candidate: 'candidate-b', url, url_sha256: urlSha256(url),
+        input_post_id: extractInputPostId(url), observed_post_id: classification.observed_post_id,
+        post_id_matches: classification.post_id_matches, title_present: classification.title_present,
+        body_present: classification.body_present, response_class: classification.response_class,
+        control_hit: hadControl, channel: 'browser-dom', status: classification.status,
+        request_count: attempt, started_at: timing.iso, ended_at: utcNow(),
+        duration_ms: Math.round(performance.now() - timing.perf), http_status: httpStatus,
+        error_category: event.error_category,
+      };
+      appendJsonl(resultsPath, result);
+      finalized.add(url);
+      process.stdout.write(`${JSON.stringify({ url_sha256: result.url_sha256, status: result.status })}\n`);
+    },
+    errorHandler: async ({ request }, error) => {
+      const url = request.url;
+      if (String(error.message).startsWith('retry:')) return;
+      const event: Attempt = {
+        schema_version: '1.0', candidate: 'candidate-b', url, url_sha256: urlSha256(url),
+        attempt: request.retryCount + 1, channel: 'browser-dom', started_at: utcNow(), ended_at: utcNow(),
+        duration_ms: 0, http_status: null, final_url_sha256: null, observed_post_id: null,
+        post_id_matches: false, title_present: false, body_present: false, response_class: 'error',
+        status: 'failed', error_category: error.name || 'network_error',
+      };
+      appendJsonl(eventsPath, event);
+    },
+    failedRequestHandler: async ({ request }) => {
+      if (finalized.has(request.url)) return;
+      const timing = startedByUrl.get(request.url) ?? { iso: utcNow(), perf: performance.now() };
+      const result = failedResult(
+        request.url,
+        request.retryCount + 1,
+        deadlineReached ? 'deadline_interrupted' : 'network_error',
+        timing.iso,
+        Math.round(performance.now() - timing.perf),
+      );
+      result.control_hit = controlHits.get(request.url) ?? false;
+      appendJsonl(resultsPath, result);
+      finalized.add(request.url);
+    },
+  });
+
+  const remainingWindowMs = Math.max(0, config.window_seconds * 1_000 - (performance.now() - runStarted));
+  if (remainingWindowMs === 0) deadlineReached = true;
+  const deadlineTimer = setTimeout(() => {
+    deadlineReached = true;
+    void crawler.teardown();
+  }, remainingWindowMs);
+  try {
+    await crawler.run(requests);
+  } catch (error) {
+    if (!deadlineReached) throw error;
+  } finally {
+    clearTimeout(deadlineTimer);
+  }
+
+  for (const url of urls) {
+    if (finalized.has(url)) continue;
+    appendJsonl(resultsPath, failedResult(url, 0, 'deadline_not_started'));
+    finalized.add(url);
+  }
+
+  return 0;
+}
+
+process.exitCode = await main();

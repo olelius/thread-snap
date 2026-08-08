@@ -152,8 +152,16 @@ def validate_result(record: dict[str, Any], candidate: str) -> list[str]:
     for field in bool_fields:
         if not isinstance(record[field], bool):
             errors.append(f"{field} 必须为布尔值")
-    if not isinstance(record["request_count"], int) or isinstance(record["request_count"], bool) or record["request_count"] < 1:
-        errors.append("request_count 必须为正整数")
+    if not isinstance(record["request_count"], int) or isinstance(record["request_count"], bool) or record["request_count"] < 0:
+        errors.append("request_count 必须为非负整数")
+    elif record["request_count"] == 0 and not (
+        record["http_status"] is None
+        and (
+            (record["status"] == "failed" and record["error_category"] == "deadline_not_started")
+            or record["error_category"] == "login_initialization_failed"
+        )
+    ):
+        errors.append("request_count=0 只允许表示截止时间内尚未启动或全局登录初始化失败")
     if not isinstance(record["duration_ms"], int) or isinstance(record["duration_ms"], bool) or record["duration_ms"] < 0:
         errors.append("duration_ms 必须为非负整数")
     if record["http_status"] is not None and (
