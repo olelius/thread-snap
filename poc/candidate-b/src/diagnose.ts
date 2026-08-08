@@ -31,6 +31,7 @@ interface CliOptions {
   limit: number;
   browserEngine: 'bundled' | 'real-chrome';
   directIp?: string;
+  profileDir?: string;
 }
 
 function parseArgs(argv: string[]): CliOptions {
@@ -46,12 +47,13 @@ function parseArgs(argv: string[]): CliOptions {
   const limit = Number.parseInt(values.get('--limit') ?? '3', 10);
   const browserEngine = values.get('--browser-engine') ?? 'bundled';
   const directIp = values.get('--direct-ip');
+  const profileDir = values.get('--profile-dir');
   if (!input || !outputDir || !Number.isInteger(limit) || limit < 1) {
     throw new Error('必须提供 --input、--output-dir，且 --limit 必须为正整数');
   }
   if (browserEngine !== 'bundled' && browserEngine !== 'real-chrome') throw new Error('--browser-engine 仅支持 bundled 或 real-chrome');
   if (directIp && isIP(directIp) === 0) throw new Error('--direct-ip 必须是有效 IP 地址');
-  return { input: resolve(input), outputDir: resolve(outputDir), limit, browserEngine, directIp };
+  return { input: resolve(input), outputDir: resolve(outputDir), limit, browserEngine, directIp, profileDir: profileDir ? resolve(profileDir) : undefined };
 }
 
 function pathTemplate(value: string | URL): string {
@@ -149,7 +151,7 @@ async function httpDiagnostics(urls: string[]): Promise<DiagnosticRow[]> {
 }
 
 async function browserDiagnostics(
-  urls: string[], outputDir: string, browserEngine: CliOptions['browserEngine'], directIp?: string,
+  urls: string[], outputDir: string, browserEngine: CliOptions['browserEngine'], directIp?: string, profileDir?: string,
 ): Promise<DiagnosticRow[]> {
   const rows: DiagnosticRow[] = [];
   const sessionLabels = new Map<string, string>();
@@ -164,7 +166,7 @@ async function browserDiagnostics(
     ...urls.map((url) => ({ url, uniqueKey: `diag-browser:first:${browserEngine}:${urlSha256(url)}`, userData: { inputUrl: url, variant: `browser-persistent-first${variantSuffix}` } })),
     { url: urls[0]!, uniqueKey: `diag-browser:revisit:${browserEngine}:${urlSha256(urls[0]!)}`, userData: { inputUrl: urls[0]!, variant: `browser-persistent-revisit${variantSuffix}` } },
   ];
-  const profile = join(outputDir, 'browser-profile');
+  const profile = profileDir ?? join(outputDir, 'browser-profile');
   mkdirSync(profile, { recursive: true });
 
   const crawler = new PlaywrightCrawler({
@@ -260,7 +262,7 @@ async function main(): Promise<void> {
   mkdirSync(options.outputDir, { recursive: true });
   const rows = [
     ...await httpDiagnostics(urls),
-    ...await browserDiagnostics(urls, options.outputDir, options.browserEngine, options.directIp),
+    ...await browserDiagnostics(urls, options.outputDir, options.browserEngine, options.directIp, options.profileDir),
   ];
   writeJsonl(join(options.outputDir, 'diagnostics.jsonl'), rows);
   console.log(JSON.stringify({ candidate: 'candidate-b', rows: rows.length }));

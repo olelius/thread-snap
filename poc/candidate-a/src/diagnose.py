@@ -123,12 +123,16 @@ def static_diagnostics(urls: list[str]) -> list[dict[str, Any]]:
 
 
 def browser_diagnostics(
-    urls: list[str], output_dir: Path, browser_engine: str, direct_ip: str | None
+    urls: list[str],
+    output_dir: Path,
+    browser_engine: str,
+    direct_ip: str | None,
+    profile_dir: Path | None,
 ) -> list[dict[str, Any]]:
     """在一个持久 DynamicSession 内执行首页预热、首访和同会话复访。"""
 
     rows: list[dict[str, Any]] = []
-    profile = output_dir / "browser-profile"
+    profile = profile_dir or output_dir / "browser-profile"
     profile.mkdir(parents=True, exist_ok=True)
     active: dict[str, Any] = {
         "label": None,
@@ -255,6 +259,7 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=3)
     parser.add_argument("--browser-engine", choices=("bundled", "real-chrome"), default="bundled")
     parser.add_argument("--direct-ip")
+    parser.add_argument("--profile-dir", type=Path)
     args = parser.parse_args()
     urls = [line.strip() for line in args.input.read_text("utf-8-sig").splitlines() if line.strip()]
     if args.limit < 1 or args.limit > len(urls):
@@ -265,7 +270,7 @@ def main() -> int:
     args.output_dir.mkdir(parents=True, exist_ok=True)
     rows = [
         *static_diagnostics(urls),
-        *browser_diagnostics(urls, args.output_dir, args.browser_engine, args.direct_ip),
+        *browser_diagnostics(urls, args.output_dir, args.browser_engine, args.direct_ip, args.profile_dir),
     ]
     write_jsonl(args.output_dir / "diagnostics.jsonl", rows)
     print(json.dumps({"candidate": "candidate-a", "rows": len(rows)}, ensure_ascii=False))
