@@ -1,0 +1,65 @@
+[
+  {
+    "name": "valid_post",
+    "final_url": "https://TARGET/ugc/article/1234567890123456789",
+    "http_status": 200,
+    "input_post_id": "1234567890123456789",
+    "document": "<html><head><title>有效帖子标题</title></head><body><article data-id=\"1234567890123456789\">这里是足以构成正文存在性证明的合成帖子内容，用于跨候选分类测试。</article></body></html>",
+    "expected_response_class": "post",
+    "expected_status": "success"
+  },
+  {
+    "name": "javascript_challenge",
+    "final_url": "https://TARGET/ugc/article/1234567890123456789",
+    "http_status": 200,
+    "input_post_id": "1234567890123456789",
+    "document": "<html><head></head><body></body><script>window._$jsvmprt=function(){return true}</script></html>",
+    "expected_response_class": "challenge",
+    "expected_status": "blocked"
+  },
+  {
+    "name": "login_redirect",
+    "final_url": "https://TARGET/login-required?redirect=%2Fugc%2Farticle%2F1234567890123456789",
+    "http_status": 200,
+    "input_post_id": "1234567890123456789",
+    "document": "<html><head><title>登录</title></head><body>请登录后继续</body></html>",
+    "expected_response_class": "login",
+    "expected_status": "blocked"
+  },
+  {
+    "name": "login_redirect_with_captcha_script",
+    "final_url": "https://TARGET/login-required?redirect=%2Fugc%2Farticle%2F1234567890123456789",
+    "http_status": 200,
+    "input_post_id": "1234567890123456789",
+    "document": "<html><head><title>登录</title><script src=\"captcha-sdk.js\"></script></head><body>请登录后继续</body></html>",
+    "expected_response_class": "login",
+    "expected_status": "blocked"
+  },
+  {
+    "name": "captcha",
+    "final_url": "https://TARGET/verify",
+    "http_status": 200,
+    "input_post_id": "1234567890123456789",
+    "document": "<html><body>请完成验证码 captcha</body></html>",
+    "expected_response_class": "captcha",
+    "expected_status": "blocked"
+  },
+  {
+    "name": "rate_limit",
+    "final_url": "https://TARGET/ugc/article/1234567890123456789",
+    "http_status": 429,
+    "input_post_id": "1234567890123456789",
+    "document": "<html><body>请求过于频繁</body></html>",
+    "expected_response_class": "rate_limited",
+    "expected_status": "blocked"
+  },
+  {
+    "name": "empty_response",
+    "final_url": "https://TARGET/ugc/article/1234567890123456789",
+    "http_status": 200,
+    "input_post_id": "1234567890123456789",
+    "document": "<html><body></body></html>",
+    "expected_response_class": "empty",
+    "expected_status": "failed"
+  }
+]

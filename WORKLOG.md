@@ -11,7 +11,30 @@
 
 ## ⏳ 待你裁决
 
+- 2026-08-08：候选 A/B 在同一 3 条真实 URL 的匿名访问冒烟中最终均进入登录页，0 条取得帖子访问证明；继续阶段 1 前需确认合法登录会话的本地提供方式和测试期间允许的使用条件。证据：`artifacts/poc/results/candidate-a/smoke-001/summary.json`、`artifacts/poc/results/candidate-b/smoke-001/summary.json`。
 - 2026-08-08：Linux 环境仍缺 CPU、内存、磁盘、语言运行时、浏览器系统依赖和进程管理信息；证据见 `docs/research/poc-input-intake-2026-08-08.md` 第 4 节。
+
+---
+
+## 2026-08-08 — 固定首轮样本并完成候选 A/B 匿名访问冒烟
+
+**总目标**：从已接收的 2694 条真实 URL 输入池固定首轮 2000 条清单，建立候选无关的结果契约和校验器，并用同一小样本验证 Scrapling 与 Crawlee/Playwright 的匿名访问行为。
+
+**状态**：⏸️ 阶段 1 匿名访问门禁未通过，等待访问条件裁决
+
+**干到哪了**：
+
+- [x] 固定首轮 2000 条不同 URL：种子 `threadsnap-poc-round-1-20260808-v1`，算法为 `SHA-256(seed + NUL + URL)` 排序取前 2000 条，清单 SHA-256 为 `4558a54cbe96259c1a64d6fda02658b3b344b8a269fcd85ea32a793572ea5d70`；本地清单与清单元数据位于 `artifacts/poc/inputs/round-1-urls.txt`、`round-1-manifest.json`。
+- [x] 建立统一响应分类、结果一致性校验、确定性抽样和跨候选合成夹具；证据：`.vevn\Scripts\python.exe -m unittest discover -s poc\shared\tests -v` 通过 4 项，`npm.cmd test` 通过 7 项，`npm.cmd run typecheck -- --pretty false`、`pip check`、锁文件 `npm ci`、npm 生产依赖审计和 `git diff --check` 均通过，审计结果为 0 个漏洞。
+- [x] 候选 A 使用 Python 3.11.4、Scrapling 0.4.12；同一 3 条 URL 的 HTTP 与动态通道最终均为登录页，最终成功 0、未恢复平台控制 3、契约错误 0；证据：`artifacts/poc/results/candidate-a/smoke-001/`，`SHA256SUMS` 的 SHA-256 为 `6cd01030ad846e325f96084b6694cb34a77bbb7482550b6ea1a2edb8e3c3a922`。
+- [x] 候选 B 使用 Node.js 22.17.0、Crawlee 3.18.0、Playwright 1.62.1；同一 3 条 URL 的 HTTP 通道均识别为挑战页，浏览器通道最终均为登录页，最终成功 0、未恢复平台控制 3、契约错误 0；证据：`artifacts/poc/results/candidate-b/smoke-001/`，`SHA256SUMS` 的 SHA-256 为 `d28138b56981ff33b87251c19adacee48cfdebab3ffbe8e5622fde742157cba3`。
+- [x] 真实 URL、HTML 捕获、逐 URL 结果和日志全部位于被 Git 忽略的 `artifacts/poc/`；Git 只新增原型、合成夹具、锁文件和文档，不提交真实链接、凭证或运行结果。
+
+**下一步**：确认合法登录会话的本地提供方式后，两个候选使用相同授权条件重跑当前 3 条固定样本；只有访问模式一致且结果校验通过后，才进入不少于 200 条的阶段 2 对比。
+
+**边界**：本次 3 条冒烟不能外推吞吐或选择正式技术栈；不把 HTTP 200、挑战页或登录页计为帖子成功；不在 Git、日志或结果结构中保存账号、密码、Cookie 或令牌。
+
+**关联**：分支 `feat/poc-smoke-validator`；代码入口 `poc/README.md`；PoC owner `docs/research/collector-stack-poc-plan.md`。
 
 ---
 

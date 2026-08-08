@@ -1,0 +1,23 @@
+{
+  "name": "threadsnap-poc-candidate-b",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "smoke": "tsx src/smoke.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "crawlee": "3.18.0",
+    "playwright": "1.62.1"
+  },
+  "devDependencies": {
+    "tsx": "4.23.11",
+    "typescript": "7.0.2",
+    "vitest": "4.1.10"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
