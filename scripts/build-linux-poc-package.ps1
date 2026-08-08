@@ -22,6 +22,11 @@ function Assert-SafePath([string]$Path, [string]$AllowedRoot) {
 }
 
 New-Item -ItemType Directory -Force -Path $artifactRoot, $runtimeRoot | Out-Null
+$sourceCommit = (git -C $repo rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or -not $sourceCommit) { throw '读取 Git 提交失败' }
+$trackedChanges = @(git -C $repo status --porcelain --untracked-files=no)
+if ($LASTEXITCODE -ne 0) { throw '读取 Git 状态失败' }
+if ($trackedChanges.Count -ne 0) { throw '存在未提交的跟踪文件修改，停止生成可追溯测试包' }
 Assert-SafePath $staging $runtimeRoot
 if (Test-Path $staging) { Remove-Item -LiteralPath $staging -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $staging | Out-Null
@@ -60,6 +65,7 @@ $manifest = [ordered]@{
     schema_version = '1.0'
     package = $packageName
     version = $Version
+    source_commit = $sourceCommit
     candidate_a = 'Scrapling 0.4.12'
     candidate_b = 'Crawlee 3.18.0 + Playwright 1.62.1'
     target = 'CentOS Stream 10 x86_64 glibc 2.39'
