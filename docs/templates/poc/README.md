@@ -3,19 +3,19 @@
 - 模板版本：1.0
 - 适用范围：第一版懂车帝 PoC
 
-本目录包含甲方需要填写并返回的两份 PoC 输入模板：
+本目录包含两份模板，但当前采集框架 PoC 只需第 1 份：
 
-1. `throughput-urls-template.txt`：用于 2000 URL/小时吞吐测试；
-2. `functional-samples-template.csv`：用于功能模块、状态和字段正确性测试。
+1. `throughput-urls-template.txt`：当前必需，用于 2000 URL/小时的访问吞吐、真实内容证明和风控响应识别测试；
+2. `functional-samples-template.csv`：后续可选，用于第一版正式功能开发后的模块、状态和字段回归测试。
 
 项目提供的可直接发送压缩包为：
 
 `threadsnap-poc-client-input-templates-v1.0.zip`
 
-填写完成后建议另存为：
+填写完成后按使用阶段另存为：
 
 - `throughput-urls.txt`
-- `functional-samples.csv`
+- `functional-samples.csv`（当前 PoC 不要求）
 
 不要覆盖仓库中的模板文件。
 
@@ -48,7 +48,7 @@ https://TARGET/thread/000002
 
 文件：`functional-samples-template.csv`
 
-每行对应一个功能验证样本。CSV 使用 UTF-8 编码，第一行字段名不得修改。
+该文件不是当前采集框架 PoC 的必需输入，也不是程序运行后的测试结果。只在后续第一版功能回归需要固定人工期望时使用；每行对应一个功能验证样本。CSV 使用 UTF-8 编码，第一行字段名不得修改。
 
 | 字段 | 必填 | 填写规则 |
 |---|---|---|
@@ -80,9 +80,9 @@ SAMPLE_001,normal_post,https://TARGET/thread/000001,visible,yes,less_than_10,no,
 
 ## 4. 返回前检查
 
-- 两个文件均使用 UTF-8；
+- 当前必需的 URL 清单使用 UTF-8；
 - 吞吐清单至少包含 2000 个不同且有效的完整 URL；
-- 功能样本 CSV 没有修改字段名；
+- 如果后续提供功能样本 CSV，没有修改字段名；
 - 没有保留 `URL_000001` 等占位内容；
 - 没有账号、密码、Cookie 或令牌；
 - 文件可以正常打开且没有乱码。
@@ -93,7 +93,9 @@ SAMPLE_001,normal_post,https://TARGET/thread/000001,visible,yes,less_than_10,no,
 
 ```text
 artifacts/poc/inputs/throughput-urls.txt
-artifacts/poc/inputs/functional-samples.csv
+artifacts/poc/inputs/functional-samples.csv  # 后续功能回归可选
 ```
 
 该目录只在本地保存，不提交 Git。
+
+当前 PoC 的程序结果不写入上述输入文件，而是写入对应轮次目录的 `url-results.jsonl`、`summary.json`、`request-events.jsonl` 和 `run.log` 等文件。

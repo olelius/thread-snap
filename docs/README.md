@@ -82,6 +82,7 @@
 | `docs/adr/0003-package-poc-for-linux-before-formal-development.md` | 正式功能开发前完成 Linux PoC 打包与最终主机测试 |
 | `docs/adr/0004-treat-platform-controls-as-poc-outcome-gate.md` | 平台风控影响按 PoC 结果门禁判定 |
 | `docs/adr/0005-adopt-forged-in-prod-workflow-control.md` | 采用 forged-in-prod 方法并按 Codex 能力建立唯一账本和流程门禁 |
+| `docs/adr/0006-split-collector-access-poc-from-v1-functional-acceptance.md` | 当前先执行采集框架访问 PoC，第一版完整功能仍在后续开发与验收 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 
@@ -93,6 +94,8 @@ ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新�
 - `docs/templates/poc/throughput-urls-template.txt`
 - `docs/templates/poc/functional-samples-template.csv`
 - `docs/templates/poc/threadsnap-poc-client-input-templates-v1.0.zip`
+
+当前采集框架 PoC 只必需 `throughput-urls.txt`；`functional-samples.csv` 是后续第一版功能回归的可选基准，不是运行结果。
 
 ### 5.2 不进入 Git 的真实输入和产物
 
