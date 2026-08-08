@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 RESPONSE_CLASSES = {"post", "rate_limited", "captcha", "challenge", "login", "empty", "error"}
 CHANNELS = {"http", "browser-network", "browser-dom"}
 STATUSES = {"success", "partial", "failed", "blocked"}
-POST_ID_PATH_RE = re.compile(r"/ugc/article/(\d+)(?:/|$)")
+POST_ID_PATH_RE = re.compile(r"/(?:ugc/)?article/(\d+)(?:/|$)")
 TITLE_RE = re.compile(r"<title[^>]*>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
 TAG_RE = re.compile(r"<[^>]+>")
@@ -30,7 +30,7 @@ def extract_input_post_id(url: str) -> str:
     parsed = urlsplit(url)
     match = POST_ID_PATH_RE.search(parsed.path)
     if not match:
-        raise ValueError("URL 路径不符合 /ugc/article/<post-id> 结构")
+        raise ValueError("URL 路径不符合 /article/<post-id> 或 /ugc/article/<post-id> 结构")
     return match.group(1)
 
 

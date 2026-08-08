@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "diagnose": "tsx src/diagnose.ts",
     "smoke": "tsx src/smoke.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"

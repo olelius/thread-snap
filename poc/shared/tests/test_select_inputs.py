@@ -10,7 +10,7 @@ from pathlib import Path
 SHARED = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SHARED))
 
-from select_inputs import select_urls, write_lf  # noqa: E402
+from select_inputs import select_stratified_urls, select_urls, url_stratum, write_lf  # noqa: E402
 
 
 class SelectionTests(unittest.TestCase):
@@ -23,6 +23,19 @@ class SelectionTests(unittest.TestCase):
             path = Path(directory) / "selected.txt"
             write_lf(path, ["https://TARGET/1", "https://TARGET/2"])
             self.assertEqual(b"https://TARGET/1\nhttps://TARGET/2\n", path.read_bytes())
+
+    def test_diagnostic_selection_covers_each_route_and_id_length(self) -> None:
+        urls = [
+            "https://TARGET/ugc/article/1234567890123456",
+            "https://TARGET/ugc/article/1234567890123456789",
+            "https://TARGET/article/2234567890123456",
+            "https://TARGET/article/2234567890123456789",
+        ]
+        selected = select_stratified_urls(list(reversed(urls)), "seed")
+        self.assertEqual(
+            {"article:16", "article:19", "ugc/article:16", "ugc/article:19"},
+            {url_stratum(url) for url in selected},
+        )
 
 
 if __name__ == "__main__":

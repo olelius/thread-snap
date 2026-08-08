@@ -11,10 +11,15 @@ from pathlib import Path
 SHARED = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(SHARED))
 
-from contract import classify_document, url_sha256, validate_result  # noqa: E402
+from contract import classify_document, extract_input_post_id, url_sha256, validate_result  # noqa: E402
 
 
 class ContractTests(unittest.TestCase):
+    def test_extracts_both_supported_article_routes(self) -> None:
+        post_id = "1234567890123456789"
+        self.assertEqual(post_id, extract_input_post_id(f"https://TARGET/article/{post_id}"))
+        self.assertEqual(post_id, extract_input_post_id(f"https://TARGET/ugc/article/{post_id}"))
+
     def test_classification_cases(self) -> None:
         cases = json.loads((SHARED / "classification-cases.json").read_text(encoding="utf-8"))
         for case in cases:

@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 ALGORITHM = "sha256(seed + NUL + utf8_url), ascending digest then URL, take first N"
+STRATIFIED_ALGORITHM = "group by route and numeric ID length; within each group rank by sha256(seed + ':' + stratum + NUL + utf8_url), take first 1"
 
 
 def sha256_bytes(data: bytes) -> str:
@@ -46,6 +47,26 @@ def select_urls(urls: list[str], seed: str, count: int) -> list[str]:
     return ranked[:count]
 
 
+def url_stratum(url: str) -> str:
+    """按公开路径形态和数字 ID 长度生成诊断分层键。"""
+
+    path = urlsplit(url).path.rstrip("/")
+    post_id = path.rsplit("/", 1)[-1]
+    if not post_id.isdigit():
+        raise ValueError(f"URL 路径末段不是数字帖子 ID: {url!r}")
+    route = "ugc/article" if "/ugc/article/" in path else "article" if "/article/" in path else "other"
+    return f"{route}:{len(post_id)}"
+
+
+def select_stratified_urls(urls: list[str], seed: str) -> list[str]:
+    """每个路径/ID 长度分层稳定选择一条，用于阶段 1 访问链诊断。"""
+
+    groups: dict[str, list[str]] = {}
+    for url in urls:
+        groups.setdefault(url_stratum(url), []).append(url)
+    return [select_urls(groups[key], f"{seed}:{key}", 1)[0] for key in sorted(groups)]
+
+
 def write_lf(path: Path, lines: list[str]) -> str:
     """以 UTF-8/LF 写入清单并返回文件哈希。"""
 
@@ -62,20 +83,23 @@ def main() -> int:
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--seed", required=True)
     parser.add_argument("--count", type=int, required=True)
+    parser.add_argument("--stratified", action="store_true")
     args = parser.parse_args()
 
     pool_bytes = args.pool.read_bytes()
     pool = read_pool(args.pool)
-    selected = select_urls(pool, args.seed, args.count)
+    selected = select_stratified_urls(pool, args.seed) if args.stratified else select_urls(pool, args.seed, args.count)
     output_hash = write_lf(args.output, selected)
     manifest = {
         "schema_version": "1.0",
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "algorithm": ALGORITHM,
+        "algorithm": STRATIFIED_ALGORITHM if args.stratified else ALGORITHM,
         "seed": args.seed,
         "pool_count": len(pool),
         "pool_sha256": sha256_bytes(pool_bytes),
         "selected_count": len(selected),
+        "selection_mode": "route-id-length-stratified" if args.stratified else "ranked",
+        "selected_strata": sorted(url_stratum(url) for url in selected) if args.stratified else None,
         "selected_sha256": output_hash,
         "output_name": args.output.name,
     }

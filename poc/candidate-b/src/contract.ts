@@ -19,8 +19,8 @@ export function urlSha256(url: string): string {
 }
 
 export function extractInputPostId(url: string): string {
-  const match = new URL(url).pathname.match(/\/ugc\/article\/(\d+)(?:\/|$)/);
-  if (!match?.[1]) throw new Error('URL 路径不符合 /ugc/article/<post-id> 结构');
+  const match = new URL(url).pathname.match(/\/(?:ugc\/)?article\/(\d+)(?:\/|$)/);
+  if (!match?.[1]) throw new Error('URL 路径不符合 /article/<post-id> 或 /ugc/article/<post-id> 结构');
   return match[1];
 }
 
