@@ -25,4 +25,4 @@
 
 ## 记忆索引
 
-当前没有达到写入门槛的项目记忆。
+- [Linux 浏览器缓存路径必须贯穿安装与运行](linux-browser-cache-path.md)

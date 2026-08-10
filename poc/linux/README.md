@@ -44,6 +44,8 @@ chmod +x poc/linux/*.sh
 - Crawlee/Playwright 自动登录和真实帖子访问；
 - 两个候选的统一结果契约检查。
 
+终端会输出当前 `stage`；浏览器健康检查最多 180 秒，每个候选最多 360 秒，超时后进入统一汇总和诊断打包，不持续静默等待。
+
 无论联通结论是否通过，脚本都会在 `connectivity-results/` 生成一个
 `connectivity-<timestamp>.tar.gz` 及对应 `.sha256`。只需把这两个文件复制回开发电脑。
 `connectivity-summary.json` 中的 `ready_for_2000=true` 表示当前服务器具备进入 2000 条测试的联通条件；失败时 `next_action` 会指出环境/浏览器、DNS/TCP/TLS/HTTP、登录或内容访问中的下一处排查方向。

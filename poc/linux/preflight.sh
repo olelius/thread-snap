@@ -6,7 +6,7 @@ cd "$ROOT"
 
 [[ "$(uname -s)" == "Linux" ]] || { echo "ERROR: 仅支持 Linux" >&2; exit 2; }
 [[ "$(uname -m)" == "x86_64" ]] || { echo "ERROR: 当前包只验证 x86_64" >&2; exit 2; }
-for command in bash sha256sum tar ps awk sed grep curl; do
+for command in bash sha256sum tar ps awk sed grep curl timeout; do
   command -v "$command" >/dev/null || { echo "ERROR: 缺少命令 $command" >&2; exit 2; }
 done
 

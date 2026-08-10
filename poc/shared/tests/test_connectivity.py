@@ -19,6 +19,14 @@ import prepare_connectivity_config  # noqa: E402
 
 
 class ConnectivityTests(unittest.TestCase):
+    def test_linux_script_exports_shared_browser_path_before_candidate_a(self) -> None:
+        script = (SHARED.parent / "linux" / "test-connectivity.sh").read_text(encoding="utf-8")
+        export_position = script.index('export PLAYWRIGHT_BROWSERS_PATH="$ROOT/.runtime/browsers"')
+        candidate_a_position = script.index("candidate_a_exit=127")
+        self.assertLess(export_position, candidate_a_position)
+        self.assertIn('timeout --signal=TERM --kill-after=15s 360s "$ROOT/.runtime/candidate-a/bin/python"', script)
+        self.assertIn("timeout --signal=TERM --kill-after=15s 360s npm", script)
+
     def test_prepare_uses_only_three_low_concurrency_samples(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
