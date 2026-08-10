@@ -26,8 +26,9 @@
 - [x] B 在 A 已进入大面积空文档后从同一出口仍先取得71条成功，排除纯 IP 统一阻断；A 登录预检成功后批量页面立即跳转登录且 Cookie 名称形态未整体消失，说明 A 另有旧会话/并发上下文连续性问题。
 - [x] 已增加候选独立的 `test-single-concurrency.sh`：要求目标会话状态最近1800秒内更新，固定前500条、并发1、最长2400秒，并记录是否在500条对应的900秒比例观察线内完成；A/B 各自初始化、各自运行和各自打包。
 - [x] 本机门禁已通过：项目 `.vevn` Python 26项、Python编译与`pip check`，Candidate B 9项与TypeScript类型检查，Bash语法、凭证标记扫描和`git diff --check`均通过；真实 Chrome/Playwright 单并发夹具分别以退出0落盘空文档诊断，B同时输出正常完成标记。
+- [x] 源码提交 `866f28ea665400c5489e5ad4ca0310b61cd13524` 已生成 v0.2.16 完整包与免重装包：完整包 SHA-256 为 `f56e62a84022df1328c3a06c62d1723831bb464b385ab2611d1923ba7ff25b58`、包内31/31一致；免重装包 SHA-256 为 `201b936d87101af9fa3cdfa272e12dd1374826ba78a2294288c23ed573fde794`、4个成员完整、Shell入口权限`0755`；两包均为零已知凭证标记。
 
-**下一步**：生成并校验免重装包；目标 Linux 依次执行 `bootstrap-sms-session.sh candidate-a`、`test-single-concurrency.sh candidate-a`，再对 Candidate B 执行同样两步并复制回两份结果包。
+**下一步**：目标 Linux 覆盖 v0.2.16 免重装包后，依次执行 `bootstrap-sms-session.sh candidate-a`、`test-single-concurrency.sh candidate-a`，再对 Candidate B 执行同样两步并复制回两份结果包。
 **边界**：单并发500条只验证触发条件和速度余量，不替代正式三轮2000条；当前23条真实404不计为平台控制，正式轮次前从输入池替换并产生新清单哈希；不共享 A/B 会话，不修改固定框架或成功契约。
 **关联**：转变结果 `artifacts/poc/results/candidate-{a,b}/access-transition-*`；结果报告 `docs/research/collector-stack-poc-results.md`；入口 `poc/linux/test-single-concurrency.sh`。
 
