@@ -63,6 +63,8 @@ class ConnectivityTests(unittest.TestCase):
         self.assertIn("chrome://inspect/#devices", script)
         self.assertNotIn("sms_code", (SHARED.parent / "linux" / "config.example.json").read_text(encoding="utf-8"))
         self.assertIn("poc/linux/bootstrap-sms-session.sh", packager)
+        self.assertIn('($hashLines -join "`n") + "`n"', packager)
+        self.assertNotIn("WriteAllLines((Join-Path $staging 'SHA256SUMS')", packager)
 
     def test_sms_bootstrap_enters_login_directly_and_reports_click_progress(self) -> None:
         candidate_a = (SHARED.parent / "candidate-a" / "src" / "throughput.py").read_text(encoding="utf-8")
