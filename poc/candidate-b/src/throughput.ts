@@ -418,9 +418,10 @@ async function bootstrapSmsSession(
       launchOptions: launchOptions(config),
     },
     preNavigationHooks: [
-      async ({ page }) => {
+      async ({ page }, gotoOptions) => {
         if (storedCookies.length > 0) await page.context().addCookies(storedCookies);
-        let loginLoadingStopped = false;
+        gotoOptions.waitUntil = 'domcontentloaded';
+        console.log('navigation_action=candidate-b;action=wait_until_domcontentloaded');
         const pendingByType = new Map<string, number>();
         const changePending = (kind: string, delta: number): void => {
           pendingByType.set(kind, Math.max(0, (pendingByType.get(kind) ?? 0) + delta));
@@ -436,8 +437,7 @@ async function bootstrapSmsSession(
         });
         page.on('domcontentloaded', async () => {
           console.log('navigation_event=candidate-b;event=domcontentloaded');
-          if (loginLoadingStopped || !page.url().includes('/login-required')) return;
-          loginLoadingStopped = true;
+          if (!page.url().includes('/login-required')) return;
           await page.waitForTimeout(250);
           if (page.isClosed()) return;
           const pending = [...pendingByType.entries()]
@@ -446,8 +446,6 @@ async function bootstrapSmsSession(
             .map(([kind, count]) => `${kind}:${count}`)
             .join(',') || 'none';
           console.log(`navigation_pending=candidate-b;types=${pending}`);
-          await page.evaluate(() => window.stop());
-          console.log('navigation_action=candidate-b;action=stop_login_loading');
         });
         page.on('load', () => console.log('navigation_event=candidate-b;event=load'));
         await page.route('**/*', async (route) => {

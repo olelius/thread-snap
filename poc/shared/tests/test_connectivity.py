@@ -77,6 +77,10 @@ class ConnectivityTests(unittest.TestCase):
         for marker in ("navigation_target", "navigation_document", "navigation_event", "navigation_pending", "navigation_action"):
             self.assertIn(marker, candidate_a)
             self.assertIn(marker, bootstrap_b)
+        self.assertIn("action=wait_until_domcontentloaded", candidate_a)
+        self.assertIn("action=wait_until_domcontentloaded", bootstrap_b)
+        self.assertNotIn("window.stop()", candidate_a)
+        self.assertNotIn("window.stop()", bootstrap_b)
 
     def test_prepare_uses_only_three_low_concurrency_samples(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
