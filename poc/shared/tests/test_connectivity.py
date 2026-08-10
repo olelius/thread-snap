@@ -72,6 +72,7 @@ class ConnectivityTests(unittest.TestCase):
             prepared = json.loads(output.read_text(encoding="utf-8"))
             self.assertEqual(3, prepared["expected_count"])
             self.assertEqual(300, prepared["window_seconds"])
+            self.assertTrue(prepared["capture_login_diagnostic"])
             self.assertEqual(1, prepared["candidate_a"]["concurrency"])
             self.assertEqual(1, prepared["candidate_b"]["concurrency"])
 

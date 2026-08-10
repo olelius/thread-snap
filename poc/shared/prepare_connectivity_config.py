@@ -32,6 +32,7 @@ def main() -> int:
     prepared["window_seconds"] = 300
     prepared["max_attempts"] = 1
     prepared["retry_delay_ms"] = 0
+    prepared["capture_login_diagnostic"] = True
     prepared.setdefault("candidate_a", {})["concurrency"] = 1
     prepared["candidate_a"]["profile_dir"] = str((args.root / "profiles/connectivity-candidate-a").resolve())
     prepared.setdefault("candidate_b", {})["concurrency"] = 1

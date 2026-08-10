@@ -5,6 +5,7 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { PlaywrightCrawler } from 'crawlee';
+import type { Page } from 'playwright';
 import { classifyDocument, CONTROL_CLASSES, extractInputPostId, urlSha256, type Classification } from './contract.js';
 
 interface CandidateConfig {
@@ -23,6 +24,7 @@ interface TestConfig {
   max_attempts?: number;
   retry_delay_ms?: number;
   request_timeout_ms?: number;
+  capture_login_diagnostic?: boolean;
   candidate_b: CandidateConfig;
 }
 
@@ -45,6 +47,13 @@ interface Attempt extends Classification {
   final_url_sha256: string | null;
   error_category: string | null;
 }
+
+const LOGIN_REASON_MARKERS = [
+  '短信验证码', '获取验证码', '发送验证码', '手机验证', '手机号验证',
+  '验证码', '验证中心', '安全验证', '滑动验证', '向右滑动',
+  '账号或密码错误', '账号不存在', '密码错误', '登录失败', '操作频繁', '请稍后重试',
+] as const;
+const VERIFICATION_REASON_MARKERS = new Set<string>(LOGIN_REASON_MARKERS.slice(0, 10));
 
 interface FinalResult {
   schema_version: '1.0';
@@ -164,6 +173,83 @@ function loginFailureResult(url: string, responseClass: Classification['response
   };
 }
 
+async function anyVisible(page: Page, selector: string): Promise<boolean> {
+  const locator = page.locator(selector);
+  const count = Math.min(await locator.count(), 10);
+  for (let index = 0; index < count; index += 1) {
+    if (await locator.nth(index).isVisible()) return true;
+  }
+  return false;
+}
+
+async function collectLoginDiagnostic(
+  page: Page,
+  config: TestConfig,
+  outputDir: string,
+): Promise<Record<string, unknown>> {
+  const bodyText = await page.locator('body').innerText({ timeout: 5_000 }).catch(() => '');
+  const reasonMarkers = LOGIN_REASON_MARKERS.filter((marker) => bodyText.includes(marker));
+  const selectorMap = {
+    sms_code_input: 'input[name="code"], input[placeholder*="验证码"]',
+    captcha_frame: 'iframe[src*="captcha" i]',
+    captcha_container: '[class*="captcha" i], [id*="captcha" i]',
+    verification_container: '[class*="verify" i], [id*="verify" i]',
+    slider_container: '[class*="slide" i], [class*="slider" i]',
+    account_input: 'input[name="account"]',
+    password_input: 'input[name="password"]',
+  };
+  const visibleSelectors: Record<string, boolean> = {};
+  for (const [name, selector] of Object.entries(selectorMap)) {
+    visibleSelectors[name] = await anyVisible(page, selector).catch(() => false);
+  }
+  const parsedUrl = new URL(page.url());
+  const secrets = [
+    config.account,
+    config.password,
+    config.account.slice(0, 3),
+    config.account.slice(-4),
+  ].filter(Boolean);
+  let pageTitle = (await page.title().catch(() => '')).slice(0, 120);
+  for (const secret of secrets) pageTitle = pageTitle.split(secret).join('[REDACTED]');
+  const verificationRequired = reasonMarkers.some((marker) => VERIFICATION_REASON_MARKERS.has(marker))
+    || ['sms_code_input', 'captcha_frame', 'captcha_container', 'verification_container', 'slider_container']
+      .some((name) => visibleSelectors[name] === true);
+  const diagnostic: Record<string, unknown> = {
+    schema_version: '1.0',
+    candidate: 'candidate-b',
+    final_path: parsedUrl.pathname,
+    query_keys: [...new Set(parsedUrl.searchParams.keys())].sort(),
+    page_title: pageTitle,
+    reason_markers: reasonMarkers,
+    visible_selectors: visibleSelectors,
+    verification_visible: verificationRequired,
+    screenshot: null,
+    screenshot_error: null,
+  };
+  if (config.capture_login_diagnostic && (parsedUrl.pathname.includes('/login') || verificationRequired)) {
+    try {
+      await page.evaluate(({ values }: { values: string[] }) => {
+        document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea').forEach((element) => {
+          element.value = '';
+          element.setAttribute('value', '');
+        });
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          for (const secret of values) {
+            if (secret) node.textContent = (node.textContent ?? '').split(secret).join('[REDACTED]');
+          }
+        }
+      }, { values: secrets });
+      const screenshotName = 'login-page-redacted.png';
+      await page.screenshot({ path: resolve(outputDir, screenshotName), fullPage: true });
+      diagnostic['screenshot'] = screenshotName;
+    } catch (error) {
+      diagnostic['screenshot_error'] = error instanceof Error ? error.name : 'unknown_error';
+    }
+  }
+  return diagnostic;
+}
+
 async function verifyLogin(
   config: TestConfig, profileDir: string, probeUrl: string, outputDir: string,
 ): Promise<Record<string, unknown>> {
@@ -204,9 +290,19 @@ async function verifyLogin(
         submitted = true;
         await page.waitForTimeout(10_000);
       }
-      const document = await page.content();
-      const classification = classifyDocument(page.url(), 200, document, extractInputPostId(probeUrl));
-      const verificationRequired = ['captcha', '验证码', '验证中心'].some((marker) => document.toLowerCase().includes(marker));
+      const htmlDocument = await page.content();
+      const classification = classifyDocument(page.url(), 200, htmlDocument, extractInputPostId(probeUrl));
+      const diagnostic = await collectLoginDiagnostic(page, config, outputDir).catch((error: unknown) => ({
+        schema_version: '1.0',
+        candidate: 'candidate-b',
+        verification_visible: false,
+        screenshot: null,
+        screenshot_error: error instanceof Error ? error.name : 'unknown_error',
+      }));
+      if (config.capture_login_diagnostic) {
+        writeFileSync(resolve(outputDir, 'login-diagnostic.json'), `${JSON.stringify(diagnostic, null, 2)}\n`, 'utf8');
+      }
+      const verificationRequired = diagnostic['verification_visible'] === true;
       result = {
         schema_version: '1.0', candidate: 'candidate-b', submitted,
         password_login_selected: passwordLoginSelected,
@@ -214,6 +310,7 @@ async function verifyLogin(
         verification_required: verificationRequired,
         response_class: classification.response_class,
         status: classification.status,
+        diagnostic_file: config.capture_login_diagnostic ? 'login-diagnostic.json' : null,
       };
     },
   });

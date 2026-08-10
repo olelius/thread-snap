@@ -12,6 +12,7 @@
 - 目标 Linux 首次执行改为先跑独立联通门：最多 3 条两个候选都曾成功的样本，依次验证运行时/浏览器、DNS/TCP/TLS/HTTP、Scrapling 登录访问和 Crawlee/Playwright 登录访问；服务器只需返回脚本生成的诊断压缩包，复核 `ready_for_2000=true` 后再进入 2000 条。
 - 目标主机已实测为 CentOS Stream 10（Coughlan）、x86_64、glibc 2.39、Python 3.12.12；根分区可用 56G、内存可用 13GiB、Swap 可用 7.8GiB，两个候选的浏览器健康检查和网络基线均通过。首次联通因候选 A 运行入口未继承包内浏览器缓存路径而失败，属于运行脚本环境变量顺序问题，不是框架或主机资源问题；候选 B 当时只完成登录页请求，不是帖子访问成功。
 - 修复浏览器路径后的 Linux 联通包已通过外层和 21/21 内部校验：两个候选均提交了表单，但3条样本均未开始帖子请求。已确认登录页默认是手机验证码模式，旧逻辑按“最后一个按钮”切换并未可靠进入密码表单；两个候选现改为显式点击可见的“密码登录”，等待账号和密码输入框可见后再提交。
+- 显式密码登录修复后的 Linux 联通包再次通过外层和 21/21 内部校验：两个候选均 `password_login_selected=true`、`submitted=true`，但提交后仍为 `logged_in=false`，3 条帖子请求均未启动。说明密码模式切换已生效但不是全部阻塞；当前补充提交后可见二次验证控件、标准化提示和脱敏截图，再区分二次手机验证、验证码或账号提示。
 - 当前正式技术栈、平台真实接口和是否需要登录仍未由实测确定。
 - 功能范围 owner 为 `docs/design/product-design.md`；技术边界 owner 为 `docs/design/technical-route.md`；PoC 细节 owner 为 `docs/research/collector-stack-poc-plan.md`。
 

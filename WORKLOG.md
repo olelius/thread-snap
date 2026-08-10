@@ -19,7 +19,7 @@
 
 **总目标**：在目标服务器执行 2000 条测试前，先用最多 3 条已验证样本独立确认 Linux 环境、网络链路、两个固定框架的自动登录和真实帖子访问；失败时返回完整诊断包后再按证据修复。
 
-**状态**：🟡 目标 Linux 环境与浏览器路径已通过；密码登录显式切换修复包 v0.2.3 已完成，等待复跑
+**状态**：🟡 密码登录切换已在目标 Linux 生效；提交后仍停留登录页，正在补充可见二次验证诊断
 
 **干到哪了**：
 
@@ -35,12 +35,14 @@
 - [x] 已确认页面默认处于手机验证码登录，旧实现检测到验证码输入框后点击“最后一个按钮”并未可靠选择密码模式；候选 A/B 均改为点击可见且文字精确为“密码登录”的选项，等待账号和密码输入框可见后再填充，并记录 `password_login_selected`。
 - [x] 本机真实浏览器夹具已复现“帖子 302 到默认手机验证码页 → 点击密码登录 → 填写提交 → 持久会话复访帖子”的完整链路；Scrapling 与 Crawlee/Playwright 均为 `password_login_selected=true`、`logged_in=true`，随后 1/1 帖子结果为 `success` 且 `request_count=1`。
 - [x] 已生成 `threadsnap-poc-dual-runner-0.2.3-linux.tar.gz`，SHA-256 为 `8022bdfa852b852fb7cc7d06958ad3809e83cf98b5e1335bd50256cb25f942fb`，包内源码提交为 `b2af26f289f86cf6e32c596b409f60a98568714a`；24/24 内部校验、两个候选密码登录定位、2000+3 输入数量和标准包零真实凭证均已复核。
+- [x] 已接收 v0.2.3 热修后的 Linux 联通包：外层 SHA-256 `5b22368e6e5de4f4344f9e325507200aac63110af215d9c5204ec3cf708474f6` 与 21/21 包内校验一致；两个候选均 `password_login_selected=true`、`submitted=true`，但仍为 `logged_in=false`、`verification_required=true`，3 条结果均 `request_count=0`。密码模式切换已被证实，不再把当前结果归因于未点击密码登录。
+- [x] 联通模式新增每个候选的 `login-diagnostic.json` 和条件性 `login-page-redacted.png`：验证信号改为可见正文及可见短信码、验证码、滑块或验证容器；只保存最终路径、查询参数名、标准化提示和控件布尔值，截图前清空输入框并遮盖账号相关文本。两个候选的手机验证失败夹具均生成诊断和脱敏截图，正常密码登录持久会话回归仍为 1/1 `success`。
 
-**下一步**：目标服务器覆盖 v0.2.3 的两个候选入口后复跑联通脚本，把新的诊断 `tar.gz` 和 `.sha256` 复制回来。只有复核为 `ready_for_2000=true` 后才运行首轮 2000 条。
+**下一步**：生成提交后可见验证诊断热修包；目标服务器覆盖后复跑联通脚本，把新的诊断 `tar.gz` 和 `.sha256` 复制回来，通过脱敏截图和 `login-diagnostic.json` 确定二次验证或账号提示。只有复核为 `ready_for_2000=true` 后才运行首轮 2000 条。
 
 **边界**：联通通过只证明当前服务器具备进入吞吐测试的网络、登录和内容访问条件，不构成 2000 条/小时门禁通过；两个固定候选技术、账号条件和结果契约保持不变。
 
-**关联**：分支 `fix/linux-password-login`；入口 `poc/candidate-a/src/throughput.py`、`poc/candidate-b/src/throughput.ts`。
+**关联**：分支 `fix/linux-post-login-diagnostics`；入口 `poc/candidate-a/src/throughput.py`、`poc/candidate-b/src/throughput.ts`。
 
 ---
 

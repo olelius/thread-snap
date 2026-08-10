@@ -52,6 +52,8 @@ chmod +x poc/linux/*.sh
 `connectivity-<timestamp>.tar.gz` 及对应 `.sha256`。只需把这两个文件复制回开发电脑。
 `connectivity-summary.json` 中的 `ready_for_2000=true` 表示当前服务器具备进入 2000 条测试的联通条件；失败时 `next_action` 会指出环境/浏览器、DNS/TCP/TLS/HTTP、登录或内容访问中的下一处排查方向。
 
+联通模式还会为每个候选生成 `login-diagnostic.json`；提交后仍停留在登录或验证页面时，额外生成 `login-page-redacted.png`。诊断只记录最终路径、查询参数名、可见验证控件和标准化提示词；截图前清空输入框并遮盖账号、密码及账号片段，不保存完整 HTML、Cookie 值或凭证。
+
 单独执行：
 
 ```bash
