@@ -24,6 +24,7 @@
 - v0.2.12 目标 Linux 已分别完成 Candidate A/B 可视验证、短信登录与帖子 200 复访，两份候选状态均成功落盘。随后联通包 `connectivity-20260810T164845+0800` 的外层 SHA-256 与 23/23 内部校验一致，网络基线全部通过，但联通临时配置把会话目录切换到空的 `profiles/connectivity-candidate-*`：Candidate B 因此重新进入密码登录并触发二次短信验证，Candidate A 在同一未认证入口等待 `load` 超时。根因是 PoC 隔离目录未复制当前会话，不是候选框架失效；联通准备阶段现重建隔离目录并分别复制 A/B 的 `storage-state.json`，源状态缺失时同时清除旧副本。
 - v0.2.13 目标 Linux 联通包确认 A/B 会话均已复制；Candidate B 对同一3条样本取得3/3 `post/success`，Candidate A 则在已认证首帖的 Scrapling `page.goto(wait_until=load)` 满 90 秒并于登录结果落盘前退出。账号、样本、网络及会话条件已由 B 的同轮成功对照排除，当前只把 A 的普通登录确认和逐 URL 访问改为 DOM 就绪导航；同时让联通汇总优先报告候选运行/契约错误，不再把已启动异常误报为 `runner_not_started` 或登录猜测。
 - v0.2.14 目标 Linux 联通包通过外层及23/23内部校验：运行时、浏览器、网络和两份会话均正常，Candidate A/B 对同一3条样本分别取得3/3 `post/success`，完成率、帖子 ID 匹配率和内容证明率均100%，未恢复控制数与契约错误均为0。联通汇总已为 `ready_for_2000=true`，独立联通阶段门关闭，下一步按固定2000条清单执行首轮双候选吞吐。
+- 目标 Linux 首轮 2000 条已按同一输入顺序完成并通过两份结果目录各自 8/8 校验，但两个候选均未通过统一硬门槛：Candidate A 为 0/2000 有效帖子证明，最终 374 个 `login` 与 1626 个 `empty`；Candidate B 为 315/2000 有效帖子证明，最终 1580 个 `empty`、22 个 `login` 与 83 个 `error`。B 的 Crawlee 队列虽在约 925.738 秒内处理完 2000 项，进程仍持续存活并在人工 TERM 后以 143 退出，总时长 6744 秒。当前先补齐空文档/登录转变、A 并发会话连续性和 B 有界退出证据，再以新包重新开始三轮硬门禁；不更换两个候选框架。
 - 当前正式技术栈、平台真实接口和是否需要登录仍未由实测确定。
 - 功能范围 owner 为 `docs/design/product-design.md`；技术边界 owner 为 `docs/design/technical-route.md`；PoC 细节 owner 为 `docs/research/collector-stack-poc-plan.md`。
 
