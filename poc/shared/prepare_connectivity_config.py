@@ -6,7 +6,42 @@ import argparse
 import copy
 import json
 import os
+import shutil
 from pathlib import Path
+
+
+def resolve_profile_dir(config_path: Path, configured: object, default: str) -> Path:
+    """按原始配置文件的位置解析候选会话目录。"""
+
+    value = Path(str(configured or default))
+    if not value.is_absolute():
+        value = config_path.parent / value
+    return value.resolve()
+
+
+def refresh_connectivity_profile(source: Path, destination: Path) -> bool:
+    """重建联通隔离目录，并只复制当前已认证的浏览器状态。"""
+
+    source = source.resolve()
+    destination = destination.resolve()
+    source_state = source / "storage-state.json"
+    destination_state = destination / "storage-state.json"
+
+    if source == destination:
+        return source_state.is_file()
+
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.mkdir(parents=True, exist_ok=True)
+    if not source_state.is_file():
+        return False
+
+    shutil.copyfile(source_state, destination_state)
+    try:
+        os.chmod(destination_state, 0o600)
+    except OSError:
+        pass
+    return True
 
 
 def main() -> int:
@@ -33,17 +68,33 @@ def main() -> int:
     prepared["max_attempts"] = 1
     prepared["retry_delay_ms"] = 0
     prepared["capture_login_diagnostic"] = True
-    prepared.setdefault("candidate_a", {})["concurrency"] = 1
-    prepared["candidate_a"]["profile_dir"] = str((args.root / "profiles/connectivity-candidate-a").resolve())
-    prepared.setdefault("candidate_b", {})["concurrency"] = 1
-    prepared["candidate_b"]["profile_dir"] = str((args.root / "profiles/connectivity-candidate-b").resolve())
+    session_states: dict[str, bool] = {}
+    for config_key, candidate_name in (("candidate_a", "candidate-a"), ("candidate_b", "candidate-b")):
+        candidate = prepared.setdefault(config_key, {})
+        source_profile = resolve_profile_dir(
+            args.config.resolve(),
+            candidate.get("profile_dir"),
+            f"profiles/{candidate_name}",
+        )
+        connectivity_profile = (args.root / f"profiles/connectivity-{candidate_name}").resolve()
+        session_states[candidate_name] = refresh_connectivity_profile(source_profile, connectivity_profile)
+        candidate["concurrency"] = 1
+        candidate["profile_dir"] = str(connectivity_profile)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(prepared, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     try:
         os.chmod(args.output, 0o600)
     except OSError:
         pass
-    print(json.dumps({"sample_count": len(urls), "window_seconds": 300}))
+    print(
+        json.dumps(
+            {
+                "sample_count": len(urls),
+                "window_seconds": 300,
+                "session_state_copied": session_states,
+            }
+        )
+    )
     return 0
 
 

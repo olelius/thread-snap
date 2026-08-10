@@ -66,6 +66,8 @@ CDP 只监听服务器回环地址并经 SSH 隧道访问，不需要在服务�
 
 动态码不写入 `config.json`、标准输出、结果文件或持久浏览器状态；成功后只在各候选的本地 `profile_dir/storage-state.json` 保存复访所需的会话状态，并将文件权限设为 `0600`。两个候选必须分别完成一次，不能共用状态文件。
 
+再次执行 `test-connectivity.sh` 时，准备阶段会重建两个 `profiles/connectivity-candidate-*` 隔离目录，并分别从 `config.json` 中 Candidate A/B 的 `profile_dir` 复制当前 `storage-state.json`。这样联通测试复用刚完成的认证，又不直接改写主会话；若源状态不存在，旧的联通副本会被删除。`prepare.log` 中的 `session_state_copied` 应对两个候选均为 `true`，该日志不包含 Cookie 或状态内容。
+
 该入口只用于当前 PoC 测试。正式项目采用人工续期、自动接码、外部会话托管还是其他方式仍为未决项，本脚本不构成正式方案。
 
 该脚本最多访问 `connectivity-urls.txt` 中的 3 条已验证样本，不启动 2000 条任务。它依次记录：

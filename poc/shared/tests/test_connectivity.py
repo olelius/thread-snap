@@ -137,6 +137,14 @@ class ConnectivityTests(unittest.TestCase):
             source = root / "source.json"
             input_path = root / "connectivity-urls.txt"
             output = root / "runtime" / "config.json"
+            state_by_candidate = {
+                "candidate-a": {"cookies": [{"name": "fixture-a", "value": "session-a"}], "origins": []},
+                "candidate-b": {"cookies": [{"name": "fixture-b", "value": "session-b"}], "origins": []},
+            }
+            for candidate, state in state_by_candidate.items():
+                profile = root / "profiles" / candidate
+                profile.mkdir(parents=True)
+                (profile / "storage-state.json").write_text(json.dumps(state), encoding="utf-8")
             source.write_text(
                 json.dumps(
                     {
@@ -163,14 +171,60 @@ class ConnectivityTests(unittest.TestCase):
                 "--root", str(root),
             ]
             with patch.object(sys, "argv", argv):
-                with redirect_stdout(io.StringIO()):
+                stdout = io.StringIO()
+                with redirect_stdout(stdout):
                     self.assertEqual(0, prepare_connectivity_config.main())
             prepared = json.loads(output.read_text(encoding="utf-8"))
+            preparation = json.loads(stdout.getvalue())
             self.assertEqual(3, prepared["expected_count"])
             self.assertEqual(300, prepared["window_seconds"])
             self.assertTrue(prepared["capture_login_diagnostic"])
             self.assertEqual(1, prepared["candidate_a"]["concurrency"])
             self.assertEqual(1, prepared["candidate_b"]["concurrency"])
+            self.assertEqual({"candidate-a": True, "candidate-b": True}, preparation["session_state_copied"])
+            for config_key, candidate in (("candidate_a", "candidate-a"), ("candidate_b", "candidate-b")):
+                connectivity_profile = root / "profiles" / f"connectivity-{candidate}"
+                self.assertEqual(connectivity_profile.resolve(), Path(prepared[config_key]["profile_dir"]))
+                copied = json.loads((connectivity_profile / "storage-state.json").read_text(encoding="utf-8"))
+                self.assertEqual(state_by_candidate[candidate], copied)
+            self.assertNotIn("session-a", stdout.getvalue())
+            self.assertNotIn("session-b", stdout.getvalue())
+
+    def test_prepare_removes_stale_connectivity_state_when_source_state_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "config.json"
+            input_path = root / "connectivity-urls.txt"
+            output = root / "runtime" / "config.json"
+            stale_profile = root / "profiles" / "connectivity-candidate-a"
+            stale_profile.mkdir(parents=True)
+            (stale_profile / "storage-state.json").write_text('{"cookies":[{"value":"stale"}]}', encoding="utf-8")
+            source.write_text(
+                json.dumps(
+                    {
+                        "account": "fixture-account",
+                        "password": "fixture-password",
+                        "candidate_a": {"profile_dir": "profiles/candidate-a"},
+                        "candidate_b": {"profile_dir": "profiles/candidate-b"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            input_path.write_text("https://TARGET/ugc/article/1234567890123456789\n", encoding="utf-8")
+            argv = [
+                "prepare_connectivity_config.py",
+                "--config", str(source),
+                "--input", str(input_path),
+                "--output", str(output),
+                "--root", str(root),
+            ]
+            with patch.object(sys, "argv", argv):
+                stdout = io.StringIO()
+                with redirect_stdout(stdout):
+                    self.assertEqual(0, prepare_connectivity_config.main())
+            preparation = json.loads(stdout.getvalue())
+            self.assertEqual({"candidate-a": False, "candidate-b": False}, preparation["session_state_copied"])
+            self.assertFalse((stale_profile / "storage-state.json").exists())
 
     def test_finalize_requires_network_and_both_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
