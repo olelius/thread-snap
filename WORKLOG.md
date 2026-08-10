@@ -15,6 +15,25 @@
 
 ---
 
+## 2026-08-10 — 复核目标 Linux 首轮 2000 条双候选结果
+
+**总目标**：保持 Scrapling 与 Crawlee/Playwright 两个固定候选不变，按统一校验器复核目标 Linux 首轮 2000 条结果，区分队列处理、有效帖子证明、平台控制和运行器生命周期问题。
+**状态**：❌ 当前包的首轮双候选吞吐门禁均未通过；进入定向诊断与运行器修复，暂不启动下一轮 2000 条
+
+**干到哪了**：
+- [x] 已完整复制并校验 `artifacts/poc/results/candidate-a/round-1-20260810T204251+0800/` 与 `artifacts/poc/results/candidate-b/round-1-20260810T210023+0800/`；两份 `SHA256SUMS` 均为 8/8 一致，其文件自身 SHA-256 分别为 `4ca6c73387d36fc2f8628c188c1c1643882d5b5caed5da07d31687e34a1cfb8d` 和 `811bac33f94d7697e6b590bada706360f4316b7c9034da6c667d4d8c12c6e9d5`。
+- [x] 两候选输入均为 2000 个不同 URL，顺序一致，输入清单 SHA-256 均为 `4558a54cbe96259c1a64d6fda02658b3b344b8a269fcd85ea32a793572ea5d70`；两边结果均为 2000 个不同输入哈希，无缺失、额外或重复结果。
+- [x] Candidate A 在 1052 秒内写完结果但有效帖子证明为 0/2000：374 个 `login/blocked`、1626 个 `empty/failed`，帖子 ID 匹配率和内容证明率均为 0%。前约 4 分钟主要为登录重定向，随后主要转为停留输入地址的空文档；登录预检成功不能外推为并发页面继续持有有效访问状态。
+- [x] Candidate B 的 Crawlee 队列在约 925.738 秒内处理完 2000 项，但统一契约只有 315/2000 `post/success`（15.75%）：另有 1580 个 `empty`、22 个 `login` 和 83 个 `error`。前约 7 分钟取得绝大多数成功，之后响应几乎整体转为 `empty`；队列日志的“2000 succeeded”只表示处理器完成，不表示帖子访问成功。
+- [x] Candidate B 在队列完成后未退出，最终由人工 TERM 收口，`runner_exit_code=143`、总时长 6744 秒且超出 3600 秒窗口；汇总、环境、逐 URL、请求事件、资源指标和校验值已保留。该退出缺陷独立于 15.75% 的访问契约失败。
+- [x] 首轮结论和证据入口已写入 `docs/research/collector-stack-poc-results.md`；原始 URL 和逐请求数据继续只保存在被 Git 忽略的 `artifacts/poc/`。
+
+**下一步**：不覆盖本轮失败证据；为两个固定候选增加少量 `empty/login` 首次出现时的脱敏页面与主文档响应证据、候选 A 并发页面会话连续性证据，并为 Candidate B 增加显式有界关闭及 Shell 进程树兜底。先用固定小样本验证根因和退出，再以新包从三轮硬门禁重新计数。
+**边界**：当前只确认两候选在本轮配置下失败；`empty` 的具体平台判定信号尚未取证，不把它直接写成已确认验证码或限流。不得用 Crawlee 队列统计替代统一结果契约，也不得把人工 TERM 后生成的完整目录改写为通过。
+**关联**：结果目录 `artifacts/poc/results/candidate-{a,b}/round-1-*`；报告 `docs/research/collector-stack-poc-results.md`；输入清单 SHA-256 `4558a54cbe96259c1a64d6fda02658b3b344b8a269fcd85ea32a793572ea5d70`。
+
+---
+
 ## 2026-08-10 — 修复 Candidate A 已认证帖子导航等待完整 load
 
 **总目标**：保持 Scrapling 与 Crawlee/Playwright 两个固定候选不变，让 Candidate A 在已认证会话下完成最多3条联通门，并保留与 Candidate B 相同的帖子 ID 和内容证明契约。
