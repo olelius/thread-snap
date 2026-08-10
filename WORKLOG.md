@@ -30,6 +30,7 @@
 - [x] 两个候选均已增加 `access-diagnostics.jsonl`：每种 `login/empty` 最多记录 3 条 URL 哈希、最终路径类型、文档长度与哈希、DOM 形态、控制标记、主文档状态链以及 Cookie 数量/名称集合哈希，不保存完整 URL、页面正文、Cookie 名称/值或凭证。
 - [x] Candidate B 在 Crawlee 队列返回后刷新完成标记并显式退出；Linux 包装器使用独立进程组，在入口退出、硬截止或信号中断时以 TERM/KILL 收口 npm、tsx 和浏览器后代。
 - [x] 项目 `.vevn` Python 23 项、Candidate B 9 项、Python 编译、TypeScript 类型检查、Bash 语法、`pip check`、暂存内容格式检查已通过；本机真实 Chrome/Playwright 合成夹具分别确认 A/B 可落盘 `empty` 诊断，B 在队列完成后正常退出。
+- [x] 源码提交 `2913d3bd00c75c2e32e6625c1e7eca327c192d0e` 已生成 v0.2.15 完整包与免重装热修包：完整包 SHA-256 为 `70ac81c451eac1a84cf1e65be7519f9407a986d5741a60c59f22d16af43a126d`、包内 29/29 校验一致；热修包 SHA-256 为 `6b5c4cc85dbb6dc9c780179f4042905b85237a97bb611d5faac244daade52ceb`、10 个成员完整、4 个 Shell 入口权限均为 `0755`；两包已复核零已知凭证标记。
 
 **下一步**：不覆盖本轮失败证据；在目标 Linux 覆盖免重装热修包后执行 `./poc/linux/test-access-transition.sh`。脚本按原顺序取前 500 条、A/B 各使用 1200 秒窗口并返回诊断压缩包；复核真实 `access-diagnostics.jsonl` 与退出码后，再决定是否重新启动三轮 2000 条硬门禁。
 **边界**：当前只确认两候选在本轮配置下失败；`empty` 的具体平台判定信号尚未取证，不把它直接写成已确认验证码或限流。不得用 Crawlee 队列统计替代统一结果契约，也不得把人工 TERM 后生成的完整目录改写为通过。

@@ -26,6 +26,7 @@
 - v0.2.14 目标 Linux 联通包通过外层及23/23内部校验：运行时、浏览器、网络和两份会话均正常，Candidate A/B 对同一3条样本分别取得3/3 `post/success`，完成率、帖子 ID 匹配率和内容证明率均100%，未恢复控制数与契约错误均为0。联通汇总已为 `ready_for_2000=true`，独立联通阶段门关闭，下一步按固定2000条清单执行首轮双候选吞吐。
 - 目标 Linux 首轮 2000 条已按同一输入顺序完成并通过两份结果目录各自 8/8 校验，但两个候选均未通过统一硬门槛：Candidate A 为 0/2000 有效帖子证明，最终 374 个 `login` 与 1626 个 `empty`；Candidate B 为 315/2000 有效帖子证明，最终 1580 个 `empty`、22 个 `login` 与 83 个 `error`。B 的 Crawlee 队列虽在约 925.738 秒内处理完 2000 项，进程仍持续存活并在人工 TERM 后以 143 退出，总时长 6744 秒。当前先补齐空文档/登录转变、A 并发会话连续性和 B 有界退出证据，再以新包重新开始三轮硬门禁；不更换两个候选框架。
 - 两个固定候选现已增加同结构的有界脱敏访问诊断，每种 `login/empty` 最多记录 3 条页面形态、主文档状态链与 Cookie 形态；Candidate B 在队列返回后显式退出，Linux 包装器以独立进程组和 TERM/KILL 收口残留后代。本机合成浏览器已验证两端 `empty` 诊断和 B 正常退出；下一步只在目标 Linux 运行固定前 500 条的转变诊断，依据真实证据细分 `empty`，不把该诊断计入正式 2000 条轮次，也不更换 Scrapling 或 Crawlee/Playwright。
+- v0.2.15 已从源码提交 `2913d3bd00c75c2e32e6625c1e7eca327c192d0e` 生成：完整包 SHA-256 为 `70ac81c451eac1a84cf1e65be7519f9407a986d5741a60c59f22d16af43a126d`，免重装热修包 SHA-256 为 `6b5c4cc85dbb6dc9c780179f4042905b85237a97bb611d5faac244daade52ceb`；目标 Linux 只需覆盖热修包并执行转变诊断，不触发依赖下载。
 - 当前正式技术栈、平台真实接口和是否需要登录仍未由实测确定。
 - 功能范围 owner 为 `docs/design/product-design.md`；技术边界 owner 为 `docs/design/technical-route.md`；PoC 细节 owner 为 `docs/research/collector-stack-poc-plan.md`。
 
