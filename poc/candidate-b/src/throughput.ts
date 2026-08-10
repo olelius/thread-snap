@@ -420,13 +420,35 @@ async function bootstrapSmsSession(
     preNavigationHooks: [
       async ({ page }) => {
         if (storedCookies.length > 0) await page.context().addCookies(storedCookies);
+        let loginLoadingStopped = false;
+        const pendingByType = new Map<string, number>();
+        const changePending = (kind: string, delta: number): void => {
+          pendingByType.set(kind, Math.max(0, (pendingByType.get(kind) ?? 0) + delta));
+        };
+        page.on('request', (request) => changePending(request.resourceType(), 1));
+        page.on('requestfinished', (request) => changePending(request.resourceType(), -1));
+        page.on('requestfailed', (request) => changePending(request.resourceType(), -1));
         page.on('response', (response) => {
           if (response.request().resourceType() !== 'document') return;
           const path = new URL(response.url()).pathname;
           const target = path.includes('/login') ? 'login' : path.includes('/article/') ? 'post' : 'other';
           console.log(`navigation_document=candidate-b;status=${response.status()};target=${target}`);
         });
-        page.on('domcontentloaded', () => console.log('navigation_event=candidate-b;event=domcontentloaded'));
+        page.on('domcontentloaded', async () => {
+          console.log('navigation_event=candidate-b;event=domcontentloaded');
+          if (loginLoadingStopped || !page.url().includes('/login-required')) return;
+          loginLoadingStopped = true;
+          await page.waitForTimeout(250);
+          if (page.isClosed()) return;
+          const pending = [...pendingByType.entries()]
+            .filter(([, count]) => count > 0)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([kind, count]) => `${kind}:${count}`)
+            .join(',') || 'none';
+          console.log(`navigation_pending=candidate-b;types=${pending}`);
+          await page.evaluate(() => window.stop());
+          console.log('navigation_action=candidate-b;action=stop_login_loading');
+        });
         page.on('load', () => console.log('navigation_event=candidate-b;event=load'));
         await page.route('**/*', async (route) => {
           const kind = route.request().resourceType();

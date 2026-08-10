@@ -105,6 +105,33 @@ async def setup_sms_navigation_diagnostics(page: Any) -> None:
     """为短信入口保留资源路由，并输出不含真实地址的导航生命周期证据。"""
 
     await setup_login_resource_routing(page)
+    login_loading_stopped = False
+    pending_by_type: dict[str, int] = {}
+
+    def change_pending(request: Any, delta: int) -> None:
+        resource_type = str(request.resource_type)
+        pending_by_type[resource_type] = max(0, pending_by_type.get(resource_type, 0) + delta)
+
+    page.on("request", lambda request: change_pending(request, 1))
+    page.on("requestfinished", lambda request: change_pending(request, -1))
+    page.on("requestfailed", lambda request: change_pending(request, -1))
+
+    async def stop_login_loading() -> None:
+        """DOM 可交互后终止登录页剩余资源，解除框架对完整 load 的等待。"""
+
+        nonlocal login_loading_stopped
+        if login_loading_stopped or "/login-required" not in page.url:
+            return
+        login_loading_stopped = True
+        await page.wait_for_timeout(250)
+        if page.is_closed():
+            return
+        pending = ",".join(
+            f"{kind}:{count}" for kind, count in sorted(pending_by_type.items()) if count > 0
+        ) or "none"
+        print(f"navigation_pending=candidate-a;types={pending}", flush=True)
+        await page.evaluate("window.stop()")
+        print("navigation_action=candidate-a;action=stop_login_loading", flush=True)
 
     def report_document(response: Any) -> None:
         try:
@@ -120,10 +147,11 @@ async def setup_sms_navigation_diagnostics(page: Any) -> None:
             return
 
     page.on("response", report_document)
-    page.on(
-        "domcontentloaded",
-        lambda: print("navigation_event=candidate-a;event=domcontentloaded", flush=True),
-    )
+    def handle_domcontentloaded() -> None:
+        print("navigation_event=candidate-a;event=domcontentloaded", flush=True)
+        asyncio.create_task(stop_login_loading())
+
+    page.on("domcontentloaded", handle_domcontentloaded)
     page.on("load", lambda: print("navigation_event=candidate-a;event=load", flush=True))
 
 

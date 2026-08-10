@@ -74,7 +74,7 @@ class ConnectivityTests(unittest.TestCase):
         self.assertIn("sms_request_clicked=candidate-a", bootstrap_a)
         self.assertIn("sms_page_ready=candidate-b", bootstrap_b)
         self.assertIn("sms_request_clicked=candidate-b", bootstrap_b)
-        for marker in ("navigation_target", "navigation_document", "navigation_event"):
+        for marker in ("navigation_target", "navigation_document", "navigation_event", "navigation_pending", "navigation_action"):
             self.assertIn(marker, candidate_a)
             self.assertIn(marker, bootstrap_b)
 
