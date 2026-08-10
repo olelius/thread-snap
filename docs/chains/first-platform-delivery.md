@@ -18,6 +18,7 @@
 - v0.2.6 在目标 Linux 首次执行候选 A 时只输出启动阶段，随后停在 Scrapling 以原始帖子 URL 启动的 `goto(load)` 导航链；回溯证明“获取验证码”点击尚未发生，但不单独证明最终画面仍在文章页。短信初始化现改为由帖子地址直接构造同源登录入口，A/B 均增加主文档生命周期、页面就绪与发送点击进度；本机合成端到端确认两者没有先发起未认证帖子请求，并继续完成持久会话复访。
 - v0.2.7 目标 Linux 输出已把候选 A 阻塞定位到登录页内部：登录主文档 HTTP 200、`DOMContentLoaded` 已完成，但完整 `load` 长时间未触发，说明文章重定向和登录主文档均正常，剩余加载项阻塞了 Scrapling 进入 `page_action`。两个候选现于首次登录页 DOM 就绪后等待 250ms，按资源类型输出未完成计数并调用页面原生停止加载，再继续各自框架原有短信动作；带永不完成子文档的本机夹具已覆盖该路径。
 - v0.2.8 目标 Linux 进一步返回未完成资源为 `fetch:2,script:2,xhr:4`，页面原生停止加载已经执行，但 Scrapling/Playwright 的 `goto(wait_until=load)` 仍保持等待；这证明 `window.stop()` 处理层级错误。当前实现直接在两个固定框架的导航配置层使用 `domcontentloaded`：候选 A 同时覆盖 Scrapling 的首次 `goto` 与随后稳定性检查，候选 B 使用 Crawlee 原生 `gotoOptions`，后台资源只保留诊断计数。本机永不完成子文档夹具下两者均已进入短信动作并完成持久会话复访。
+- v0.2.9 目标 Linux 已确认候选 A 依次到达 DOM 就绪、页面动作就绪和发送按钮点击；候选 A/B 随后均未在手机端收到动态码。现有 `sms_request_clicked` 只证明浏览器事件完成，尚未区分平台接口请求、业务拒绝、附加验证和短信投递。两个候选现同步增加点击后 5 秒的脱敏 XHR/fetch 状态、按钮倒计时和可见验证/警告证据，再按共同结果定位，不更换候选技术。
 - 当前正式技术栈、平台真实接口和是否需要登录仍未由实测确定。
 - 功能范围 owner 为 `docs/design/product-design.md`；技术边界 owner 为 `docs/design/technical-route.md`；PoC 细节 owner 为 `docs/research/collector-stack-poc-plan.md`。
 

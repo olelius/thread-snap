@@ -81,6 +81,11 @@ class ConnectivityTests(unittest.TestCase):
         self.assertIn("action=wait_until_domcontentloaded", bootstrap_b)
         self.assertNotIn("window.stop()", candidate_a)
         self.assertNotIn("window.stop()", bootstrap_b)
+        for marker in ("sms_send_evidence", "network_events", "countdown_visible", "verification_visible", "warning_markers"):
+            self.assertIn(marker, bootstrap_a)
+            self.assertIn(marker, bootstrap_b)
+        self.assertIn('await page.wait_for_timeout(5_000)', bootstrap_a)
+        self.assertIn('await page.waitForTimeout(5_000)', bootstrap_b)
 
     def test_prepare_uses_only_three_low_concurrency_samples(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
