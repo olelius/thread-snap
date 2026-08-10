@@ -15,6 +15,27 @@
 
 ---
 
+## 2026-08-10 — 增加 Linux 双候选独立联通门
+
+**总目标**：在目标服务器执行 2000 条测试前，先用最多 3 条已验证样本独立确认 Linux 环境、网络链路、两个固定框架的自动登录和真实帖子访问；失败时返回完整诊断包后再按证据修复。
+
+**状态**：🟡 联通脚本与本地合成验证完成；等待目标 Linux 返回诊断包
+
+**干到哪了**：
+
+- [x] 新增 `poc/linux/test-connectivity.sh`，顺序执行预检、浏览器健康检查、DNS/TCP/TLS/HTTP 基线、候选 A Scrapling 登录访问、候选 B Crawlee/Playwright 登录访问和统一结果校验；联通阶段固定并发为 1、最多 3 条、每个候选最多一次访问尝试，不启动 2000 条任务。
+- [x] 从 Windows 已认证诊断中选出两个候选共同成功过的 3 条样本，保存到被 Git 忽略的 `artifacts/poc/inputs/connectivity-urls.txt`；数量为 3，SHA-256 为 `9265717feb359f8fa855eaa1582fcc56322d7ce1ed8e9b06c7a8145ff799d99e`。
+- [x] 联通脚本无论成功或失败都会生成 `connectivity-results/connectivity-<timestamp>.tar.gz` 和 `.sha256`；汇总以 `ready_for_2000` 和 `next_action` 区分运行时/浏览器、网络路径、登录跳转与内容访问问题，临时明文配置在退出时删除且不进入结果包。
+- [x] 本机合成端到端已验证：网络基线为 `transport_ready=true`，候选 A/B 均为 1/1 `post/success`，最终 `ready_for_2000=true`；Python 联通配置与汇总单元测试新增 2 项并通过。
+
+**下一步**：重新生成含 `test-connectivity.sh` 与 3 条 sidecar 样本的 Linux 复制目录；目标服务器部署后只运行联通脚本，把生成的诊断 `tar.gz` 和 `.sha256` 复制回来。只有复核为 `ready_for_2000=true` 后才运行首轮 2000 条。
+
+**边界**：联通通过只证明当前服务器具备进入吞吐测试的网络、登录和内容访问条件，不构成 2000 条/小时门禁通过；两个固定候选技术、账号条件和结果契约保持不变。
+
+**关联**：分支 `feat/linux-connectivity-check`；入口 `poc/linux/test-connectivity.sh`。
+
+---
+
 ## 2026-08-08 — 建立可直接迁移到 Linux 的双候选 2000 条认证测试运行器
 
 **总目标**：保持 Scrapling 与 Crawlee/Playwright 两个固定候选不变，提供配置驱动、可复制到目标 Linux 的同清单 2000 条/一小时测试程序，自动完成登录、访问、资源采样、结果校验和校验值生成。

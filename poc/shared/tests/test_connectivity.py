@@ -1,0 +1,113 @@
+"""独立联通配置与汇总逻辑的合成测试。"""
+
+from __future__ import annotations
+
+import json
+import io
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+from unittest.mock import patch
+
+SHARED = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(SHARED))
+
+import finalize_connectivity  # noqa: E402
+import prepare_connectivity_config  # noqa: E402
+
+
+class ConnectivityTests(unittest.TestCase):
+    def test_prepare_uses_only_three_low_concurrency_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.json"
+            input_path = root / "connectivity-urls.txt"
+            output = root / "runtime" / "config.json"
+            source.write_text(
+                json.dumps(
+                    {
+                        "account": "fixture-account",
+                        "password": "fixture-password",
+                        "input_file": "input-urls.txt",
+                        "expected_count": 2000,
+                        "window_seconds": 3600,
+                        "candidate_a": {"concurrency": 8},
+                        "candidate_b": {"concurrency": 8},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            input_path.write_text(
+                "\n".join(f"https://TARGET/ugc/article/123456789012345678{i}" for i in range(3)) + "\n",
+                encoding="utf-8",
+            )
+            argv = [
+                "prepare_connectivity_config.py",
+                "--config", str(source),
+                "--input", str(input_path),
+                "--output", str(output),
+                "--root", str(root),
+            ]
+            with patch.object(sys, "argv", argv):
+                with redirect_stdout(io.StringIO()):
+                    self.assertEqual(0, prepare_connectivity_config.main())
+            prepared = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(3, prepared["expected_count"])
+            self.assertEqual(300, prepared["window_seconds"])
+            self.assertEqual(1, prepared["candidate_a"]["concurrency"])
+            self.assertEqual(1, prepared["candidate_b"]["concurrency"])
+
+    def test_finalize_requires_network_and_both_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result_dir = Path(directory)
+            (result_dir / "network.json").write_text(
+                json.dumps(
+                    {
+                        "transport_ready": True,
+                        "dns": {"ok": True},
+                        "tcp": {"ok": True},
+                        "tls": {"ok": True},
+                        "http": {"ok": True, "status": 200},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            for candidate in ("candidate-a", "candidate-b"):
+                base = result_dir / candidate
+                base.mkdir()
+                (base / "login-result.json").write_text(
+                    json.dumps({"logged_in": True, "verification_required": False}), encoding="utf-8"
+                )
+                (base / "summary.json").write_text(
+                    json.dumps(
+                        {
+                            "result_count": 3,
+                            "success_count": 2,
+                            "contract_error_count": 0,
+                            "status_counts": {"success": 2, "failed": 1},
+                            "response_class_counts": {"post": 2, "error": 1},
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            argv = [
+                "finalize_connectivity.py",
+                "--result-dir", str(result_dir),
+                "--preflight-exit", "0",
+                "--healthcheck-exit", "0",
+                "--network-exit", "0",
+                "--candidate-a-exit", "0",
+                "--candidate-b-exit", "0",
+            ]
+            with patch.object(sys, "argv", argv):
+                with redirect_stdout(io.StringIO()):
+                    self.assertEqual(0, finalize_connectivity.main())
+            summary = json.loads((result_dir / "connectivity-summary.json").read_text(encoding="utf-8"))
+            self.assertTrue(summary["ready_for_2000"])
+            self.assertEqual("run_2000_url_test", summary["next_action"])
+
+
+if __name__ == "__main__":
+    unittest.main()
