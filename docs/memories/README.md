@@ -26,3 +26,4 @@
 ## 记忆索引
 
 - [Linux 浏览器缓存路径必须贯穿安装与运行](linux-browser-cache-path.md)
+- [登录页必须显式切换到密码登录](password-login-mode.md)
