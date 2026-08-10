@@ -35,7 +35,10 @@ def candidate_summary(result_dir: Path, candidate: str, exit_code: int) -> dict:
         "status_counts": summary.get("status_counts", {}),
         "response_class_counts": summary.get("response_class_counts", {}),
         "contract_error_count": int(summary.get("contract_error_count", 0) or 0),
-        "connected": logged_in and success_count >= 1 and int(summary.get("contract_error_count", 0) or 0) == 0,
+        "connected": exit_code == 0
+        and logged_in
+        and success_count >= 1
+        and int(summary.get("contract_error_count", 0) or 0) == 0,
     }
 
 
@@ -66,6 +69,13 @@ def main() -> int:
         next_action = "repair_linux_runtime_or_browser_dependencies"
     elif args.network_exit != 0 or network.get("transport_ready") is not True:
         next_action = "inspect_dns_tcp_tls_or_http_network_path"
+    elif (
+        candidate_a["exit_code"] != 0
+        or candidate_b["exit_code"] != 0
+        or candidate_a["contract_error_count"] != 0
+        or candidate_b["contract_error_count"] != 0
+    ):
+        next_action = "inspect_candidate_runtime_or_contract_error"
     elif not candidate_a["logged_in"] or not candidate_b["logged_in"]:
         next_action = "inspect_login_redirect_or_verification"
     else:

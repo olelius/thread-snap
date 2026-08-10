@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-import json
+import asyncio
+import importlib.util
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -18,6 +20,18 @@ import finalize_connectivity  # noqa: E402
 import prepare_connectivity_config  # noqa: E402
 
 
+def load_candidate_a_module():
+    """从固定候选源码加载可独立测试的导航辅助函数。"""
+
+    path = SHARED.parent / "candidate-a" / "src" / "throughput.py"
+    spec = importlib.util.spec_from_file_location("candidate_a_throughput_for_tests", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("候选 A 模块加载失败")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class ConnectivityTests(unittest.TestCase):
     def test_linux_script_exports_shared_browser_path_before_candidate_a(self) -> None:
         script = (SHARED.parent / "linux" / "test-connectivity.sh").read_text(encoding="utf-8")
@@ -26,6 +40,42 @@ class ConnectivityTests(unittest.TestCase):
         self.assertLess(export_position, candidate_a_position)
         self.assertIn('timeout --signal=TERM --kill-after=15s 360s "$ROOT/.runtime/candidate-a/bin/python"', script)
         self.assertIn("timeout --signal=TERM --kill-after=15s 360s npm", script)
+
+    def test_linux_script_replaces_started_runner_placeholder_after_failure(self) -> None:
+        script = (SHARED.parent / "linux" / "test-connectivity.sh").read_text(encoding="utf-8")
+        self.assertEqual(2, script.count('"status":"runner_failed_before_login_result"'))
+        self.assertIn('grep -q \'"status":"runner_not_started"\'', script)
+
+    def test_candidate_a_authenticated_navigation_uses_dom_ready_for_goto_and_stability(self) -> None:
+        candidate_a = load_candidate_a_module()
+
+        class FakePage:
+            def __init__(self) -> None:
+                self.goto_calls: list[dict[str, object]] = []
+                self.load_states: list[tuple[str, float | None]] = []
+
+            async def goto(self, url: str, **kwargs: object) -> str:
+                self.goto_calls.append({"url": url, **kwargs})
+                return "response"
+
+            async def wait_for_load_state(self, state: str = "load", timeout: float | None = None) -> None:
+                self.load_states.append((state, timeout))
+
+        async def exercise() -> FakePage:
+            page = FakePage()
+            await candidate_a.setup_dom_ready_navigation(page)
+            await candidate_a.setup_dom_ready_navigation(page)
+            await page.goto("https://TARGET/ugc/article/1234567890123456789", referer="https://TARGET/")
+            await page.wait_for_load_state(state="load", timeout=1234)
+            return page
+
+        page = asyncio.run(exercise())
+        self.assertEqual("domcontentloaded", page.goto_calls[0]["wait_until"])
+        self.assertEqual([("domcontentloaded", 1234)], page.load_states)
+        source = (SHARED.parent / "candidate-a" / "src" / "throughput.py").read_text(encoding="utf-8")
+        verify_login = source[source.index("async def verify_login(") : source.index("async def main_async(")]
+        self.assertIn("await setup_dom_ready_navigation(page)", verify_login)
+        self.assertIn("page_setup=setup_dom_ready_navigation", source)
 
     def test_both_candidates_select_password_login_before_filling_credentials(self) -> None:
         candidate_a = (SHARED.parent / "candidate-a" / "src" / "throughput.py").read_text(encoding="utf-8")
@@ -45,7 +95,8 @@ class ConnectivityTests(unittest.TestCase):
         self.assertIn('secondary_sms_required: bodyText.includes(SECONDARY_SMS_MARKER)', candidate_b)
         verify_login = candidate_a[candidate_a.index("async def verify_login(") : candidate_a.index("async def main_async(")]
         self.assertIn("page_setup=page_setup", verify_login)
-        self.assertIn("route.request.resource_type in LOGIN_BLOCKED_RESOURCE_TYPES", verify_login)
+        self.assertIn("await setup_login_resource_routing(page)", verify_login)
+        self.assertIn("await setup_dom_ready_navigation(page)", verify_login)
         self.assertNotIn("disable_resources=True", verify_login)
 
     def test_manual_sms_bootstrap_keeps_candidates_isolated_and_interactive(self) -> None:
@@ -274,6 +325,54 @@ class ConnectivityTests(unittest.TestCase):
             summary = json.loads((result_dir / "connectivity-summary.json").read_text(encoding="utf-8"))
             self.assertTrue(summary["ready_for_2000"])
             self.assertEqual("run_2000_url_test", summary["next_action"])
+
+    def test_finalize_prioritizes_candidate_runtime_failure_over_login_guess(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            result_dir = Path(directory)
+            (result_dir / "network.json").write_text(
+                json.dumps(
+                    {
+                        "transport_ready": True,
+                        "dns": {"ok": True},
+                        "tcp": {"ok": True},
+                        "tls": {"ok": True},
+                        "http": {"ok": True, "status": 200},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            for candidate in ("candidate-a", "candidate-b"):
+                base = result_dir / candidate
+                base.mkdir()
+                (base / "login-result.json").write_text(
+                    json.dumps({"logged_in": candidate == "candidate-b"}),
+                    encoding="utf-8",
+                )
+                (base / "summary.json").write_text(
+                    json.dumps(
+                        {
+                            "result_count": 3 if candidate == "candidate-b" else 0,
+                            "success_count": 3 if candidate == "candidate-b" else 0,
+                            "contract_error_count": 0 if candidate == "candidate-b" else 1,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            argv = [
+                "finalize_connectivity.py",
+                "--result-dir", str(result_dir),
+                "--preflight-exit", "0",
+                "--healthcheck-exit", "0",
+                "--network-exit", "0",
+                "--candidate-a-exit", "1",
+                "--candidate-b-exit", "0",
+            ]
+            with patch.object(sys, "argv", argv):
+                with redirect_stdout(io.StringIO()):
+                    self.assertEqual(3, finalize_connectivity.main())
+            summary = json.loads((result_dir / "connectivity-summary.json").read_text(encoding="utf-8"))
+            self.assertFalse(summary["ready_for_2000"])
+            self.assertEqual("inspect_candidate_runtime_or_contract_error", summary["next_action"])
 
 
 if __name__ == "__main__":
