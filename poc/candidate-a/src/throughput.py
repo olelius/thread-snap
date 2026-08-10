@@ -47,6 +47,11 @@ LOGIN_BLOCKED_RESOURCE_TYPES = frozenset(
     {"font", "image", "media", "beacon", "object", "imageset", "texttrack", "websocket", "csp_report"}
 )
 SMS_CODE_PATTERN = re.compile(r"^[0-9]{4,8}$")
+VISUAL_VERIFICATION_SELECTOR = (
+    'iframe[src*="captcha" i], [class*="captcha" i], [id*="captcha" i], '
+    '[class*="verify" i], [id*="verify" i], [class*="slider" i]'
+)
+MANUAL_VERIFICATION_TIMEOUT_SECONDS = 600
 
 
 def utc_now() -> str:
@@ -322,6 +327,82 @@ async def any_visible(page: Any, selector: str) -> bool:
     return False
 
 
+async def sms_countdown_visible(page: Any) -> bool:
+    """检查发送控件是否进入重新获取倒计时。"""
+
+    controls = page.get_by_text(re.compile(r"(?:重新获取|重新发送|\d{1,3}\s*(?:s|秒))"))
+    for index in range(min(await controls.count(), 100)):
+        control = controls.nth(index)
+        if not await control.is_visible():
+            continue
+        text = (await control.inner_text()).strip()
+        if "重新获取" in text or "重新发送" in text or re.search(r"\d{1,3}\s*(?:s|秒)", text):
+            return True
+    return False
+
+
+async def wait_for_cdp_port(port: int, timeout_seconds: int = 10) -> bool:
+    """确认 Chromium 的回环 CDP 端口已经监听。"""
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            _, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.close()
+            await writer.wait_closed()
+            return True
+        except OSError:
+            await asyncio.sleep(0.25)
+    return False
+
+
+async def wait_for_manual_visual_verification(page: Any, candidate: str, cdp_port: int) -> dict[str, bool]:
+    """在原浏览器上下文等待操作人员通过 SSH 隧道完成可视验证。"""
+
+    verification_visible = await any_visible(page, VISUAL_VERIFICATION_SELECTOR)
+    countdown_visible = await sms_countdown_visible(page)
+    if not verification_visible:
+        return {
+            "visual_verification_required": False,
+            "manual_verification_completed": False,
+            "sms_send_confirmed": countdown_visible,
+        }
+    if not 1024 <= cdp_port <= 65535:
+        raise RuntimeError("检测到可视验证，但没有有效的回环 CDP 端口")
+    if not await wait_for_cdp_port(cdp_port):
+        raise RuntimeError("Chromium 回环 CDP 端口尚未就绪")
+
+    print(f"visual_verification_required={candidate}", flush=True)
+    print(f"cdp_endpoint=http://127.0.0.1:{cdp_port}", flush=True)
+    print(
+        f"windows_tunnel=ssh -N -L {cdp_port}:127.0.0.1:{cdp_port} root@<服务器地址>",
+        flush=True,
+    )
+    print("windows_browser=chrome://inspect/#devices", flush=True)
+    print(f"manual_verification_waiting={candidate};timeout_seconds={MANUAL_VERIFICATION_TIMEOUT_SECONDS}", flush=True)
+
+    deadline = time.monotonic() + MANUAL_VERIFICATION_TIMEOUT_SECONDS
+    challenge_disappeared_at: float | None = None
+    while time.monotonic() < deadline:
+        verification_visible = await any_visible(page, VISUAL_VERIFICATION_SELECTOR)
+        countdown_visible = await sms_countdown_visible(page)
+        if not verification_visible and countdown_visible:
+            print(f"manual_verification_completed={candidate}", flush=True)
+            print(f"sms_send_confirmed={candidate}", flush=True)
+            return {
+                "visual_verification_required": True,
+                "manual_verification_completed": True,
+                "sms_send_confirmed": True,
+            }
+        if not verification_visible and challenge_disappeared_at is None:
+            challenge_disappeared_at = time.monotonic()
+            print(f"visual_verification_cleared={candidate};waiting_for_sms_confirmation=true", flush=True)
+        elif verification_visible:
+            challenge_disappeared_at = None
+        await page.wait_for_timeout(500)
+    raise TimeoutError("人工可视验证或短信发送确认等待超时")
+
+
 async def collect_login_diagnostic(
     page: Any,
     account: str,
@@ -509,12 +590,16 @@ async def bootstrap_sms_session(
     url: str,
     account: str,
     profile_dir: Path,
+    cdp_port: int,
 ) -> dict[str, Any]:
     """在当前 SSH 终端读取一次短信码，并写入候选 A 的持久浏览器配置。"""
 
     state: dict[str, Any] = {
         "sms_requested": False,
         "sms_send_evidence": None,
+        "visual_verification_required": False,
+        "manual_verification_completed": False,
+        "sms_send_confirmed": False,
         "submitted": False,
         "classification": None,
         "error_category": None,
@@ -588,12 +673,8 @@ async def bootstrap_sms_session(
                     for marker in ("操作频繁", "请稍后重试", "发送失败", "请求过于频繁", "安全验证", "滑动验证")
                     if marker in body_text
                 ]
-                button_texts = await page.locator("button").all_inner_texts()
-                countdown_visible = any("重新获取" in text or re.search(r"\d+\s*(?:s|秒)", text) for text in button_texts)
-                verification_visible = await any_visible(
-                    page,
-                    'iframe[src*="captcha" i], [class*="captcha" i], [id*="captcha" i], [class*="slider" i]',
-                )
+                countdown_visible = await sms_countdown_visible(page)
+                verification_visible = await any_visible(page, VISUAL_VERIFICATION_SELECTOR)
                 evidence = {
                     "network_events": sms_network_events[:20],
                     "countdown_visible": countdown_visible,
@@ -605,6 +686,14 @@ async def bootstrap_sms_session(
                     "sms_send_evidence=candidate-a;" + json.dumps(evidence, ensure_ascii=False, separators=(",", ":")),
                     flush=True,
                 )
+                verification_result = await wait_for_manual_visual_verification(
+                    page,
+                    "candidate-a",
+                    cdp_port,
+                )
+                state.update(verification_result)
+                if not state["sms_send_confirmed"]:
+                    raise RuntimeError("短信发送尚未取得倒计时确认")
                 code = await asyncio.to_thread(read_sms_code, "candidate-a")
                 await code_input.fill(code)
                 code = ""
@@ -634,7 +723,7 @@ async def bootstrap_sms_session(
             page_setup=setup_sms_navigation_diagnostics,
             page_action=page_action,
             wait=500,
-            timeout=600_000,
+            timeout=900_000,
             network_idle=False,
         )
     except Exception as error:  # noqa: BLE001
@@ -650,6 +739,9 @@ async def bootstrap_sms_session(
         "mode": "interactive_sms_bootstrap",
         "sms_requested": state["sms_requested"],
         "sms_send_evidence": state["sms_send_evidence"],
+        "visual_verification_required": state["visual_verification_required"],
+        "manual_verification_completed": state["manual_verification_completed"],
+        "sms_send_confirmed": state["sms_send_confirmed"],
         "submitted": state["submitted"],
         "logged_in": classification["status"] == "success",
         "response_class": classification["response_class"],
@@ -685,17 +777,33 @@ async def main_async(args: argparse.Namespace) -> int:
     profile_dir = (config_path.parent / str(candidate_config.get("profile_dir", "profiles/candidate-a"))).resolve()
     profile_dir.mkdir(parents=True, exist_ok=True)
     if args.bootstrap_sms:
+        cdp_port = int(args.manual_captcha_cdp_port)
+        extra_flags = []
+        if cdp_port:
+            if not 1024 <= cdp_port <= 65535:
+                raise ValueError("manual-captcha-cdp-port 必须在 1024..65535")
+            extra_flags = [
+                "--remote-debugging-address=127.0.0.1",
+                f"--remote-debugging-port={cdp_port}",
+            ]
         async with AsyncDynamicSession(
             headless=bool(config.get("headless", True)),
             google_search=False,
             max_pages=1,
-            timeout=600_000,
+            timeout=900_000,
             retries=1,
             user_data_dir=str(profile_dir),
             cookies=load_profile_cookies(profile_dir),
             real_chrome=bool(candidate_config.get("real_chrome", False)),
+            extra_flags=extra_flags,
         ) as session:
-            result = await bootstrap_sms_session(session, urls[0], str(config["account"]), profile_dir)
+            result = await bootstrap_sms_session(
+                session,
+                urls[0],
+                str(config["account"]),
+                profile_dir,
+                cdp_port,
+            )
         (output_dir / "sms-bootstrap-result.json").write_text(
             json.dumps(result, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
@@ -888,6 +996,7 @@ def main() -> int:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--bootstrap-sms", action="store_true")
+    parser.add_argument("--manual-captcha-cdp-port", type=int, default=0)
     return asyncio.run(main_async(parser.parse_args()))
 
 

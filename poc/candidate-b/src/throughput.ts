@@ -33,6 +33,7 @@ interface CliOptions {
   config: string;
   outputDir: string;
   bootstrapSms: boolean;
+  manualCaptchaCdpPort: number;
 }
 
 interface Attempt extends Classification {
@@ -58,6 +59,11 @@ const LOGIN_REASON_MARKERS = [
   '账号或密码错误', '账号不存在', '密码错误', '登录失败', '操作频繁', '请稍后重试',
 ] as const;
 const VERIFICATION_REASON_MARKERS = new Set<string>(LOGIN_REASON_MARKERS.slice(0, 11));
+const VISUAL_VERIFICATION_SELECTOR = [
+  'iframe[src*="captcha" i]', '[class*="captcha" i]', '[id*="captcha" i]',
+  '[class*="verify" i]', '[id*="verify" i]', '[class*="slider" i]',
+].join(', ');
+const MANUAL_VERIFICATION_TIMEOUT_MS = 600_000;
 
 interface FinalResult {
   schema_version: '1.0';
@@ -99,7 +105,14 @@ function parseArgs(argv: string[]): CliOptions {
   const config = values.get('--config');
   const outputDir = values.get('--output-dir');
   if (!config || !outputDir) throw new Error('缺少 --config 或 --output-dir');
-  return { config: resolve(config), outputDir: resolve(outputDir), bootstrapSms };
+  const manualCaptchaCdpPort = Number(values.get('--manual-captcha-cdp-port') ?? 0);
+  if (!Number.isInteger(manualCaptchaCdpPort) || manualCaptchaCdpPort < 0 || manualCaptchaCdpPort > 65535) {
+    throw new Error('manual-captcha-cdp-port 必须是 0 或 1024..65535 的整数');
+  }
+  if (manualCaptchaCdpPort > 0 && manualCaptchaCdpPort < 1024) {
+    throw new Error('manual-captcha-cdp-port 必须是 0 或 1024..65535 的整数');
+  }
+  return { config: resolve(config), outputDir: resolve(outputDir), bootstrapSms, manualCaptchaCdpPort };
 }
 
 type StoredCookies = Parameters<ReturnType<Page['context']>['addCookies']>[0];
@@ -178,8 +191,15 @@ function storageStatePath(profileDir: string): string {
   return resolve(profileDir, 'storage-state.json');
 }
 
-function launchOptions(config: TestConfig): Record<string, unknown> {
-  return { headless: config.headless ?? true };
+function launchOptions(config: TestConfig, cdpPort = 0): Record<string, unknown> {
+  const options: Record<string, unknown> = { headless: config.headless ?? true };
+  if (cdpPort > 0) {
+    options.args = [
+      '--remote-debugging-address=127.0.0.1',
+      `--remote-debugging-port=${cdpPort}`,
+    ];
+  }
+  return options;
 }
 
 function loadStorageCookies(profileDir: string): StoredCookies {
@@ -255,6 +275,84 @@ async function anyVisible(page: Page, selector: string): Promise<boolean> {
     if (await locator.nth(index).isVisible()) return true;
   }
   return false;
+}
+
+async function smsCountdownVisible(page: Page): Promise<boolean> {
+  const controls = page.getByText(/(?:重新获取|重新发送|\d{1,3}\s*(?:s|秒))/u);
+  const count = Math.min(await controls.count(), 100);
+  for (let index = 0; index < count; index += 1) {
+    const control = controls.nth(index);
+    if (!await control.isVisible()) continue;
+    const text = (await control.innerText()).trim();
+    if (text.includes('重新获取') || text.includes('重新发送') || /\d{1,3}\s*(?:s|秒)/u.test(text)) return true;
+  }
+  return false;
+}
+
+async function waitForCdpPort(port: number, timeoutMs = 10_000): Promise<boolean> {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1_000) });
+      if (response.ok) return true;
+    } catch {
+      // 浏览器启动后的短暂连接失败属于预期轮询状态。
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 250));
+  }
+  return false;
+}
+
+interface ManualVerificationResult {
+  visual_verification_required: boolean;
+  manual_verification_completed: boolean;
+  sms_send_confirmed: boolean;
+}
+
+async function waitForManualVisualVerification(
+  page: Page, candidate: string, cdpPort: number,
+): Promise<ManualVerificationResult> {
+  let verificationVisible = await anyVisible(page, VISUAL_VERIFICATION_SELECTOR);
+  let countdownVisible = await smsCountdownVisible(page);
+  if (!verificationVisible) {
+    return {
+      visual_verification_required: false,
+      manual_verification_completed: false,
+      sms_send_confirmed: countdownVisible,
+    };
+  }
+  if (cdpPort < 1024 || cdpPort > 65535) throw new Error('检测到可视验证，但没有有效的回环 CDP 端口');
+  if (!await waitForCdpPort(cdpPort)) throw new Error('Chromium 回环 CDP 端口尚未就绪');
+
+  console.log(`visual_verification_required=${candidate}`);
+  console.log(`cdp_endpoint=http://127.0.0.1:${cdpPort}`);
+  console.log(`windows_tunnel=ssh -N -L ${cdpPort}:127.0.0.1:${cdpPort} root@<服务器地址>`);
+  console.log('windows_browser=chrome://inspect/#devices');
+  console.log(`manual_verification_waiting=${candidate};timeout_seconds=${MANUAL_VERIFICATION_TIMEOUT_MS / 1_000}`);
+
+  const deadline = performance.now() + MANUAL_VERIFICATION_TIMEOUT_MS;
+  let challengeCleared = false;
+  while (performance.now() < deadline) {
+    verificationVisible = await anyVisible(page, VISUAL_VERIFICATION_SELECTOR);
+    countdownVisible = await smsCountdownVisible(page);
+    if (!verificationVisible && countdownVisible) {
+      console.log(`manual_verification_completed=${candidate}`);
+      console.log(`sms_send_confirmed=${candidate}`);
+      return {
+        visual_verification_required: true,
+        manual_verification_completed: true,
+        sms_send_confirmed: true,
+      };
+    }
+    if (!verificationVisible && !challengeCleared) {
+      challengeCleared = true;
+      console.log(`visual_verification_cleared=${candidate};waiting_for_sms_confirmation=true`);
+    } else if (verificationVisible) {
+      challengeCleared = false;
+    }
+    await page.waitForTimeout(500);
+  }
+  throw new Error('人工可视验证或短信发送确认等待超时');
 }
 
 async function collectLoginDiagnostic(
@@ -403,7 +501,7 @@ async function verifyLogin(
 }
 
 async function bootstrapSmsSession(
-  config: TestConfig, profileDir: string, probeUrl: string, outputDir: string,
+  config: TestConfig, profileDir: string, probeUrl: string, outputDir: string, cdpPort: number,
 ): Promise<Record<string, unknown>> {
   let result: Record<string, unknown> | undefined;
   const storedCookies = loadStorageCookies(profileDir);
@@ -412,10 +510,10 @@ async function bootstrapSmsSession(
     maxRequestRetries: 0,
     retryOnBlocked: false,
     useSessionPool: false,
-    requestHandlerTimeoutSecs: 600,
+    requestHandlerTimeoutSecs: 900,
     launchContext: {
       userDataDir: profileDir,
-      launchOptions: launchOptions(config),
+      launchOptions: launchOptions(config, cdpPort),
     },
     preNavigationHooks: [
       async ({ page }, gotoOptions) => {
@@ -458,6 +556,9 @@ async function bootstrapSmsSession(
     requestHandler: async ({ page }) => {
       let smsRequested = false;
       let smsSendEvidence: Record<string, unknown> | null = null;
+      let visualVerificationRequired = false;
+      let manualVerificationCompleted = false;
+      let smsSendConfirmed = false;
       let submitted = false;
       let errorCategory: string | null = null;
       let classification: Classification = {
@@ -515,16 +616,18 @@ async function bootstrapSmsSession(
           const bodyText = await page.locator('body').innerText({ timeout: 5_000 });
           const warningMarkers = ['操作频繁', '请稍后重试', '发送失败', '请求过于频繁', '安全验证', '滑动验证']
             .filter((marker) => bodyText.includes(marker));
-          const buttonTexts = await page.locator('button').allInnerTexts();
-          const countdownVisible = buttonTexts.some((text) => text.includes('重新获取') || /\d+\s*(?:s|秒)/u.test(text));
-          const verificationVisible = await anyVisible(
-            page, 'iframe[src*="captcha" i], [class*="captcha" i], [id*="captcha" i], [class*="slider" i]',
-          );
+          const countdownVisible = await smsCountdownVisible(page);
+          const verificationVisible = await anyVisible(page, VISUAL_VERIFICATION_SELECTOR);
           smsSendEvidence = {
             network_events: smsNetworkEvents.slice(0, 20), countdown_visible: countdownVisible,
             verification_visible: verificationVisible, warning_markers: warningMarkers,
           };
           console.log(`sms_send_evidence=candidate-b;${JSON.stringify(smsSendEvidence)}`);
+          const verificationResult = await waitForManualVisualVerification(page, 'candidate-b', cdpPort);
+          visualVerificationRequired = verificationResult.visual_verification_required;
+          manualVerificationCompleted = verificationResult.manual_verification_completed;
+          smsSendConfirmed = verificationResult.sms_send_confirmed;
+          if (!smsSendConfirmed) throw new Error('短信发送尚未取得倒计时确认');
           let code = await readSmsCode('candidate-b');
           await codeInput.fill(code);
           code = '';
@@ -548,6 +651,9 @@ async function bootstrapSmsSession(
         mode: 'interactive_sms_bootstrap',
         sms_requested: smsRequested,
         sms_send_evidence: smsSendEvidence,
+        visual_verification_required: visualVerificationRequired,
+        manual_verification_completed: manualVerificationCompleted,
+        sms_send_confirmed: smsSendConfirmed,
         submitted,
         logged_in: classification.status === 'success',
         response_class: classification.response_class,
@@ -585,7 +691,9 @@ async function main(): Promise<number> {
   process.env['CRAWLEE_STORAGE_DIR'] = resolve(options.outputDir, 'crawlee-storage');
 
   if (options.bootstrapSms) {
-    const result = await bootstrapSmsSession(config, profileDir, urls[0]!, options.outputDir);
+    const result = await bootstrapSmsSession(
+      config, profileDir, urls[0]!, options.outputDir, options.manualCaptchaCdpPort,
+    );
     return result['logged_in'] === true ? 0 : 5;
   }
 

@@ -46,7 +46,25 @@ chmod +x poc/linux/*.sh
 ./poc/linux/test-connectivity.sh
 ```
 
-短信初始化会从帖子地址构造同源 `/login-required?redirect=...` 入口，避免先等待文章页全部资源加载；登录成功后的内容判定仍使用原始帖子 ID。该入口把首次导航及 Scrapling 随后的稳定性检查都限定为 `domcontentloaded`，候选 B 则通过 Crawlee 的 `gotoOptions.waitUntil` 使用相同条件；`navigation_action=...wait_until_domcontentloaded` 表示该条件已生效。终端继续用 `navigation_target`、`navigation_document`、`navigation_event` 和 `navigation_pending` 报告脱敏后的主文档生命周期与后台资源类型，但这些后台请求不再阻塞页面动作。点击后脚本等待 5 秒并输出 `sms_send_evidence`：`network_events` 只保留 XHR/fetch 的方法、响应状态和不含查询参数的路径，`countdown_visible`、`verification_visible` 与 `warning_markers` 记录可见页面反馈；不记录手机号、请求体、响应体或验证码。之后提示输入当次动态码。其中 `sms_request_clicked` 只表示发送按钮点击已经完成，是否已被平台接受以 `sms_send_evidence` 为准，短信送达仍以手机实际接收为准。动态码不写入 `config.json`、标准输出、结果文件或持久浏览器状态；成功后只在各候选的本地 `profile_dir/storage-state.json` 保存复访所需的会话状态，并将文件权限设为 `0600`。两个候选必须分别完成一次，不能共用状态文件。
+短信初始化会从帖子地址构造同源 `/login-required?redirect=...` 入口，避免先等待文章页全部资源加载；登录成功后的内容判定仍使用原始帖子 ID。该入口把首次导航及 Scrapling 随后的稳定性检查都限定为 `domcontentloaded`，候选 B 则通过 Crawlee 的 `gotoOptions.waitUntil` 使用相同条件；`navigation_action=...wait_until_domcontentloaded` 表示该条件已生效。终端继续用 `navigation_target`、`navigation_document`、`navigation_event` 和 `navigation_pending` 报告脱敏后的主文档生命周期与后台资源类型，但这些后台请求不再阻塞页面动作。
+
+点击后脚本等待 5 秒并输出 `sms_send_evidence`：`network_events` 只保留 XHR/fetch 的方法、响应状态和不含查询参数的路径，`countdown_visible`、`verification_visible` 与 `warning_markers` 记录可见页面反馈；不记录手机号、请求体、响应体或验证码。`sms_request_clicked` 只表示发送按钮点击已经完成，是否已被平台接受以 `sms_send_evidence` 为准。
+
+若出现可视验证码，脚本不会提前等待短信码，而是输出候选独立的 CDP 端口。以候选 A 的默认端口 `9222` 为例，在 Windows 新开一个 PowerShell 并保持运行：
+
+```powershell
+ssh -N -L 9222:127.0.0.1:9222 root@<服务器地址>
+```
+
+随后在 Windows Chrome 打开 `chrome://inspect/#devices`，点击 `Configure`，加入 `localhost:9222`，再对登录页目标点击 `inspect`，在服务器原浏览器上下文中完成人工验证。候选 B 默认使用 `9223`：
+
+```powershell
+ssh -N -L 9223:127.0.0.1:9223 root@<服务器地址>
+```
+
+CDP 只监听服务器回环地址并经 SSH 隧道访问，不需要在服务器安装桌面、Xvfb、VNC 或 noVNC。端口可通过 `THREADSNAP_CANDIDATE_A_CDP_PORT` 和 `THREADSNAP_CANDIDATE_B_CDP_PORT` 临时覆盖。脚本检测到可视验证消失且发送控件进入倒计时后，才提示输入当次短信码；十分钟内没有取得这两个信号则本次初始化失败，不把验证码页误判为短信已发送。
+
+动态码不写入 `config.json`、标准输出、结果文件或持久浏览器状态；成功后只在各候选的本地 `profile_dir/storage-state.json` 保存复访所需的会话状态，并将文件权限设为 `0600`。两个候选必须分别完成一次，不能共用状态文件。
 
 该入口只用于当前 PoC 测试。正式项目采用人工续期、自动接码、外部会话托管还是其他方式仍为未决项，本脚本不构成正式方案。
 

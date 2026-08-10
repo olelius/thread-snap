@@ -13,6 +13,8 @@ config_path="${THREADSNAP_CONFIG:-$ROOT/config.json}"
 target="${1:-all}"
 timestamp="$(date +%Y%m%dT%H%M%S%z)"
 output_root="$ROOT/.runtime/sms-bootstrap/$timestamp"
+candidate_a_cdp_port="${THREADSNAP_CANDIDATE_A_CDP_PORT:-9222}"
+candidate_b_cdp_port="${THREADSNAP_CANDIDATE_B_CDP_PORT:-9223}"
 
 if [[ ! -t 0 || ! -t 1 ]]; then
   echo "ERROR: 请直接在 SSH 交互终端运行本脚本" >&2
@@ -30,6 +32,30 @@ fi
 mkdir -p "$output_root"
 chmod 700 "$output_root"
 
+validate_cdp_port() {
+  local port="$1"
+  [[ "$port" =~ ^[0-9]+$ && "$port" -ge 1024 && "$port" -le 65535 ]] || {
+    echo "ERROR: CDP 端口必须在 1024..65535" >&2
+    return 2
+  }
+}
+
+ensure_cdp_port_free() {
+  local port="$1"
+  if (echo > "/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
+    echo "ERROR: 回环 CDP 端口 $port 已被占用，请设置候选对应的 THREADSNAP_*_CDP_PORT 后重试" >&2
+    return 2
+  fi
+}
+
+print_manual_steps() {
+  local candidate="$1"
+  local port="$2"
+  echo "manual_visual_verification=$candidate"
+  echo "windows_tunnel=ssh -N -L $port:127.0.0.1:$port root@<服务器地址>"
+  echo "windows_browser=chrome://inspect/#devices;configure=localhost:$port"
+}
+
 run_candidate_a() {
   local python="$ROOT/.runtime/candidate-a/bin/python"
   if [[ ! -x "$python" ]]; then
@@ -37,10 +63,14 @@ run_candidate_a() {
     return 3
   fi
   echo "stage=candidate-a-sms-bootstrap"
+  validate_cdp_port "$candidate_a_cdp_port"
+  ensure_cdp_port_free "$candidate_a_cdp_port"
+  print_manual_steps "candidate-a" "$candidate_a_cdp_port"
   "$python" poc/candidate-a/src/throughput.py \
     --config "$config_path" \
     --output-dir "$output_root/candidate-a" \
-    --bootstrap-sms
+    --bootstrap-sms \
+    --manual-captcha-cdp-port "$candidate_a_cdp_port"
   echo "candidate-a-session=ready"
 }
 
@@ -50,10 +80,14 @@ run_candidate_b() {
     return 3
   fi
   echo "stage=candidate-b-sms-bootstrap"
+  validate_cdp_port "$candidate_b_cdp_port"
+  ensure_cdp_port_free "$candidate_b_cdp_port"
+  print_manual_steps "candidate-b" "$candidate_b_cdp_port"
   npm --prefix poc/candidate-b run throughput -- \
     --config "$config_path" \
     --output-dir "$output_root/candidate-b" \
-    --bootstrap-sms
+    --bootstrap-sms \
+    --manual-captcha-cdp-port "$candidate_b_cdp_port"
   echo "candidate-b-session=ready"
 }
 

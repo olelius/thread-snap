@@ -89,7 +89,11 @@ $hashLines = Get-ChildItem -LiteralPath $staging -Recurse -File |
         $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
         "$hash  $relative"
     }
-[IO.File]::WriteAllLines((Join-Path $staging 'SHA256SUMS'), $hashLines, [Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText(
+    (Join-Path $staging 'SHA256SUMS'),
+    ($hashLines -join "`n") + "`n",
+    [Text.UTF8Encoding]::new($false)
+)
 
 if (Test-Path $archive) { Remove-Item -LiteralPath $archive -Force }
 tar.exe -czf $archive -C $runtimeRoot $packageName
