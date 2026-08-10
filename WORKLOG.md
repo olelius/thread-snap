@@ -18,7 +18,7 @@
 ## 2026-08-10 — 修复 Candidate A 已认证帖子导航等待完整 load
 
 **总目标**：保持 Scrapling 与 Crawlee/Playwright 两个固定候选不变，让 Candidate A 在已认证会话下完成最多3条联通门，并保留与 Candidate B 相同的帖子 ID 和内容证明契约。
-**状态**：🟡 v0.2.14 Candidate A DOM 就绪导航热修包已完成；等待目标 Linux 复跑联通门
+**状态**：✅ 目标 Linux 双候选联通门已通过；允许进入首轮2000条吞吐测试
 
 **干到哪了**：
 - [x] 已校验目标 Linux 结果包 `connectivity-20260810T200311+0800.tar.gz`：外层 SHA-256 为 `56a9c0ca02ff065f3a8a460238e98cbf0ffffaf3f9e7aa399f00434169579ed6`，22/22 内部校验一致；`session_state_copied` 对 A/B 均为 `true`，网络基线全部通过。
@@ -27,8 +27,9 @@
 - [x] 联通脚本现把已启动但未写登录结果的非零退出记录为 `runner_failed_before_login_result`；汇总在候选退出或契约错误时优先返回 `inspect_candidate_runtime_or_contract_error`，不再误报 `runner_not_started` 或登录问题。
 - [x] 项目 `.vevn` 的联通定向13项通过；真实 Chrome + Scrapling 本地夹具在永不完成的子文档下于625ms返回 HTTP 200并取得1个内容证明节点，复现并验证 DOM 就绪处理层级。
 - [x] 全量验证为项目 `.vevn` Python 21项、Candidate B 8项、两端编译/类型、Bash语法、`pip check`、`git diff --check` 和凭证形态扫描通过。完整包 `threadsnap-poc-dual-runner-0.2.14-linux.tar.gz` 的 SHA-256 为 `5dad34b78539927143c63672ec708559a123406b2efff74d79655e3e428aa932`，源码提交为 `db0c0b7f35ddbd14509ddc201cc34ba4d8b1a605`，25/25 内部校验一致且校验清单无 CR 字节。免重装包 `threadsnap-candidate-a-dom-ready-hotfix-0.2.14.tar.gz` 的 SHA-256 为 `1a67b6583b9e79a424d80f216d0f5027f4c1e050a33c92ce547ad1dbc8954128`，4个运行文件与提交内容一致，Shell 入口权限为 `0755`，不安装依赖且不含凭证。
+- [x] 目标 Linux 结果包 `connectivity-20260810T203827+0800.tar.gz` 的外层 SHA-256 为 `06a2161568a2c3ed4c39c4c3a203a9a76a8a62f1c3c1271b17dc37a6dc15422b`，23/23 内部校验一致；预检、浏览器、DNS/TCP/TLS/HTTP 和 A/B 会话复制均通过。Candidate A/B 各自3/3均为 `post/success`，完成率、帖子 ID 匹配率和内容证明率均100%，未恢复控制数和契约错误均为0，最终 `ready_for_2000=true`、`next_action=run_2000_url_test`。
 
-**下一步**：目标 Linux 覆盖 v0.2.14 免重装包后直接复跑联通门；确认 A/B 均为3/3成功且 `ready_for_2000=true` 后再进入2000条。
+**下一步**：目标 Linux 执行 `./poc/linux/run-all.sh round-1`，按同一固定2000条清单先后运行 Candidate A/B；每个候选独立拥有一小时窗口。复制回两个结果目录后校验 `SHA256SUMS` 并形成首轮对比结论。
 **边界**：不更换两个候选，不跳过内容契约，不重复短信登录；本轮 Candidate B 3/3成功只关闭其联通分支，不外推 Candidate A 或2000条结果。
 **关联**：分支 `codex/fix-candidate-a-dom-ready-navigation`；入口 `poc/candidate-a/src/throughput.py`、`poc/linux/test-connectivity.sh`、`poc/shared/finalize_connectivity.py`。
 
