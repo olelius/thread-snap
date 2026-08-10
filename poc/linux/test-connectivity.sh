@@ -75,6 +75,9 @@ if [[ "$prepare_exit" -eq 0 && -x "$ROOT/.runtime/candidate-a/bin/python" ]]; th
     --config "$temp_config" \
     --output-dir "$result_dir/candidate-a" > "$result_dir/candidate-a/run.log" 2>&1
   candidate_a_exit=$?
+  if [[ "$candidate_a_exit" -ne 0 ]] && grep -q '"status":"runner_not_started"' "$result_dir/candidate-a/login-result.json"; then
+    printf '{"schema_version":"1.0","candidate":"candidate-a","logged_in":false,"status":"runner_failed_before_login_result","exit_code":%d}\n' "$candidate_a_exit" > "$result_dir/candidate-a/login-result.json"
+  fi
 else
   printf 'candidate A runtime or temporary configuration is not ready\n' > "$result_dir/candidate-a/run.log"
 fi
@@ -86,6 +89,9 @@ if [[ "$prepare_exit" -eq 0 ]] && command -v npm >/dev/null; then
     --config "$temp_config" \
     --output-dir "$result_dir/candidate-b" > "$result_dir/candidate-b/run.log" 2>&1
   candidate_b_exit=$?
+  if [[ "$candidate_b_exit" -ne 0 ]] && grep -q '"status":"runner_not_started"' "$result_dir/candidate-b/login-result.json"; then
+    printf '{"schema_version":"1.0","candidate":"candidate-b","logged_in":false,"status":"runner_failed_before_login_result","exit_code":%d}\n' "$candidate_b_exit" > "$result_dir/candidate-b/login-result.json"
+  fi
 else
   printf 'candidate B runtime or temporary configuration is not ready\n' > "$result_dir/candidate-b/run.log"
 fi

@@ -15,6 +15,25 @@
 
 ---
 
+## 2026-08-10 — 修复 Candidate A 已认证帖子导航等待完整 load
+
+**总目标**：保持 Scrapling 与 Crawlee/Playwright 两个固定候选不变，让 Candidate A 在已认证会话下完成最多3条联通门，并保留与 Candidate B 相同的帖子 ID 和内容证明契约。
+**状态**：🟡 v0.2.14 Candidate A DOM 就绪导航热修包已完成；等待目标 Linux 复跑联通门
+
+**干到哪了**：
+- [x] 已校验目标 Linux 结果包 `connectivity-20260810T200311+0800.tar.gz`：外层 SHA-256 为 `56a9c0ca02ff065f3a8a460238e98cbf0ffffaf3f9e7aa399f00434169579ed6`，22/22 内部校验一致；`session_state_copied` 对 A/B 均为 `true`，网络基线全部通过。
+- [x] Candidate B 使用复制的会话完成3/3 `post/success`，完成率、帖子 ID 匹配率和内容证明率均为100%；这确认账号、会话、3条样本和服务器网络均可用。Candidate A 在已认证首帖的 Scrapling `page.goto(wait_until=load)` 满90秒，尚未进入登录分类和逐 URL 队列。
+- [x] Candidate A 的登录确认与逐 URL 访问现统一通过 Scrapling `page_setup` 把首次 `goto` 及框架随后固定的 `wait_for_load_state(load)` 映射为 `domcontentloaded`；资源过滤、固定短等待、帖子 ID 和标题/正文成功契约保持不变。
+- [x] 联通脚本现把已启动但未写登录结果的非零退出记录为 `runner_failed_before_login_result`；汇总在候选退出或契约错误时优先返回 `inspect_candidate_runtime_or_contract_error`，不再误报 `runner_not_started` 或登录问题。
+- [x] 项目 `.vevn` 的联通定向13项通过；真实 Chrome + Scrapling 本地夹具在永不完成的子文档下于625ms返回 HTTP 200并取得1个内容证明节点，复现并验证 DOM 就绪处理层级。
+- [x] 全量验证为项目 `.vevn` Python 21项、Candidate B 8项、两端编译/类型、Bash语法、`pip check`、`git diff --check` 和凭证形态扫描通过。完整包 `threadsnap-poc-dual-runner-0.2.14-linux.tar.gz` 的 SHA-256 为 `5dad34b78539927143c63672ec708559a123406b2efff74d79655e3e428aa932`，源码提交为 `db0c0b7f35ddbd14509ddc201cc34ba4d8b1a605`，25/25 内部校验一致且校验清单无 CR 字节。免重装包 `threadsnap-candidate-a-dom-ready-hotfix-0.2.14.tar.gz` 的 SHA-256 为 `1a67b6583b9e79a424d80f216d0f5027f4c1e050a33c92ce547ad1dbc8954128`，4个运行文件与提交内容一致，Shell 入口权限为 `0755`，不安装依赖且不含凭证。
+
+**下一步**：目标 Linux 覆盖 v0.2.14 免重装包后直接复跑联通门；确认 A/B 均为3/3成功且 `ready_for_2000=true` 后再进入2000条。
+**边界**：不更换两个候选，不跳过内容契约，不重复短信登录；本轮 Candidate B 3/3成功只关闭其联通分支，不外推 Candidate A 或2000条结果。
+**关联**：分支 `codex/fix-candidate-a-dom-ready-navigation`；入口 `poc/candidate-a/src/throughput.py`、`poc/linux/test-connectivity.sh`、`poc/shared/finalize_connectivity.py`。
+
+---
+
 ## 2026-08-10 — 修复 Linux 联通门的候选会话交接
 
 **总目标**：保持 Scrapling 与 Crawlee/Playwright 两个固定候选不变，让短信初始化保存的两份独立会话真实进入最多 3 条的联通门，再据此决定是否启动 2000 条测试。

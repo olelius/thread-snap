@@ -110,6 +110,28 @@ async def setup_login_resource_routing(
     await page.route("**/*", route_handler)
 
 
+async def setup_dom_ready_navigation(page: Any) -> None:
+    """让 Scrapling 以 DOM 就绪结束导航，避免平台后台资源拖住完整 load。"""
+
+    marker = "_threadsnap_dom_ready_navigation"
+    if getattr(page, marker, False):
+        return
+    original_goto = page.goto
+    original_wait_for_load_state = page.wait_for_load_state
+
+    async def goto_when_dom_ready(url: str, **kwargs: Any) -> Any:
+        kwargs["wait_until"] = "domcontentloaded"
+        return await original_goto(url, **kwargs)
+
+    async def wait_for_dom_ready(state: str = "load", timeout: float | None = None) -> None:
+        target_state = "domcontentloaded" if state == "load" else state
+        await original_wait_for_load_state(state=target_state, timeout=timeout)
+
+    page.goto = goto_when_dom_ready
+    page.wait_for_load_state = wait_for_dom_ready
+    setattr(page, marker, True)
+
+
 async def setup_sms_navigation_diagnostics(page: Any) -> None:
     """为短信入口保留资源路由，并输出不含真实地址的导航生命周期证据。"""
 
@@ -508,13 +530,8 @@ async def verify_login(
     state: dict[str, Any] = {"submitted": False, "password_login_selected": False, "diagnostic": None}
 
     async def page_setup(page: Any) -> None:
-        async def route_handler(route: Any) -> None:
-            if route.request.resource_type in LOGIN_BLOCKED_RESOURCE_TYPES:
-                await route.abort()
-            else:
-                await route.continue_()
-
-        await page.route("**/*", route_handler)
+        await setup_login_resource_routing(page)
+        await setup_dom_ready_navigation(page)
 
     async def page_action(page: Any) -> None:
         await page.wait_for_timeout(2_000)
@@ -904,6 +921,7 @@ async def main_async(args: argparse.Namespace) -> int:
                         response = await session.fetch(
                             url,
                             google_search=False,
+                            page_setup=setup_dom_ready_navigation,
                             wait=wait_ms,
                             timeout=min(request_timeout_ms, max(1_000, int(remaining * 1000))),
                             network_idle=False,
