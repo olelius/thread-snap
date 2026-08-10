@@ -88,6 +88,20 @@ Candidate A 的普通登录确认和逐 URL 访问使用 Scrapling 原有 `page_
 
 联通模式还会为每个候选生成 `login-diagnostic.json`；提交后仍停留在登录或验证页面时，额外生成 `login-page-redacted.png`。诊断只记录最终路径、查询参数名、可见验证控件和标准化提示词；截图前清空输入框并遮盖账号、密码及账号片段，不保存完整 HTML、Cookie 值或凭证。
 
+## login/empty 状态转变诊断
+
+当完整轮次出现登录页或空文档时，先执行：
+
+```bash
+./poc/linux/test-access-transition.sh
+```
+
+该脚本固定取清单前 500 条、保持两个候选原并发和会话隔离，分别提供最多 20 分钟窗口。500 条覆盖首轮 Candidate B 在约 400 条附近发生的状态转变，又不重复启动完整 2000 条。脚本结束后返回 `access-diagnostic-results/access-transition-<timestamp>.tar.gz` 及 `.sha256`。
+
+每个候选结果新增 `access-diagnostics.jsonl`，只为最先出现的最多三条 `login` 和三条 `empty` 保存以下信息：主文档响应状态与目标类别、最终地址类别、DOM 长度和哈希、标题/正文文本长度、脚本/iframe/form 数量、预定义验证标记，以及 Cookie 数量和 Cookie 名称集合哈希。它不保存页面正文、完整最终地址、Cookie 名称、Cookie 值、账号或密码。
+
+`login` 表示导航最终进入登录路径，不属于网络连接错误；`empty` 表示主文档请求有响应，但最终 DOM 没有帖子 ID、标题或正文证明。是否由验证码、挑战脚本、持续负载控制或资源加载造成，应以该诊断文件中的响应链和页面形态判断，不根据 HTTP 200 单独推断。
+
 单独执行：
 
 ```bash
@@ -102,6 +116,7 @@ Candidate A 的普通登录确认和逐 URL 访问使用 Scrapling 原有 `page_
 - `input-urls.txt`
 - `url-results.jsonl`
 - `request-events.jsonl`
+- `access-diagnostics.jsonl`
 - `resource-metrics.csv`
 - `run.log`
 - `SHA256SUMS`

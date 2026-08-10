@@ -63,7 +63,7 @@ Candidate B 的框架日志记录 `requestsFinished=2000`、`requestsFailed=0` �
 
 ## 5. 下一阶段门
 
-1. Candidate A：记录登录预检前后及首批并发页面的非敏感会话形态，捕获首次 `login`、首次 `empty` 和首次状态转变的脱敏主文档证据。
-2. Candidate B：捕获首次 `empty` 与状态转变证据；在 `crawler.run()` 返回后执行显式有界关闭，并由 Linux 包装器对候选进程树设置硬截止和 TERM/KILL 收口。
-3. 两个候选：先用固定小样本复核登录连续性、空文档原因和进程退出；该诊断不计为 2000 条正式轮次。
-4. 定向诊断通过后生成新版本测试包。因为实现和测试包身份发生变化，三轮 2000 条硬门禁从新包重新计数，当前失败轮次永久保留且不覆盖。
+1. 已在两个固定候选中完成有界脱敏诊断：每种 `login/empty` 最多记录 3 条 URL 哈希、最终路径类型、文档长度与哈希、DOM 形态、控制标记、主文档状态链及 Cookie 数量/名称集合哈希；不保存页面正文、Cookie 名称/值或完整 URL。
+2. Candidate B 已在 `crawler.run()` 返回后写出完成标记并显式退出；Linux 包装器现以独立进程组执行候选，在入口退出、硬截止或信号中断时对 npm、tsx 和浏览器后代执行 TERM/KILL 有界收口。
+3. 本机合成浏览器验证已分别复现 Candidate A 与 B 的 `empty`，确认诊断文件落盘且 B 正常退出；目标 Linux 仍需运行固定前 500 条的 `test-access-transition.sh`，才能根据真实 `access-diagnostics.jsonl` 判断 `empty` 的具体页面形态。该诊断不计为 2000 条正式轮次。
+4. 源码提交 `2913d3bd00c75c2e32e6625c1e7eca327c192d0e` 已形成 v0.2.15 完整包和免重装热修包，SHA-256 分别为 `70ac81c451eac1a84cf1e65be7519f9407a986d5741a60c59f22d16af43a126d` 与 `6b5c4cc85dbb6dc9c780179f4042905b85237a97bb611d5faac244daade52ceb`。目标 Linux 定向诊断确认分类证据和进程退出后，再以该版本重新开始三轮 2000 条硬门禁；当前失败轮次永久保留且不覆盖。

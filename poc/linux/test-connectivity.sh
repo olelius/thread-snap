@@ -3,6 +3,7 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
+source "$ROOT/poc/linux/process-control.sh"
 NODE_HOME="$ROOT/.runtime/node-v22.17.0-linux-x64"
 export PATH="$NODE_HOME/bin:$PATH"
 export PLAYWRIGHT_BROWSERS_PATH="$ROOT/.runtime/browsers"
@@ -14,7 +15,13 @@ result_dir="$result_parent/connectivity-$timestamp"
 temp_dir="$ROOT/.runtime/connectivity-$timestamp"
 temp_config="$temp_dir/config.json"
 mkdir -p "$result_dir/candidate-a" "$result_dir/candidate-b" "$temp_dir"
-trap 'rm -f "$temp_config"' EXIT
+cleanup_connectivity() {
+  stop_bounded_process
+  rm -f "$temp_config"
+}
+trap cleanup_connectivity EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 python="$ROOT/.runtime/candidate-a/bin/python"
 if [[ ! -x "$python" ]]; then python="$(command -v python3 || true)"; fi
@@ -31,6 +38,7 @@ fi
 for candidate in candidate-a candidate-b; do
   : > "$result_dir/$candidate/url-results.jsonl"
   : > "$result_dir/$candidate/request-events.jsonl"
+  : > "$result_dir/$candidate/access-diagnostics.jsonl"
   printf '{"schema_version":"1.0","candidate":"%s","logged_in":false,"status":"runner_not_started"}\n' "$candidate" > "$result_dir/$candidate/login-result.json"
 done
 
@@ -71,7 +79,7 @@ fi
 candidate_a_exit=127
 if [[ "$prepare_exit" -eq 0 && -x "$ROOT/.runtime/candidate-a/bin/python" ]]; then
   echo "stage=candidate-a"
-  timeout --signal=TERM --kill-after=15s 360s "$ROOT/.runtime/candidate-a/bin/python" poc/candidate-a/src/throughput.py \
+  run_bounded_process 360 15 "$ROOT/.runtime/candidate-a/bin/python" poc/candidate-a/src/throughput.py \
     --config "$temp_config" \
     --output-dir "$result_dir/candidate-a" > "$result_dir/candidate-a/run.log" 2>&1
   candidate_a_exit=$?
@@ -85,7 +93,7 @@ fi
 candidate_b_exit=127
 if [[ "$prepare_exit" -eq 0 ]] && command -v npm >/dev/null; then
   echo "stage=candidate-b"
-  timeout --signal=TERM --kill-after=15s 360s npm --prefix poc/candidate-b run throughput -- \
+  run_bounded_process 360 15 npm --prefix poc/candidate-b run throughput -- \
     --config "$temp_config" \
     --output-dir "$result_dir/candidate-b" > "$result_dir/candidate-b/run.log" 2>&1
   candidate_b_exit=$?

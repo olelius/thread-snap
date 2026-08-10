@@ -6,8 +6,14 @@ import { dirname, isAbsolute, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { createInterface } from 'node:readline/promises';
 import { PlaywrightCrawler } from 'crawlee';
-import type { Page } from 'playwright';
+import type { Cookie, Page, Response } from 'playwright';
 import { classifyDocument, CONTROL_CLASSES, extractInputPostId, urlSha256, type Classification } from './contract.js';
+import {
+  ACCESS_DIAGNOSTIC_CLASSES,
+  ACCESS_DIAGNOSTIC_LIMIT_PER_CLASS,
+  buildAccessDiagnostic,
+  summarizeDocumentResponse,
+} from './access-diagnostic.js';
 
 interface CandidateConfig {
   concurrency?: number;
@@ -682,6 +688,8 @@ async function main(): Promise<number> {
   mkdirSync(options.outputDir, { recursive: true });
   const resultsPath = resolve(options.outputDir, 'url-results.jsonl');
   const eventsPath = resolve(options.outputDir, 'request-events.jsonl');
+  const diagnosticsPath = resolve(options.outputDir, 'access-diagnostics.jsonl');
+  if (!existsSync(diagnosticsPath)) writeFileSync(diagnosticsPath, '', 'utf8');
   const completed = loadCompleted(resultsPath);
   const urlSet = new Set(urls);
   for (const url of completed) if (!urlSet.has(url)) throw new Error('已有结果包含本轮清单外 URL');
@@ -721,6 +729,50 @@ async function main(): Promise<number> {
   let deadlineReached = false;
   const requests = pending.map((url) => ({ url, uniqueKey: `throughput:${urlSha256(url)}` }));
   const storedCookies = loadStorageCookies(profileDir);
+  const diagnosticCounts = new Map<string, number>();
+  let diagnosticSequence = 0;
+  const documentResponsesByPage = new WeakMap<Page, Array<Record<string, unknown>>>();
+  const instrumentedPages = new WeakSet<Page>();
+
+  const maybeRecordAccessDiagnostic = async (optionsForDiagnostic: {
+    responseClass: string;
+    attempt: number;
+    inputUrl: string;
+    finalUrl: string;
+    httpStatus: number | null;
+    document: string;
+    page: Page;
+  }): Promise<void> => {
+    if (!ACCESS_DIAGNOSTIC_CLASSES.has(optionsForDiagnostic.responseClass)) return;
+    const count = diagnosticCounts.get(optionsForDiagnostic.responseClass) ?? 0;
+    if (count >= ACCESS_DIAGNOSTIC_LIMIT_PER_CLASS) return;
+    const nextCount = count + 1;
+    diagnosticCounts.set(optionsForDiagnostic.responseClass, nextCount);
+    diagnosticSequence += 1;
+    let cookies: Cookie[] = [];
+    let cookieShapeAvailable = true;
+    try {
+      cookies = await optionsForDiagnostic.page.context().cookies();
+    } catch {
+      cookieShapeAvailable = false;
+    }
+    appendJsonl(diagnosticsPath, buildAccessDiagnostic({
+      candidate: 'candidate-b',
+      trigger: nextCount === 1
+        ? `first_${optionsForDiagnostic.responseClass}`
+        : `sample_${optionsForDiagnostic.responseClass}_${nextCount}`,
+      sequence: diagnosticSequence,
+      attempt: optionsForDiagnostic.attempt,
+      inputUrl: optionsForDiagnostic.inputUrl,
+      finalUrl: optionsForDiagnostic.finalUrl,
+      httpStatus: optionsForDiagnostic.httpStatus,
+      responseClass: optionsForDiagnostic.responseClass,
+      document: optionsForDiagnostic.document,
+      cookies,
+      cookieShapeAvailable,
+      mainDocumentResponses: documentResponsesByPage.get(optionsForDiagnostic.page) ?? [],
+    }));
+  };
 
   const crawler = new PlaywrightCrawler({
     minConcurrency: Math.min(2, concurrency),
@@ -735,6 +787,17 @@ async function main(): Promise<number> {
     },
     preNavigationHooks: [
       async ({ page }) => {
+        documentResponsesByPage.set(page, []);
+        if (!instrumentedPages.has(page)) {
+          page.on('response', (response: Response) => {
+            if (response.request().resourceType() !== 'document') return;
+            const evidence = documentResponsesByPage.get(page);
+            if (evidence && evidence.length < 10) {
+              evidence.push(summarizeDocumentResponse(response.url(), response.status()));
+            }
+          });
+          instrumentedPages.add(page);
+        }
         if (storedCookies.length > 0) await page.context().addCookies(storedCookies);
         await page.route('**/*', async (route) => {
           const kind = route.request().resourceType();
@@ -754,6 +817,15 @@ async function main(): Promise<number> {
       const httpStatus = response?.status() ?? null;
       const classification = classifyDocument(page.url(), httpStatus, document, extractInputPostId(url));
       const attempt = request.retryCount + 1;
+      await maybeRecordAccessDiagnostic({
+        responseClass: classification.response_class,
+        attempt,
+        inputUrl: url,
+        finalUrl: page.url(),
+        httpStatus,
+        document,
+        page,
+      });
       const event: Attempt = {
         schema_version: '1.0', candidate: 'candidate-b', url, url_sha256: urlSha256(url), attempt,
         channel: 'browser-dom', started_at: attemptStartedAt, ended_at: utcNow(),
@@ -835,4 +907,6 @@ async function main(): Promise<number> {
   return 0;
 }
 
-process.exitCode = await main();
+const exitCode = await main();
+process.exitCode = exitCode;
+process.stdout.write(`runner_complete=candidate-b;exit_code=${exitCode}\n`, () => process.exit(exitCode));

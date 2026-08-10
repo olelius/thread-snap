@@ -254,8 +254,10 @@ Linux 测试机虽然允许联网，但联网能力不作为应用依赖安装�
 - Codex 不远程登录、不上传文件，也不自动操作最终 Linux 主机；
 - 人工只负责环境准备和命令触发，不人工统计完成量、不编辑指标文件、不补齐失败结果；
 - `run-poc.sh` 自动保存包版本、Git 提交、`SHA256SUMS`、环境快照、开始/结束时间、输入清单哈希、逐 URL 状态、帖子标识与内容证明、风控事件和资源指标；
+- 每个候选对 `login` 和 `empty` 各最多保存 3 条脱敏访问形态，只含 URL 哈希、页面形态、已知控制标记、主文档状态链及 Cookie 数量/名称集合哈希，不含完整 URL、页面正文或 Cookie 内容；
+- 每个候选由 `setsid` 启动为独立进程组；候选入口结束、硬截止或外层终止时，以 TERM/KILL 有界清理同组 npm、tsx 和浏览器子进程；
 - `run-poc.sh` 只写入本次测试产生的数据，不扫描或收集服务器上的其他文件；
-- Linux 测试包内每轮结果目录固定为 `results/<candidate>/<round>-<timestamp>/`，至少包含环境信息、输入 URL 清单、摘要、逐 URL 结果、请求事件、资源指标、运行日志和校验值；
+- Linux 测试包内每轮结果目录固定为 `results/<candidate>/<round>-<timestamp>/`，至少包含环境信息、输入 URL 清单、摘要、逐 URL 结果、请求事件、脱敏访问诊断、资源指标、运行日志和校验值；
 - `input-urls.txt` 和逐 URL 结果必须保留实际完整 URL，不以哈希值替代；输入清单哈希仅用于确认两个候选和各轮使用了约定清单；
 - 测试结束后由项目负责人把完整轮次目录复制到当前开发电脑的 `artifacts/poc/results/<candidate>/<round>-<timestamp>/`；
 - 从最终 Linux 主机复制回来的范围只包含本次测试结果，不包含程序、离线依赖、运行环境、浏览器目录或数据库；
@@ -270,11 +272,14 @@ Linux 测试机虽然允许联网，但联网能力不作为应用依赖安装�
 | `input-urls.txt` | UTF-8 纯文本 | 按实际测试顺序每行保存一个完整 URL |
 | `url-results.jsonl` | JSONL | 每行保存一个 URL 的最终状态、耗时、帖子标识匹配、真实内容证明和错误分类 |
 | `request-events.jsonl` | JSONL | 每行保存一次请求、重试、恢复或异常事件 |
+| `access-diagnostics.jsonl` | JSONL | 有界保存 `login/empty` 的脱敏页面形态、主文档状态链和 Cookie 形态 |
 | `resource-metrics.csv` | CSV | 按时间采样保存 CPU、内存和浏览器进程数量 |
 | `run.log` | UTF-8 纯文本 | 保存测试运行日志，不写入凭证 |
 | `SHA256SUMS` | UTF-8 纯文本 | 校验该轮目录中上述结果文件 |
 
 JSON、JSONL、CSV 和日志统一使用 UTF-8；时间使用带时区的 ISO 8601 格式。两个候选必须生成相同文件结构和字段定义。
+
+首轮 2000 条出现大面积 `login/empty` 后，先运行 `test-access-transition.sh`：按原输入顺序固定取前 500 条，保持两个候选原并发、资源路由和会话方式，每个候选使用 1200 秒诊断窗口。该运行只复核分类转变、会话形态和进程退出，不计为阶段 3 的 2000 条正式轮次；诊断完成后复制其压缩包和外层 SHA-256 回开发机复核。
 
 ### 阶段 3：目标吞吐验证
 
@@ -442,7 +447,7 @@ PoC 原型默认是验证代码。只有经代码审查、测试和结构评估�
 - 目标主机环境截图已确认：CentOS Stream 10（Coughlan）、x86_64、glibc 2.39；截图保存在本地 `artifacts/poc/inputs/linux-environment-centos-stream-10.png`；
 - PoC 部署人员具有 `sudo` 或 root 权限，可以安装语言运行时、浏览器系统库等主机级依赖；
 - Linux 测试完成后由项目负责人只把完整轮次结果目录复制到当前开发电脑的 `artifacts/poc/results/<candidate>/<round>-<timestamp>/`，用于复核和技术选型；
-- 每轮结果统一使用 `environment.json`、`summary.json`、`input-urls.txt`、`url-results.jsonl`、`request-events.jsonl`、`resource-metrics.csv`、`run.log` 和 `SHA256SUMS`；
+- 每轮结果统一使用 `environment.json`、`summary.json`、`input-urls.txt`、`url-results.jsonl`、`request-events.jsonl`、`access-diagnostics.jsonl`、`resource-metrics.csv`、`run.log` 和 `SHA256SUMS`；
 - 当前开发环境的候选 A 固定使用 Python 3.11.4、Scrapling 0.4.12；候选 B 固定使用 Node.js 22.17.0、Crawlee 3.18.0、Playwright 1.62.1。上述是当前阶段 1 原型版本，不自动等同于最终 Linux 测试包版本；
 - Windows 登录阶段 1 已确认：两个候选使用同一授权条件均能自动完成密码登录与 SSO 回调，并在清除凭证环境后复用各自的持久浏览器配置；四层样本均为 3 条真实帖子成功、同一条服务器 404。下一步先核对固定输入的现时有效性，再进入中等批量正确性预筛；
 

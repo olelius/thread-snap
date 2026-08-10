@@ -20,6 +20,12 @@ ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "poc" / "shared"))
 
 from contract import classify_document, extract_input_post_id, url_sha256  # noqa: E402
+from access_diagnostic import (  # noqa: E402
+    ACCESS_DIAGNOSTIC_CLASSES,
+    ACCESS_DIAGNOSTIC_LIMIT_PER_CLASS,
+    build_access_diagnostic,
+    summarize_document_response,
+)
 
 CONTROL_CLASSES = {"rate_limited", "captcha", "challenge", "login"}
 SECONDARY_SMS_MARKER = "为保证账号安全，请使用手机验证码登录"
@@ -130,6 +136,30 @@ async def setup_dom_ready_navigation(page: Any) -> None:
     page.goto = goto_when_dom_ready
     page.wait_for_load_state = wait_for_dom_ready
     setattr(page, marker, True)
+
+
+async def setup_access_navigation_diagnostics(page: Any) -> None:
+    """复用页面监听器，按每次导航重置脱敏主文档响应链。"""
+
+    await setup_dom_ready_navigation(page)
+    evidence_marker = "_threadsnap_access_document_responses"
+    listener_marker = "_threadsnap_access_document_listener"
+    setattr(page, evidence_marker, [])
+    if getattr(page, listener_marker, False):
+        return
+
+    def capture_document_response(response: Any) -> None:
+        try:
+            if response.request.resource_type != "document":
+                return
+            evidence = getattr(page, evidence_marker, None)
+            if isinstance(evidence, list) and len(evidence) < 10:
+                evidence.append(summarize_document_response(str(response.url), int(response.status)))
+        except Exception:  # noqa: BLE001 - 诊断监听器不干扰候选正常访问。
+            return
+
+    page.on("response", capture_document_response)
+    setattr(page, listener_marker, True)
 
 
 async def setup_sms_navigation_diagnostics(page: Any) -> None:
@@ -793,6 +823,8 @@ async def main_async(args: argparse.Namespace) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     results_path = output_dir / "url-results.jsonl"
     events_path = output_dir / "request-events.jsonl"
+    diagnostics_path = output_dir / "access-diagnostics.jsonl"
+    diagnostics_path.touch(exist_ok=True)
     completed = load_completed(results_path)
     unknown = completed - set(urls)
     if unknown:
@@ -858,6 +890,10 @@ async def main_async(args: argparse.Namespace) -> int:
                 handle.write(payload)
                 handle.flush()
 
+    diagnostic_counts: dict[str, int] = {}
+    diagnostic_sequence = 0
+    diagnostic_lock = asyncio.Lock()
+
     async with AsyncDynamicSession(
         headless=bool(config.get("headless", True)),
         google_search=False,
@@ -868,6 +904,51 @@ async def main_async(args: argparse.Namespace) -> int:
         cookies=load_profile_cookies(profile_dir),
         real_chrome=bool(candidate_config.get("real_chrome", False)),
     ) as session:
+        async def maybe_record_access_diagnostic(
+            *,
+            trigger_class: str,
+            attempt: int,
+            input_url: str,
+            final_url: str,
+            http_status: int | None,
+            document: str,
+            main_document_responses: list[dict[str, Any]],
+        ) -> None:
+            """每种 login/empty 最多保存三条脱敏形态，避免结果目录膨胀。"""
+
+            nonlocal diagnostic_sequence
+            if trigger_class not in ACCESS_DIAGNOSTIC_CLASSES:
+                return
+            async with diagnostic_lock:
+                count = diagnostic_counts.get(trigger_class, 0)
+                if count >= ACCESS_DIAGNOSTIC_LIMIT_PER_CLASS:
+                    return
+                count += 1
+                diagnostic_counts[trigger_class] = count
+                diagnostic_sequence += 1
+                sequence = diagnostic_sequence
+            try:
+                cookies = await session.context.cookies()
+                cookie_shape_available = True
+            except Exception:  # noqa: BLE001 - 诊断字段明确标记形态未取得。
+                cookies = []
+                cookie_shape_available = False
+            diagnostic = build_access_diagnostic(
+                candidate="candidate-a",
+                trigger=f"first_{trigger_class}" if count == 1 else f"sample_{trigger_class}_{count}",
+                sequence=sequence,
+                attempt=attempt,
+                input_url=input_url,
+                final_url=final_url,
+                http_status=http_status,
+                response_class=trigger_class,
+                document=document,
+                cookies=cookies,
+                cookie_shape_available=cookie_shape_available,
+                main_document_responses=main_document_responses,
+            )
+            await append_jsonl(diagnostics_path, diagnostic)
+
         login_result = await verify_login(
             session,
             urls[0],
@@ -916,12 +997,18 @@ async def main_async(args: argparse.Namespace) -> int:
                     break
                 attempt_started_at = utc_now()
                 attempt_started = time.perf_counter()
+                page_state: dict[str, Any] = {}
+
+                async def page_setup(page: Any) -> None:
+                    page_state["page"] = page
+                    await setup_access_navigation_diagnostics(page)
+
                 try:
                     async with asyncio.timeout(min(remaining, request_timeout_ms / 1000)):
                         response = await session.fetch(
                             url,
                             google_search=False,
-                            page_setup=setup_dom_ready_navigation,
+                            page_setup=page_setup,
                             wait=wait_ms,
                             timeout=min(request_timeout_ms, max(1_000, int(remaining * 1000))),
                             network_idle=False,
@@ -931,6 +1018,19 @@ async def main_async(args: argparse.Namespace) -> int:
                     final_url = str(response.url)
                     http_status = int(response.status)
                     classification = classify_document(final_url, http_status, document, extract_input_post_id(url))
+                    page = page_state.get("page")
+                    main_document_responses = list(
+                        getattr(page, "_threadsnap_access_document_responses", []) if page is not None else []
+                    )
+                    await maybe_record_access_diagnostic(
+                        trigger_class=str(classification["response_class"]),
+                        attempt=attempt,
+                        input_url=url,
+                        final_url=final_url,
+                        http_status=http_status,
+                        document=document,
+                        main_document_responses=main_document_responses,
+                    )
                     event = {
                         "schema_version": "1.0",
                         "candidate": "candidate-a",
