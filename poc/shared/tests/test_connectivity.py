@@ -58,6 +58,11 @@ class ConnectivityTests(unittest.TestCase):
         self.assertIn('config["window_seconds"] = 1200', transition_script)
         self.assertIn('access-transition-$timestamp.tar.gz', transition_script)
         self.assertIn('access-diagnostics.jsonl', transition_script)
+        single_script = (SHARED.parent / "linux" / "test-single-concurrency.sh").read_text(encoding="utf-8")
+        self.assertIn('prepare_single_concurrency_config.py', single_script)
+        self.assertIn('single-concurrency-$candidate-$timestamp.tar.gz', single_script)
+        self.assertIn('completed_within_proportional_target', single_script)
+        self.assertIn('next=./poc/linux/bootstrap-sms-session.sh $candidate', single_script)
 
     def test_linux_script_replaces_started_runner_placeholder_after_failure(self) -> None:
         script = (SHARED.parent / "linux" / "test-connectivity.sh").read_text(encoding="utf-8")

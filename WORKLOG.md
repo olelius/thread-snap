@@ -15,6 +15,24 @@
 
 ---
 
+## 2026-08-11 — 复核双候选空文档转变并增加 fresh-session 单并发诊断
+
+**总目标**：保持 Scrapling 0.4.12 与 Crawlee 3.18.0/Playwright 1.62.1 不变，用同批500条目标 Linux证据确认 `empty` 形态，再以刚初始化的候选隔离会话和并发1判断持续并发是否是主要触发条件。
+**状态**：🟡 双候选转变根因已收敛到会话/客户端身份与持续并发共同参与的 HTTP 200 空文档控制；单并发入口已实现，等待本机门禁与目标 Linux 实测
+
+**干到哪了**：
+- [x] A/B 转变结果目录各自9/9校验一致，输入文件 SHA-256 同为 `cbb34154b1614e417c24f049844288864f139683c62a419cdab5b172e878822a`。A 为0/500成功、95个`login`、405个`empty`、274秒/退出0；B 为71/500成功、1个`login`、405个`empty`、23个HTTP404、224秒/退出0。
+- [x] A/B 首次 `empty` 分别出现在约64.2秒与69.2秒；A正文0字节，B为浏览器给零正文补出的39字节空HTML骨架。405个最终空文档有393个输入相同，双方立即重试均未出现 `empty -> post`。
+- [x] B 在 A 已进入大面积空文档后从同一出口仍先取得71条成功，排除纯 IP 统一阻断；A 登录预检成功后批量页面立即跳转登录且 Cookie 名称形态未整体消失，说明 A 另有旧会话/并发上下文连续性问题。
+- [x] 已增加候选独立的 `test-single-concurrency.sh`：要求目标会话状态最近1800秒内更新，固定前500条、并发1、最长2400秒，并记录是否在500条对应的900秒比例观察线内完成；A/B 各自初始化、各自运行和各自打包。
+- [x] 本机门禁已通过：项目 `.vevn` Python 26项、Python编译与`pip check`，Candidate B 9项与TypeScript类型检查，Bash语法、凭证标记扫描和`git diff --check`均通过；真实 Chrome/Playwright 单并发夹具分别以退出0落盘空文档诊断，B同时输出正常完成标记。
+
+**下一步**：生成并校验免重装包；目标 Linux 依次执行 `bootstrap-sms-session.sh candidate-a`、`test-single-concurrency.sh candidate-a`，再对 Candidate B 执行同样两步并复制回两份结果包。
+**边界**：单并发500条只验证触发条件和速度余量，不替代正式三轮2000条；当前23条真实404不计为平台控制，正式轮次前从输入池替换并产生新清单哈希；不共享 A/B 会话，不修改固定框架或成功契约。
+**关联**：转变结果 `artifacts/poc/results/candidate-{a,b}/access-transition-*`；结果报告 `docs/research/collector-stack-poc-results.md`；入口 `poc/linux/test-single-concurrency.sh`。
+
+---
+
 ## 2026-08-10 — 复核目标 Linux 首轮 2000 条双候选结果
 
 **总目标**：保持 Scrapling 与 Crawlee/Playwright 两个固定候选不变，按统一校验器复核目标 Linux 首轮 2000 条结果，区分队列处理、有效帖子证明、平台控制和运行器生命周期问题。

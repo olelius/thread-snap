@@ -45,6 +45,7 @@ $files = @(
     'poc/linux/run-all.sh',
     'poc/linux/test-connectivity.sh',
     'poc/linux/test-access-transition.sh',
+    'poc/linux/test-single-concurrency.sh',
     'poc/linux/bootstrap-sms-session.sh',
     'poc/candidate-a/requirements.lock',
     'poc/candidate-a/src/throughput.py',
@@ -58,6 +59,7 @@ $files = @(
     'poc/shared/contract.py',
     'poc/shared/network_probe.py',
     'poc/shared/prepare_connectivity_config.py',
+    'poc/shared/prepare_single_concurrency_config.py',
     'poc/shared/finalize_connectivity.py',
     'poc/shared/validate_results.py',
     'poc/shared/finalize_run.py'

@@ -96,11 +96,27 @@ Candidate A 的普通登录确认和逐 URL 访问使用 Scrapling 原有 `page_
 ./poc/linux/test-access-transition.sh
 ```
 
-该脚本固定取清单前 500 条、保持两个候选原并发和会话隔离，分别提供最多 20 分钟窗口。500 条覆盖首轮 Candidate B 在约 400 条附近发生的状态转变，又不重复启动完整 2000 条。脚本结束后返回 `access-diagnostic-results/access-transition-<timestamp>.tar.gz` 及 `.sha256`。
+该脚本固定取清单前 500 条、保持两个候选原并发和会话隔离，分别提供最多 20 分钟窗口，不重复启动完整 2000 条。脚本结束后返回 `access-diagnostic-results/access-transition-<timestamp>.tar.gz` 及 `.sha256`。
 
 每个候选结果新增 `access-diagnostics.jsonl`，只为最先出现的最多三条 `login` 和三条 `empty` 保存以下信息：主文档响应状态与目标类别、最终地址类别、DOM 长度和哈希、标题/正文文本长度、脚本/iframe/form 数量、预定义验证标记，以及 Cookie 数量和 Cookie 名称集合哈希。它不保存页面正文、完整最终地址、Cookie 名称、Cookie 值、账号或密码。
 
 `login` 表示导航最终进入登录路径，不属于网络连接错误；`empty` 表示主文档请求有响应，但最终 DOM 没有帖子 ID、标题或正文证明。是否由验证码、挑战脚本、持续负载控制或资源加载造成，应以该诊断文件中的响应链和页面形态判断，不根据 HTTP 200 单独推断。
+
+## fresh-session 单并发诊断
+
+当两个候选都在持续并发约一分钟后转为 HTTP 200 空文档时，分别刷新各自会话并紧接着运行单并发诊断。每次只运行一个候选，避免先运行 A 导致 B 的会话在等待期间变旧：
+
+```bash
+./poc/linux/bootstrap-sms-session.sh candidate-a
+./poc/linux/test-single-concurrency.sh candidate-a
+
+./poc/linux/bootstrap-sms-session.sh candidate-b
+./poc/linux/test-single-concurrency.sh candidate-b
+```
+
+脚本要求目标候选的 `storage-state.json` 在最近 30 分钟内更新；状态缺失或过旧时只输出重新初始化命令，不启动访问。诊断固定取原清单前 500 条、只把目标候选并发设为 1，保留原框架、资源路由、重试和成功契约，最多运行 40 分钟。`diagnostic-summary.json` 另记录是否在 900 秒比例窗口内完成500条；该字段只用于判断单并发是否还有达到2000条/小时的速度余量，不构成正式吞吐通过结论。
+
+结果压缩包位于 `access-diagnostic-results/single-concurrency-<candidate>-<timestamp>.tar.gz`。A/B 两次诊断必须各自返回压缩包和 `.sha256`，不得复用另一候选会话，也不得把两次诊断拼接为正式2000条轮次。
 
 单独执行：
 
