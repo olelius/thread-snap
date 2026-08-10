@@ -58,6 +58,9 @@ class ConnectivityTests(unittest.TestCase):
         self.assertIn("[[ ! -t 0 || ! -t 1 ]]", script)
         self.assertLess(script.index("run_candidate_a"), script.index("run_candidate_b"))
         self.assertEqual(2, script.count("--bootstrap-sms"))
+        self.assertEqual(2, script.count("--manual-captcha-cdp-port"))
+        self.assertIn("127.0.0.1:$port", script)
+        self.assertIn("chrome://inspect/#devices", script)
         self.assertNotIn("sms_code", (SHARED.parent / "linux" / "config.example.json").read_text(encoding="utf-8"))
         self.assertIn("poc/linux/bootstrap-sms-session.sh", packager)
 
@@ -86,6 +89,32 @@ class ConnectivityTests(unittest.TestCase):
             self.assertIn(marker, bootstrap_b)
         self.assertIn('await page.wait_for_timeout(5_000)', bootstrap_a)
         self.assertIn('await page.waitForTimeout(5_000)', bootstrap_b)
+
+    def test_visual_verification_waits_for_manual_cdp_before_sms_code(self) -> None:
+        candidate_a = (SHARED.parent / "candidate-a" / "src" / "throughput.py").read_text(encoding="utf-8")
+        candidate_b = (SHARED.parent / "candidate-b" / "src" / "throughput.ts").read_text(encoding="utf-8")
+        bootstrap_a = candidate_a[candidate_a.index("async def bootstrap_sms_session(") : candidate_a.index("async def main_async(")]
+        bootstrap_b = candidate_b[candidate_b.index("async function bootstrapSmsSession(") : candidate_b.index("async function main()")]
+
+        self.assertIn('"--remote-debugging-address=127.0.0.1"', candidate_a)
+        self.assertIn("'--remote-debugging-address=127.0.0.1'", candidate_b)
+        self.assertIn("wait_for_manual_visual_verification", bootstrap_a)
+        self.assertIn("waitForManualVisualVerification", bootstrap_b)
+        self.assertLess(
+            bootstrap_a.index("wait_for_manual_visual_verification"),
+            bootstrap_a.index('read_sms_code, "candidate-a"'),
+        )
+        self.assertLess(
+            bootstrap_b.index("waitForManualVisualVerification"),
+            bootstrap_b.index("readSmsCode('candidate-b')"),
+        )
+        for marker in (
+            "visual_verification_required",
+            "manual_verification_completed",
+            "sms_send_confirmed",
+        ):
+            self.assertIn(marker, bootstrap_a)
+            self.assertIn(marker, bootstrap_b)
 
     def test_prepare_uses_only_three_low_concurrency_samples(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

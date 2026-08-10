@@ -15,6 +15,24 @@
 
 ---
 
+## 2026-08-10 — 为纯命令行 Linux PoC 增加可视验证码人工入口
+
+**总目标**：保持 Scrapling 与 Crawlee/Playwright 两个固定候选不变，在纯命令行目标服务器的原浏览器上下文中完成人工可视验证；确认短信实际进入倒计时后再读取动态码并保存候选隔离会话。
+**状态**：进行中；源码、脚本、owner 文档及本机验证已完成，正在生成可追溯 Linux 包。
+
+**干到哪了**：
+- [x] 根据目标 Linux `POST /send_activation_code/v2/` HTTP 200 后加载验证中心、`verification_visible=true` 且 `countdown_visible=false` 的共同证据，把阻塞定位为短信发送前的可视验证；不再继续修改导航或点击定位。
+- [x] 候选 A/B 均增加回环 CDP 启动参数、可视验证等待状态、十分钟有界等待及 `visual_verification_required`、`manual_verification_completed`、`sms_send_confirmed` 结果字段；检测到可视验证时不提前读取短信码。
+- [x] `poc/linux/bootstrap-sms-session.sh` 为 A/B 分配独立默认端口 9222/9223，并输出 Windows SSH 隧道与 `chrome://inspect` 操作入口；CDP 只绑定 `127.0.0.1`，不增加 Linux 桌面或 VNC 依赖。
+- [x] 已同步技术路线、首个平台链档、PoC 计划和 Linux README；明确本入口只用于 PoC 初始化，正式验证码及会话续期方案仍未决。
+- [x] 本机验证通过：项目 `.vevn` 运行 Python 16 项测试及候选 A 语法检查；Candidate B 8 项测试及 TypeScript 类型检查通过；Git Bash `bash -n`、`git diff --check` 和已知真实凭证扫描通过。真实浏览器检查分别得到 `candidate_a_cdp_page_target=ready` 与 `candidate_b_cdp=ready`，证明 Scrapling 和 Crawlee 启动链均实际开放可由 DevTools发现的回环 CDP 端点。
+
+**下一步**：构建带新版本号与 SHA-256 的 Linux 完整包和免重装热修包，再由目标 Linux 先复核候选 A、后复核候选 B；目标 Linux 仍需真实确认 Windows DevTools 画面可操作、验证后倒计时出现和隔离会话复访成功。
+**边界**：CDP 人工操作不计入 2000 条计时窗口；两个候选不共享资料目录或会话；验证码、动态码、Cookie、挑战数据及真实凭证不进入 Git、日志或结果包；目标 Linux 复核通过前不声明联通门通过。
+**关联**：分支 `fix/manual-captcha-cdp`；入口 `poc/linux/bootstrap-sms-session.sh`、`poc/candidate-a/src/throughput.py`、`poc/candidate-b/src/throughput.ts`。
+
+---
+
 ## 2026-08-10 — 增加 Linux 双候选独立联通门
 
 **总目标**：在目标服务器执行 2000 条测试前，先用最多 3 条已验证样本独立确认 Linux 环境、网络链路、两个固定框架的自动登录和真实帖子访问；失败时返回完整诊断包后再按证据修复。
