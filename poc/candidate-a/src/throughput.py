@@ -46,6 +46,7 @@ VERIFICATION_REASON_MARKERS = frozenset(LOGIN_REASON_MARKERS[:11])
 LOGIN_BLOCKED_RESOURCE_TYPES = frozenset(
     {"font", "image", "media", "beacon", "object", "imageset", "texttrack", "websocket", "csp_report"}
 )
+SMS_LOGIN_BLOCKED_RESOURCE_TYPES = LOGIN_BLOCKED_RESOURCE_TYPES - {"image", "imageset"}
 SMS_CODE_PATTERN = re.compile(r"^[0-9]{4,8}$")
 VISUAL_VERIFICATION_SELECTOR = (
     'iframe[src*="captcha" i], [class*="captcha" i], [id*="captcha" i], '
@@ -94,11 +95,14 @@ def build_sms_login_url(post_url: str) -> str:
     )
 
 
-async def setup_login_resource_routing(page: Any) -> None:
-    """保留样式与脚本，仅丢弃可能拖住登录页面 load 的非必要资源。"""
+async def setup_login_resource_routing(
+    page: Any,
+    blocked_resource_types: frozenset[str] = LOGIN_BLOCKED_RESOURCE_TYPES,
+) -> None:
+    """按当前登录场景丢弃可能拖住页面 load 的非必要资源。"""
 
     async def route_handler(route: Any) -> None:
-        if route.request.resource_type in LOGIN_BLOCKED_RESOURCE_TYPES:
+        if route.request.resource_type in blocked_resource_types:
             await route.abort()
         else:
             await route.continue_()
@@ -109,7 +113,7 @@ async def setup_login_resource_routing(page: Any) -> None:
 async def setup_sms_navigation_diagnostics(page: Any) -> None:
     """为短信入口保留资源路由，并输出不含真实地址的导航生命周期证据。"""
 
-    await setup_login_resource_routing(page)
+    await setup_login_resource_routing(page, SMS_LOGIN_BLOCKED_RESOURCE_TYPES)
     pending_by_type: dict[str, int] = {}
     original_goto = page.goto
     original_wait_for_load_state = page.wait_for_load_state
@@ -143,8 +147,11 @@ async def setup_sms_navigation_diagnostics(page: Any) -> None:
 
         if "/login-required" not in page.url:
             return
-        await page.wait_for_timeout(250)
-        if page.is_closed():
+        try:
+            if page.is_closed():
+                return
+            await page.wait_for_timeout(250)
+        except Exception:  # noqa: BLE001 - 页面可能在短任务完成后先于诊断定时器关闭。
             return
         pending = ",".join(
             f"{kind}:{count}" for kind, count in sorted(pending_by_type.items()) if count > 0

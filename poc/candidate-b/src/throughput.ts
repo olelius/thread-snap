@@ -548,7 +548,7 @@ async function bootstrapSmsSession(
         page.on('load', () => console.log('navigation_event=candidate-b;event=load'));
         await page.route('**/*', async (route) => {
           const kind = route.request().resourceType();
-          if (['image', 'media', 'font'].includes(kind)) await route.abort();
+          if (['media', 'font'].includes(kind)) await route.abort();
           else await route.continue();
         });
       },

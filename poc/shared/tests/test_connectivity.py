@@ -118,6 +118,19 @@ class ConnectivityTests(unittest.TestCase):
             self.assertIn(marker, bootstrap_a)
             self.assertIn(marker, bootstrap_b)
 
+    def test_sms_bootstrap_allows_captcha_images_without_changing_other_routes(self) -> None:
+        candidate_a = (SHARED.parent / "candidate-a" / "src" / "throughput.py").read_text(encoding="utf-8")
+        candidate_b = (SHARED.parent / "candidate-b" / "src" / "throughput.ts").read_text(encoding="utf-8")
+        bootstrap_a = candidate_a[candidate_a.index("async def setup_sms_navigation_diagnostics(") : candidate_a.index("async def first_visible(")]
+        bootstrap_b = candidate_b[candidate_b.index("async function bootstrapSmsSession(") : candidate_b.index("async function main()")]
+
+        self.assertIn('SMS_LOGIN_BLOCKED_RESOURCE_TYPES = LOGIN_BLOCKED_RESOURCE_TYPES - {"image", "imageset"}', candidate_a)
+        self.assertIn("setup_login_resource_routing(page, SMS_LOGIN_BLOCKED_RESOURCE_TYPES)", bootstrap_a)
+        self.assertIn("if (['media', 'font'].includes(kind)) await route.abort();", bootstrap_b)
+        self.assertNotIn("if (['image', 'media', 'font'].includes(kind))", bootstrap_b)
+        self.assertIn('"font", "image", "media"', candidate_a)
+        self.assertIn("['image', 'media', 'font', 'stylesheet']", candidate_b)
+
     def test_prepare_uses_only_three_low_concurrency_samples(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
