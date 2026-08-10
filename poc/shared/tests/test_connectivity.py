@@ -35,6 +35,19 @@ class ConnectivityTests(unittest.TestCase):
         self.assertNotIn('locator("button").last.click', candidate_a)
         self.assertNotIn("locator('button').last().click", candidate_b)
 
+    def test_login_diagnostics_identify_forced_sms_and_candidate_a_drops_nonessential_resources(self) -> None:
+        candidate_a = (SHARED.parent / "candidate-a" / "src" / "throughput.py").read_text(encoding="utf-8")
+        candidate_b = (SHARED.parent / "candidate-b" / "src" / "throughput.ts").read_text(encoding="utf-8")
+        marker = "为保证账号安全，请使用手机验证码登录"
+        self.assertIn(marker, candidate_a)
+        self.assertIn(marker, candidate_b)
+        self.assertIn('"secondary_sms_required": SECONDARY_SMS_MARKER in body_text', candidate_a)
+        self.assertIn('secondary_sms_required: bodyText.includes(SECONDARY_SMS_MARKER)', candidate_b)
+        verify_login = candidate_a[candidate_a.index("async def verify_login(") : candidate_a.index("async def main_async(")]
+        self.assertIn("page_setup=page_setup", verify_login)
+        self.assertIn("route.request.resource_type in LOGIN_BLOCKED_RESOURCE_TYPES", verify_login)
+        self.assertNotIn("disable_resources=True", verify_login)
+
     def test_prepare_uses_only_three_low_concurrency_samples(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

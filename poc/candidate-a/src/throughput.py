@@ -21,7 +21,9 @@ sys.path.insert(0, str(ROOT / "poc" / "shared"))
 from contract import classify_document, extract_input_post_id, url_sha256  # noqa: E402
 
 CONTROL_CLASSES = {"rate_limited", "captcha", "challenge", "login"}
+SECONDARY_SMS_MARKER = "为保证账号安全，请使用手机验证码登录"
 LOGIN_REASON_MARKERS = (
+    SECONDARY_SMS_MARKER,
     "短信验证码",
     "获取验证码",
     "发送验证码",
@@ -39,7 +41,10 @@ LOGIN_REASON_MARKERS = (
     "操作频繁",
     "请稍后重试",
 )
-VERIFICATION_REASON_MARKERS = frozenset(LOGIN_REASON_MARKERS[:10])
+VERIFICATION_REASON_MARKERS = frozenset(LOGIN_REASON_MARKERS[:11])
+LOGIN_BLOCKED_RESOURCE_TYPES = frozenset(
+    {"font", "image", "media", "beacon", "object", "imageset", "texttrack", "websocket", "csp_report"}
+)
 
 
 def utc_now() -> str:
@@ -216,6 +221,7 @@ async def collect_login_diagnostic(
         "query_keys": sorted({name for name, _ in parse_qsl(parsed.query, keep_blank_values=True)}),
         "page_title": page_title,
         "reason_markers": marker_hits,
+        "secondary_sms_required": SECONDARY_SMS_MARKER in body_text,
         "visible_selectors": visible_selectors,
         "verification_visible": any(marker in VERIFICATION_REASON_MARKERS for marker in marker_hits)
         or any(verification_selectors),
@@ -260,6 +266,15 @@ async def verify_login(
 
     state: dict[str, Any] = {"submitted": False, "password_login_selected": False, "diagnostic": None}
 
+    async def page_setup(page: Any) -> None:
+        async def route_handler(route: Any) -> None:
+            if route.request.resource_type in LOGIN_BLOCKED_RESOURCE_TYPES:
+                await route.abort()
+            else:
+                await route.continue_()
+
+        await page.route("**/*", route_handler)
+
     async def page_action(page: Any) -> None:
         await page.wait_for_timeout(2_000)
         if "/login-required" in page.url:
@@ -300,6 +315,7 @@ async def verify_login(
     response = await session.fetch(
         url,
         google_search=False,
+        page_setup=page_setup,
         page_action=page_action,
         wait=wait_ms,
         timeout=90_000,

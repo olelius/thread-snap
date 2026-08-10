@@ -48,12 +48,14 @@ interface Attempt extends Classification {
   error_category: string | null;
 }
 
+const SECONDARY_SMS_MARKER = '为保证账号安全，请使用手机验证码登录';
 const LOGIN_REASON_MARKERS = [
+  SECONDARY_SMS_MARKER,
   '短信验证码', '获取验证码', '发送验证码', '手机验证', '手机号验证',
   '验证码', '验证中心', '安全验证', '滑动验证', '向右滑动',
   '账号或密码错误', '账号不存在', '密码错误', '登录失败', '操作频繁', '请稍后重试',
 ] as const;
-const VERIFICATION_REASON_MARKERS = new Set<string>(LOGIN_REASON_MARKERS.slice(0, 10));
+const VERIFICATION_REASON_MARKERS = new Set<string>(LOGIN_REASON_MARKERS.slice(0, 11));
 
 interface FinalResult {
   schema_version: '1.0';
@@ -221,6 +223,7 @@ async function collectLoginDiagnostic(
     query_keys: [...new Set(parsedUrl.searchParams.keys())].sort(),
     page_title: pageTitle,
     reason_markers: reasonMarkers,
+    secondary_sms_required: bodyText.includes(SECONDARY_SMS_MARKER),
     visible_selectors: visibleSelectors,
     verification_visible: verificationRequired,
     screenshot: null,
