@@ -7,6 +7,8 @@
 
 两个候选按顺序使用同一份 2000 条 URL 清单和同一套测试账号，分别建立持久登录会话，结果互不拼接。每个候选的一小时窗口包含浏览器启动和登录时间。
 
+目标登录页默认是手机验证码模式；两个候选会显式点击“密码登录”，确认账号和密码输入框可见后再提交，并在 `login-result.json` 记录 `password_login_selected`。
+
 ## 配置
 
 复制 `poc/linux/config.example.json` 为包根目录的 `config.json`，填写明文 `account` 和 `password`。完整 URL 放在包根目录 `input-urls.txt`，前 `expected_count` 条必须互不重复。

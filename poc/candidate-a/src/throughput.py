@@ -137,16 +137,25 @@ def failed_result(
 async def verify_login(session: AsyncDynamicSession, url: str, account: str, password: str, wait_ms: int) -> dict[str, Any]:
     """在同一持久浏览器上下文建立或确认登录会话。"""
 
-    state = {"submitted": False, "verification_required": False}
+    state = {"submitted": False, "password_login_selected": False, "verification_required": False}
 
     async def page_action(page: Any) -> None:
         await page.wait_for_timeout(2_000)
         if "/login-required" in page.url:
-            if await page.locator('input[name="code"]').count():
-                await page.locator("button").last.click(timeout=5_000)
-                await page.wait_for_timeout(500)
-            await page.locator('input[name="account"]').fill(account)
-            await page.locator('input[name="password"]').fill(password)
+            password_options = page.get_by_text("密码登录", exact=True)
+            for index in range(min(await password_options.count(), 10)):
+                option = password_options.nth(index)
+                if await option.is_visible():
+                    await option.click(timeout=5_000)
+                    state["password_login_selected"] = True
+                    await page.wait_for_timeout(500)
+                    break
+            account_input = page.locator('input[name="account"]')
+            password_input = page.locator('input[name="password"]')
+            await account_input.wait_for(state="visible", timeout=10_000)
+            await password_input.wait_for(state="visible", timeout=10_000)
+            await account_input.fill(account)
+            await password_input.fill(password)
             await page.get_by_role("button", name="登录", exact=True).click(timeout=10_000)
             state["submitted"] = True
             await page.wait_for_timeout(10_000)
@@ -169,6 +178,7 @@ async def verify_login(session: AsyncDynamicSession, url: str, account: str, pas
         "schema_version": "1.0",
         "candidate": "candidate-a",
         "submitted": state["submitted"],
+        "password_login_selected": state["password_login_selected"],
         "logged_in": logged_in,
         "verification_required": state["verification_required"],
         "response_class": classification["response_class"],

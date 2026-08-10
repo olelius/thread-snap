@@ -27,6 +27,14 @@ class ConnectivityTests(unittest.TestCase):
         self.assertIn('timeout --signal=TERM --kill-after=15s 360s "$ROOT/.runtime/candidate-a/bin/python"', script)
         self.assertIn("timeout --signal=TERM --kill-after=15s 360s npm", script)
 
+    def test_both_candidates_select_password_login_before_filling_credentials(self) -> None:
+        candidate_a = (SHARED.parent / "candidate-a" / "src" / "throughput.py").read_text(encoding="utf-8")
+        candidate_b = (SHARED.parent / "candidate-b" / "src" / "throughput.ts").read_text(encoding="utf-8")
+        self.assertLess(candidate_a.index('get_by_text("密码登录", exact=True)'), candidate_a.index("account_input.fill(account)"))
+        self.assertLess(candidate_b.index("getByText('密码登录', { exact: true })"), candidate_b.index("accountInput.fill(config.account)"))
+        self.assertNotIn('locator("button").last.click', candidate_a)
+        self.assertNotIn("locator('button').last().click", candidate_b)
+
     def test_prepare_uses_only_three_low_concurrency_samples(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

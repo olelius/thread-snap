@@ -181,13 +181,25 @@ async function verifyLogin(
     requestHandler: async ({ page }) => {
       await page.waitForTimeout(2_000);
       let submitted = false;
+      let passwordLoginSelected = false;
       if (page.url().includes('/login-required')) {
-        if (await page.locator('input[name="code"]').count()) {
-          await page.locator('button').last().click({ timeout: 5_000 });
-          await page.waitForTimeout(500);
+        const passwordOptions = page.getByText('密码登录', { exact: true });
+        const optionCount = Math.min(await passwordOptions.count(), 10);
+        for (let index = 0; index < optionCount; index += 1) {
+          const option = passwordOptions.nth(index);
+          if (await option.isVisible()) {
+            await option.click({ timeout: 5_000 });
+            passwordLoginSelected = true;
+            await page.waitForTimeout(500);
+            break;
+          }
         }
-        await page.locator('input[name="account"]').fill(config.account);
-        await page.locator('input[name="password"]').fill(config.password);
+        const accountInput = page.locator('input[name="account"]');
+        const passwordInput = page.locator('input[name="password"]');
+        await accountInput.waitFor({ state: 'visible', timeout: 10_000 });
+        await passwordInput.waitFor({ state: 'visible', timeout: 10_000 });
+        await accountInput.fill(config.account);
+        await passwordInput.fill(config.password);
         await page.getByRole('button', { name: '登录', exact: true }).click({ timeout: 10_000 });
         submitted = true;
         await page.waitForTimeout(10_000);
@@ -197,6 +209,7 @@ async function verifyLogin(
       const verificationRequired = ['captcha', '验证码', '验证中心'].some((marker) => document.toLowerCase().includes(marker));
       result = {
         schema_version: '1.0', candidate: 'candidate-b', submitted,
+        password_login_selected: passwordLoginSelected,
         logged_in: classification.status === 'success' && !verificationRequired,
         verification_required: verificationRequired,
         response_class: classification.response_class,
