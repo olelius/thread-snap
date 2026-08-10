@@ -3,6 +3,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT"
+source "$ROOT/poc/linux/process-control.sh"
+trap 'stop_bounded_process' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 candidate="${1:-}"
 round_id="${2:-round-1}"
 config_path="${THREADSNAP_CONFIG:-$ROOT/config.json}"
@@ -36,19 +40,23 @@ head -n "$expected_count" "$input_path" > "$result_dir/input-urls.txt"
 : > "$result_dir/run.log"
 : > "$result_dir/url-results.jsonl"
 : > "$result_dir/request-events.jsonl"
+: > "$result_dir/access-diagnostics.jsonl"
 printf '{"schema_version":"1.0","candidate":"%s","logged_in":false,"status":"runner_not_started"}\n' "$candidate" > "$result_dir/login-result.json"
 
 started_at="$(date --iso-8601=seconds)"
+hard_timeout_seconds=$((window_seconds + 120))
 if [[ "$candidate" == "candidate-a" ]]; then
-  "$python" poc/candidate-a/src/throughput.py --config "$config_path" --output-dir "$result_dir" >> "$result_dir/run.log" 2>&1 &
+  start_bounded_process "$hard_timeout_seconds" 15 "$python" poc/candidate-a/src/throughput.py \
+    --config "$config_path" --output-dir "$result_dir" >> "$result_dir/run.log" 2>&1
 else
-  npm --prefix poc/candidate-b run throughput -- --config "$config_path" --output-dir "$result_dir" >> "$result_dir/run.log" 2>&1 &
+  start_bounded_process "$hard_timeout_seconds" 15 npm --prefix poc/candidate-b run throughput -- \
+    --config "$config_path" --output-dir "$result_dir" >> "$result_dir/run.log" 2>&1
 fi
-runner_pid=$!
+runner_pid="$BOUNDED_RUNNER_PID"
 ./poc/linux/monitor-resources.sh "$runner_pid" "$result_dir/resource-metrics.csv" 5 &
 monitor_pid=$!
 set +e
-wait "$runner_pid"
+wait_bounded_process
 runner_exit=$?
 wait "$monitor_pid" 2>/dev/null || true
 set -e
@@ -74,7 +82,7 @@ finalize_exit=$?
 set -e
 
 rm -rf "$result_dir/crawlee-storage" "$result_dir/runner-environment.json"
-(cd "$result_dir" && sha256sum environment.json summary.json login-result.json input-urls.txt url-results.jsonl request-events.jsonl resource-metrics.csv run.log > SHA256SUMS)
+(cd "$result_dir" && sha256sum environment.json summary.json login-result.json input-urls.txt url-results.jsonl request-events.jsonl access-diagnostics.jsonl resource-metrics.csv run.log > SHA256SUMS)
 echo "result_dir=$result_dir"
 if [[ "$runner_exit" -ne 0 || "$validator_exit" -ne 0 || "$finalize_exit" -ne 0 ]]; then
   exit 3

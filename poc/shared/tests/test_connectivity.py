@@ -38,8 +38,26 @@ class ConnectivityTests(unittest.TestCase):
         export_position = script.index('export PLAYWRIGHT_BROWSERS_PATH="$ROOT/.runtime/browsers"')
         candidate_a_position = script.index("candidate_a_exit=127")
         self.assertLess(export_position, candidate_a_position)
-        self.assertIn('timeout --signal=TERM --kill-after=15s 360s "$ROOT/.runtime/candidate-a/bin/python"', script)
-        self.assertIn("timeout --signal=TERM --kill-after=15s 360s npm", script)
+        self.assertIn('source "$ROOT/poc/linux/process-control.sh"', script)
+        self.assertIn('run_bounded_process 360 15 "$ROOT/.runtime/candidate-a/bin/python"', script)
+        self.assertIn("run_bounded_process 360 15 npm", script)
+
+    def test_round_runner_records_access_diagnostics_and_bounds_the_process_group(self) -> None:
+        script = (SHARED.parent / "linux" / "run-poc.sh").read_text(encoding="utf-8")
+        process_control = (SHARED.parent / "linux" / "process-control.sh").read_text(encoding="utf-8")
+        candidate_b = (SHARED.parent / "candidate-b" / "src" / "throughput.ts").read_text(encoding="utf-8")
+        self.assertIn('hard_timeout_seconds=$((window_seconds + 120))', script)
+        self.assertIn('start_bounded_process "$hard_timeout_seconds" 15', script)
+        self.assertIn('access-diagnostics.jsonl', script)
+        self.assertIn('kill -TERM -- "-$BOUNDED_RUNNER_PID"', process_control)
+        self.assertIn('kill -KILL -- "-$BOUNDED_RUNNER_PID"', process_control)
+        self.assertIn('runner_complete=candidate-b;exit_code=', candidate_b)
+        self.assertIn('process.exit(exitCode)', candidate_b)
+        transition_script = (SHARED.parent / "linux" / "test-access-transition.sh").read_text(encoding="utf-8")
+        self.assertIn('config["expected_count"] = min(500, available)', transition_script)
+        self.assertIn('config["window_seconds"] = 1200', transition_script)
+        self.assertIn('access-transition-$timestamp.tar.gz', transition_script)
+        self.assertIn('access-diagnostics.jsonl', transition_script)
 
     def test_linux_script_replaces_started_runner_placeholder_after_failure(self) -> None:
         script = (SHARED.parent / "linux" / "test-connectivity.sh").read_text(encoding="utf-8")
@@ -75,7 +93,8 @@ class ConnectivityTests(unittest.TestCase):
         source = (SHARED.parent / "candidate-a" / "src" / "throughput.py").read_text(encoding="utf-8")
         verify_login = source[source.index("async def verify_login(") : source.index("async def main_async(")]
         self.assertIn("await setup_dom_ready_navigation(page)", verify_login)
-        self.assertIn("page_setup=setup_dom_ready_navigation", source)
+        self.assertIn("page_setup=page_setup", source)
+        self.assertIn("await setup_access_navigation_diagnostics(page)", source)
 
     def test_both_candidates_select_password_login_before_filling_credentials(self) -> None:
         candidate_a = (SHARED.parent / "candidate-a" / "src" / "throughput.py").read_text(encoding="utf-8")
