@@ -46,7 +46,7 @@ chmod +x poc/linux/*.sh
 ./poc/linux/test-connectivity.sh
 ```
 
-短信初始化会从帖子地址构造同源 `/login-required?redirect=...` 入口，避免先等待文章页全部资源加载；登录成功后的内容判定仍使用原始帖子 ID。该入口把首次导航及 Scrapling 随后的稳定性检查都限定为 `domcontentloaded`，候选 B 则通过 Crawlee 的 `gotoOptions.waitUntil` 使用相同条件；`navigation_action=...wait_until_domcontentloaded` 表示该条件已生效。终端继续用 `navigation_target`、`navigation_document`、`navigation_event` 和 `navigation_pending` 报告脱敏后的主文档生命周期与后台资源类型，但这些后台请求不再阻塞页面动作。之后依次出现 `sms_page_ready=<candidate>` 和 `sms_request_clicked=<candidate>` 并提示输入当次动态码。其中 `sms_request_clicked` 只表示发送按钮点击已经完成，短信送达仍以手机实际接收为准。动态码不写入 `config.json`、标准输出、结果文件或持久浏览器状态；成功后只在各候选的本地 `profile_dir/storage-state.json` 保存复访所需的会话状态，并将文件权限设为 `0600`。两个候选必须分别完成一次，不能共用状态文件。
+短信初始化会从帖子地址构造同源 `/login-required?redirect=...` 入口，避免先等待文章页全部资源加载；登录成功后的内容判定仍使用原始帖子 ID。该入口把首次导航及 Scrapling 随后的稳定性检查都限定为 `domcontentloaded`，候选 B 则通过 Crawlee 的 `gotoOptions.waitUntil` 使用相同条件；`navigation_action=...wait_until_domcontentloaded` 表示该条件已生效。终端继续用 `navigation_target`、`navigation_document`、`navigation_event` 和 `navigation_pending` 报告脱敏后的主文档生命周期与后台资源类型，但这些后台请求不再阻塞页面动作。点击后脚本等待 5 秒并输出 `sms_send_evidence`：`network_events` 只保留 XHR/fetch 的方法、响应状态和不含查询参数的路径，`countdown_visible`、`verification_visible` 与 `warning_markers` 记录可见页面反馈；不记录手机号、请求体、响应体或验证码。之后提示输入当次动态码。其中 `sms_request_clicked` 只表示发送按钮点击已经完成，是否已被平台接受以 `sms_send_evidence` 为准，短信送达仍以手机实际接收为准。动态码不写入 `config.json`、标准输出、结果文件或持久浏览器状态；成功后只在各候选的本地 `profile_dir/storage-state.json` 保存复访所需的会话状态，并将文件权限设为 `0600`。两个候选必须分别完成一次，不能共用状态文件。
 
 该入口只用于当前 PoC 测试。正式项目采用人工续期、自动接码、外部会话托管还是其他方式仍为未决项，本脚本不构成正式方案。
 

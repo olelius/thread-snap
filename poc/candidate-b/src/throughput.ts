@@ -457,6 +457,7 @@ async function bootstrapSmsSession(
     ],
     requestHandler: async ({ page }) => {
       let smsRequested = false;
+      let smsSendEvidence: Record<string, unknown> | null = null;
       let submitted = false;
       let errorCategory: string | null = null;
       let classification: Classification = {
@@ -491,12 +492,39 @@ async function bootstrapSmsSession(
           await accountInput.evaluate((element) => element.setAttribute('autocomplete', 'off'));
           await codeInput.evaluate((element) => element.setAttribute('autocomplete', 'off'));
           await codeInput.evaluate((element) => element.closest('form')?.setAttribute('autocomplete', 'off'));
+          const smsNetworkEvents: Array<Record<string, unknown>> = [];
+          page.on('request', (request) => {
+            if (!['xhr', 'fetch'].includes(request.resourceType())) return;
+            smsNetworkEvents.push({
+              phase: 'request', type: request.resourceType(), method: request.method(), path: new URL(request.url()).pathname,
+            });
+          });
+          page.on('response', (response) => {
+            if (!['xhr', 'fetch'].includes(response.request().resourceType())) return;
+            smsNetworkEvents.push({
+              phase: 'response', type: response.request().resourceType(), status: response.status(), path: new URL(response.url()).pathname,
+            });
+          });
           await accountInput.fill(config.account);
           console.log('sms_page_ready=candidate-b');
+          smsNetworkEvents.length = 0;
           await clickFirstVisibleText(page, ['获取验证码', '发送验证码']);
           smsRequested = true;
-          await page.waitForTimeout(1_000);
+          await page.waitForTimeout(5_000);
           console.log('sms_request_clicked=candidate-b');
+          const bodyText = await page.locator('body').innerText({ timeout: 5_000 });
+          const warningMarkers = ['操作频繁', '请稍后重试', '发送失败', '请求过于频繁', '安全验证', '滑动验证']
+            .filter((marker) => bodyText.includes(marker));
+          const buttonTexts = await page.locator('button').allInnerTexts();
+          const countdownVisible = buttonTexts.some((text) => text.includes('重新获取') || /\d+\s*(?:s|秒)/u.test(text));
+          const verificationVisible = await anyVisible(
+            page, 'iframe[src*="captcha" i], [class*="captcha" i], [id*="captcha" i], [class*="slider" i]',
+          );
+          smsSendEvidence = {
+            network_events: smsNetworkEvents.slice(0, 20), countdown_visible: countdownVisible,
+            verification_visible: verificationVisible, warning_markers: warningMarkers,
+          };
+          console.log(`sms_send_evidence=candidate-b;${JSON.stringify(smsSendEvidence)}`);
           let code = await readSmsCode('candidate-b');
           await codeInput.fill(code);
           code = '';
@@ -519,6 +547,7 @@ async function bootstrapSmsSession(
         candidate: 'candidate-b',
         mode: 'interactive_sms_bootstrap',
         sms_requested: smsRequested,
+        sms_send_evidence: smsSendEvidence,
         submitted,
         logged_in: classification.status === 'success',
         response_class: classification.response_class,

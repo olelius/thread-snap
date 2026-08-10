@@ -514,6 +514,7 @@ async def bootstrap_sms_session(
 
     state: dict[str, Any] = {
         "sms_requested": False,
+        "sms_send_evidence": None,
         "submitted": False,
         "classification": None,
         "error_category": None,
@@ -546,12 +547,64 @@ async def bootstrap_sms_session(
                 await account_input.evaluate("element => element.setAttribute('autocomplete', 'off')")
                 await code_input.evaluate("element => element.setAttribute('autocomplete', 'off')")
                 await code_input.evaluate("element => element.form?.setAttribute('autocomplete', 'off')")
+                sms_network_events: list[dict[str, Any]] = []
+
+                def capture_sms_request(request: Any) -> None:
+                    if request.resource_type not in {"xhr", "fetch"}:
+                        return
+                    sms_network_events.append(
+                        {
+                            "phase": "request",
+                            "type": request.resource_type,
+                            "method": request.method,
+                            "path": urlsplit(request.url).path,
+                        }
+                    )
+
+                def capture_sms_response(response: Any) -> None:
+                    if response.request.resource_type not in {"xhr", "fetch"}:
+                        return
+                    sms_network_events.append(
+                        {
+                            "phase": "response",
+                            "type": response.request.resource_type,
+                            "status": response.status,
+                            "path": urlsplit(response.url).path,
+                        }
+                    )
+
+                page.on("request", capture_sms_request)
+                page.on("response", capture_sms_response)
                 await account_input.fill(account)
                 print("sms_page_ready=candidate-a", flush=True)
+                sms_network_events.clear()
                 await click_first_visible_text(page, ("获取验证码", "发送验证码"))
                 state["sms_requested"] = True
-                await page.wait_for_timeout(1_000)
+                await page.wait_for_timeout(5_000)
                 print("sms_request_clicked=candidate-a", flush=True)
+                body_text = await page.locator("body").inner_text(timeout=5_000)
+                warning_markers = [
+                    marker
+                    for marker in ("操作频繁", "请稍后重试", "发送失败", "请求过于频繁", "安全验证", "滑动验证")
+                    if marker in body_text
+                ]
+                button_texts = await page.locator("button").all_inner_texts()
+                countdown_visible = any("重新获取" in text or re.search(r"\d+\s*(?:s|秒)", text) for text in button_texts)
+                verification_visible = await any_visible(
+                    page,
+                    'iframe[src*="captcha" i], [class*="captcha" i], [id*="captcha" i], [class*="slider" i]',
+                )
+                evidence = {
+                    "network_events": sms_network_events[:20],
+                    "countdown_visible": countdown_visible,
+                    "verification_visible": verification_visible,
+                    "warning_markers": warning_markers,
+                }
+                state["sms_send_evidence"] = evidence
+                print(
+                    "sms_send_evidence=candidate-a;" + json.dumps(evidence, ensure_ascii=False, separators=(",", ":")),
+                    flush=True,
+                )
                 code = await asyncio.to_thread(read_sms_code, "candidate-a")
                 await code_input.fill(code)
                 code = ""
@@ -596,6 +649,7 @@ async def bootstrap_sms_session(
         "candidate": "candidate-a",
         "mode": "interactive_sms_bootstrap",
         "sms_requested": state["sms_requested"],
+        "sms_send_evidence": state["sms_send_evidence"],
         "submitted": state["submitted"],
         "logged_in": classification["status"] == "success",
         "response_class": classification["response_class"],
