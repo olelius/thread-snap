@@ -43,6 +43,7 @@ $files = @(
     'poc/linux/run-poc.sh',
     'poc/linux/run-all.sh',
     'poc/linux/test-connectivity.sh',
+    'poc/linux/bootstrap-sms-session.sh',
     'poc/candidate-a/requirements.lock',
     'poc/candidate-a/src/throughput.py',
     'poc/candidate-b/package.json',

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -45,12 +46,64 @@ VERIFICATION_REASON_MARKERS = frozenset(LOGIN_REASON_MARKERS[:11])
 LOGIN_BLOCKED_RESOURCE_TYPES = frozenset(
     {"font", "image", "media", "beacon", "object", "imageset", "texttrack", "websocket", "csp_report"}
 )
+SMS_CODE_PATTERN = re.compile(r"^[0-9]{4,8}$")
 
 
 def utc_now() -> str:
     """返回带时区的 UTC ISO 8601 时间。"""
 
     return datetime.now(timezone.utc).isoformat()
+
+
+def read_sms_code(candidate: str) -> str:
+    """从当前终端读取一次性短信码，不把值写入配置或结果。"""
+
+    prompt = f"[{candidate}] 请输入手机收到的 4-8 位验证码: "
+    if sys.stdin.isatty():
+        code = input(prompt)
+    else:
+        code = sys.stdin.readline()
+    code = code.strip()
+    if not SMS_CODE_PATTERN.fullmatch(code):
+        raise ValueError("短信验证码必须是 4-8 位数字")
+    return code
+
+
+async def setup_login_resource_routing(page: Any) -> None:
+    """保留样式与脚本，仅丢弃可能拖住登录页面 load 的非必要资源。"""
+
+    async def route_handler(route: Any) -> None:
+        if route.request.resource_type in LOGIN_BLOCKED_RESOURCE_TYPES:
+            await route.abort()
+        else:
+            await route.continue_()
+
+    await page.route("**/*", route_handler)
+
+
+async def first_visible(page: Any, selector: str, timeout_ms: int = 10_000) -> Any:
+    """返回组合选择器中的第一个可见控件。"""
+
+    locator = page.locator(selector)
+    await locator.first.wait_for(state="attached", timeout=timeout_ms)
+    for index in range(min(await locator.count(), 20)):
+        item = locator.nth(index)
+        if await item.is_visible():
+            return item
+    raise RuntimeError("未找到可见登录控件")
+
+
+async def click_first_visible_text(page: Any, labels: tuple[str, ...]) -> str:
+    """按给定顺序点击第一个可见的精确文本控件。"""
+
+    for label in labels:
+        options = page.get_by_text(label, exact=True)
+        for index in range(min(await options.count(), 10)):
+            option = options.nth(index)
+            if await option.is_visible():
+                await option.click(timeout=10_000)
+                return label
+    raise RuntimeError("未找到可见登录操作")
 
 
 def response_document(response: Any) -> str:
@@ -121,6 +174,19 @@ def load_completed(path: Path) -> set[str]:
             raise ValueError(f"已有结果第 {line_no} 行 URL 重复")
         completed.add(url)
     return completed
+
+
+def load_profile_cookies(profile_dir: Path) -> list[dict[str, Any]] | None:
+    """读取短信初始化保存的浏览器状态；值只进入候选进程内存。"""
+
+    state_path = profile_dir / "storage-state.json"
+    if not state_path.is_file():
+        return None
+    value = json.loads(state_path.read_text(encoding="utf-8"))
+    cookies = value.get("cookies") if isinstance(value, dict) else None
+    if not isinstance(cookies, list):
+        raise ValueError("候选 A storage-state.json 缺少 cookies")
+    return cookies
 
 
 def failed_result(
@@ -351,6 +417,102 @@ async def verify_login(
     }
 
 
+async def bootstrap_sms_session(
+    session: AsyncDynamicSession,
+    url: str,
+    account: str,
+    profile_dir: Path,
+) -> dict[str, Any]:
+    """在当前 SSH 终端读取一次短信码，并写入候选 A 的持久浏览器配置。"""
+
+    state: dict[str, Any] = {
+        "sms_requested": False,
+        "submitted": False,
+        "classification": None,
+        "error_category": None,
+    }
+
+    async def page_action(page: Any) -> None:
+        try:
+            if "/login-required" in page.url:
+                for label in ("验证码登录", "手机验证码登录"):
+                    options = page.get_by_text(label, exact=True)
+                    clicked = False
+                    for index in range(min(await options.count(), 10)):
+                        option = options.nth(index)
+                        if await option.is_visible():
+                            await option.click(timeout=10_000)
+                            await page.wait_for_timeout(500)
+                            clicked = True
+                            break
+                    if clicked:
+                        break
+
+                account_input = await first_visible(
+                    page,
+                    'input[name="account"], input[placeholder*="手机号"]',
+                )
+                code_input = await first_visible(
+                    page,
+                    'input[name="code"], input[placeholder*="验证码"]',
+                )
+                await account_input.evaluate("element => element.setAttribute('autocomplete', 'off')")
+                await code_input.evaluate("element => element.setAttribute('autocomplete', 'off')")
+                await code_input.evaluate("element => element.form?.setAttribute('autocomplete', 'off')")
+                await account_input.fill(account)
+                await click_first_visible_text(page, ("获取验证码", "发送验证码"))
+                state["sms_requested"] = True
+                code = await asyncio.to_thread(read_sms_code, "candidate-a")
+                await code_input.fill(code)
+                code = ""
+                await click_first_visible_text(page, ("登录/注册", "登录"))
+                state["submitted"] = True
+                await page.wait_for_timeout(10_000)
+
+            html_document = await page.content()
+            state["classification"] = classify_document(
+                page.url,
+                200,
+                html_document,
+                extract_input_post_id(url),
+            )
+            if state["classification"]["status"] == "success":
+                state_path = profile_dir / "storage-state.json"
+                await page.context.storage_state(path=str(state_path))
+                state_path.chmod(0o600)
+        except Exception as error:  # noqa: BLE001
+            state["error_category"] = type(error).__name__
+
+    try:
+        await session.fetch(
+            url,
+            google_search=False,
+            page_setup=setup_login_resource_routing,
+            page_action=page_action,
+            wait=500,
+            timeout=600_000,
+            network_idle=False,
+        )
+    except Exception as error:  # noqa: BLE001
+        state["error_category"] = state["error_category"] or type(error).__name__
+
+    classification = state["classification"] or {
+        "response_class": "error",
+        "status": "failed",
+    }
+    return {
+        "schema_version": "1.0",
+        "candidate": "candidate-a",
+        "mode": "interactive_sms_bootstrap",
+        "sms_requested": state["sms_requested"],
+        "submitted": state["submitted"],
+        "logged_in": classification["status"] == "success",
+        "response_class": classification["response_class"],
+        "status": classification["status"],
+        "error_category": state["error_category"],
+    }
+
+
 async def main_async(args: argparse.Namespace) -> int:
     """执行登录、并发抓取、即时落盘和截止时间收口。"""
 
@@ -377,6 +539,24 @@ async def main_async(args: argparse.Namespace) -> int:
     pending = [url for url in urls if url not in completed]
     profile_dir = (config_path.parent / str(candidate_config.get("profile_dir", "profiles/candidate-a"))).resolve()
     profile_dir.mkdir(parents=True, exist_ok=True)
+    if args.bootstrap_sms:
+        async with AsyncDynamicSession(
+            headless=bool(config.get("headless", True)),
+            google_search=False,
+            max_pages=1,
+            timeout=600_000,
+            retries=1,
+            user_data_dir=str(profile_dir),
+            cookies=load_profile_cookies(profile_dir),
+            real_chrome=bool(candidate_config.get("real_chrome", False)),
+        ) as session:
+            result = await bootstrap_sms_session(session, urls[0], str(config["account"]), profile_dir)
+        (output_dir / "sms-bootstrap-result.json").write_text(
+            json.dumps(result, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return 0 if result["logged_in"] else 5
+
     write_lock = asyncio.Lock()
     deadline = time.monotonic() + int(config["window_seconds"])
     environment = {
@@ -408,6 +588,7 @@ async def main_async(args: argparse.Namespace) -> int:
         timeout=request_timeout_ms,
         retries=1,
         user_data_dir=str(profile_dir),
+        cookies=load_profile_cookies(profile_dir),
         real_chrome=bool(candidate_config.get("real_chrome", False)),
     ) as session:
         login_result = await verify_login(
@@ -561,6 +742,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--bootstrap-sms", action="store_true")
     return asyncio.run(main_async(parser.parse_args()))
 
 

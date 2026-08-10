@@ -1,9 +1,10 @@
 /** 候选 B：使用 Crawlee/Playwright 持久认证会话执行定量吞吐测试。 */
 
 import { createHash } from 'node:crypto';
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { createInterface } from 'node:readline/promises';
 import { PlaywrightCrawler } from 'crawlee';
 import type { Page } from 'playwright';
 import { classifyDocument, CONTROL_CLASSES, extractInputPostId, urlSha256, type Classification } from './contract.js';
@@ -31,6 +32,7 @@ interface TestConfig {
 interface CliOptions {
   config: string;
   outputDir: string;
+  bootstrapSms: boolean;
 }
 
 interface Attempt extends Classification {
@@ -81,16 +83,64 @@ interface FinalResult {
 
 function parseArgs(argv: string[]): CliOptions {
   const values = new Map<string, string>();
-  for (let index = 0; index < argv.length; index += 2) {
+  let bootstrapSms = false;
+  for (let index = 0; index < argv.length;) {
     const key = argv[index];
+    if (key === '--bootstrap-sms') {
+      bootstrapSms = true;
+      index += 1;
+      continue;
+    }
     const value = argv[index + 1];
     if (!key?.startsWith('--') || value === undefined) throw new Error(`参数格式错误: ${key ?? ''}`);
     values.set(key, value);
+    index += 2;
   }
   const config = values.get('--config');
   const outputDir = values.get('--output-dir');
   if (!config || !outputDir) throw new Error('缺少 --config 或 --output-dir');
-  return { config: resolve(config), outputDir: resolve(outputDir) };
+  return { config: resolve(config), outputDir: resolve(outputDir), bootstrapSms };
+}
+
+type StoredCookies = Parameters<ReturnType<Page['context']>['addCookies']>[0];
+
+async function readSmsCode(candidate: string): Promise<string> {
+  const terminal = process.stdin.isTTY === true;
+  const prompt = terminal ? `[${candidate}] 请输入手机收到的 4-8 位验证码: ` : '';
+  const reader = createInterface({ input: process.stdin, output: process.stdout, terminal });
+  try {
+    const code = (await reader.question(prompt)).trim();
+    if (!/^[0-9]{4,8}$/u.test(code)) throw new Error('短信验证码必须是 4-8 位数字');
+    return code;
+  } finally {
+    reader.close();
+  }
+}
+
+async function firstVisible(page: Page, selector: string): Promise<ReturnType<Page['locator']>> {
+  const locator = page.locator(selector);
+  await locator.first().waitFor({ state: 'attached', timeout: 10_000 });
+  const count = Math.min(await locator.count(), 20);
+  for (let index = 0; index < count; index += 1) {
+    const item = locator.nth(index);
+    if (await item.isVisible()) return item;
+  }
+  throw new Error('未找到可见登录控件');
+}
+
+async function clickFirstVisibleText(page: Page, labels: readonly string[]): Promise<string> {
+  for (const label of labels) {
+    const options = page.getByText(label, { exact: true });
+    const count = Math.min(await options.count(), 10);
+    for (let index = 0; index < count; index += 1) {
+      const option = options.nth(index);
+      if (await option.isVisible()) {
+        await option.click({ timeout: 10_000 });
+        return label;
+      }
+    }
+  }
+  throw new Error('未找到可见登录操作');
 }
 
 function positiveInt(value: unknown, name: string, min = 1, max = Number.MAX_SAFE_INTEGER): number {
@@ -115,6 +165,22 @@ function loadConfig(path: string): TestConfig {
 
 function relativeToConfig(configPath: string, value: string): string {
   return isAbsolute(value) ? value : resolve(dirname(configPath), value);
+}
+
+function storageStatePath(profileDir: string): string {
+  return resolve(profileDir, 'storage-state.json');
+}
+
+function launchOptions(config: TestConfig): Record<string, unknown> {
+  return { headless: config.headless ?? true };
+}
+
+function loadStorageCookies(profileDir: string): StoredCookies {
+  const path = storageStatePath(profileDir);
+  if (!existsSync(path)) return [];
+  const state = JSON.parse(readFileSync(path, 'utf8')) as { cookies?: unknown };
+  if (!Array.isArray(state.cookies)) throw new Error('候选 B storage-state.json 缺少 cookies');
+  return state.cookies as StoredCookies;
 }
 
 function loadUrls(configPath: string, config: TestConfig): { inputPath: string; urls: string[] } {
@@ -257,6 +323,7 @@ async function verifyLogin(
   config: TestConfig, profileDir: string, probeUrl: string, outputDir: string,
 ): Promise<Record<string, unknown>> {
   let result: Record<string, unknown> | undefined;
+  const storedCookies = loadStorageCookies(profileDir);
   const crawler = new PlaywrightCrawler({
     maxConcurrency: 1,
     maxRequestRetries: 0,
@@ -265,8 +332,13 @@ async function verifyLogin(
     requestHandlerTimeoutSecs: 90,
     launchContext: {
       userDataDir: profileDir,
-      launchOptions: { headless: config.headless ?? true },
+      launchOptions: launchOptions(config),
     },
+    preNavigationHooks: [
+      async ({ page }) => {
+        if (storedCookies.length > 0) await page.context().addCookies(storedCookies);
+      },
+    ],
     requestHandler: async ({ page }) => {
       await page.waitForTimeout(2_000);
       let submitted = false;
@@ -323,6 +395,106 @@ async function verifyLogin(
   return result;
 }
 
+async function bootstrapSmsSession(
+  config: TestConfig, profileDir: string, probeUrl: string, outputDir: string,
+): Promise<Record<string, unknown>> {
+  let result: Record<string, unknown> | undefined;
+  const storedCookies = loadStorageCookies(profileDir);
+  const crawler = new PlaywrightCrawler({
+    maxConcurrency: 1,
+    maxRequestRetries: 0,
+    retryOnBlocked: false,
+    useSessionPool: false,
+    requestHandlerTimeoutSecs: 600,
+    launchContext: {
+      userDataDir: profileDir,
+      launchOptions: launchOptions(config),
+    },
+    preNavigationHooks: [
+      async ({ page }) => {
+        if (storedCookies.length > 0) await page.context().addCookies(storedCookies);
+        await page.route('**/*', async (route) => {
+          const kind = route.request().resourceType();
+          if (['image', 'media', 'font'].includes(kind)) await route.abort();
+          else await route.continue();
+        });
+      },
+    ],
+    requestHandler: async ({ page }) => {
+      let smsRequested = false;
+      let submitted = false;
+      let errorCategory: string | null = null;
+      let classification: Classification = {
+        observed_post_id: null,
+        post_id_matches: false,
+        title_present: false,
+        body_present: false,
+        response_class: 'error',
+        status: 'failed',
+      };
+      try {
+        await page.waitForTimeout(2_000);
+        if (page.url().includes('/login-required')) {
+          let switched = false;
+          for (const label of ['验证码登录', '手机验证码登录']) {
+            const options = page.getByText(label, { exact: true });
+            const count = Math.min(await options.count(), 10);
+            for (let index = 0; index < count; index += 1) {
+              const option = options.nth(index);
+              if (await option.isVisible()) {
+                await option.click({ timeout: 10_000 });
+                await page.waitForTimeout(500);
+                switched = true;
+                break;
+              }
+            }
+            if (switched) break;
+          }
+
+          const accountInput = await firstVisible(page, 'input[name="account"], input[placeholder*="手机号"]');
+          const codeInput = await firstVisible(page, 'input[name="code"], input[placeholder*="验证码"]');
+          await accountInput.evaluate((element) => element.setAttribute('autocomplete', 'off'));
+          await codeInput.evaluate((element) => element.setAttribute('autocomplete', 'off'));
+          await codeInput.evaluate((element) => element.closest('form')?.setAttribute('autocomplete', 'off'));
+          await accountInput.fill(config.account);
+          await clickFirstVisibleText(page, ['获取验证码', '发送验证码']);
+          smsRequested = true;
+          let code = await readSmsCode('candidate-b');
+          await codeInput.fill(code);
+          code = '';
+          await clickFirstVisibleText(page, ['登录/注册', '登录']);
+          submitted = true;
+          await page.waitForTimeout(10_000);
+        }
+        const htmlDocument = await page.content();
+        classification = classifyDocument(page.url(), 200, htmlDocument, extractInputPostId(probeUrl));
+        if (classification.status === 'success') {
+          const path = storageStatePath(profileDir);
+          await page.context().storageState({ path });
+          chmodSync(path, 0o600);
+        }
+      } catch (error) {
+        errorCategory = error instanceof Error ? error.name : 'unknown_error';
+      }
+      result = {
+        schema_version: '1.0',
+        candidate: 'candidate-b',
+        mode: 'interactive_sms_bootstrap',
+        sms_requested: smsRequested,
+        submitted,
+        logged_in: classification.status === 'success',
+        response_class: classification.response_class,
+        status: classification.status,
+        error_category: errorCategory,
+      };
+    },
+  });
+  await crawler.run([{ url: probeUrl, uniqueKey: `sms-bootstrap:${urlSha256(probeUrl)}` }]);
+  if (!result) throw new Error('候选 B 短信初始化未生成结果');
+  writeFileSync(resolve(outputDir, 'sms-bootstrap-result.json'), `${JSON.stringify(result, null, 2)}\n`, 'utf8');
+  return result;
+}
+
 async function main(): Promise<number> {
   const runStarted = performance.now();
   const options = parseArgs(process.argv.slice(2));
@@ -343,6 +515,11 @@ async function main(): Promise<number> {
   const profileDir = relativeToConfig(options.config, candidate.profile_dir ?? 'profiles/candidate-b');
   mkdirSync(profileDir, { recursive: true });
   process.env['CRAWLEE_STORAGE_DIR'] = resolve(options.outputDir, 'crawlee-storage');
+
+  if (options.bootstrapSms) {
+    const result = await bootstrapSmsSession(config, profileDir, urls[0]!, options.outputDir);
+    return result['logged_in'] === true ? 0 : 5;
+  }
 
   const environment = {
     schema_version: '1.0', candidate: 'candidate-b', access_mode: 'authenticated',
@@ -367,6 +544,7 @@ async function main(): Promise<number> {
   const finalized = new Set(completed);
   let deadlineReached = false;
   const requests = pending.map((url) => ({ url, uniqueKey: `throughput:${urlSha256(url)}` }));
+  const storedCookies = loadStorageCookies(profileDir);
 
   const crawler = new PlaywrightCrawler({
     minConcurrency: Math.min(2, concurrency),
@@ -377,10 +555,11 @@ async function main(): Promise<number> {
     requestHandlerTimeoutSecs: Math.ceil(requestTimeoutMs / 1000) + 10,
     launchContext: {
       userDataDir: profileDir,
-      launchOptions: { headless: config.headless ?? true },
+      launchOptions: launchOptions(config),
     },
     preNavigationHooks: [
       async ({ page }) => {
+        if (storedCookies.length > 0) await page.context().addCookies(storedCookies);
         await page.route('**/*', async (route) => {
           const kind = route.request().resourceType();
           if (['image', 'media', 'font', 'stylesheet'].includes(kind)) await route.abort();

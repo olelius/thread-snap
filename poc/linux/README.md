@@ -38,6 +38,18 @@ chmod +x poc/linux/*.sh
 ./poc/linux/test-connectivity.sh
 ```
 
+如果密码提交后明确要求手机验证码，先在当前 SSH 终端分别初始化两个隔离会话：
+
+```bash
+./poc/linux/bootstrap-sms-session.sh candidate-a
+./poc/linux/bootstrap-sms-session.sh candidate-b
+./poc/linux/test-connectivity.sh
+```
+
+每次脚本点击“获取验证码”后才提示输入当次动态码。动态码不写入 `config.json`、标准输出、结果文件或持久浏览器状态；成功后只在各候选的本地 `profile_dir/storage-state.json` 保存复访所需的会话状态，并将文件权限设为 `0600`。两个候选必须分别完成一次，不能共用状态文件。
+
+该入口只用于当前 PoC 测试。正式项目采用人工续期、自动接码、外部会话托管还是其他方式仍为未决项，本脚本不构成正式方案。
+
 该脚本最多访问 `connectivity-urls.txt` 中的 3 条已验证样本，不启动 2000 条任务。它依次记录：
 
 - Linux 和浏览器运行时预检；
