@@ -19,7 +19,7 @@
 
 **总目标**：在目标服务器执行 2000 条测试前，先用最多 3 条已验证样本独立确认 Linux 环境、网络链路、两个固定框架的自动登录和真实帖子访问；失败时返回完整诊断包后再按证据修复。
 
-**状态**：🟡 v0.2.6 PoC 手动短信初始化包已完成；等待目标 Linux 实际输入验证码复跑
+**状态**：🟡 已修正 v0.2.6 在短信发送前等待帖子完整加载的问题；正在生成 v0.2.7 测试包
 
 **干到哪了**：
 
@@ -45,12 +45,13 @@
 - [x] 新增 `poc/linux/bootstrap-sms-session.sh`：只允许从 SSH 交互终端顺序初始化候选 A/B；每个候选点击发送后读取一次动态码，成功时保存权限为 `0600` 的隔离 `storage-state.json`，普通登录和吞吐入口在新进程启动时显式加载该状态。动态码不写入配置、标准输出、结果 JSON 或浏览器自动填充状态。
 - [x] 手动短信初始化合成端到端已覆盖两个固定框架：候选 A/B 均完成“短信提交成功 → 初始化进程退出 → 新进程加载状态 → 同一帖子 1/1 `success`”；以独立动态码扫描完整运行目录匹配为 0。正式项目的验证码与会话续期方式已记入链档未决项，本 PoC 手动入口不构成正式方案。
 - [x] 已生成完整包 `threadsnap-poc-dual-runner-0.2.6-linux.tar.gz`，SHA-256 为 `c7c69de3dcf0a95efab1f73d790559487b1e9663c17741b82973a048c4905d6a`，包内源码提交为 `80a47a01c95b79daa3ac7c6811333ae2025fef34`；25/25 内部校验、短信入口成员和标准包零真实凭证均已复核。免重装包 `threadsnap-interactive-sms-bootstrap-hotfix-0.2.6.tar.gz` 的 SHA-256 为 `356cebbfc3e0fb5f935055372632fbc17739fdaf03fef4fc97d85522a7c5a6dd`，成员 4/4、零凭证匹配且不安装依赖。
+- [x] 目标 Linux 首次执行 v0.2.6 候选 A 时只输出启动阶段，回溯停在 Scrapling 以原始帖子 URL 启动的首次 `page.goto(load)`，发送按钮尚未被点击；该回溯只证明导航链未完成，不能单独证明最终画面仍是文章页。两个候选的短信入口现统一由帖子 URL 构造同源登录页，保留原帖子 ID 作为登录后内容判定目标，并输出主文档状态、`DOMContentLoaded/load`、`sms_page_ready`、`sms_request_clicked` 阶段。本机合成端到端确认 A/B 均完成短信初始化、退出后新进程 1/1 复访成功，且初始化前未认证帖子请求数为 0；Python 15 项、Node 8 项及两端类型/编译检查通过。
 
-**下一步**：目标服务器覆盖 v0.2.6 免重装包后，依次执行候选 A、候选 B 的短信初始化并输入各自动态码，再复跑联通门。只有复核为 `ready_for_2000=true` 后才运行首轮 2000 条。
+**下一步**：生成并覆盖 v0.2.7 免重装包后，依次执行候选 A、候选 B 的短信初始化；只有终端出现各自的 `sms_request_clicked` 后才开始等待和输入动态码，再复跑联通门。只有复核为 `ready_for_2000=true` 后才运行首轮 2000 条。
 
 **边界**：联通通过只证明当前服务器具备进入吞吐测试的网络、登录和内容访问条件，不构成 2000 条/小时门禁通过；两个固定候选技术、账号条件和结果契约保持不变。
 
-**关联**：分支 `feat/linux-interactive-sms-bootstrap`；入口 `poc/linux/bootstrap-sms-session.sh`、`poc/candidate-a/src/throughput.py`、`poc/candidate-b/src/throughput.ts`。
+**关联**：分支 `fix/linux-sms-bootstrap-navigation`；入口 `poc/linux/bootstrap-sms-session.sh`、`poc/candidate-a/src/throughput.py`、`poc/candidate-b/src/throughput.ts`。
 
 ---
 

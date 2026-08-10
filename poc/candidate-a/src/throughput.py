@@ -11,7 +11,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import scrapling
 from scrapling.fetchers import AsyncDynamicSession
@@ -69,6 +69,26 @@ def read_sms_code(candidate: str) -> str:
     return code
 
 
+def build_sms_login_url(post_url: str) -> str:
+    """从帖子地址构造同源短信登录入口，避开帖子主文档的完整加载等待。"""
+
+    parsed = urlsplit(post_url)
+    if not parsed.scheme or not parsed.netloc or not parsed.path:
+        raise ValueError("帖子 URL 缺少协议、主机或路径")
+    redirect = parsed.path
+    if parsed.query:
+        redirect = f"{redirect}?{parsed.query}"
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            "/login-required",
+            urlencode({"redirect": redirect}),
+            "",
+        )
+    )
+
+
 async def setup_login_resource_routing(page: Any) -> None:
     """保留样式与脚本，仅丢弃可能拖住登录页面 load 的非必要资源。"""
 
@@ -79,6 +99,32 @@ async def setup_login_resource_routing(page: Any) -> None:
             await route.continue_()
 
     await page.route("**/*", route_handler)
+
+
+async def setup_sms_navigation_diagnostics(page: Any) -> None:
+    """为短信入口保留资源路由，并输出不含真实地址的导航生命周期证据。"""
+
+    await setup_login_resource_routing(page)
+
+    def report_document(response: Any) -> None:
+        try:
+            if response.request.resource_type != "document":
+                return
+            path = urlsplit(response.url).path
+            target = "login" if "/login" in path else "post" if "/article/" in path else "other"
+            print(
+                f"navigation_document=candidate-a;status={response.status};target={target}",
+                flush=True,
+            )
+        except Exception:  # noqa: BLE001
+            return
+
+    page.on("response", report_document)
+    page.on(
+        "domcontentloaded",
+        lambda: print("navigation_event=candidate-a;event=domcontentloaded", flush=True),
+    )
+    page.on("load", lambda: print("navigation_event=candidate-a;event=load", flush=True))
 
 
 async def first_visible(page: Any, selector: str, timeout_ms: int = 10_000) -> Any:
@@ -460,8 +506,11 @@ async def bootstrap_sms_session(
                 await code_input.evaluate("element => element.setAttribute('autocomplete', 'off')")
                 await code_input.evaluate("element => element.form?.setAttribute('autocomplete', 'off')")
                 await account_input.fill(account)
+                print("sms_page_ready=candidate-a", flush=True)
                 await click_first_visible_text(page, ("获取验证码", "发送验证码"))
                 state["sms_requested"] = True
+                await page.wait_for_timeout(1_000)
+                print("sms_request_clicked=candidate-a", flush=True)
                 code = await asyncio.to_thread(read_sms_code, "candidate-a")
                 await code_input.fill(code)
                 code = ""
@@ -484,10 +533,11 @@ async def bootstrap_sms_session(
             state["error_category"] = type(error).__name__
 
     try:
+        print("navigation_target=candidate-a;target=login", flush=True)
         await session.fetch(
-            url,
+            build_sms_login_url(url),
             google_search=False,
-            page_setup=setup_login_resource_routing,
+            page_setup=setup_sms_navigation_diagnostics,
             page_action=page_action,
             wait=500,
             timeout=600_000,

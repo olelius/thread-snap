@@ -61,6 +61,23 @@ class ConnectivityTests(unittest.TestCase):
         self.assertNotIn("sms_code", (SHARED.parent / "linux" / "config.example.json").read_text(encoding="utf-8"))
         self.assertIn("poc/linux/bootstrap-sms-session.sh", packager)
 
+    def test_sms_bootstrap_enters_login_directly_and_reports_click_progress(self) -> None:
+        candidate_a = (SHARED.parent / "candidate-a" / "src" / "throughput.py").read_text(encoding="utf-8")
+        candidate_b = (SHARED.parent / "candidate-b" / "src" / "throughput.ts").read_text(encoding="utf-8")
+        bootstrap_a = candidate_a[candidate_a.index("async def bootstrap_sms_session(") : candidate_a.index("async def main_async(")]
+        bootstrap_b = candidate_b[candidate_b.index("async function bootstrapSmsSession(") : candidate_b.index("async function main()")]
+        self.assertIn("build_sms_login_url(url)", bootstrap_a)
+        self.assertIn("buildSmsLoginUrl(probeUrl)", bootstrap_b)
+        self.assertNotIn("await session.fetch(\n            url,", bootstrap_a)
+        self.assertNotIn("crawler.run([{ url: probeUrl", bootstrap_b)
+        self.assertIn("sms_page_ready=candidate-a", bootstrap_a)
+        self.assertIn("sms_request_clicked=candidate-a", bootstrap_a)
+        self.assertIn("sms_page_ready=candidate-b", bootstrap_b)
+        self.assertIn("sms_request_clicked=candidate-b", bootstrap_b)
+        for marker in ("navigation_target", "navigation_document", "navigation_event"):
+            self.assertIn(marker, candidate_a)
+            self.assertIn(marker, bootstrap_b)
+
     def test_prepare_uses_only_three_low_concurrency_samples(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -117,6 +117,13 @@ async function readSmsCode(candidate: string): Promise<string> {
   }
 }
 
+function buildSmsLoginUrl(postUrl: string): string {
+  const parsed = new URL(postUrl);
+  const loginUrl = new URL('/login-required', parsed.origin);
+  loginUrl.searchParams.set('redirect', `${parsed.pathname}${parsed.search}`);
+  return loginUrl.toString();
+}
+
 async function firstVisible(page: Page, selector: string): Promise<ReturnType<Page['locator']>> {
   const locator = page.locator(selector);
   await locator.first().waitFor({ state: 'attached', timeout: 10_000 });
@@ -413,6 +420,14 @@ async function bootstrapSmsSession(
     preNavigationHooks: [
       async ({ page }) => {
         if (storedCookies.length > 0) await page.context().addCookies(storedCookies);
+        page.on('response', (response) => {
+          if (response.request().resourceType() !== 'document') return;
+          const path = new URL(response.url()).pathname;
+          const target = path.includes('/login') ? 'login' : path.includes('/article/') ? 'post' : 'other';
+          console.log(`navigation_document=candidate-b;status=${response.status()};target=${target}`);
+        });
+        page.on('domcontentloaded', () => console.log('navigation_event=candidate-b;event=domcontentloaded'));
+        page.on('load', () => console.log('navigation_event=candidate-b;event=load'));
         await page.route('**/*', async (route) => {
           const kind = route.request().resourceType();
           if (['image', 'media', 'font'].includes(kind)) await route.abort();
@@ -457,8 +472,11 @@ async function bootstrapSmsSession(
           await codeInput.evaluate((element) => element.setAttribute('autocomplete', 'off'));
           await codeInput.evaluate((element) => element.closest('form')?.setAttribute('autocomplete', 'off'));
           await accountInput.fill(config.account);
+          console.log('sms_page_ready=candidate-b');
           await clickFirstVisibleText(page, ['获取验证码', '发送验证码']);
           smsRequested = true;
+          await page.waitForTimeout(1_000);
+          console.log('sms_request_clicked=candidate-b');
           let code = await readSmsCode('candidate-b');
           await codeInput.fill(code);
           code = '';
@@ -489,7 +507,8 @@ async function bootstrapSmsSession(
       };
     },
   });
-  await crawler.run([{ url: probeUrl, uniqueKey: `sms-bootstrap:${urlSha256(probeUrl)}` }]);
+  console.log('navigation_target=candidate-b;target=login');
+  await crawler.run([{ url: buildSmsLoginUrl(probeUrl), uniqueKey: `sms-bootstrap:${urlSha256(probeUrl)}` }]);
   if (!result) throw new Error('候选 B 短信初始化未生成结果');
   writeFileSync(resolve(outputDir, 'sms-bootstrap-result.json'), `${JSON.stringify(result, null, 2)}\n`, 'utf8');
   return result;
