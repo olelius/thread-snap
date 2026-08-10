@@ -139,7 +139,8 @@ poc/candidate-b/src/throughput.ts
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-linux-poc-package.ps1 `
   -Version <版本> `
   -RuntimeConfig .\artifacts\poc\inputs\linux-run-config.json `
-  -InputFile .\artifacts\poc\inputs\round-1-urls.txt
+  -InputFile .\artifacts\poc\inputs\round-1-urls.txt `
+  -ConnectivityInputFile .\artifacts\poc\inputs\connectivity-urls.txt
 ```
 
 标准压缩包不含账号密码；`copy-to-linux/config.json` 是本地明文 sidecar，整个

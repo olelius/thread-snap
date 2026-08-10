@@ -2,7 +2,8 @@
     [Parameter(Mandatory = $true)]
     [string]$Version,
     [string]$RuntimeConfig,
-    [string]$InputFile
+    [string]$InputFile,
+    [string]$ConnectivityInputFile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -41,6 +42,7 @@ $files = @(
     'poc/linux/monitor-resources.sh',
     'poc/linux/run-poc.sh',
     'poc/linux/run-all.sh',
+    'poc/linux/test-connectivity.sh',
     'poc/candidate-a/requirements.lock',
     'poc/candidate-a/src/throughput.py',
     'poc/candidate-b/package.json',
@@ -49,6 +51,9 @@ $files = @(
     'poc/candidate-b/src/contract.ts',
     'poc/candidate-b/src/throughput.ts',
     'poc/shared/contract.py',
+    'poc/shared/network_probe.py',
+    'poc/shared/prepare_connectivity_config.py',
+    'poc/shared/finalize_connectivity.py',
     'poc/shared/validate_results.py',
     'poc/shared/finalize_run.py'
 )
@@ -93,10 +98,13 @@ $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLow
 $entries = tar.exe -tzf $archive
 if ($LASTEXITCODE -ne 0 -or -not ($entries -contains "$packageName/SHA256SUMS")) { throw '压缩包结构校验失败' }
 
-if ($RuntimeConfig -or $InputFile) {
-    if (-not $RuntimeConfig -or -not $InputFile) { throw 'RuntimeConfig 与 InputFile 必须同时提供' }
+if ($RuntimeConfig -or $InputFile -or $ConnectivityInputFile) {
+    if (-not $RuntimeConfig -or -not $InputFile -or -not $ConnectivityInputFile) {
+        throw 'RuntimeConfig、InputFile 与 ConnectivityInputFile 必须同时提供'
+    }
     $configSource = (Resolve-Path $RuntimeConfig).Path
     $inputSource = (Resolve-Path $InputFile).Path
+    $connectivityInputSource = (Resolve-Path $ConnectivityInputFile).Path
     $operator = Join-Path $artifactRoot 'copy-to-linux'
     Assert-SafePath $operator $artifactRoot
     if (Test-Path $operator) { Remove-Item -LiteralPath $operator -Recurse -Force }
@@ -104,6 +112,7 @@ if ($RuntimeConfig -or $InputFile) {
     Copy-Item -LiteralPath $archive, "$archive.sha256" -Destination $operator
     Copy-Item -LiteralPath $configSource -Destination (Join-Path $operator 'config.json')
     Copy-Item -LiteralPath $inputSource -Destination (Join-Path $operator 'input-urls.txt')
+    Copy-Item -LiteralPath $connectivityInputSource -Destination (Join-Path $operator 'connectivity-urls.txt')
     $deploy = @"
 #!/usr/bin/env bash
 set -euo pipefail
@@ -113,16 +122,16 @@ actual="`$(sha256sum "`$archive" | awk '{print `$1}')"
 [[ "`$actual" == "`$expected" ]] || { echo "ERROR: archive checksum mismatch" >&2; exit 2; }
 tar -xzf "`$archive"
 runner="$packageName"
-cp config.json input-urls.txt "`$runner/"
+cp config.json input-urls.txt connectivity-urls.txt "`$runner/"
 chmod 600 "`$runner/config.json"
 chmod +x "`$runner"/poc/linux/*.sh
 echo "deployed: `$runner"
-echo "next: cd `$runner && ./poc/linux/install.sh && ./poc/linux/start.sh && ./poc/linux/healthcheck.sh && ./poc/linux/run-all.sh round-1"
+echo "next: cd `$runner && ./poc/linux/install.sh && ./poc/linux/start.sh && ./poc/linux/test-connectivity.sh"
 "@
     [IO.File]::WriteAllText((Join-Path $operator 'deploy.sh'), $deploy.Replace("`r`n", "`n"), [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText(
         (Join-Path $operator 'README.txt'),
-        "将本目录完整复制到 Linux，执行: chmod +x deploy.sh && ./deploy.sh`n配置文件为明文，仅保留在受控测试目录。`n",
+        "将本目录完整复制到 Linux，执行: chmod +x deploy.sh && ./deploy.sh`n部署后先运行 test-connectivity.sh，把 connectivity-results 中的 tar.gz 和 sha256 复制回来。`n配置文件为明文，仅保留在受控测试目录。`n",
         [Text.UTF8Encoding]::new($false)
     )
 }

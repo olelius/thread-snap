@@ -28,6 +28,26 @@ chmod +x poc/linux/*.sh
 ./poc/linux/run-all.sh round-1
 ```
 
+## 先做独立联通测试
+
+首次部署到服务器时先执行：
+
+```bash
+./poc/linux/test-connectivity.sh
+```
+
+该脚本最多访问 `connectivity-urls.txt` 中的 3 条已验证样本，不启动 2000 条任务。它依次记录：
+
+- Linux 和浏览器运行时预检；
+- DNS、TCP、TLS、普通 HTTP 基线；
+- Scrapling 自动登录和真实帖子访问；
+- Crawlee/Playwright 自动登录和真实帖子访问；
+- 两个候选的统一结果契约检查。
+
+无论联通结论是否通过，脚本都会在 `connectivity-results/` 生成一个
+`connectivity-<timestamp>.tar.gz` 及对应 `.sha256`。只需把这两个文件复制回开发电脑。
+`connectivity-summary.json` 中的 `ready_for_2000=true` 表示当前服务器具备进入 2000 条测试的联通条件；失败时 `next_action` 会指出环境/浏览器、DNS/TCP/TLS/HTTP、登录或内容访问中的下一处排查方向。
+
 单独执行：
 
 ```bash
