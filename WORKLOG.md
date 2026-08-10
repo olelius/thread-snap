@@ -15,6 +15,24 @@
 
 ---
 
+## 2026-08-10 — 修复 Linux 联通门的候选会话交接
+
+**总目标**：保持 Scrapling 与 Crawlee/Playwright 两个固定候选不变，让短信初始化保存的两份独立会话真实进入最多 3 条的联通门，再据此决定是否启动 2000 条测试。
+**状态**：🟡 v0.2.13 会话交接热修包已完成；等待目标 Linux 覆盖后复跑联通门
+
+**干到哪了**：
+- [x] 已校验目标 Linux 结果包 `connectivity-20260810T164845+0800.tar.gz`：外层 SHA-256 为 `f5ad41ad630986b1d553a71eacc4c3ac3d0218e5faed60bdaa3b25114b71b28a`，23/23 内部校验一致；DNS/TCP/TLS/HTTP 全部通过，但最终 `ready_for_2000=false`。
+- [x] 两个短信初始化结果本身已成功；本轮联通失败的共同根因是 `prepare_connectivity_config.py` 把运行目录切到新的 `profiles/connectivity-candidate-*`，却没有复制原候选 `storage-state.json`。Candidate B 因此重新进入密码登录并触发二次短信验证；Candidate A 在同一未认证入口等待 `load` 满 90 秒。该结果不构成候选框架失败。
+- [x] 联通准备阶段现按原始 `config.json` 位置解析 A/B 各自 `profile_dir`，每轮删除旧联通隔离目录、只复制当前 `storage-state.json` 并保持 `0600`；源状态缺失时不沿用旧副本。`prepare.log` 新增不含状态值的 `session_state_copied` 布尔证据。
+- [x] 项目 `.vevn` 的联通配置测试已新增“两个候选状态分别复制且不回显内容”和“源状态缺失时删除陈旧副本”，定向 10 项通过；候选技术和普通吞吐逻辑未改变。
+- [x] 完整包 `threadsnap-poc-dual-runner-0.2.13-linux.tar.gz` 的 SHA-256 为 `80ef1170aa610100e215537fd89a914660597985e7ad261365bddc9005772594`，包内源码提交为 `b80dd98824e5d96ec4748e6d8cd0f1810cb6a272`，25/25 内部校验一致且 `SHA256SUMS` 的 CR 字节为 0。免重装包 `threadsnap-connectivity-session-handoff-hotfix-0.2.13.tar.gz` 的 SHA-256 为 `24037abedac9d8f07569505e41c5376892162d8e49b3fba3909a4e97761c7983`，代码成员与提交内容一致、不安装依赖且清单声明零凭证。
+
+**下一步**：目标 Linux 覆盖 v0.2.13 免重装包后直接复跑 `test-connectivity.sh`，先确认 `prepare.log` 中 A/B 的 `session_state_copied=true`，再以汇总 `ready_for_2000` 决定是否进入 2000 条。
+**边界**：不重复短信登录、不共享 A/B 会话、不把状态文件、Cookie、动态码或真实凭证放入热修包、Git、日志或结果；当前结果只证明联通脚本没有使用已认证状态，尚未形成 2000 条结论。
+**关联**：分支 `codex/fix-connectivity-session-handoff`；入口 `poc/shared/prepare_connectivity_config.py`、`poc/linux/test-connectivity.sh`。
+
+---
+
 ## 2026-08-10 — 为纯命令行 Linux PoC 增加可视验证码人工入口
 
 **总目标**：保持 Scrapling 与 Crawlee/Playwright 两个固定候选不变，在纯命令行目标服务器的原浏览器上下文中完成人工可视验证；确认短信实际进入倒计时后再读取动态码并保存候选隔离会话。
