@@ -18,7 +18,7 @@
 ## 2026-08-10 — 为纯命令行 Linux PoC 增加可视验证码人工入口
 
 **总目标**：保持 Scrapling 与 Crawlee/Playwright 两个固定候选不变，在纯命令行目标服务器的原浏览器上下文中完成人工可视验证；确认短信实际进入倒计时后再读取动态码并保存候选隔离会话。
-**状态**：进行中；源码、脚本、owner 文档及本机验证已完成，正在生成可追溯 Linux 包。
+**状态**：🟡 v0.2.11 CDP 人工可视验证包已完成；等待目标 Linux 依次复核候选 A/B
 
 **干到哪了**：
 - [x] 根据目标 Linux `POST /send_activation_code/v2/` HTTP 200 后加载验证中心、`verification_visible=true` 且 `countdown_visible=false` 的共同证据，把阻塞定位为短信发送前的可视验证；不再继续修改导航或点击定位。
@@ -27,8 +27,9 @@
 - [x] 已同步技术路线、首个平台链档、PoC 计划和 Linux README；明确本入口只用于 PoC 初始化，正式验证码及会话续期方案仍未决。
 - [x] 本机验证通过：项目 `.vevn` 运行 Python 16 项测试及候选 A 语法检查；Candidate B 8 项测试及 TypeScript 类型检查通过；Git Bash `bash -n`、`git diff --check` 和已知真实凭证扫描通过。真实浏览器检查分别得到 `candidate_a_cdp_page_target=ready` 与 `candidate_b_cdp=ready`，证明 Scrapling 和 Crawlee 启动链均实际开放可由 DevTools发现的回环 CDP 端点。
 - [x] 首次 `0.2.11` 完整包复核发现 Windows 构建脚本以 CRLF 写入 `SHA256SUMS`，Linux `sha256sum -c` 会把行尾 `\r` 解释为文件名；已在版本化构建脚本中固定为 UTF-8/LF 并补回归断言，首次包及其哈希作废后重新生成。
+- [x] 已生成完整包 `threadsnap-poc-dual-runner-0.2.11-linux.tar.gz`，SHA-256 为 `1cc8a3c08286dbaef35aa4eafca86381daf308bf7f3e810c2517bcd56b77a890`，包内源码提交为 `bf20e32bd677cb96ace3bd361a86551f0c80c36e`；Linux `sha256sum -c` 25/25 通过、`SHA256SUMS` 的 CR 字节为 0、真实凭证匹配为 0。免重装包 `threadsnap-manual-captcha-cdp-hotfix-0.2.11.tar.gz` 的 SHA-256 为 `bea1de19f9113abf1c93047b69e28af3d9e1bf024ecec9aff8609985319e668c`，5/5 文件成员、零真实凭证、不安装依赖且短信入口权限为 `0755`。
 
-**下一步**：构建带新版本号与 SHA-256 的 Linux 完整包和免重装热修包，再由目标 Linux 先复核候选 A、后复核候选 B；目标 Linux 仍需真实确认 Windows DevTools 画面可操作、验证后倒计时出现和隔离会话复访成功。
+**下一步**：目标 Linux 在现有目录覆盖 `0.2.11` 免重装包，先运行候选 A；出现 `visual_verification_required` 后从 Windows 建立 9222 SSH 隧道并在 Chrome DevTools 完成验证，取得 `sms_send_confirmed`、输入动态码并复跑联通门。A 通过后以 9223 对候选 B 执行相同步骤；目标 Linux 仍需真实确认 DevTools 画面可操作、验证后倒计时出现和隔离会话复访成功。
 **边界**：CDP 人工操作不计入 2000 条计时窗口；两个候选不共享资料目录或会话；验证码、动态码、Cookie、挑战数据及真实凭证不进入 Git、日志或结果包；目标 Linux 复核通过前不声明联通门通过。
 **关联**：分支 `fix/manual-captcha-cdp`；入口 `poc/linux/bootstrap-sms-session.sh`、`poc/candidate-a/src/throughput.py`、`poc/candidate-b/src/throughput.ts`。
 
