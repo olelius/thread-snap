@@ -105,8 +105,25 @@ async def setup_sms_navigation_diagnostics(page: Any) -> None:
     """为短信入口保留资源路由，并输出不含真实地址的导航生命周期证据。"""
 
     await setup_login_resource_routing(page)
-    login_loading_stopped = False
     pending_by_type: dict[str, int] = {}
+    original_goto = page.goto
+    original_wait_for_load_state = page.wait_for_load_state
+
+    async def goto_when_dom_ready(url: str, **kwargs: Any) -> Any:
+        """本短信入口以 DOM 可交互作为首次导航完成条件。"""
+
+        kwargs["wait_until"] = "domcontentloaded"
+        print("navigation_action=candidate-a;action=wait_until_domcontentloaded", flush=True)
+        return await original_goto(url, **kwargs)
+
+    async def wait_for_dom_ready(state: str = "load", timeout: float | None = None) -> None:
+        """同步修正 Scrapling 导航后的固定 load 稳定性等待。"""
+
+        target_state = "domcontentloaded" if state == "load" and "/login-required" in page.url else state
+        await original_wait_for_load_state(state=target_state, timeout=timeout)
+
+    page.goto = goto_when_dom_ready
+    page.wait_for_load_state = wait_for_dom_ready
 
     def change_pending(request: Any, delta: int) -> None:
         resource_type = str(request.resource_type)
@@ -116,13 +133,11 @@ async def setup_sms_navigation_diagnostics(page: Any) -> None:
     page.on("requestfinished", lambda request: change_pending(request, -1))
     page.on("requestfailed", lambda request: change_pending(request, -1))
 
-    async def stop_login_loading() -> None:
-        """DOM 可交互后终止登录页剩余资源，解除框架对完整 load 的等待。"""
+    async def report_pending_loading() -> None:
+        """DOM 就绪后报告仍在运行的资源类型，不介入浏览器生命周期。"""
 
-        nonlocal login_loading_stopped
-        if login_loading_stopped or "/login-required" not in page.url:
+        if "/login-required" not in page.url:
             return
-        login_loading_stopped = True
         await page.wait_for_timeout(250)
         if page.is_closed():
             return
@@ -130,8 +145,6 @@ async def setup_sms_navigation_diagnostics(page: Any) -> None:
             f"{kind}:{count}" for kind, count in sorted(pending_by_type.items()) if count > 0
         ) or "none"
         print(f"navigation_pending=candidate-a;types={pending}", flush=True)
-        await page.evaluate("window.stop()")
-        print("navigation_action=candidate-a;action=stop_login_loading", flush=True)
 
     def report_document(response: Any) -> None:
         try:
@@ -149,7 +162,7 @@ async def setup_sms_navigation_diagnostics(page: Any) -> None:
     page.on("response", report_document)
     def handle_domcontentloaded() -> None:
         print("navigation_event=candidate-a;event=domcontentloaded", flush=True)
-        asyncio.create_task(stop_login_loading())
+        asyncio.create_task(report_pending_loading())
 
     page.on("domcontentloaded", handle_domcontentloaded)
     page.on("load", lambda: print("navigation_event=candidate-a;event=load", flush=True))

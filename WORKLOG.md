@@ -19,7 +19,7 @@
 
 **总目标**：在目标服务器执行 2000 条测试前，先用最多 3 条已验证样本独立确认 Linux 环境、网络链路、两个固定框架的自动登录和真实帖子访问；失败时返回完整诊断包后再按证据修复。
 
-**状态**：🟡 v0.2.8 登录页加载收口包已完成；等待目标 Linux 分别复跑候选 A/B
+**状态**：🟡 v0.2.9 DOM 就绪导航包已完成；等待目标 Linux 复跑候选 A
 
 **干到哪了**：
 
@@ -49,12 +49,14 @@
 - [x] 已生成完整包 `threadsnap-poc-dual-runner-0.2.7-linux.tar.gz`，SHA-256 为 `c859ba195c2a91aba5c9d549d471bac9b64d212ef7e0ba777dee347abdfd774a`，包内源码提交为 `8c97bae06bf8f3c224a493bcc58cef8549af1e2d`，25/25 内部校验一致且零真实凭证。免重装包 `threadsnap-sms-login-navigation-hotfix-0.2.7.tar.gz` 的 SHA-256 为 `9ddcb3caa5561f335f858e50ef3f7b00215cbf5f392687f915988d9ca3db4d45`，5 个文件成员、零真实凭证且不安装依赖。
 - [x] 目标 Linux 覆盖 v0.2.7 后，候选 A 已返回登录主文档 HTTP 200 并触发 `DOMContentLoaded`，但未触发 `load`，随后人工中止；这确认原始帖子仅是重定向来源，实际阻塞位于登录页 DOM 就绪后的剩余加载阶段，短信按钮尚未进入。两个候选现仅对首次 `/login-required` 页面执行 250ms 稳定等待，输出未完成资源类型并调用 `window.stop()` 后继续框架原有页面动作；本机永不完成子文档夹具中 A/B 均完成短信初始化及新进程 1/1 持久会话复访。
 - [x] 已生成完整包 `threadsnap-poc-dual-runner-0.2.8-linux.tar.gz`，SHA-256 为 `4159cf791e33bb5fc0882b04e73455282569059e6681f510a8574d7929e67865`，包内源码提交为 `9cc22cf9f639e61777185dba78aa150eb79feed2`，25/25 内部校验一致且零真实凭证。免重装包 `threadsnap-login-load-stop-hotfix-0.2.8.tar.gz` 的 SHA-256 为 `f3bb5c8d827483fb2e7273395096976ffe80f5948b030197d4096bdad3f6c45e`，5/5 文件成员、零真实凭证、不安装依赖，且归档内短信入口权限已固定为 `0755`。
+- [x] 目标 Linux 的 v0.2.8 输出显示未完成资源为 `fetch:2,script:2,xhr:4`，`window.stop()` 已执行但 Scrapling/Playwright 的 `goto(wait_until=load)` 仍等待，短信按钮依然未进入。现已删除该错误层级的处理：候选 A 在 Scrapling `page_setup` 中仅为短信入口把首次 `goto` 和随后固定稳定性检查映射为 `domcontentloaded`，候选 B 通过 Crawlee 原生 `gotoOptions.waitUntil` 使用相同条件；本机永不完成子文档夹具中 A/B 均进入短信动作，退出后新进程均为 1/1 持久会话复访成功。
+- [x] 已生成完整包 `threadsnap-poc-dual-runner-0.2.9-linux.tar.gz`，SHA-256 为 `d69472239637323e1196d1275e8e90a20a79ce824908facccc62c25de66cf023`，包内源码提交为 `14a19514dfca803b38d1aa9bfe3406dba0b4b9f6`，25/25 内部校验一致且零真实凭证。免重装包 `threadsnap-sms-dom-ready-hotfix-0.2.9.tar.gz` 的 SHA-256 为 `5ee98eb1a412fb5150e1a9b6c44c070cfa7f248ca9164b5db299511e3acbac87`，5/5 文件成员、零真实凭证、不安装依赖且短信入口权限为 `0755`。
 
-**下一步**：目标 Linux 覆盖 v0.2.8 免重装包后，依次执行候选 A、候选 B 的短信初始化；核对 `navigation_pending`、`navigation_action` 和 `sms_request_clicked` 后输入各自动态码，再复跑联通门。只有复核为 `ready_for_2000=true` 后才运行首轮 2000 条。
+**下一步**：目标 Linux 覆盖 v0.2.9 免重装包后，先执行候选 A 短信初始化；确认 `navigation_action=...wait_until_domcontentloaded` 后应直接出现 `sms_page_ready` 与 `sms_request_clicked`。候选 A 成功后再执行候选 B 并复跑联通门；只有复核为 `ready_for_2000=true` 后才运行首轮 2000 条。
 
 **边界**：联通通过只证明当前服务器具备进入吞吐测试的网络、登录和内容访问条件，不构成 2000 条/小时门禁通过；两个固定候选技术、账号条件和结果契约保持不变。
 
-**关联**：分支 `fix/linux-login-load-stop`；入口 `poc/linux/bootstrap-sms-session.sh`、`poc/candidate-a/src/throughput.py`、`poc/candidate-b/src/throughput.ts`。
+**关联**：分支 `fix/scrapling-sms-dom-ready`；入口 `poc/linux/bootstrap-sms-session.sh`、`poc/candidate-a/src/throughput.py`、`poc/candidate-b/src/throughput.ts`。
 
 ---
 
