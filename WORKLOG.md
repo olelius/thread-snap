@@ -19,7 +19,7 @@
 
 **总目标**：在目标服务器执行 2000 条测试前，先用最多 3 条已验证样本独立确认 Linux 环境、网络链路、两个固定框架的自动登录和真实帖子访问；失败时返回完整诊断包后再按证据修复。
 
-**状态**：🟡 v0.2.5 候选 A 资源等待修复与强制短信标记已完成；等待目标 Linux 复跑及候选隔离会话的手机验证
+**状态**：🟡 v0.2.6 PoC 手动短信初始化包已完成；等待目标 Linux 实际输入验证码复跑
 
 **干到哪了**：
 
@@ -42,12 +42,15 @@
 - [x] 已接收 v0.2.4 Linux 联通结果：外层 SHA-256 `a050e128cab4b996d6e8639118a1cdd0457d737e2c4cff967a84fbd3edf5d1bd` 与 23/23 包内校验一致，结果包零凭证匹配。候选 B 已切换密码登录并提交，脱敏截图明确显示“为保证账号安全，请使用手机验证码登录”，3 条结果均为 `login/blocked`；这已确认当前账号在该服务器访问条件下被要求二次短信验证，不是密码模式选择错误。
 - [x] 候选 A 在诊断动作前的首个帖子导航等待 `load` 满 90 秒，未生成逐 URL 结果；源码保持 Scrapling 不变，把登录入口改为与吞吐请求一致地丢弃图片、字体等非必要资源。真实浏览器夹具加入永不完成的图片资源后，候选 A 仍成功生成强制短信验证诊断，候选 A/B 正常密码登录持久会话回归仍均为 1/1 `success`；Python 13 项、Node 8 项及两端类型/编译检查通过。
 - [x] 已生成完整包 `threadsnap-poc-dual-runner-0.2.5-linux.tar.gz`，SHA-256 为 `de59facf949f78e1925901794eebb7fd77b73cc0f02b5ad1023e862f89fe0552`，包内源码提交为 `6a1f09e8db285da6584a8875ba17a05e52a3b1f2`；24/24 内部校验、2000+3 输入数量和标准包零真实凭证均已复核。免重装包 `threadsnap-sms-verification-hotfix-0.2.5.tar.gz` 的 SHA-256 为 `99423c8f24e61ab065cbad1982302da2f72282e1ba94950039420d2dc59b3eda`，成员 3/3、零凭证匹配且不安装依赖。
+- [x] 新增 `poc/linux/bootstrap-sms-session.sh`：只允许从 SSH 交互终端顺序初始化候选 A/B；每个候选点击发送后读取一次动态码，成功时保存权限为 `0600` 的隔离 `storage-state.json`，普通登录和吞吐入口在新进程启动时显式加载该状态。动态码不写入配置、标准输出、结果 JSON 或浏览器自动填充状态。
+- [x] 手动短信初始化合成端到端已覆盖两个固定框架：候选 A/B 均完成“短信提交成功 → 初始化进程退出 → 新进程加载状态 → 同一帖子 1/1 `success`”；以独立动态码扫描完整运行目录匹配为 0。正式项目的验证码与会话续期方式已记入链档未决项，本 PoC 手动入口不构成正式方案。
+- [x] 已生成完整包 `threadsnap-poc-dual-runner-0.2.6-linux.tar.gz`，SHA-256 为 `c7c69de3dcf0a95efab1f73d790559487b1e9663c17741b82973a048c4905d6a`，包内源码提交为 `80a47a01c95b79daa3ac7c6811333ae2025fef34`；25/25 内部校验、短信入口成员和标准包零真实凭证均已复核。免重装包 `threadsnap-interactive-sms-bootstrap-hotfix-0.2.6.tar.gz` 的 SHA-256 为 `356cebbfc3e0fb5f935055372632fbc17739fdaf03fef4fc97d85522a7c5a6dd`，成员 4/4、零凭证匹配且不安装依赖。
 
-**下一步**：在目标服务器覆盖 v0.2.5 免重装包后复跑联通脚本。若仍显示二次短信验证，则先用该账号在目标服务器访问条件下分别为两个候选建立经手机验证的隔离持久会话，再复跑联通门；只有复核为 `ready_for_2000=true` 后才运行首轮 2000 条。
+**下一步**：目标服务器覆盖 v0.2.6 免重装包后，依次执行候选 A、候选 B 的短信初始化并输入各自动态码，再复跑联通门。只有复核为 `ready_for_2000=true` 后才运行首轮 2000 条。
 
 **边界**：联通通过只证明当前服务器具备进入吞吐测试的网络、登录和内容访问条件，不构成 2000 条/小时门禁通过；两个固定候选技术、账号条件和结果契约保持不变。
 
-**关联**：分支 `fix/linux-sms-verification-evidence`；入口 `poc/candidate-a/src/throughput.py`、`poc/candidate-b/src/throughput.ts`。
+**关联**：分支 `feat/linux-interactive-sms-bootstrap`；入口 `poc/linux/bootstrap-sms-session.sh`、`poc/candidate-a/src/throughput.py`、`poc/candidate-b/src/throughput.ts`。
 
 ---
 

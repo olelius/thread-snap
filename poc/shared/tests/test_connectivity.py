@@ -48,6 +48,19 @@ class ConnectivityTests(unittest.TestCase):
         self.assertIn("route.request.resource_type in LOGIN_BLOCKED_RESOURCE_TYPES", verify_login)
         self.assertNotIn("disable_resources=True", verify_login)
 
+    def test_manual_sms_bootstrap_keeps_candidates_isolated_and_interactive(self) -> None:
+        candidate_a = (SHARED.parent / "candidate-a" / "src" / "throughput.py").read_text(encoding="utf-8")
+        candidate_b = (SHARED.parent / "candidate-b" / "src" / "throughput.ts").read_text(encoding="utf-8")
+        script = (SHARED.parent / "linux" / "bootstrap-sms-session.sh").read_text(encoding="utf-8")
+        packager = (SHARED.parents[1] / "scripts" / "build-linux-poc-package.ps1").read_text(encoding="utf-8")
+        self.assertIn('parser.add_argument("--bootstrap-sms", action="store_true")', candidate_a)
+        self.assertIn("if (options.bootstrapSms)", candidate_b)
+        self.assertIn("[[ ! -t 0 || ! -t 1 ]]", script)
+        self.assertLess(script.index("run_candidate_a"), script.index("run_candidate_b"))
+        self.assertEqual(2, script.count("--bootstrap-sms"))
+        self.assertNotIn("sms_code", (SHARED.parent / "linux" / "config.example.json").read_text(encoding="utf-8"))
+        self.assertIn("poc/linux/bootstrap-sms-session.sh", packager)
+
     def test_prepare_uses_only_three_low_concurrency_samples(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
