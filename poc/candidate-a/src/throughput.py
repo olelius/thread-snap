@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
 import scrapling
 from scrapling.fetchers import AsyncDynamicSession
@@ -20,6 +21,25 @@ sys.path.insert(0, str(ROOT / "poc" / "shared"))
 from contract import classify_document, extract_input_post_id, url_sha256  # noqa: E402
 
 CONTROL_CLASSES = {"rate_limited", "captcha", "challenge", "login"}
+LOGIN_REASON_MARKERS = (
+    "短信验证码",
+    "获取验证码",
+    "发送验证码",
+    "手机验证",
+    "手机号验证",
+    "验证码",
+    "验证中心",
+    "安全验证",
+    "滑动验证",
+    "向右滑动",
+    "账号或密码错误",
+    "账号不存在",
+    "密码错误",
+    "登录失败",
+    "操作频繁",
+    "请稍后重试",
+)
+VERIFICATION_REASON_MARKERS = frozenset(LOGIN_REASON_MARKERS[:10])
 
 
 def utc_now() -> str:
@@ -134,10 +154,111 @@ def failed_result(
     }
 
 
-async def verify_login(session: AsyncDynamicSession, url: str, account: str, password: str, wait_ms: int) -> dict[str, Any]:
+async def any_visible(page: Any, selector: str) -> bool:
+    """判断至多前十个匹配节点中是否存在可见节点。"""
+
+    locator = page.locator(selector)
+    for index in range(min(await locator.count(), 10)):
+        if await locator.nth(index).is_visible():
+            return True
+    return False
+
+
+async def collect_login_diagnostic(
+    page: Any,
+    account: str,
+    password: str,
+    output_dir: Path,
+    capture_screenshot: bool,
+) -> dict[str, Any]:
+    """记录不含完整 URL、HTML、Cookie 或凭证的登录后可见状态。"""
+
+    try:
+        body_text = await page.locator("body").inner_text(timeout=5_000)
+    except Exception:  # noqa: BLE001
+        body_text = ""
+    marker_hits = [marker for marker in LOGIN_REASON_MARKERS if marker in body_text]
+    selector_map = {
+        "sms_code_input": 'input[name="code"], input[placeholder*="验证码"]',
+        "captcha_frame": 'iframe[src*="captcha" i]',
+        "captcha_container": '[class*="captcha" i], [id*="captcha" i]',
+        "verification_container": '[class*="verify" i], [id*="verify" i]',
+        "slider_container": '[class*="slide" i], [class*="slider" i]',
+        "account_input": 'input[name="account"]',
+        "password_input": 'input[name="password"]',
+    }
+    visible_selectors: dict[str, bool] = {}
+    for name, selector in selector_map.items():
+        try:
+            visible_selectors[name] = await any_visible(page, selector)
+        except Exception:  # noqa: BLE001
+            visible_selectors[name] = False
+
+    parsed = urlsplit(str(page.url))
+    secrets = [value for value in (account, password, account[:3], account[-4:]) if value]
+    try:
+        page_title = str(await page.title())[:120]
+    except Exception:  # noqa: BLE001
+        page_title = ""
+    for secret in secrets:
+        page_title = page_title.replace(secret, "[REDACTED]")
+    verification_selectors = (
+        visible_selectors["sms_code_input"],
+        visible_selectors["captcha_frame"],
+        visible_selectors["captcha_container"],
+        visible_selectors["verification_container"],
+        visible_selectors["slider_container"],
+    )
+    diagnostic: dict[str, Any] = {
+        "schema_version": "1.0",
+        "candidate": "candidate-a",
+        "final_path": parsed.path,
+        "query_keys": sorted({name for name, _ in parse_qsl(parsed.query, keep_blank_values=True)}),
+        "page_title": page_title,
+        "reason_markers": marker_hits,
+        "visible_selectors": visible_selectors,
+        "verification_visible": any(marker in VERIFICATION_REASON_MARKERS for marker in marker_hits)
+        or any(verification_selectors),
+        "screenshot": None,
+        "screenshot_error": None,
+    }
+    if capture_screenshot and ("/login" in parsed.path or diagnostic["verification_visible"]):
+        try:
+            await page.evaluate(
+                """({ secrets }) => {
+                    document.querySelectorAll('input, textarea').forEach((element) => {
+                        element.value = '';
+                        element.setAttribute('value', '');
+                    });
+                    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+                    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+                        for (const secret of secrets) {
+                            if (secret) node.textContent = (node.textContent || '').split(secret).join('[REDACTED]');
+                        }
+                    }
+                }""",
+                {"secrets": secrets},
+            )
+            screenshot_name = "login-page-redacted.png"
+            await page.screenshot(path=str(output_dir / screenshot_name), full_page=True)
+            diagnostic["screenshot"] = screenshot_name
+        except Exception as error:  # noqa: BLE001
+            diagnostic["screenshot_error"] = type(error).__name__
+    return diagnostic
+
+
+async def verify_login(
+    session: AsyncDynamicSession,
+    url: str,
+    account: str,
+    password: str,
+    wait_ms: int,
+    output_dir: Path,
+    capture_diagnostic: bool,
+) -> dict[str, Any]:
     """在同一持久浏览器上下文建立或确认登录会话。"""
 
-    state = {"submitted": False, "password_login_selected": False, "verification_required": False}
+    state: dict[str, Any] = {"submitted": False, "password_login_selected": False, "diagnostic": None}
 
     async def page_action(page: Any) -> None:
         await page.wait_for_timeout(2_000)
@@ -159,8 +280,22 @@ async def verify_login(session: AsyncDynamicSession, url: str, account: str, pas
             await page.get_by_role("button", name="登录", exact=True).click(timeout=10_000)
             state["submitted"] = True
             await page.wait_for_timeout(10_000)
-        document = await page.content()
-        state["verification_required"] = any(marker in document.lower() for marker in ("captcha", "验证码", "验证中心"))
+        try:
+            state["diagnostic"] = await collect_login_diagnostic(
+                page,
+                account,
+                password,
+                output_dir,
+                capture_diagnostic,
+            )
+        except Exception as error:  # noqa: BLE001
+            state["diagnostic"] = {
+                "schema_version": "1.0",
+                "candidate": "candidate-a",
+                "verification_visible": False,
+                "screenshot": None,
+                "screenshot_error": type(error).__name__,
+            }
 
     response = await session.fetch(
         url,
@@ -173,16 +308,30 @@ async def verify_login(session: AsyncDynamicSession, url: str, account: str, pas
     document = response_document(response)
     final_url = str(response.url)
     classification = classify_document(final_url, int(response.status), document, extract_input_post_id(url))
-    logged_in = classification["status"] == "success" and not state["verification_required"]
+    diagnostic = state["diagnostic"] or {
+        "schema_version": "1.0",
+        "candidate": "candidate-a",
+        "verification_visible": False,
+        "screenshot": None,
+        "screenshot_error": "diagnostic_not_collected",
+    }
+    if capture_diagnostic:
+        (output_dir / "login-diagnostic.json").write_text(
+            json.dumps(diagnostic, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    verification_required = bool(diagnostic.get("verification_visible"))
+    logged_in = classification["status"] == "success" and not verification_required
     return {
         "schema_version": "1.0",
         "candidate": "candidate-a",
         "submitted": state["submitted"],
         "password_login_selected": state["password_login_selected"],
         "logged_in": logged_in,
-        "verification_required": state["verification_required"],
+        "verification_required": verification_required,
         "response_class": classification["response_class"],
         "status": classification["status"],
+        "diagnostic_file": "login-diagnostic.json" if capture_diagnostic else None,
     }
 
 
@@ -245,7 +394,15 @@ async def main_async(args: argparse.Namespace) -> int:
         user_data_dir=str(profile_dir),
         real_chrome=bool(candidate_config.get("real_chrome", False)),
     ) as session:
-        login_result = await verify_login(session, urls[0], str(config["account"]), str(config["password"]), wait_ms)
+        login_result = await verify_login(
+            session,
+            urls[0],
+            str(config["account"]),
+            str(config["password"]),
+            wait_ms,
+            output_dir,
+            bool(config.get("capture_login_diagnostic", False)),
+        )
         (output_dir / "login-result.json").write_text(
             json.dumps(login_result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
         )
