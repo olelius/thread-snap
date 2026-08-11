@@ -18,7 +18,7 @@
 ## 2026-08-11 — 复核双候选空文档转变并增加会话实测单并发诊断
 
 **总目标**：保持 Scrapling 0.4.12 与 Crawlee 3.18.0/Playwright 1.62.1 不变，用同批500条目标 Linux证据确认 `empty` 形态，再以主动验证有效的候选隔离会话和并发1判断持续并发是否是主要触发条件。
-**状态**：🟡 双候选转变根因已收敛到会话/客户端身份与持续并发共同参与的 HTTP 200 空文档控制；已修正文件年龄导致的重复登录门禁，等待 v0.2.17 目标 Linux 实测
+**状态**：🟡 Candidate A 现有会话主动探测已确认首条 HTTP 200 空文档，同一旧浏览器资料的短信入口等待控件超时；全新资料初始化修复已完成本机验证，等待 v0.2.18 目标 Linux 实测
 
 **干到哪了**：
 - [x] A/B 转变结果目录各自9/9校验一致，输入文件 SHA-256 同为 `cbb34154b1614e417c24f049844288864f139683c62a419cdab5b172e878822a`。A 为0/500成功、95个`login`、405个`empty`、274秒/退出0；B 为71/500成功、1个`login`、405个`empty`、23个HTTP404、224秒/退出0。
@@ -27,11 +27,13 @@
 - [x] 已增加候选独立的 `test-single-concurrency.sh`：固定前500条、并发1、最长2400秒，并记录是否在500条对应的900秒比例观察线内完成；A/B 各自运行和各自打包。
 - [x] 目标 Linux 复现 v0.2.16 把 `storage-state.json` 超过1800秒直接判为需重新初始化；该文件年龄不等于服务端会话失效。本次已改为先用同一候选和首条 URL 做窗口外真实探测，`post/success` 时复用现有状态，实际进入登录类或探测失败时才停止并提示初始化。
 - [x] 短信初始化脚本在候选退出非零时输出脱敏的结果分类与阶段布尔证据，不再只留下后续脚本的旧状态报错；操作说明要求重新初始化与单并发诊断用 `&&` 串联，避免前一步失败后误启动后一步。
-- [x] v0.2.17 变更的本机门禁已通过：项目 `.vevn` Python 29项（含旧状态放行主动探测、登录/空文档阻断和真实帖子放行）、Python编译与`pip check`，Candidate B 9项与TypeScript类型检查，两个变更 Shell 入口的 Bash 语法、凭证标记扫描和`git diff --check`均通过；v0.2.16 的真实 Chrome/Playwright 单并发夹具证据继续保留。
+- [x] v0.2.17 Candidate A 主动探测结果目录 9/9 校验一致：会话年龄70193秒，Scrapling首条样本取得HTTP 200但分类为`empty/failed`，批量请求数0、运行器退出4；同一旧资料随后打开登录入口，主文档HTTP 200且DOM/load完成、待定请求0，但短信控件等待`TimeoutError`，`sms_page_ready=false`。这确认现有资料当前不可复用，但尚不单独归因为自然过期或平台控制。
+- [x] A/B 短信初始化现均使用本次输出目录下的全新浏览器资料，不注入旧 Cookie、缓存或客户端状态；仅在短信登录和原始帖子证明成功且浏览器关闭后整体替换候选主资料，失败保留旧资料。结果新增 `error_stage`、脱敏控件计数、`bootstrap_profile_mode` 与 `session_promoted`。
+- [x] 当前变更的本机门禁已通过：项目 `.vevn` Python 33项（含旧状态放行主动探测、登录/空文档阻断、真实帖子放行及新旧资料原子替换）、Python编译与`pip check`，Candidate B 9项与TypeScript类型检查，两个 Shell 入口的 Bash 语法和`git diff --check`均通过；v0.2.16 的真实 Chrome/Playwright 单并发夹具证据继续保留。
 - [x] 源码提交 `866f28ea665400c5489e5ad4ca0310b61cd13524` 已生成 v0.2.16 完整包与免重装包：完整包 SHA-256 为 `f56e62a84022df1328c3a06c62d1723831bb464b385ab2611d1923ba7ff25b58`、包内31/31一致；免重装包 SHA-256 为 `201b936d87101af9fa3cdfa272e12dd1374826ba78a2294288c23ed573fde794`、4个成员完整、Shell入口权限`0755`；两包均为零已知凭证标记。
 - [x] 修正源码提交 `870285ec4a64456d8799a02fa7d5f8a43742e89d` 已生成 v0.2.17 完整包与免重装包：两包统一归档在 `H:\ThreadSnap\artifacts\poc\packages\linux-dual-runner\`；完整包 `threadsnap-poc-dual-runner-0.2.17-linux.tar.gz` 的 SHA-256 为 `941ec71be681cdcb3007484c8bd4b4a6acc089a92caeedcaf72a4bb195712145`、包内32/32一致；免重装包 `threadsnap-session-reuse-hotfix-0.2.17.tar.gz` 的 SHA-256 为 `1a018327faf74b2cd8f812e8ece20f7f46f9f35d86f0a7720d0c3fbea3f2c665`、5/5运行文件与源码一致、Shell入口权限`0755`；两包均为零已知凭证标记且不安装依赖。
 
-**下一步**：目标 Linux 覆盖 v0.2.17 免重装包后先直接执行 `test-single-concurrency.sh candidate-a`；实测探测有效即复用既有状态继续500条，只有脚本明确输出登录类时才执行一次短信初始化并以 `&&` 接续测试。Candidate B 随后独立执行相同步骤并复制回两份结果包。
+**下一步**：生成并覆盖 v0.2.18 免重装包后，目标 Linux 执行 `bootstrap-sms-session.sh candidate-a && test-single-concurrency.sh candidate-a`；确认终端先输出 `bootstrap_profile=candidate-a;mode=fresh_isolated`、登录成功后 `session_promoted=candidate-a;value=true`，再进入500条。Candidate B 随后独立执行相同步骤。
 **边界**：单并发500条只验证触发条件和速度余量，不替代正式三轮2000条；会话文件年龄只作信息证据，是否有效以目标访问结果为准；当前23条真实404不计为平台控制，正式轮次前从输入池替换并产生新清单哈希；不共享 A/B 会话，不修改固定框架或成功契约。
 **关联**：转变结果 `artifacts/poc/results/candidate-{a,b}/access-transition-*`；结果报告 `docs/research/collector-stack-poc-results.md`；入口 `poc/linux/test-single-concurrency.sh`。
 

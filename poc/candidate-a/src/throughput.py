@@ -26,6 +26,7 @@ from access_diagnostic import (  # noqa: E402
     build_access_diagnostic,
     summarize_document_response,
 )
+from session_profile import prepare_isolated_profile, promote_isolated_profile  # noqa: E402
 
 CONTROL_CLASSES = {"rate_limited", "captcha", "challenge", "login"}
 SECONDARY_SMS_MARKER = "为保证账号安全，请使用手机验证码登录"
@@ -643,10 +644,10 @@ async def bootstrap_sms_session(
     session: AsyncDynamicSession,
     url: str,
     account: str,
-    profile_dir: Path,
+    session_profile_dir: Path,
     cdp_port: int,
 ) -> dict[str, Any]:
-    """在当前 SSH 终端读取一次短信码，并写入候选 A 的持久浏览器配置。"""
+    """在当前 SSH 终端读取一次短信码，并把成功状态写入隔离浏览器资料。"""
 
     state: dict[str, Any] = {
         "sms_requested": False,
@@ -657,11 +658,30 @@ async def bootstrap_sms_session(
         "submitted": False,
         "classification": None,
         "error_category": None,
+        "error_stage": None,
+        "login_page_evidence": None,
     }
 
     async def page_action(page: Any) -> None:
         try:
             if "/login-required" in page.url:
+                state["error_stage"] = "inspect_login_page"
+                html_document = await page.content()
+                sms_label_count = 0
+                for label in ("验证码登录", "手机验证码登录"):
+                    sms_label_count += await page.get_by_text(label, exact=True).count()
+                login_page_evidence = {
+                    "document_bytes": len(html_document.encode("utf-8")),
+                    "input_count": await page.locator("input").count(),
+                    "form_count": await page.locator("form").count(),
+                    "sms_label_count": sms_label_count,
+                }
+                state["login_page_evidence"] = login_page_evidence
+                print(
+                    "sms_login_page_evidence=candidate-a;"
+                    + json.dumps(login_page_evidence, ensure_ascii=False, separators=(",", ":")),
+                    flush=True,
+                )
                 for label in ("验证码登录", "手机验证码登录"):
                     options = page.get_by_text(label, exact=True)
                     clicked = False
@@ -675,6 +695,7 @@ async def bootstrap_sms_session(
                     if clicked:
                         break
 
+                state["error_stage"] = "wait_sms_controls"
                 account_input = await first_visible(
                     page,
                     'input[name="account"], input[placeholder*="手机号"]',
@@ -715,6 +736,7 @@ async def bootstrap_sms_session(
                 page.on("request", capture_sms_request)
                 page.on("response", capture_sms_response)
                 await account_input.fill(account)
+                state["error_stage"] = "request_sms"
                 print("sms_page_ready=candidate-a", flush=True)
                 sms_network_events.clear()
                 await click_first_visible_text(page, ("获取验证码", "发送验证码"))
@@ -748,11 +770,13 @@ async def bootstrap_sms_session(
                 state.update(verification_result)
                 if not state["sms_send_confirmed"]:
                     raise RuntimeError("短信发送尚未取得倒计时确认")
+                state["error_stage"] = "read_sms_code"
                 code = await asyncio.to_thread(read_sms_code, "candidate-a")
                 await code_input.fill(code)
                 code = ""
                 await click_first_visible_text(page, ("登录/注册", "登录"))
                 state["submitted"] = True
+                state["error_stage"] = "verify_authenticated_post"
                 await page.wait_for_timeout(10_000)
 
             html_document = await page.content()
@@ -763,9 +787,10 @@ async def bootstrap_sms_session(
                 extract_input_post_id(url),
             )
             if state["classification"]["status"] == "success":
-                state_path = profile_dir / "storage-state.json"
+                state_path = session_profile_dir / "storage-state.json"
                 await page.context.storage_state(path=str(state_path))
                 state_path.chmod(0o600)
+                state["error_stage"] = None
         except Exception as error:  # noqa: BLE001
             state["error_category"] = type(error).__name__
 
@@ -801,6 +826,8 @@ async def bootstrap_sms_session(
         "response_class": classification["response_class"],
         "status": classification["status"],
         "error_category": state["error_category"],
+        "error_stage": state["error_stage"],
+        "login_page_evidence": state["login_page_evidence"],
     }
 
 
@@ -842,14 +869,16 @@ async def main_async(args: argparse.Namespace) -> int:
                 "--remote-debugging-address=127.0.0.1",
                 f"--remote-debugging-port={cdp_port}",
             ]
+        bootstrap_profile_dir = prepare_isolated_profile(output_dir / "browser-profile")
+        print("bootstrap_profile=candidate-a;mode=fresh_isolated", flush=True)
         async with AsyncDynamicSession(
             headless=bool(config.get("headless", True)),
             google_search=False,
             max_pages=1,
             timeout=900_000,
             retries=1,
-            user_data_dir=str(profile_dir),
-            cookies=load_profile_cookies(profile_dir),
+            user_data_dir=str(bootstrap_profile_dir),
+            cookies=None,
             real_chrome=bool(candidate_config.get("real_chrome", False)),
             extra_flags=extra_flags,
         ) as session:
@@ -857,14 +886,29 @@ async def main_async(args: argparse.Namespace) -> int:
                 session,
                 urls[0],
                 str(config["account"]),
-                profile_dir,
+                bootstrap_profile_dir,
                 cdp_port,
             )
+        result["bootstrap_profile_mode"] = "fresh_isolated"
+        result["session_promoted"] = False
+        if result["logged_in"]:
+            try:
+                promote_isolated_profile(
+                    bootstrap_profile_dir,
+                    profile_dir,
+                    output_dir / "previous-profile",
+                )
+                result["session_promoted"] = True
+                print("session_promoted=candidate-a;value=true")
+            except Exception as error:  # noqa: BLE001
+                result["status"] = "failed"
+                result["error_category"] = type(error).__name__
+                result["error_stage"] = "promote_session_profile"
         (output_dir / "sms-bootstrap-result.json").write_text(
             json.dumps(result, ensure_ascii=False, indent=2) + "\n",
             encoding="utf-8",
         )
-        return 0 if result["logged_in"] else 5
+        return 0 if result["logged_in"] and result["session_promoted"] else 5
 
     write_lock = asyncio.Lock()
     deadline = time.monotonic() + int(config["window_seconds"])

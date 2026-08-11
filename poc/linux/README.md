@@ -64,7 +64,7 @@ ssh -N -L 9223:127.0.0.1:9223 root@<服务器地址>
 
 CDP 只监听服务器回环地址并经 SSH 隧道访问，不需要在服务器安装桌面、Xvfb、VNC 或 noVNC。端口可通过 `THREADSNAP_CANDIDATE_A_CDP_PORT` 和 `THREADSNAP_CANDIDATE_B_CDP_PORT` 临时覆盖。短信初始化会放行滑块背景、拼图和验证码素材所需的图片资源，只继续丢弃媒体与字体；普通登录诊断和2000条吞吐访问仍使用原有资源策略。脚本检测到可视验证消失且发送控件进入倒计时后，才提示输入当次短信码；十分钟内没有取得这两个信号则本次初始化失败，不把验证码页误判为短信已发送。
 
-动态码不写入 `config.json`、标准输出、结果文件或持久浏览器状态；成功后只在各候选的本地 `profile_dir/storage-state.json` 保存复访所需的会话状态，并将文件权限设为 `0600`。两个候选必须分别完成一次，不能共用状态文件。
+动态码不写入 `config.json`、标准输出、结果文件或持久浏览器状态。短信初始化不再加载候选旧 `user_data_dir` 或旧 Cookie，而是在本次 `.runtime/sms-bootstrap/<timestamp>/<candidate>/browser-profile` 中建立全新资料；只有短信登录完成且原始帖子取得 ID 与内容证明后，才关闭浏览器并把整份新资料提升为该候选的 `profile_dir`。失败时旧资料保持原状，并输出 `error_stage` 与只含文档字节数、输入框/表单/短信标签数量的 `login_page_evidence`。两个候选必须分别完成一次，不能共用状态文件。
 
 再次执行 `test-connectivity.sh` 时，准备阶段会重建两个 `profiles/connectivity-candidate-*` 隔离目录，并分别从 `config.json` 中 Candidate A/B 的 `profile_dir` 复制当前 `storage-state.json`。这样联通测试复用刚完成的认证，又不直接改写主会话；若源状态不存在，旧的联通副本会被删除。`prepare.log` 中的 `session_state_copied` 应对两个候选均为 `true`，该日志不包含 Cookie 或状态内容。
 
@@ -112,7 +112,7 @@ Candidate A 的普通登录确认和逐 URL 访问使用 Scrapling 原有 `page_
 ./poc/linux/test-single-concurrency.sh candidate-b
 ```
 
-脚本先用同一候选、同一会话和清单首条 URL 做一次不计入500条窗口的主动探测。探测确认登录态和文章内容均有效时输出 `session_probe_result=ready;session_action=reuse_existing` 并直接继续；只有探测实际落入登录类或运行失败时才输出短信初始化命令并停止，不把失败探测混入500条结果。此时按提示执行 `./poc/linux/bootstrap-sms-session.sh <candidate> && ./poc/linux/test-single-concurrency.sh <candidate>`，`&&` 保证初始化失败时后续诊断不会误启动。
+脚本先用同一候选、同一会话和清单首条 URL 做一次不计入500条窗口的主动探测。探测确认登录态和文章内容均有效时输出 `session_probe_result=ready;session_action=reuse_existing` 并直接继续；探测实际落入登录类、空文档或运行失败时输出短信初始化命令并停止，不把失败探测混入500条结果。此时按提示执行 `./poc/linux/bootstrap-sms-session.sh <candidate> && ./poc/linux/test-single-concurrency.sh <candidate>`，`&&` 保证全新资料初始化及成功提升完成后才启动诊断。
 
 诊断固定取原清单前 500 条、只把目标候选并发设为 1，保留原框架、资源路由、重试和成功契约，最多运行 40 分钟。`diagnostic-summary.json` 另记录会话文件年龄（仅信息）、主动探测证据，以及是否在 900 秒比例窗口内完成500条；比例字段只用于判断单并发是否还有达到2000条/小时的速度余量，不构成正式吞吐通过结论。
 
