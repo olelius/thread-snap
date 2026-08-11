@@ -15,6 +15,25 @@
 
 ---
 
+## 2026-08-11 — 补齐直接 HTTP/Spider 的风控与吞吐验证路线
+
+**总目标**：不改变 Scrapling 与 Crawlee 两个候选和统一成功契约，把此前未进入大批量入口的直接 HTTP/Spider 通道纳入公平预筛，并用有效链接速度、首次控制时间和会话一致性决定是否进入目标 Linux。
+**状态**：🟡 owner 文档已同步；等待实现 A/B 最小直接 HTTP 批量入口并执行本地预筛
+
+**干到哪了**：
+- [x] 已核对当前实现：Candidate A 吞吐使用 `AsyncDynamicSession`，Candidate B 吞吐使用 `PlaywrightCrawler` 且未启用 `SessionPool`；`FetcherSession`、`CheerioCrawler` 目前只在冒烟或诊断路径出现，因此现有2000/500条证据只代表浏览器批量路径。
+- [x] 技术路线和 PoC 计划已明确新的同框架访问通道：A 使用 `Spider + FetcherSession(impersonate="chrome")`，B 使用 `CheerioCrawler/HttpCrawler + SessionPool`；阶段内不启动浏览器、不导入浏览器状态，也不在 HTTP 失败后切换浏览器。
+- [x] 已增加风控与速度记录口径：首次 `login/empty/captcha/challenge/rate_limited` 的时间和已完成数、持续有效 URL/秒、P50/P95、请求放大率、HTTP 会话寿命及最终分类分布；HTTP 通道占比必须为100%，HTTP 200、队列完成和请求发送数均不计为有效完成。
+- [x] 已固定动态参数边界：阶段 2A 只解析页面主文档及其内嵌状态，不请求评论接口；评论动态参数、纯 HTTP 参数实现和浏览器运行时参数方案后续按独立实验组验证，不与当前结果拼接。
+- [x] 现有 v0.2.18 全新隔离会话和浏览器单并发包继续保留，不覆盖既有失败证据；本地直接 HTTP 结果只做预筛，正式结论仍要求目标 CentOS 三轮2000条硬门禁。
+- [x] 文档验证已通过：`git diff --check` 无格式错误，四份修改文档均可按 UTF-8 读取且 owner 引用存在；源码事实复核定位到 Candidate A 的 `AsyncDynamicSession` 导入和 Candidate B 的 `PlaywrightCrawler` 吞吐入口，差异中未发现动态令牌值。
+
+**下一步**：在新开发任务中先实现两个不改统一输出契约的批量入口：Candidate A `http_throughput.py` 使用 `Spider + FetcherSession`，Candidate B `http-throughput.ts` 使用 `CheerioCrawler/HttpCrawler + SessionPool`。先对现有固定联通样本并发1验证帖子 ID 与标题/正文存在性，再对同一固定前500条按 `1 -> 2 -> 4 -> 8` 递进预筛；通过后才生成目标 Linux 包。
+**边界**：本步不把浏览器作为初始化、参数生成或失败兜底，也不把完整正文、一级评论或动态签名实现并入当前访问 PoC；不提交真实 URL、Cookie、令牌、完整查询串或请求体；“10条/秒”和“十万条/夜”只是扩展压力目标，当前硬门槛仍为三轮各2000 URL/小时且100%有效完成。
+**关联**：技术路线 `docs/design/technical-route.md`；PoC owner `docs/research/collector-stack-poc-plan.md`；工作线 `docs/chains/first-platform-delivery.md`。
+
+---
+
 ## 2026-08-11 — 复核双候选空文档转变并增加会话实测单并发诊断
 
 **总目标**：保持 Scrapling 0.4.12 与 Crawlee 3.18.0/Playwright 1.62.1 不变，用同批500条目标 Linux证据确认 `empty` 形态，再以主动验证有效的候选隔离会话和并发1判断持续并发是否是主要触发条件。
