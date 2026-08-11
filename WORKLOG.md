@@ -15,6 +15,26 @@
 
 ---
 
+## 2026-08-11 — 完成纯直接 HTTP 双候选500条预筛
+
+**总目标**：实现 A/B 不含浏览器兜底的直接 HTTP 批量入口，在当前开发电脑对同一固定500条执行一次并发1实测，并以有效帖子证明而非队列速度形成结论。
+**状态**：✅ 本机纯匿名直接 HTTP 500条已完成并判定失败；不升并发、不打Linux包
+
+**干到哪了**：
+- [x] Candidate A 新增 `http_throughput.py`，使用 Scrapling `Spider + FetcherSession(impersonate="chrome")`；Candidate B 新增 `http-throughput.ts`，使用 Crawlee `CheerioCrawler + SessionPool`。两端均固定单HTTP会话、每URL一次请求、无浏览器启动或状态导入，并输出相同的环境、输入、逐URL、请求事件、摘要和校验清单。
+- [x] 3条冒烟已确认阶段门失败：A为3条`login`，B为1条`challenge`和2条`login`。按用户明确要求仍继续执行一次完整500条；未增加失败兜底或其他通道。
+- [x] 500条结果目录的5/5内部校验均一致，输入文件 SHA-256 同为 `cbb34154b1614e417c24f049844288864f139683c62a419cdab5b172e878822a`；两端均500条结果、500条请求事件、HTTP通道100%、请求放大率1.0、浏览器未启动、统一契约错误0。
+- [x] Candidate A 为0/500、500条`login`，总时长71.803秒，原始处理速度约6.96 URL/秒，首次控制约0.312秒；Candidate B 为0/500、497条`login`、2条`captcha`、1条`challenge`，总时长74.580秒，原始处理速度约6.70 URL/秒，首次控制约1.004秒。两端有效链接速度均为0。
+- [x] 已复核本轮逐URL P50/P95起点不一致：A含Spider队列等待，B从实际导航计时；该差异不影响总时长、最终分类和0条有效结果。B入口已改为后续同样从批量提交时计时，本轮报告不使用P50/P95做候选比较。
+- [x] 结论已同步到技术路线、PoC计划、首个平台链档和 `docs/research/collector-stack-poc-results.md`；原始URL与结果继续只保存在被Git忽略的 `artifacts/poc/`。
+- [x] 本机验证通过：项目 `.vevn` Python 35项、Candidate B 10项、Python `compileall`、TypeScript类型检查、`pip check`、`git diff --check`、新入口零浏览器路径断言和差异凭证值扫描均通过。
+
+**下一步**：当前匿名直接HTTP分支到此结束。若继续研究直接HTTP，建立新的“认证条件下纯HTTP”独立实验，先以3条固定样本验证会话建立、身份一致性和帖子证明；3条全部有效后再重新制定500条负载，不与本轮匿名结果拼接。
+**边界**：当前结果只绑定本机、当前网络出口、匿名主文档访问和本轮时间；不外推认证纯HTTP、评论动态参数或CentOS。原始处理速度是控制页速度，不代表有效采集能力；并发2/4/8和Linux打包均因正确性门失败而停止。
+**关联**：A结果 `artifacts/poc/results/candidate-a/direct-http-500-20260811T234144+0800/`；B结果 `artifacts/poc/results/candidate-b/direct-http-500-20260811T234144+0800/`；输入 SHA-256 `cbb34154b1614e417c24f049844288864f139683c62a419cdab5b172e878822a`。
+
+---
+
 ## 2026-08-11 — 补齐直接 HTTP/Spider 的风控与吞吐验证路线
 
 **总目标**：不改变 Scrapling 与 Crawlee 两个候选和统一成功契约，把此前未进入大批量入口的直接 HTTP/Spider 通道纳入公平预筛，并用有效链接速度、首次控制时间和会话一致性决定是否进入目标 Linux。
