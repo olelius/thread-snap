@@ -15,6 +15,25 @@
 
 ---
 
+## 2026-08-12 — 完成新浏览器与匿名 HTTP 会话对照
+
+**总目标**：解释500条 `login` 是否来自未处理指纹，并用新浏览器、Chrome模拟HTTP直连及首页匿名Cookie预热对同一帖子做分层验证。
+**状态**：🟡 匿名浏览器与匿名HTTP均确认登录门；等待真实已认证浏览器会话后继续HTTP状态交接试验
+
+**干到哪了**：
+- [x] 已核对500条实现：Candidate A 使用 `impersonate="chrome"` 与 `stealthy_headers=true`；Candidate B 使用 CheerioCrawler、SessionPool 和 Cookie 持久化。上一轮确实没有登录Cookie或浏览器状态，但不是完全没有TLS/请求头指纹处理。
+- [x] 全新应用内浏览器分别打开固定联通样本和另一条已知帖子，两条都直接进入 `/login-required?redirect=...` 并显示手机验证码/密码登录表单，没有帖子正文；当前只连接了应用内浏览器，没有可控制的已登录Chrome会话。
+- [x] Candidate A HTTP对照启用Chrome模拟、隐蔽请求头、中文语言头和站点来源头；直接访问帖子为文章HTTP302后登录页HTTP200。使用同一HTTP会话先访问首页取得5个匿名Cookie，再访问帖子，仍为相同登录结果。
+- [x] 两组结果只保存路径模板、正文长度、Cookie数量和名称哈希，未保存Cookie值、Cookie名称、页面正文或完整查询串；证据校验清单已写入被忽略的 `artifacts/poc/results/`。
+- [x] 当前已确认主文档在页面运行前就被服务器重定向；`msToken`、`a_bogus` 和评论分页参数不是当前主文档登录的直接阻塞点。
+- [x] 两个有效证据目录的 `SHA256SUMS` 均复核通过；四份修改文档可按UTF-8读取，`git diff --check` 和差异凭证值扫描通过。浏览器检查结束后已关闭本轮临时标签页。
+
+**下一步**：先在受控浏览器中形成可复访的真实认证帖子会话，再使用同一条样本顺序执行浏览器复访与最小认证状态HTTP复访；状态值只保存在被忽略的临时文件，不回显、不进入结果报告或Git。未登录成功前不再扩大HTTP样本或并发。
+**边界**：当前证据只说明现有Chrome模拟与匿名Cookie不足，尚不能单独区分账号认证、网络出口和平台策略的影响；不把新浏览器也进入登录误写成HTTP框架缺陷，也不把首页HTTP200当作帖子可访问。
+**关联**：`artifacts/poc/results/candidate-a/browser-http-session-probe-20260812T071759+0800/`；`artifacts/poc/results/candidate-a/browser-http-session-probe-known-url-20260812T071923+0800/`。
+
+---
+
 ## 2026-08-11 — 完成纯直接 HTTP 双候选500条预筛
 
 **总目标**：实现 A/B 不含浏览器兜底的直接 HTTP 批量入口，在当前开发电脑对同一固定500条执行一次并发1实测，并以有效帖子证明而非队列速度形成结论。
