@@ -13,7 +13,6 @@ VALID_CANDIDATES = {"candidate-a": ("candidate_a", "profiles/candidate-a"), "can
 DIAGNOSTIC_COUNT = 500
 DIAGNOSTIC_WINDOW_SECONDS = 2_400
 PROPORTIONAL_TARGET_SECONDS = 900
-SESSION_MAX_AGE_SECONDS = 1_800
 
 
 def _resolve(base: Path, value: str) -> Path:
@@ -28,7 +27,11 @@ def prepare_config(
     candidate: str,
     now_epoch: float | None = None,
 ) -> dict[str, Any]:
-    """校验刚初始化的候选会话，并生成单并发500条诊断配置。"""
+    """校验候选会话文件存在，并生成单并发500条诊断配置。
+
+    文件修改时间只作为证据输出。会话是否仍有效必须由目标候选在真实访问
+    探测中判定，不能用本地文件年龄代替服务端会话状态。
+    """
 
     if candidate not in VALID_CANDIDATES:
         raise ValueError("candidate 必须是 candidate-a 或 candidate-b")
@@ -61,11 +64,6 @@ def prepare_config(
         raise ValueError(f"候选会话状态缺失，请先初始化: {candidate}")
     now = time.time() if now_epoch is None else now_epoch
     session_age_seconds = max(0, int(now - storage_state.stat().st_mtime))
-    if session_age_seconds > SESSION_MAX_AGE_SECONDS:
-        raise ValueError(
-            f"候选会话状态已超过 {SESSION_MAX_AGE_SECONDS} 秒，请重新初始化: {candidate}"
-        )
-
     config["input_file"] = str(input_path)
     config["expected_count"] = min(DIAGNOSTIC_COUNT, available)
     config["window_seconds"] = DIAGNOSTIC_WINDOW_SECONDS
@@ -81,8 +79,8 @@ def prepare_config(
         "concurrency": 1,
         "window_seconds": DIAGNOSTIC_WINDOW_SECONDS,
         "proportional_target_seconds": PROPORTIONAL_TARGET_SECONDS,
-        "session_max_age_seconds": SESSION_MAX_AGE_SECONDS,
         "session_age_seconds": session_age_seconds,
+        "session_age_gate": "informational_only",
         "session_state_size": storage_state.stat().st_size,
     }
 

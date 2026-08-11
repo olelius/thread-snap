@@ -3,7 +3,6 @@ import os
 import stat
 import sys
 import tempfile
-import time
 import unittest
 from pathlib import Path
 
@@ -12,7 +11,6 @@ sys.path.insert(0, str(SHARED))
 
 from prepare_single_concurrency_config import (  # noqa: E402
     DIAGNOSTIC_WINDOW_SECONDS,
-    SESSION_MAX_AGE_SECONDS,
     prepare_config,
 )
 
@@ -42,7 +40,7 @@ class PrepareSingleConcurrencyConfigTests(unittest.TestCase):
         )
         return config, state, root / "runtime-config.json"
 
-    def test_prepares_single_concurrency_with_fresh_isolated_session(self) -> None:
+    def test_prepares_single_concurrency_with_existing_session(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source, state, target = self.make_fixture(root)
@@ -54,18 +52,25 @@ class PrepareSingleConcurrencyConfigTests(unittest.TestCase):
             self.assertEqual(generated["candidate_a"]["concurrency"], 1)
             self.assertEqual(Path(generated["candidate_a"]["profile_dir"]), state.parent.resolve())
             self.assertEqual(evidence["session_age_seconds"], 12)
+            self.assertEqual(evidence["session_age_gate"], "informational_only")
             if os.name == "posix":
                 self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o600)
 
-    def test_rejects_stale_session_state(self) -> None:
+    def test_accepts_old_session_state_for_active_probe(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source, state, target = self.make_fixture(root, "candidate-b")
-            stale = time.time() - SESSION_MAX_AGE_SECONDS - 1
-            os.utime(state, (stale, stale))
-            with self.assertRaisesRegex(ValueError, "重新初始化"):
-                prepare_config(source=source, target=target, candidate="candidate-b", now_epoch=time.time())
-            self.assertFalse(target.exists())
+            old_mtime = state.stat().st_mtime - 86_400
+            os.utime(state, (old_mtime, old_mtime))
+            evidence = prepare_config(
+                source=source,
+                target=target,
+                candidate="candidate-b",
+                now_epoch=old_mtime + 86_400,
+            )
+            self.assertTrue(target.exists())
+            self.assertEqual(evidence["session_age_seconds"], 86_400)
+            self.assertEqual(evidence["session_age_gate"], "informational_only")
 
     def test_rejects_missing_session_state(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
