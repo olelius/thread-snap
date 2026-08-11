@@ -102,3 +102,5 @@ Candidate B 的框架日志记录 `requestsFinished=2000`、`requestsFailed=0` �
 - Scrapling 0.4.12 在并发1下对首条已知样本取得主文档 HTTP 200，但登录预检分类为 `empty/failed`，没有帖子 ID、标题或正文证明；批量URL请求数为0，运行器以登录初始化失败退出，因此500条计时尚未启动。
 - 随后使用同一旧浏览器资料打开同源登录入口，主文档 HTTP 200、DOMContentLoaded 与 load 均完成且后台待定请求为0，但10秒内没有出现短信输入控件；结果为 `TimeoutError`、`sms_page_ready=false`、`submitted=false`。这排除文件年龄门禁和500条并发作为本次失败来源，确认旧候选资料当前既不能访问文章，也不能完成重新登录页面动作。
 - 当前证据尚未区分约19.5小时后的自然会话过期与平台对该客户端身份的静默控制。下一因果测试保持框架不变，使用全新临时浏览器资料完成短信初始化；成功后才整体提升为候选主资料，再立即执行同一500条并发1诊断。
+
+执行包：源码提交 `cb6f0bfc5fe4786cec34576c3ef29f8a05b8559f` 对应 v0.2.18；完整包 SHA-256 为 `d77f8917afce386acae14d016d9f84ce13fad66d9564e3a0c19c87a35f19f1c7`，免重装包 SHA-256 为 `f1ac7d89b08cef4e5111f8e3e75421c27d6f88cbb28de50af3373ad587e2de5f`。
