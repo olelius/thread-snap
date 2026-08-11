@@ -140,3 +140,25 @@ Candidate B 的框架日志记录 `requestsFinished=2000`、`requestsFailed=0` �
 结论边界：该结果证明当前开发电脑、当前网络出口、匿名且纯直接 HTTP 的帖子主文档方案不可行；它不证明带独立认证条件的纯 HTTP、评论动态参数接口或目标 CentOS 结果必然相同。依据阶段 2A 的停止规则，本轮不继续提高并发，也不把当前实现打包到目标 Linux。
 
 若继续研究直接 HTTP，下一步应建立新的“认证条件下纯 HTTP”独立实验：先只用3条固定样本验证会话建立、身份一致性和帖子证明；不得与本轮匿名结果拼接，也不得在 URL 失败后切换浏览器。只有3条全部有效，再重新制定500条负载。
+
+## 9. 新浏览器与匿名 HTTP 会话对照
+
+2026-08-12 在当前开发电脑使用全新的应用内浏览器分别打开固定联通样本和项目讨论中曾验证过的另一条帖子；两条均由帖子 URL 直接进入 `/login-required?redirect=...`，可见页面为手机验证码/密码登录表单，没有帖子正文。当前没有连接可控制的 Chrome 用户会话，因此本轮浏览器不具备既有登录状态，也没有可用于 HTTP 对照的认证材料。
+
+随后使用 Candidate A 的 `FetcherSession` 做两组纯 HTTP 请求：
+
+1. `impersonate="chrome"`、`stealthy_headers=true`、中文 `Accept-Language` 和站点来源头，直接访问帖子；
+2. 使用相同 HTTP 会话先访问站点首页，再携带该会话建立的匿名 Cookie 访问帖子。
+
+两条样本的结果相同：直接访问和首页预热后访问均先收到文章 URL 的 HTTP 302，再到 HTTP 200 登录页；首页本身 HTTP 200，并在响应中提供5个 Cookie 名称，但这些匿名 Cookie 没有改变帖子访问结果。原始 Cookie 值、Cookie 名称、页面正文和完整查询串未保存，结果只记录路径模板、Cookie 数量及名称哈希。
+
+已确认事实：
+
+- 上一轮500条并非完全没有指纹处理：Candidate A 已启用 Chrome TLS/HTTP 模拟和隐蔽请求头，Candidate B 的 CheerioCrawler 使用 Crawlee HTTP 栈和单会话 Cookie 持久化；
+- 两个新浏览器样本和对应 HTTP 请求都在首个文章主文档阶段进入登录，不是运行一分钟或高并发后才出现；
+- 首页匿名 Cookie、Chrome 模拟请求头和同会话预热不足以取得帖子内容；当前缺少的是平台认可的认证会话或其他尚未识别的访问条件；
+- 文章主文档在页面运行前已被服务器302到登录入口，因此 `msToken`、`a_bogus` 或评论分页参数不是这一步的直接阻塞点。
+
+结论边界：本轮没有已登录浏览器，因而没有执行“已认证浏览器状态传给 HTTP”的试验；当前证据也不能单独区分账号认证、网络出口和平台策略各自的影响。下一步需先在受控浏览器中形成真实可复访的已认证帖子会话，再以同一条样本对比浏览器复访和只导入最小认证状态的 HTTP 复访；会话值仅留在被忽略的临时文件，不进入日志、结果报告或 Git。
+
+证据目录：`artifacts/poc/results/candidate-a/browser-http-session-probe-20260812T071759+0800/` 与 `artifacts/poc/results/candidate-a/browser-http-session-probe-known-url-20260812T071923+0800/`。
