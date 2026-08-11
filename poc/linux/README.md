@@ -104,17 +104,17 @@ Candidate A 的普通登录确认和逐 URL 访问使用 Scrapling 原有 `page_
 
 ## fresh-session 单并发诊断
 
-当两个候选都在持续并发约一分钟后转为 HTTP 200 空文档时，分别刷新各自会话并紧接着运行单并发诊断。每次只运行一个候选，避免先运行 A 导致 B 的会话在等待期间变旧：
+当两个候选都在持续并发约一分钟后转为 HTTP 200 空文档时，先分别对既有隔离会话执行真实文章探测，再决定是否进入单并发诊断。文件修改时间只记录为证据，不再据此要求重复登录。每次只运行一个候选：
 
 ```bash
-./poc/linux/bootstrap-sms-session.sh candidate-a
 ./poc/linux/test-single-concurrency.sh candidate-a
 
-./poc/linux/bootstrap-sms-session.sh candidate-b
 ./poc/linux/test-single-concurrency.sh candidate-b
 ```
 
-脚本要求目标候选的 `storage-state.json` 在最近 30 分钟内更新；状态缺失或过旧时只输出重新初始化命令，不启动访问。诊断固定取原清单前 500 条、只把目标候选并发设为 1，保留原框架、资源路由、重试和成功契约，最多运行 40 分钟。`diagnostic-summary.json` 另记录是否在 900 秒比例窗口内完成500条；该字段只用于判断单并发是否还有达到2000条/小时的速度余量，不构成正式吞吐通过结论。
+脚本先用同一候选、同一会话和清单首条 URL 做一次不计入500条窗口的主动探测。探测确认登录态和文章内容均有效时输出 `session_probe_result=ready;session_action=reuse_existing` 并直接继续；只有探测实际落入登录类或运行失败时才输出短信初始化命令并停止，不把失败探测混入500条结果。此时按提示执行 `./poc/linux/bootstrap-sms-session.sh <candidate> && ./poc/linux/test-single-concurrency.sh <candidate>`，`&&` 保证初始化失败时后续诊断不会误启动。
+
+诊断固定取原清单前 500 条、只把目标候选并发设为 1，保留原框架、资源路由、重试和成功契约，最多运行 40 分钟。`diagnostic-summary.json` 另记录会话文件年龄（仅信息）、主动探测证据，以及是否在 900 秒比例窗口内完成500条；比例字段只用于判断单并发是否还有达到2000条/小时的速度余量，不构成正式吞吐通过结论。
 
 结果压缩包位于 `access-diagnostic-results/single-concurrency-<candidate>-<timestamp>.tar.gz`。A/B 两次诊断必须各自返回压缩包和 `.sha256`，不得复用另一候选会话，也不得把两次诊断拼接为正式2000条轮次。
 

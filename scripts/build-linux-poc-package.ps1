@@ -60,6 +60,7 @@ $files = @(
     'poc/shared/network_probe.py',
     'poc/shared/prepare_connectivity_config.py',
     'poc/shared/prepare_single_concurrency_config.py',
+    'poc/shared/validate_single_concurrency_probe.py',
     'poc/shared/finalize_connectivity.py',
     'poc/shared/validate_results.py',
     'poc/shared/finalize_run.py'
