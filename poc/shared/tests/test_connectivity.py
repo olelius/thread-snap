@@ -138,8 +138,33 @@ class ConnectivityTests(unittest.TestCase):
         self.assertIn("chrome://inspect/#devices", script)
         self.assertNotIn("sms_code", (SHARED.parent / "linux" / "config.example.json").read_text(encoding="utf-8"))
         self.assertIn("poc/linux/bootstrap-sms-session.sh", packager)
+        self.assertIn("poc/shared/session_profile.py", packager)
         self.assertIn('($hashLines -join "`n") + "`n"', packager)
         self.assertNotIn("WriteAllLines((Join-Path $staging 'SHA256SUMS')", packager)
+
+    def test_sms_bootstrap_uses_fresh_profile_and_promotes_only_after_success(self) -> None:
+        candidate_a = (SHARED.parent / "candidate-a" / "src" / "throughput.py").read_text(encoding="utf-8")
+        candidate_b = (SHARED.parent / "candidate-b" / "src" / "throughput.ts").read_text(encoding="utf-8")
+        bootstrap_a = candidate_a[candidate_a.index("if args.bootstrap_sms:") : candidate_a.index("write_lock =")]
+        bootstrap_b = candidate_b[candidate_b.index("if (options.bootstrapSms)") : candidate_b.index("const environment =")]
+        bootstrap_b_handler = candidate_b[
+            candidate_b.index("async function bootstrapSmsSession(") : candidate_b.index("async function main()")
+        ]
+        self.assertIn('prepare_isolated_profile(output_dir / "browser-profile")', bootstrap_a)
+        self.assertIn("user_data_dir=str(bootstrap_profile_dir)", bootstrap_a)
+        self.assertIn("cookies=None", bootstrap_a)
+        self.assertNotIn("load_profile_cookies(profile_dir)", bootstrap_a)
+        self.assertLess(bootstrap_a.index('if result["logged_in"]'), bootstrap_a.index("promote_isolated_profile("))
+        self.assertIn("prepareIsolatedProfile(bootstrapProfileDir)", bootstrap_b)
+        self.assertIn("config, bootstrapProfileDir", bootstrap_b)
+        self.assertLess(bootstrap_b.index("if (result['logged_in'] === true)"), bootstrap_b.index("promoteIsolatedProfile("))
+        self.assertNotIn("loadStorageCookies", bootstrap_b_handler)
+        self.assertIn("userDataDir: sessionProfileDir", bootstrap_b_handler)
+        for marker in ("error_stage", "login_page_evidence", "fresh_isolated", "session_promoted"):
+            self.assertIn(marker, candidate_a)
+            self.assertIn(marker, candidate_b)
+        self.assertIn('print("session_promoted=candidate-a;value=true")', bootstrap_a)
+        self.assertIn("console.log('session_promoted=candidate-b;value=true')", bootstrap_b)
 
     def test_sms_bootstrap_enters_login_directly_and_reports_click_progress(self) -> None:
         candidate_a = (SHARED.parent / "candidate-a" / "src" / "throughput.py").read_text(encoding="utf-8")

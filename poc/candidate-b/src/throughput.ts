@@ -1,7 +1,9 @@
 /** 候选 B：使用 Crawlee/Playwright 持久认证会话执行定量吞吐测试。 */
 
 import { createHash } from 'node:crypto';
-import { appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync, chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync,
+} from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { createInterface } from 'node:readline/promises';
@@ -214,6 +216,31 @@ function loadStorageCookies(profileDir: string): StoredCookies {
   const state = JSON.parse(readFileSync(path, 'utf8')) as { cookies?: unknown };
   if (!Array.isArray(state.cookies)) throw new Error('候选 B storage-state.json 缺少 cookies');
   return state.cookies as StoredCookies;
+}
+
+function prepareIsolatedProfile(profileDir: string): void {
+  rmSync(profileDir, { recursive: true, force: true });
+  mkdirSync(profileDir, { recursive: true, mode: 0o700 });
+}
+
+function promoteIsolatedProfile(source: string, target: string, backup: string): void {
+  if (source === target || source === backup || target === backup) {
+    throw new Error('会话资料目录必须彼此独立');
+  }
+  if (!existsSync(resolve(source, 'storage-state.json'))) {
+    throw new Error('新会话资料缺少 storage-state.json');
+  }
+  mkdirSync(dirname(target), { recursive: true });
+  rmSync(backup, { recursive: true, force: true });
+  const hadTarget = existsSync(target);
+  if (hadTarget) renameSync(target, backup);
+  try {
+    renameSync(source, target);
+  } catch (error) {
+    if (hadTarget && existsSync(backup) && !existsSync(target)) renameSync(backup, target);
+    throw error;
+  }
+  rmSync(backup, { recursive: true, force: true });
 }
 
 function loadUrls(configPath: string, config: TestConfig): { inputPath: string; urls: string[] } {
@@ -507,10 +534,9 @@ async function verifyLogin(
 }
 
 async function bootstrapSmsSession(
-  config: TestConfig, profileDir: string, probeUrl: string, outputDir: string, cdpPort: number,
+  config: TestConfig, sessionProfileDir: string, probeUrl: string, cdpPort: number,
 ): Promise<Record<string, unknown>> {
   let result: Record<string, unknown> | undefined;
-  const storedCookies = loadStorageCookies(profileDir);
   const crawler = new PlaywrightCrawler({
     maxConcurrency: 1,
     maxRequestRetries: 0,
@@ -518,12 +544,11 @@ async function bootstrapSmsSession(
     useSessionPool: false,
     requestHandlerTimeoutSecs: 900,
     launchContext: {
-      userDataDir: profileDir,
+      userDataDir: sessionProfileDir,
       launchOptions: launchOptions(config, cdpPort),
     },
     preNavigationHooks: [
       async ({ page }, gotoOptions) => {
-        if (storedCookies.length > 0) await page.context().addCookies(storedCookies);
         gotoOptions.waitUntil = 'domcontentloaded';
         console.log('navigation_action=candidate-b;action=wait_until_domcontentloaded');
         const pendingByType = new Map<string, number>();
@@ -567,6 +592,8 @@ async function bootstrapSmsSession(
       let smsSendConfirmed = false;
       let submitted = false;
       let errorCategory: string | null = null;
+      let errorStage: string | null = null;
+      let loginPageEvidence: Record<string, unknown> | null = null;
       let classification: Classification = {
         observed_post_id: null,
         post_id_matches: false,
@@ -578,6 +605,17 @@ async function bootstrapSmsSession(
       try {
         await page.waitForTimeout(2_000);
         if (page.url().includes('/login-required')) {
+          errorStage = 'inspect_login_page';
+          const htmlDocument = await page.content();
+          const smsLabelCount = await page.getByText('验证码登录', { exact: true }).count()
+            + await page.getByText('手机验证码登录', { exact: true }).count();
+          loginPageEvidence = {
+            document_bytes: Buffer.byteLength(htmlDocument, 'utf8'),
+            input_count: await page.locator('input').count(),
+            form_count: await page.locator('form').count(),
+            sms_label_count: smsLabelCount,
+          };
+          console.log(`sms_login_page_evidence=candidate-b;${JSON.stringify(loginPageEvidence)}`);
           let switched = false;
           for (const label of ['验证码登录', '手机验证码登录']) {
             const options = page.getByText(label, { exact: true });
@@ -594,6 +632,7 @@ async function bootstrapSmsSession(
             if (switched) break;
           }
 
+          errorStage = 'wait_sms_controls';
           const accountInput = await firstVisible(page, 'input[name="account"], input[placeholder*="手机号"]');
           const codeInput = await firstVisible(page, 'input[name="code"], input[placeholder*="验证码"]');
           await accountInput.evaluate((element) => element.setAttribute('autocomplete', 'off'));
@@ -613,6 +652,7 @@ async function bootstrapSmsSession(
             });
           });
           await accountInput.fill(config.account);
+          errorStage = 'request_sms';
           console.log('sms_page_ready=candidate-b');
           smsNetworkEvents.length = 0;
           await clickFirstVisibleText(page, ['获取验证码', '发送验证码']);
@@ -634,19 +674,22 @@ async function bootstrapSmsSession(
           manualVerificationCompleted = verificationResult.manual_verification_completed;
           smsSendConfirmed = verificationResult.sms_send_confirmed;
           if (!smsSendConfirmed) throw new Error('短信发送尚未取得倒计时确认');
+          errorStage = 'read_sms_code';
           let code = await readSmsCode('candidate-b');
           await codeInput.fill(code);
           code = '';
           await clickFirstVisibleText(page, ['登录/注册', '登录']);
           submitted = true;
+          errorStage = 'verify_authenticated_post';
           await page.waitForTimeout(10_000);
         }
         const htmlDocument = await page.content();
         classification = classifyDocument(page.url(), 200, htmlDocument, extractInputPostId(probeUrl));
         if (classification.status === 'success') {
-          const path = storageStatePath(profileDir);
+          const path = storageStatePath(sessionProfileDir);
           await page.context().storageState({ path });
           chmodSync(path, 0o600);
+          errorStage = null;
         }
       } catch (error) {
         errorCategory = error instanceof Error ? error.name : 'unknown_error';
@@ -665,13 +708,14 @@ async function bootstrapSmsSession(
         response_class: classification.response_class,
         status: classification.status,
         error_category: errorCategory,
+        error_stage: errorStage,
+        login_page_evidence: loginPageEvidence,
       };
     },
   });
   console.log('navigation_target=candidate-b;target=login');
   await crawler.run([{ url: buildSmsLoginUrl(probeUrl), uniqueKey: `sms-bootstrap:${urlSha256(probeUrl)}` }]);
   if (!result) throw new Error('候选 B 短信初始化未生成结果');
-  writeFileSync(resolve(outputDir, 'sms-bootstrap-result.json'), `${JSON.stringify(result, null, 2)}\n`, 'utf8');
   return result;
 }
 
@@ -699,10 +743,27 @@ async function main(): Promise<number> {
   process.env['CRAWLEE_STORAGE_DIR'] = resolve(options.outputDir, 'crawlee-storage');
 
   if (options.bootstrapSms) {
+    const bootstrapProfileDir = resolve(options.outputDir, 'browser-profile');
+    prepareIsolatedProfile(bootstrapProfileDir);
+    console.log('bootstrap_profile=candidate-b;mode=fresh_isolated');
     const result = await bootstrapSmsSession(
-      config, profileDir, urls[0]!, options.outputDir, options.manualCaptchaCdpPort,
+      config, bootstrapProfileDir, urls[0]!, options.manualCaptchaCdpPort,
     );
-    return result['logged_in'] === true ? 0 : 5;
+    result['bootstrap_profile_mode'] = 'fresh_isolated';
+    result['session_promoted'] = false;
+    if (result['logged_in'] === true) {
+      try {
+        promoteIsolatedProfile(bootstrapProfileDir, profileDir, resolve(options.outputDir, 'previous-profile'));
+        result['session_promoted'] = true;
+        console.log('session_promoted=candidate-b;value=true');
+      } catch (error) {
+        result['status'] = 'failed';
+        result['error_category'] = error instanceof Error ? error.name : 'unknown_error';
+        result['error_stage'] = 'promote_session_profile';
+      }
+    }
+    writeFileSync(resolve(options.outputDir, 'sms-bootstrap-result.json'), `${JSON.stringify(result, null, 2)}\n`, 'utf8');
+    return result['logged_in'] === true && result['session_promoted'] === true ? 0 : 5;
   }
 
   const environment = {
