@@ -162,3 +162,35 @@ Candidate B 的框架日志记录 `requestsFinished=2000`、`requestsFailed=0` �
 结论边界：本轮没有已登录浏览器，因而没有执行“已认证浏览器状态传给 HTTP”的试验；当前证据也不能单独区分账号认证、网络出口和平台策略各自的影响。下一步需先在受控浏览器中形成真实可复访的已认证帖子会话，再以同一条样本对比浏览器复访和只导入最小认证状态的 HTTP 复访；会话值仅留在被忽略的临时文件，不进入日志、结果报告或 Git。
 
 证据目录：`artifacts/poc/results/candidate-a/browser-http-session-probe-20260812T071759+0800/` 与 `artifacts/poc/results/candidate-a/browser-http-session-probe-known-url-20260812T071923+0800/`。
+
+## 10. Candidate A 认证纯 HTTP 首版
+
+2026-08-12 在当前开发电脑完成独立认证实验。当前日常 Chrome 页面已确认登录可见，但该 Chrome 未开启 CDP，项目没有直接读取、复制或记录其 Cookie；本轮改由 Scrapling `AsyncDynamicSession` 使用项目既有测试账号建立项目自有认证状态。密码登录成功、未出现二次验证，单帖取得 `post/success`，随后显式导出只保存在 `artifacts/poc/` 的 Playwright storage state。
+
+认证状态再由 `session_handoff.py` 过滤为目标域、未过期 Cookie，并交给 Scrapling `Spider + FetcherSession + Request/Response`。框架化最终复跑如下：
+
+| 指标 | 结果 |
+|---|---:|
+| 固定样本 | 3 |
+| 并发 | 1 |
+| 有效帖子证明 | 3/3（100%） |
+| 最终分类 | 3 `post` |
+| HTTP 状态 | 3 `200` |
+| 总时长 | 1.169秒 |
+| 有效速度 | 约2.57 URL/秒 |
+| 请求放大率 | 1.0 |
+| 首次控制 | 无 |
+| 框架状态码阻断 | 0 |
+| 项目内容阻断 | 0 |
+| 源/目标有效/过期/非目标域 Cookie 数 | 39 / 32 / 2 / 5 |
+
+已确认事实：
+
+1. 在本机当前账号、网络和测试时点，认证状态能够从 Scrapling 浏览器 Session 交接到 `FetcherSession`，三条主文档无需逐 URL 启动浏览器即可取得有效帖子内容。
+2. 匿名500条全部登录与认证3条全部成功共同说明：`FetcherSession` 或Chrome模拟本身不是已确认失败点，认证条件对本轮主文档结果有决定性差异。
+3. 采集链中可由框架完成的 Session、TLS/请求头、Cookie、Spider调度、Request/Response、CrawlStats和JSONL导出已使用 Scrapling；项目只保留帖子真实性、HTTP 200控制页细分、脱敏诊断、摘要与校验。
+4. 本轮没有风控响应，因此没有具体风控原因可归因；探针已能在后续出现 `login/captcha/challenge/rate_limited/empty` 时给出响应层分类，但不能据此证明平台内部评分规则。
+
+结论边界：3条、约1.17秒不构成持续吞吐证据，不外推500条、十万条/夜、评论接口动态参数、CentOS或长期会话有效性。下一步先设计同一认证HTTP架构的固定中等样本和会话寿命阶段门，通过后才递增负载/并发。
+
+证据目录：认证初始化 `artifacts/poc/results/candidate-a/auth-bootstrap-20260812-130809/`；认证HTTP框架化复跑 `artifacts/poc/results/candidate-a/auth-http-framework-20260812-131028/`。后者5/5校验一致，`SHA256SUMS` 文件 SHA-256 为 `7fb8dda314b753af0366362dbcf590e456e36f062878aa3ad8152ba864627e20`。

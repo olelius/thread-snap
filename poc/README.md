@@ -8,7 +8,7 @@
 - `candidate-a/`：Scrapling 的 HTTP 优先、动态页面回退冒烟；
 - `candidate-b/`：Crawlee CheerioCrawler 的 HTTP 优先、PlaywrightCrawler 回退冒烟。
 
-当前代码只覆盖阶段 1 的最小访问冒烟和统一结果验证，不是正式业务采集器，也不代表第一版功能完成。
+当前代码覆盖访问冒烟、浏览器认证、匿名/认证直接 HTTP 预筛和统一结果验证，不是正式业务采集器，也不代表第一版功能完成。
 
 ## Python 环境
 
@@ -122,6 +122,24 @@ Remove-Item Env:THREADSNAP_PLATFORM_PASSWORD
 ```
 
 候选配置目录彼此隔离，测试时按 A、B 顺序运行，避免同一账号的并发登录干扰。
+
+## Candidate A 认证直接 HTTP 首版
+
+Candidate A 浏览器认证成功后，`throughput.py` 会在候选隔离 profile 中显式写出
+`storage-state.json`。纯 HTTP 探针只接受1至3条同域样本，固定并发1、每URL一次
+请求，不启动浏览器或切换兜底：
+
+```powershell
+.\.vevn\Scripts\python.exe .\poc\candidate-a\src\authenticated_http_probe.py `
+  --input .\artifacts\poc\inputs\auth-http-probe-urls.txt `
+  --storage-state .\artifacts\poc\inputs\profiles\candidate-a\storage-state.json `
+  --output-dir .\artifacts\poc\results\candidate-a\auth-http-001 `
+  --limit 3
+```
+
+该入口使用 Scrapling `Spider + FetcherSession + Request/Response`、框架
+`CrawlStats` 与 `ItemList.to_jsonl()`；项目逻辑只补充帖子真实性、HTTP 200 控制页
+分类、脱敏事件、摘要和校验清单。Cookie 名称和值不会写入输出或日志。
 
 ## Linux 2000 条认证吞吐运行器
 

@@ -1026,6 +1026,12 @@ async def main_async(args: argparse.Namespace) -> int:
                 )
             return 4
 
+        # 认证成功后显式导出 Playwright 状态，供后续纯 HTTP 小样本验证使用。
+        # 文件只保存在被 Git 忽略的 PoC profile 目录，Cookie 内容不进入日志或结果。
+        storage_state_path = profile_dir / "storage-state.json"
+        await session.context.storage_state(path=str(storage_state_path))
+        storage_state_path.chmod(0o600)
+
         queue: asyncio.Queue[str] = asyncio.Queue()
         for url in pending:
             queue.put_nowait(url)
