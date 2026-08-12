@@ -39,8 +39,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=3)
     parser.add_argument("--timeout-seconds", type=int, default=30)
     args = parser.parse_args()
-    if not 1 <= args.limit <= 500:
-        parser.error("认证 HTTP 探针的 limit 必须在 1 到 500 之间")
+    if not 1 <= args.limit <= 2000:
+        parser.error("认证 HTTP 探针的 limit 必须在 1 到 2000 之间")
     if args.timeout_seconds < 1:
         parser.error("timeout-seconds 必须为正整数")
     return args
@@ -90,6 +90,12 @@ def infer_risk(summary: dict, session_metadata: dict) -> dict:
     }
 
 
+def was_stopped_by_policy(framework_paused: bool, pause_reason: str | None) -> bool:
+    """兼容框架快速收口时暂停标志尚未置位的情况。"""
+
+    return framework_paused or pause_reason is not None
+
+
 def main() -> int:
     """执行最多三条、并发为一、无自动重试的认证 HTTP 验证。"""
 
@@ -121,7 +127,8 @@ def main() -> int:
     duration_ms = round((time.perf_counter() - started_perf) * 1000)
 
     missing = [url for url in urls if url not in spider.results_by_url]
-    if missing and not crawl_result.paused:
+    stopped_by_policy = was_stopped_by_policy(crawl_result.paused, spider.pause_reason)
+    if missing and not stopped_by_policy:
         raise RuntimeError(f"Spider 缺少 {len(missing)} 条结果")
     completed_urls = [url for url in urls if url in spider.results_by_url]
     results = [spider.results_by_url[url] for url in completed_urls]
@@ -142,7 +149,8 @@ def main() -> int:
         access_mode="authenticated-direct-http",
         requested_count=len(urls),
     )
-    summary["crawl_paused"] = crawl_result.paused
+    summary["crawl_paused"] = stopped_by_policy
+    summary["framework_paused"] = crawl_result.paused
     summary["remaining_count"] = len(missing)
     summary["stop_policy"] = "pause_after_first_control_or_empty"
     summary["stop_reason"] = spider.pause_reason
