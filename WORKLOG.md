@@ -15,6 +15,28 @@
 
 ---
 
+## 2026-08-12 — 完成 Candidate A 帖子内容与一级评论 HTTP API 提取测试
+
+**总目标**：在不逐条打开帖子页面、不重复详情请求的前提下，使用现有 Scrapling 登录状态和直接 HTTP API 提取第一版需要的帖子、媒体 URL、状态及最多十条一级评论，同时验证字段完整性与有效速度。
+**状态**：✅ 提取器、字段映射、按需评论与500条并发8实测完成；❌ 原固定输入中空详情、正文真实为空、评论计数差异和未确认状态语义导致严格完整率未达100%
+
+**干到哪了**：
+- [x] 新增 `poc/candidate-a/src/content_extraction.py`：登录与storage state继续复用项目既有Scrapling流程；批量阶段只注册 `FetcherSession`，由Spider调度详情与评论API、维护Cookie/TLS/请求头、输出CrawlStats和JSONL，不读取帖子DOM、不启动浏览器。
+- [x] 从既有Scrapling浏览器缓存确认真实请求路径为 `/motor/pc/ugc/detail/common` 和 `/motor/pc/ugc/detail/comment_list`；对同一已取到响应的样本做快速对照后确认当前HTTP接口省略 `msToken/a_bogus` 仍返回完整JSON，详情约301ms、评论约279ms，因此首版不生成动态签名。
+- [x] 请求策略固定为单请求优先：每帖先且只请求一次详情；`comment_count=0` 直接完成；大于0才请求 `count=10&cursor=0` 的评论首批；首批不足10且 `has_more=true` 才继续游标，空详情直接1请求结束。可见状态复用详情响应，不额外请求。
+- [x] 已映射帖子URL、平台帖子ID、标题、作者、发布时间、正文、图片URL、视频URL、评论数、点赞数、圈子、`visible/unknown`、原始状态，以及一级评论ID、作者、内容、时间和点赞；评论按平台顺序最多10条，不采集楼中楼。
+- [x] 单帖真实闭环取得578字正文、3图和1条一级评论，2请求、649ms、全部字段完整。20条并发4为20/20完整、2.173秒、9.20条完整URL/秒，其中5条真实零评论只发1请求。
+- [x] 最终代码回归100条（原清单偏移620、并发8）为86/100严格完整、5.377秒、15.99条完整URL/秒；12条详情无数据、2条可见纯图片帖正文文本为空。中文字段改为从响应原始字节解析JSON后未再出现编码失真。
+- [x] 最终500条（原清单偏移720、并发8）形成500/500唯一终态：19.381秒、处理25.80 URL/秒、严格完整372条、完整速度19.19 URL/秒、703次HTTP请求、放大率1.406、297条只发1请求；全部详情和评论请求均HTTP 200，没有页面请求、浏览器、登录、验证码、限流或动态签名事件。
+- [x] 最终500条的128个不完整终态已分类：122条API `status=0` 但详情数据为空；3条有标题和图片但正文文本为空；1条评论API总数为2但只返回1条且无下一页；2条 `operation_status=2` 的语义未验证，按约束保留 `unknown`。83条详情评论计数与评论API当前总数不一致，提取完整性以评论API的 `total_count/cursor/has_more` 单独记录，不静默混同。
+- [x] 7项内容提取单测、语法编译通过；最终结果 `SHA256SUMS` 文件SHA-256为 `5e09604a3ba3831f09bfc4f16afcd88d8ffc96d5a12559c78ff3e10f605b869f`。
+
+**下一步**：先用当前结果形成“详情可用且正文非空”的事前功能样本，并人工确认 `operation_status=2` 的业务含义、纯图片帖正文口径与评论计数差异；随后用同一提取器在目标CentOS对新的固定有效样本做三轮字段完整率与速度验证。圈子列表发现仍是独立未决项。
+**边界**：19.19条完整URL/秒已超过2000条/小时与十万条/8小时的纯速度门槛，但本轮严格完整率只有74.4%，不能据此宣告第一版完工或正式技术栈选型。评论、标题、作者和圈子字段的真实空值保留为空；正文为空、详情不存在和状态语义未知不按成功掩盖。接口当前无需动态参数是本时点实测，不承诺长期不变。
+**关联**：实现 `poc/candidate-a/src/content_extraction.py`；测试 `poc/shared/tests/test_content_extraction.py`；单帖 `artifacts/poc/results/candidate-a/content-functional-20260812-02/`；最终回归 `artifacts/poc/results/candidate-a/content-regression-100-offset620-c8-20260812/`；最终500条 `artifacts/poc/results/candidate-a/content-final-500-offset720-c8-20260812/`。
+
+---
+
 ## 2026-08-12 — 完成 Candidate B 认证HTTP至2000条验证
 
 **总目标**：让 Candidate B 使用 Crawlee/Playwright 建立认证状态、交接给 `CheerioCrawler + SessionPool` 纯HTTP采集，并按与 Candidate A 相同的3条门禁、并发1、一小时窗口和最多2次有界恢复执行至2000条计划分母。
