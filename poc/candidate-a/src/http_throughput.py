@@ -16,8 +16,10 @@ from pathlib import Path
 from typing import Any, AsyncGenerator
 
 import scrapling
+from curl_cffi.requests import Cookies
 from scrapling.fetchers import FetcherSession
 from scrapling.spiders import Request, Response, SessionManager, Spider
+from scrapling.spiders.result import ItemList
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "poc" / "shared"))
@@ -109,13 +111,21 @@ class DirectHttpSpider(Spider):
     logging_level = logging.WARNING
     autothrottle_enabled = False
 
-    def __init__(self, urls: list[str], concurrency: int, timeout_seconds: int) -> None:
+    def __init__(
+        self,
+        urls: list[str],
+        concurrency: int,
+        timeout_seconds: int,
+        request_cookies: Cookies | None = None,
+    ) -> None:
         self.urls = urls
         self.concurrent_requests = concurrency
         self.concurrent_requests_per_domain = concurrency
         self.timeout_seconds = timeout_seconds
+        self.request_cookies = request_cookies
         self.results_by_url: dict[str, dict[str, Any]] = {}
         self.events_by_url: dict[str, dict[str, Any]] = {}
+        self.block_evidence_by_url: dict[str, dict[str, bool]] = {}
         self.completion_offsets_ms: dict[str, int] = {}
         self.run_started_perf = time.perf_counter()
         super().__init__()
@@ -141,15 +151,37 @@ class DirectHttpSpider(Spider):
         """为每个 URL 生成且只生成一个直接 HTTP 请求。"""
 
         for url in self.urls:
+            request_kwargs: dict[str, Any] = {}
+            if self.request_cookies is not None:
+                request_kwargs["cookies"] = self.request_cookies
             yield Request(
                 url,
                 sid="http",
                 meta={"input_url": url, "started_at": utc_now(), "started_perf": time.perf_counter()},
+                **request_kwargs,
             )
 
     async def is_blocked(self, response: Response) -> bool:
-        """禁用框架重试；所有响应均交给项目统一分类器。"""
+        """记录框架与项目阻断证据，同时保留终态响应供统一分类。
 
+        Spider 会丢弃超过重试次数的 blocked 响应，无法生成项目要求的终态记录。
+        因此首版探针调用框架检测但返回 False，不自动放大请求。
+        """
+
+        framework_blocked = await super().is_blocked(response)
+        request = response.request
+        if request is not None:
+            url = str(request.meta["input_url"])
+            classification = classify_document(
+                response.url,
+                int(response.status),
+                response_document(response),
+                extract_input_post_id(url),
+            )
+            self.block_evidence_by_url[url] = {
+                "framework_status_blocked": framework_blocked,
+                "project_content_blocked": classification["response_class"] in CONTROL_OR_EMPTY,
+            }
         return False
 
     async def parse(self, response: Response) -> AsyncGenerator[dict[str, Any] | None, None]:
@@ -180,6 +212,10 @@ class DirectHttpSpider(Spider):
             "duration_ms": duration_ms,
             "http_status": int(response.status),
             "error_category": None if classification["status"] == "success" else classification["response_class"],
+            "block_detection": self.block_evidence_by_url.get(
+                url,
+                {"framework_status_blocked": False, "project_content_blocked": False},
+            ),
         }
         event = {
             "schema_version": "1.0",
@@ -220,6 +256,7 @@ def build_summary(
     completion_offsets_ms: dict[str, int],
     duration_ms: int,
     concurrency: int,
+    access_mode: str = "anonymous-direct-http",
 ) -> dict[str, Any]:
     """生成只基于有效结果的风控与吞吐摘要。"""
 
@@ -233,7 +270,7 @@ def build_summary(
     return {
         "schema_version": "1.0",
         "candidate": "candidate-a",
-        "access_mode": "anonymous-direct-http",
+        "access_mode": access_mode,
         "direct_http_only": channel_counts == {"http": len(results)},
         "concurrency": concurrency,
         "input_count": len(results),
@@ -313,7 +350,7 @@ def main() -> int:
     started_at = utc_now()
     started_perf = time.perf_counter()
     spider = DirectHttpSpider(urls, args.concurrency, args.timeout_seconds)
-    spider.start()
+    crawl_result = spider.start()
     duration_ms = round((time.perf_counter() - started_perf) * 1000)
 
     missing = [url for url in urls if url not in spider.results_by_url]
@@ -349,8 +386,10 @@ def main() -> int:
         "input_file_sha256": hashlib.sha256((args.output_dir / "input-urls.txt").read_bytes()).hexdigest(),
         "concurrency": args.concurrency,
         "browser_started": False,
+        "framework_crawl_stats": crawl_result.stats.to_dict(),
     }
-    write_jsonl(args.output_dir / "url-results.jsonl", results)
+    # on_error 没有 yield 通道；用框架 ItemList 导出已补齐并按输入排序的终态结果。
+    ItemList(results).to_jsonl(args.output_dir / "url-results.jsonl")
     write_jsonl(args.output_dir / "request-events.jsonl", events)
     write_json(args.output_dir / "summary.json", summary)
     write_json(args.output_dir / "environment.json", environment)

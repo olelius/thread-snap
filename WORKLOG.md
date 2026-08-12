@@ -15,6 +15,25 @@
 
 ---
 
+## 2026-08-12 — 完成 Candidate A 认证 HTTP 首版三样本验证
+
+**总目标**：从已认证浏览器状态建立 Scrapling 纯 HTTP Session，先以最多3条、并发1验证帖子有效内容与首个风控形态，并把可由框架承担的采集职责收敛到框架。
+**状态**：✅ 本机认证 HTTP 首版通过；下一阶段仍需独立制定中等负载与会话寿命验证
+
+**干到哪了**：
+- [x] 当前日常 Chrome 的帖子页面已确认登录可见，但该浏览器未开启 CDP，项目没有直接读取或复制其 Cookie；本轮由 Scrapling `AsyncDynamicSession` 使用项目既有测试账号建立独立认证状态，密码登录成功、无二次验证，单帖取得 `post/success`，并显式导出被 Git 忽略的 `storage-state.json`。
+- [x] 新增 `session_handoff.py`：只把 Playwright storage state 中适用于目标域、未过期的 Cookie 在内存中转为 `curl_cffi` Cookie 容器；结果只记录数量，不输出 Cookie 名称和值。
+- [x] 新增 `authenticated_http_probe.py`：固定使用 Scrapling `Spider + FetcherSession + Request/Response`，最多3条、并发1、每 URL 一次请求；Spider 调用框架状态码阻断检测并保留项目 HTTP 200 登录/空文档/挑战内容分类，终态不自动重试。
+- [x] 框架可承担的抓取职责已交给 Scrapling：Session 生命周期、TLS/请求头模拟、Cookie 请求、Spider 调度、Request/Response、CrawlStats 和 `ItemList.to_jsonl()` 导出；项目仅保留 URL/帖子 ID 契约、正文真实性、细分风控分类、脱敏事件、摘要与校验清单。
+- [x] 认证 HTTP 框架化复跑结果为3/3 `post/success`，总时长1.169秒、有效速度约2.57 URL/秒、请求放大率1.0；39个源 Cookie 中32个目标域有效、2个已过期、5个非目标域；三条均为HTTP 200，框架状态码阻断与项目内容阻断均为否，未出现登录、验证码、挑战或限流。
+- [x] 结果目录5/5校验一致，`SHA256SUMS` 文件 SHA-256 为 `7fb8dda314b753af0366362dbcf590e456e36f062878aa3ad8152ba864627e20`；项目 `.vevn` 38项测试、Python `compileall` 均通过。
+
+**下一步**：继续使用同一认证 HTTP 架构，先制定独立的会话寿命与固定中等样本阶段门；只有有效完成率保持100%才递增负载/并发。评论接口、动态参数和500条持续负载不与本次3条结果拼接。
+**边界**：3条、约1.17秒只证明认证主文档的小样本可行性，不能外推500条、十万条/夜、评论接口或CentOS；本轮未直接导出当前日常Chrome会话，也未证明平台内部具体风控评分原因。
+**关联**：认证初始化 `artifacts/poc/results/candidate-a/auth-bootstrap-20260812-130809/`；框架化HTTP结果 `artifacts/poc/results/candidate-a/auth-http-framework-20260812-131028/`。
+
+---
+
 ## 2026-08-12 — 完成新浏览器与匿名 HTTP 会话对照
 
 **总目标**：解释500条 `login` 是否来自未处理指纹，并用新浏览器、Chrome模拟HTTP直连及首页匿名Cookie预热对同一帖子做分层验证。
