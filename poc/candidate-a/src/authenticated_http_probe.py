@@ -37,10 +37,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--storage-state", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--limit", type=int, default=3)
+    parser.add_argument("--offset", type=int, default=0)
     parser.add_argument("--timeout-seconds", type=int, default=30)
     args = parser.parse_args()
     if not 1 <= args.limit <= 2000:
         parser.error("认证 HTTP 探针的 limit 必须在 1 到 2000 之间")
+    if args.offset < 0:
+        parser.error("offset 不能为负数")
     if args.timeout_seconds < 1:
         parser.error("timeout-seconds 必须为正整数")
     return args
@@ -101,9 +104,9 @@ def main() -> int:
 
     args = parse_args()
     all_urls = [line.strip() for line in args.input.read_text(encoding="utf-8-sig").splitlines() if line.strip()]
-    if args.limit > len(all_urls):
-        raise ValueError("limit 超出输入清单范围")
-    urls = all_urls[: args.limit]
+    if args.offset + args.limit > len(all_urls):
+        raise ValueError("offset + limit 超出输入清单范围")
+    urls = all_urls[args.offset : args.offset + args.limit]
     for url in urls:
         extract_input_post_id(url)
     hosts = {(url.split("/", 3)[2]).lower() for url in urls}
@@ -168,6 +171,8 @@ def main() -> int:
         "ended_at": utc_now(),
         "input_count": len(urls),
         "input_file_sha256": hashlib.sha256((args.output_dir / "input-urls.txt").read_bytes()).hexdigest(),
+        "source_input_file_sha256": hashlib.sha256(args.input.read_bytes()).hexdigest(),
+        "input_offset": args.offset,
         "concurrency": 1,
         "browser_started": False,
         "session_cookie_metadata": session_metadata,

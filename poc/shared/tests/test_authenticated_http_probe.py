@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -95,6 +96,30 @@ class StopPolicyTests(unittest.TestCase):
     def test_spider_pause_reason_is_a_valid_stop_even_if_framework_flag_lags(self) -> None:
         self.assertTrue(MODULE.was_stopped_by_policy(False, "login"))
         self.assertFalse(MODULE.was_stopped_by_policy(False, None))
+
+
+class ArgumentTests(unittest.TestCase):
+    def test_accepts_resume_offset_within_2000_limit(self) -> None:
+        with patch.object(
+            sys,
+            "argv",
+            [
+                "authenticated_http_probe.py",
+                "--input",
+                "input.txt",
+                "--storage-state",
+                "state.json",
+                "--output-dir",
+                "output",
+                "--offset",
+                "708",
+                "--limit",
+                "1292",
+            ],
+        ):
+            args = MODULE.parse_args()
+        self.assertEqual(708, args.offset)
+        self.assertEqual(1292, args.limit)
 
 
 if __name__ == "__main__":

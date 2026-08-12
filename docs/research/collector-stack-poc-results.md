@@ -252,3 +252,11 @@ Candidate B 的框架日志记录 `requestsFinished=2000`、`requestsFailed=0` �
 本轮没有刷新认证状态后继续剩余1292条，因为这会把两个会话生命周期拼成一个轮次，破坏持续会话结论。下一步先以小样本因果矩阵分别控制账号/会话、profile、HTTP客户端身份和请求间隔；找到可持续条件后才从0重新开始新的2000条测试。
 
 证据目录：`artifacts/poc/results/candidate-a/auth-http-2000-20260812-133930/`；核心结果与 `control-analysis.json` 6/6校验一致，`SHA256SUMS` 文件SHA-256为 `bab8b1f9f246e0f109b3b0fbee46d643c467287307917549a8ce0e14a806e521`。
+
+## 13. 未完成段冷却恢复探测
+
+2000条主轮次暂停一段时间后，保持原认证storage state、原profile、原HTTP配置和并发1，先对本轮曾成功的已知有效样本执行1次恢复阶段门。结果仍为HTTP 200、正文0字节、`empty/failed`，约0.228秒即暂停；31个目标域Cookie仍处于未过期状态，另有3个已过期，但Cookie存在没有带来内容恢复。
+
+因此本次等待没有解除项目Session/profile/客户端身份组合的静默控制，剩余1292条未发送。代码已支持 `--offset 708 --limit 1292`保留原清单位置和来源SHA-256；只有重新认证并通过小样本后才使用该入口，且输出必须作为新Session恢复段独立报告，不能与旧Session的708个终态合并为2000条通过。
+
+证据目录：`artifacts/poc/results/candidate-a/cooldown-session-probe-20260812-140937/`；5/5校验一致，`SHA256SUMS` 文件SHA-256为 `7528b47f999ed1f44bfe5513cdc36680170d3188aeca7e128dfe3b1ddba0a44d`。
