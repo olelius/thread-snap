@@ -7,6 +7,7 @@ import {
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import { createInterface } from 'node:readline/promises';
+import { fileURLToPath } from 'node:url';
 import { PlaywrightCrawler } from 'crawlee';
 import type { Cookie, Page, Response } from 'playwright';
 import { classifyDocument, CONTROL_CLASSES, extractInputPostId, urlSha256, type Classification } from './contract.js';
@@ -22,7 +23,7 @@ interface CandidateConfig {
   profile_dir?: string;
 }
 
-interface TestConfig {
+export interface TestConfig {
   account: string;
   password: string;
   input_file: string;
@@ -178,7 +179,7 @@ function positiveInt(value: unknown, name: string, min = 1, max = Number.MAX_SAF
   return value as number;
 }
 
-function loadConfig(path: string): TestConfig {
+export function loadConfig(path: string): TestConfig {
   const value = JSON.parse(readFileSync(path, 'utf8')) as Partial<TestConfig>;
   if (!value || typeof value !== 'object') throw new Error('配置根节点必须是对象');
   if (typeof value.account !== 'string' || !value.account) throw new Error('account 必须是非空字符串');
@@ -195,7 +196,7 @@ function relativeToConfig(configPath: string, value: string): string {
   return isAbsolute(value) ? value : resolve(dirname(configPath), value);
 }
 
-function storageStatePath(profileDir: string): string {
+export function storageStatePath(profileDir: string): string {
   return resolve(profileDir, 'storage-state.json');
 }
 
@@ -218,7 +219,7 @@ function loadStorageCookies(profileDir: string): StoredCookies {
   return state.cookies as StoredCookies;
 }
 
-function prepareIsolatedProfile(profileDir: string): void {
+export function prepareIsolatedProfile(profileDir: string): void {
   rmSync(profileDir, { recursive: true, force: true });
   mkdirSync(profileDir, { recursive: true, mode: 0o700 });
 }
@@ -457,7 +458,7 @@ async function collectLoginDiagnostic(
   return diagnostic;
 }
 
-async function verifyLogin(
+export async function verifyLogin(
   config: TestConfig, profileDir: string, probeUrl: string, outputDir: string,
 ): Promise<Record<string, unknown>> {
   let result: Record<string, unknown> | undefined;
@@ -516,10 +517,16 @@ async function verifyLogin(
         writeFileSync(resolve(outputDir, 'login-diagnostic.json'), `${JSON.stringify(diagnostic, null, 2)}\n`, 'utf8');
       }
       const verificationRequired = diagnostic['verification_visible'] === true;
+      const loggedIn = classification.status === 'success' && !verificationRequired;
+      if (loggedIn) {
+        const path = storageStatePath(profileDir);
+        await page.context().storageState({ path });
+        chmodSync(path, 0o600);
+      }
       result = {
         schema_version: '1.0', candidate: 'candidate-b', submitted,
         password_login_selected: passwordLoginSelected,
-        logged_in: classification.status === 'success' && !verificationRequired,
+        logged_in: loggedIn,
         verification_required: verificationRequired,
         response_class: classification.response_class,
         status: classification.status,
@@ -527,7 +534,8 @@ async function verifyLogin(
       };
     },
   });
-  await crawler.run([{ url: probeUrl, uniqueKey: `login:${urlSha256(probeUrl)}` }]);
+  // 同一进程可能连续重建多个隔离会话；profile 纳入键，避免 Crawlee 队列把后续登录误判为已处理。
+  await crawler.run([{ url: probeUrl, uniqueKey: `login:${urlSha256(probeUrl)}:${urlSha256(profileDir)}` }]);
   if (!result) throw new Error('候选 B 登录运行未生成结果');
   writeFileSync(resolve(outputDir, 'login-result.json'), `${JSON.stringify(result, null, 2)}\n`, 'utf8');
   return result;
@@ -968,6 +976,8 @@ async function main(): Promise<number> {
   return 0;
 }
 
-const exitCode = await main();
-process.exitCode = exitCode;
-process.stdout.write(`runner_complete=candidate-b;exit_code=${exitCode}\n`, () => process.exit(exitCode));
+if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+  const exitCode = await main();
+  process.exitCode = exitCode;
+  process.stdout.write(`runner_complete=candidate-b;exit_code=${exitCode}\n`, () => process.exit(exitCode));
+}
