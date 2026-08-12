@@ -15,6 +15,26 @@
 
 ---
 
+## 2026-08-12 — 完成 Candidate B 认证HTTP至2000条验证
+
+**总目标**：让 Candidate B 使用 Crawlee/Playwright 建立认证状态、交接给 `CheerioCrawler + SessionPool` 纯HTTP采集，并按与 Candidate A 相同的3条门禁、并发1、一小时窗口和最多2次有界恢复执行至2000条计划分母。
+**状态**：✅ 3条与500条轮次完成；✅ 2000条计划轮执行并真实触发两次恢复；❌ 第1337条再次转空并耗尽恢复预算，剩余663条未请求
+
+**干到哪了**：
+- [x] 新增 Candidate B 有界恢复入口：PlaywrightCrawler只负责全新隔离profile登录并导出storage state；目标域未过期Cookie交给Crawlee `CheerioCrawler + SessionPool + persistCookiesPerSession`；`empty/login`首控暂停后重新登录、3条门禁并从触发URL重试，验证码、挑战、限流、登录失败、门禁失败和预算耗尽均停止。
+- [x] 3条真实门禁为3/3 `post/success`；总时长18.102秒，6个采集HTTP请求包含3个门禁和3个批量请求，证明Candidate B认证Cookie可交接给直接HTTP，不需要逐URL打开浏览器。
+- [x] 500条为500/500终态：452条有效、48条HTTP 404、无登录/空文档/验证码/挑战/限流；181.711秒、503个采集HTTP请求、有效速度2.49 URL/秒、请求放大率1.006。正确性门因48条404失败。
+- [x] 2000条实现检查中发现平台静默控制响应标记为 `text/plain`，Crawlee默认在正文分类前拒绝该MIME；已使用框架 `additionalMimeTypes` 接收正文，并修正同进程连续登录的请求唯一键。修正后不再把控制页误记为网络错误。
+- [x] 同口径2000条轮次：Session 1在原第626条转为HTTP 200空文档，Session 2恢复该触发URL；Session 2在原第1300条再次转空，Session 3再次恢复；Session 3仅再完成38个终态便在原第1337条转空。最终1337个唯一终态、1092条有效、244条HTTP 404、1条未恢复空文档，剩余663条；两次刷新与两次触发URL恢复均成功，但达到2次预算后停止。
+- [x] 该轮总时长488.028秒、1348个采集HTTP请求、按有效结果计算约2.24 URL/秒；`SHA256SUMS`文件SHA-256为 `8f4e2412e6b92563051697bf08b58c56cb9dc5dab83ba012a31ab1a5e5714113`。随后立即尝试上限5次的容量轮，初始Playwright登录即得到空文档且未提交表单，0条进入采集；这证明当前时点连会话初始化也受控，不能用无限重登录承诺2000条完成。
+- [x] 项目 `.vevn` 47项Python测试、Python编译、`pip check`、Candidate B类型检查、4个测试文件13项测试和 `git diff --check` 通过；3条、500条和1337个已形成终态的统一结果契约均为0错误，四个结论目录校验清单一致，跟踪文件与公开结果凭证值扫描通过。恢复状态机覆盖触发URL重试、不可恢复验证码和预算耗尽。
+
+**下一步**：不继续立即重复登录。先基于新的当前可访问清单做独立Session的速率/间隔矩阵，并加入登录阶段冷却观察；只有同一预注册策略能在不同时间重复完成2000/2000有效终态，才进入CentOS三轮。Candidate A当前证据优于B，但两者都未通过100%正确性门，也都低于十万条/8小时所需约3.47个有效URL/秒。
+**边界**：本任务已经以2000条为计划分母完成测试，不等于产生2000个终态。最多2次恢复是预注册停止规则；剩余663条未请求是方案B失败证据，不能用事后增加无限Session或拼接新轮次改写。`text/plain`是平台响应MIME与Crawlee默认接收范围的适配问题；修复后观察到的HTTP 200空文档才是平台控制证据。
+**关联**：门禁 `artifacts/poc/results/candidate-b/auth-http-gate-3-20260812-194725/`；500条 `artifacts/poc/results/candidate-b/auth-http-500-20260812-194757/`；最终2000计划轮 `artifacts/poc/results/candidate-b/bounded-recovery-2000-final-20260812-200550/`；扩展容量轮 `artifacts/poc/results/candidate-b/bounded-recovery-2000-max5-20260812-201419/`。
+
+---
+
 ## 2026-08-12 — 完成有界Session恢复的2000条完整验证
 
 **总目标**：使用全新Scrapling认证Session、固定2000条清单、并发1、一小时窗口和最多2次自动恢复，验证 `empty/login` 后重新登录、门禁、触发URL重试和继续队列能否形成完整逐URL终态。

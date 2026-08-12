@@ -8,6 +8,7 @@
     "login": "tsx src/login.ts",
     "smoke": "tsx src/smoke.ts",
     "http-throughput": "tsx src/http-throughput.ts",
+    "bounded-session-recovery": "tsx src/bounded-session-recovery.ts",
     "throughput": "tsx src/throughput.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit"
