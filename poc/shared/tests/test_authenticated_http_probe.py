@@ -73,6 +73,23 @@ class RiskAnalysisTests(unittest.TestCase):
         analysis = MODULE.infer_risk(summary, metadata)
         self.assertEqual("session_rejected_or_incomplete", analysis["category"])
 
+    def test_all_failures_as_404_are_not_reported_as_risk_control(self) -> None:
+        summary = {
+            "success_count": 399,
+            "result_count": 500,
+            "response_class_counts": {"post": 399, "error": 101},
+            "http_status_counts": {"200": 399, "404": 101},
+        }
+        metadata = {
+            "source_cookie_count": 4,
+            "accepted_cookie_count": 3,
+            "expired_cookie_count": 0,
+            "unrelated_cookie_count": 1,
+            "malformed_cookie_count": 0,
+        }
+        analysis = MODULE.infer_risk(summary, metadata)
+        self.assertEqual("input_not_found", analysis["category"])
+
 
 if __name__ == "__main__":
     unittest.main()

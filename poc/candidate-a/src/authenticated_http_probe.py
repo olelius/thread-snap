@@ -39,8 +39,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=3)
     parser.add_argument("--timeout-seconds", type=int, default=30)
     args = parser.parse_args()
-    if not 1 <= args.limit <= 3:
-        parser.error("首版认证 HTTP 探针的 limit 必须在 1 到 3 之间")
+    if not 1 <= args.limit <= 500:
+        parser.error("认证 HTTP 探针的 limit 必须在 1 到 500 之间")
     if args.timeout_seconds < 1:
         parser.error("timeout-seconds 必须为正整数")
     return args
@@ -50,9 +50,14 @@ def infer_risk(summary: dict, session_metadata: dict) -> dict:
     """根据响应分类生成不含凭证的首轮原因判断。"""
 
     counts = summary["response_class_counts"]
+    http_status_counts = summary.get("http_status_counts", {})
+    failure_count = summary["result_count"] - summary["success_count"]
     if summary["success_count"] == summary["result_count"]:
         category = "authenticated_http_viable_for_small_sample"
         evidence = "全部样本通过帖子 ID 与正文证据校验"
+    elif failure_count > 0 and int(http_status_counts.get("404", 0)) == failure_count:
+        category = "input_not_found"
+        evidence = "全部失败项均为服务端 HTTP 404；未观察到登录、验证码、挑战、限流或空文档"
     elif counts.get("login", 0):
         category = "session_rejected_or_incomplete"
         evidence = "服务端仍返回登录态页面；需核对 Cookie 完整性、域、有效期及会话绑定"
@@ -105,15 +110,22 @@ def main() -> int:
 
     started_at = utc_now()
     started_perf = time.perf_counter()
-    spider = DirectHttpSpider(urls, concurrency=1, timeout_seconds=args.timeout_seconds, request_cookies=cookies)
+    spider = DirectHttpSpider(
+        urls,
+        concurrency=1,
+        timeout_seconds=args.timeout_seconds,
+        request_cookies=cookies,
+        pause_on_control=True,
+    )
     crawl_result = spider.start()
     duration_ms = round((time.perf_counter() - started_perf) * 1000)
 
     missing = [url for url in urls if url not in spider.results_by_url]
-    if missing:
+    if missing and not crawl_result.paused:
         raise RuntimeError(f"Spider 缺少 {len(missing)} 条结果")
-    results = [spider.results_by_url[url] for url in urls]
-    events = [spider.events_by_url[url] for url in urls]
+    completed_urls = [url for url in urls if url in spider.results_by_url]
+    results = [spider.results_by_url[url] for url in completed_urls]
+    events = [spider.events_by_url[url] for url in completed_urls]
     contract_errors = {
         result["url_sha256"]: validate_result(result, "candidate-a")
         for result in results
@@ -128,7 +140,13 @@ def main() -> int:
         duration_ms=duration_ms,
         concurrency=1,
         access_mode="authenticated-direct-http",
+        requested_count=len(urls),
     )
+    summary["crawl_paused"] = crawl_result.paused
+    summary["remaining_count"] = len(missing)
+    summary["stop_policy"] = "pause_after_first_control_or_empty"
+    summary["stop_reason"] = spider.pause_reason
+    summary["stop_url_sha256"] = spider.pause_url_sha256
     summary["risk_analysis"] = infer_risk(summary, session_metadata)
     environment = {
         "schema_version": "1.0",

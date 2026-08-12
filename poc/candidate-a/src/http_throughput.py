@@ -117,12 +117,16 @@ class DirectHttpSpider(Spider):
         concurrency: int,
         timeout_seconds: int,
         request_cookies: Cookies | None = None,
+        pause_on_control: bool = False,
     ) -> None:
         self.urls = urls
         self.concurrent_requests = concurrency
         self.concurrent_requests_per_domain = concurrency
         self.timeout_seconds = timeout_seconds
         self.request_cookies = request_cookies
+        self.pause_on_control = pause_on_control
+        self.pause_reason: str | None = None
+        self.pause_url_sha256: str | None = None
         self.results_by_url: dict[str, dict[str, Any]] = {}
         self.events_by_url: dict[str, dict[str, Any]] = {}
         self.block_evidence_by_url: dict[str, dict[str, bool]] = {}
@@ -236,6 +240,10 @@ class DirectHttpSpider(Spider):
         self.results_by_url[url] = result
         self.events_by_url[url] = event
         self.completion_offsets_ms[url] = round((time.perf_counter() - self.run_started_perf) * 1000)
+        if self.pause_on_control and classification["response_class"] in CONTROL_OR_EMPTY:
+            self.pause_reason = classification["response_class"]
+            self.pause_url_sha256 = result["url_sha256"]
+            self.pause()
         yield result
 
     async def on_error(self, request: Request, error: Exception) -> None:
@@ -257,26 +265,30 @@ def build_summary(
     duration_ms: int,
     concurrency: int,
     access_mode: str = "anonymous-direct-http",
+    requested_count: int | None = None,
 ) -> dict[str, Any]:
     """生成只基于有效结果的风控与吞吐摘要。"""
 
     counts = Counter(str(item["response_class"]) for item in results)
+    http_status_counts = Counter(str(item["http_status"]) for item in results)
     channel_counts = Counter(str(item["channel"]) for item in results)
     success_count = sum(item["status"] == "success" for item in results)
     durations = [int(item["duration_ms"]) for item in results]
     control_results = [item for item in results if item["response_class"] in CONTROL_OR_EMPTY]
     first_control = min(control_results, key=lambda item: completion_offsets_ms[item["url"]]) if control_results else None
     total_requests = sum(int(item["request_count"]) for item in results)
+    expected_count = len(results) if requested_count is None else requested_count
     return {
         "schema_version": "1.0",
         "candidate": "candidate-a",
         "access_mode": access_mode,
         "direct_http_only": channel_counts == {"http": len(results)},
         "concurrency": concurrency,
-        "input_count": len(results),
+        "input_count": expected_count,
         "result_count": len(results),
         "success_count": success_count,
-        "final_valid_rate": round(success_count / len(results), 6) if results else 0,
+        "final_valid_rate": round(success_count / expected_count, 6) if expected_count else 0,
+        "result_coverage_rate": round(len(results) / expected_count, 6) if expected_count else 0,
         "duration_ms": duration_ms,
         "processed_urls_per_second": round(len(results) / (duration_ms / 1000), 6) if duration_ms else 0,
         "effective_urls_per_second": round(success_count / (duration_ms / 1000), 6) if duration_ms else 0,
@@ -286,6 +298,8 @@ def build_summary(
         "request_amplification": round(total_requests / len(results), 6) if results else 0,
         "channel_counts": dict(sorted(channel_counts.items())),
         "response_class_counts": dict(sorted(counts.items())),
+        "http_status_counts": dict(sorted(http_status_counts.items())),
+        "duration_metric_scope": "queue_submission_to_completion",
         "first_control": None
         if first_control is None
         else {
@@ -294,7 +308,7 @@ def build_summary(
             "completed_offset_ms": completion_offsets_ms[first_control["url"]],
         },
         "meets_2000_per_hour_speed": duration_ms > 0 and success_count / (duration_ms / 1000) >= 2000 / 3600,
-        "meets_correctness_gate": len(results) > 0 and success_count == len(results),
+        "meets_correctness_gate": expected_count > 0 and len(results) == expected_count and success_count == expected_count,
     }
 
 

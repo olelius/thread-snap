@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+import time
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -69,6 +70,54 @@ class HttpThroughputTests(unittest.TestCase):
             results=[item], completion_offsets_ms={item["url"]: 100}, duration_ms=1000, concurrency=1
         )
         self.assertFalse(summary["direct_http_only"])
+
+    def test_partial_summary_uses_requested_count_as_valid_rate_denominator(self) -> None:
+        item = result("https://TARGET/ugc/article/4444444444444444444", "success", "post", 100)
+        summary = MODULE.build_summary(
+            results=[item],
+            completion_offsets_ms={item["url"]: 100},
+            duration_ms=1000,
+            concurrency=1,
+            requested_count=500,
+        )
+        self.assertEqual(500, summary["input_count"])
+        self.assertEqual(1, summary["result_count"])
+        self.assertEqual(0.002, summary["final_valid_rate"])
+        self.assertEqual(0.002, summary["result_coverage_rate"])
+        self.assertFalse(summary["meets_correctness_gate"])
+
+
+class HttpSpiderControlTests(unittest.IsolatedAsyncioTestCase):
+    async def test_authenticated_bulk_pauses_after_first_content_control(self) -> None:
+        url = "https://TARGET/ugc/article/5555555555555555555"
+        spider = MODULE.DirectHttpSpider([url], concurrency=1, timeout_seconds=30, pause_on_control=True)
+        pause_calls = 0
+
+        def record_pause() -> None:
+            nonlocal pause_calls
+            pause_calls += 1
+
+        spider.pause = record_pause
+        request = MODULE.Request(
+            url,
+            sid="http",
+            meta={"input_url": url, "started_at": MODULE.utc_now(), "started_perf": time.perf_counter()},
+        )
+        response = MODULE.Response(
+            url=url,
+            content="<html><body>请登录</body></html>",
+            status=200,
+            reason="OK",
+            cookies={},
+            headers={},
+            request_headers={},
+        )
+        response.request = request
+        items = [item async for item in spider.parse(response)]
+        self.assertEqual(1, pause_calls)
+        self.assertEqual("login", spider.pause_reason)
+        self.assertEqual(1, len(items))
+        self.assertEqual("login", items[0]["response_class"])
 
 
 if __name__ == "__main__":
