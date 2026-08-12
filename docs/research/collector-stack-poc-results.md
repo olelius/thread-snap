@@ -291,3 +291,22 @@ Candidate B 的框架日志记录 `requestsFinished=2000`、`requestsFailed=0` �
 下一步不继续剩余525条，改为每个实验臂使用独立新Session/profile和固定有效样本，至少比较当前约3请求/秒、1请求/秒与分批暂停，以首控请求序号和首控时间区分请求量、持续时间与速率影响。
 
 证据目录：登录 `artifacts/poc/results/candidate-a/auth-recovery-bootstrap-20260812-141852/`；门禁 `artifacts/poc/results/candidate-a/auth-recovery-preflight-20260812-141852/`（5/5，`SHA256SUMS` SHA-256 `a7eb46ffe734a3f649afb807801d097edd1b1bf68eea170aaa88e88c7fec0e13`）；恢复段 `artifacts/poc/results/candidate-a/auth-recovery-offset708-20260812-141852/`（含 `control-analysis.json`，6/6，`SHA256SUMS` SHA-256 `ee36e7517e2e6ee8c68d4aedf4bdb4fce9f9250ca4d86df90a40727b3ba47e72`）；停控复查 `artifacts/poc/results/candidate-a/auth-recovery-postcontrol-20260812-141852/`（5/5，`SHA256SUMS` SHA-256 `8aece299b2d06ac49b5bd9fbc67601c71883e2b9310993b3835d0bb4d3e3cc40`）。
+
+## 15. 有界Session自动恢复控制
+
+Candidate A 已新增有界恢复状态机：
+
+1. 现有storage state先执行3条纯HTTP门禁；
+2. 批量段继续由Scrapling `Spider + FetcherSession`执行，首个 `empty/login` 立即暂停；
+3. 使用 `AsyncDynamicSession` 在全新隔离profile中重新密码登录；
+4. 新storage state必须通过3条固定门禁；
+5. 从触发控制的URL本身重新处理，成功后再继续剩余队列；
+6. 默认最多恢复2次，验证码、挑战、限流、登录或门禁失败、预算耗尽和窗口耗尽均停止。
+
+所有门禁和重试都进入 `request-events.jsonl`及采集HTTP请求放大率；浏览器重新登录子请求不混入该指标，Session刷新次数单列。最终 `url-results.jsonl` 每个输入只保留一个最终终态。这样可以在同一轮内证明“控制发生后是否真正恢复”，而不是把不同运行目录人工拼接。
+
+真实1条闭环使用仅含无效夹具Cookie的状态：旧门禁首条返回 `login`，控制器自动完成1次Scrapling密码登录且无二次验证；新Session门禁3/3，随后目标URL重试1/1 `post/success`。总时长16.999秒，共5个HTTP请求（旧门禁1、新门禁3、目标1），请求放大率5.0，最终完成率100%。该结果只验证恢复控制链有效，不证明2000条吞吐或每次控制都能刷新成功。
+
+同一时段还重新门禁了两份此前返回空文档的历史状态，两者均恢复为3/3有效。它修正了“旧Session一旦转空就永久失效”的过强推断：当前只确认较短冷却探测时未恢复、约数小时后已恢复，尚未测得最短恢复时间，也未证明自然恢复与重新登录恢复属于同一机制。
+
+证据目录：`artifacts/poc/results/candidate-a/bounded-recovery-login-smoke-20260812-171252/`；核心公开结果6/6校验一致，`SHA256SUMS` 文件SHA-256为 `e8ea5ee09bc2eae96e474040829d163daf6fbc5be35f5dd3c51335bb24f32992`。
