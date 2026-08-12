@@ -18,7 +18,7 @@
 ## 2026-08-12 — 完成 Candidate A 帖子内容与一级评论 HTTP API 提取测试
 
 **总目标**：在不逐条打开帖子页面、不重复详情请求的前提下，使用现有 Scrapling 登录状态和直接 HTTP API 提取第一版需要的帖子、媒体 URL、状态及最多十条一级评论，同时验证字段完整性与有效速度。
-**状态**：✅ 提取器、字段映射、按需评论与500条并发8实测完成；❌ 原固定输入中空详情、正文真实为空、评论计数差异和未确认状态语义导致严格完整率未达100%
+**状态**：✅ 提取器、字段映射、按需评论、完整2000条并发8实测及逐链接Excel结果完成；❌ 原固定输入中空详情、正文真实为空、评论计数差异和未确认状态语义导致严格完整率未达100%
 
 **干到哪了**：
 - [x] 新增 `poc/candidate-a/src/content_extraction.py`：登录与storage state继续复用项目既有Scrapling流程；批量阶段只注册 `FetcherSession`，由Spider调度详情与评论API、维护Cookie/TLS/请求头、输出CrawlStats和JSONL，不读取帖子DOM、不启动浏览器。
@@ -29,11 +29,14 @@
 - [x] 最终代码回归100条（原清单偏移620、并发8）为86/100严格完整、5.377秒、15.99条完整URL/秒；12条详情无数据、2条可见纯图片帖正文文本为空。中文字段改为从响应原始字节解析JSON后未再出现编码失真。
 - [x] 最终500条（原清单偏移720、并发8）形成500/500唯一终态：19.381秒、处理25.80 URL/秒、严格完整372条、完整速度19.19 URL/秒、703次HTTP请求、放大率1.406、297条只发1请求；全部详情和评论请求均HTTP 200，没有页面请求、浏览器、登录、验证码、限流或动态签名事件。
 - [x] 最终500条的128个不完整终态已分类：122条API `status=0` 但详情数据为空；3条有标题和图片但正文文本为空；1条评论API总数为2但只返回1条且无下一页；2条 `operation_status=2` 的语义未验证，按约束保留 `unknown`。83条详情评论计数与评论API当前总数不一致，提取完整性以评论API的 `total_count/cursor/has_more` 单独记录，不静默混同。
-- [x] 7项内容提取单测、语法编译通过；最终结果 `SHA256SUMS` 文件SHA-256为 `5e09604a3ba3831f09bfc4f16afcd88d8ffc96d5a12559c78ff3e10f605b869f`。
+- [x] 完整2000条使用原固定清单前2000条、既有Scrapling storage state、并发8，由项目 `content_extraction.py` 从0执行：2000/2000结果、URL唯一且顺序与输入一致；85.394秒、处理23.42 URL/秒、严格完整1587条（79.35%）、完整速度18.58 URL/秒、2989次HTTP请求、放大率1.4945、1012条只发1请求。2000次详情与989次评论请求全部HTTP 200，页面文档请求0、浏览器未启动、未生成动态签名。
+- [x] 413个不完整终态已按逐链接结果保留：398条详情数据为空、11条仅正文为空、3条仅 `operation_status=2` 导致可见状态未知、1条评论分页证据不完整；另有458条详情回复数与评论API当前总数不一致，但其中可按评论API分页证据完成的结果未误记为评论缺失。共提取4119个图片URL、0个视频URL和3908条一级评论。
+- [x] 已生成逐链接Excel：`artifacts/poc/results/candidate-a/content-full-2000-c8-20260812-210616/content-test-results-2000.xlsx`，包含“测试摘要”“帖子结果”“一级评论”三表；Excel本机只读复核为2001行帖子表、3909行评论表，19位帖子/评论ID按文本完整显示，摘要公式为2000、1587、79.35%和3908。文件SHA-256为 `b19bee197b7160578c47687ae2b41445dd773a09a44e08ae19473a03fbe6ccc0`，更新后的 `SHA256SUMS` SHA-256为 `98c1df9b7771ba96c109e1cee4564264becb8a628a4406473be5748844db2052`。
+- [x] 内容提取7项单测及项目全部54项 `unittest` 通过；Python编译、`pip check`、`git diff --check` 和完整2000条结果目录5项SHA-256复核通过。此前最终500条 `SHA256SUMS` 文件SHA-256为 `5e09604a3ba3831f09bfc4f16afcd88d8ffc96d5a12559c78ff3e10f605b869f`。
 
-**下一步**：先用当前结果形成“详情可用且正文非空”的事前功能样本，并人工确认 `operation_status=2` 的业务含义、纯图片帖正文口径与评论计数差异；随后用同一提取器在目标CentOS对新的固定有效样本做三轮字段完整率与速度验证。圈子列表发现仍是独立未决项。
-**边界**：19.19条完整URL/秒已超过2000条/小时与十万条/8小时的纯速度门槛，但本轮严格完整率只有74.4%，不能据此宣告第一版完工或正式技术栈选型。评论、标题、作者和圈子字段的真实空值保留为空；正文为空、详情不存在和状态语义未知不按成功掩盖。接口当前无需动态参数是本时点实测，不承诺长期不变。
-**关联**：实现 `poc/candidate-a/src/content_extraction.py`；测试 `poc/shared/tests/test_content_extraction.py`；单帖 `artifacts/poc/results/candidate-a/content-functional-20260812-02/`；最终回归 `artifacts/poc/results/candidate-a/content-regression-100-offset620-c8-20260812/`；最终500条 `artifacts/poc/results/candidate-a/content-final-500-offset720-c8-20260812/`。
+**下一步**：先核对398条空详情是否为失效输入，并用当前结果事前形成“详情可用且正文非空”的固定功能样本；同时人工确认 `operation_status=2`、正文HTML/纯图片口径和评论计数差异。随后用同一提取器在目标CentOS对新固定样本连续执行三轮字段完整率与速度验证。圈子列表发现仍是独立未决项。
+**边界**：18.58条完整URL/秒已超过2000条/小时与十万条/8小时的纯速度门槛，但完整2000条轮次的严格完整率只有79.35%，不能据此宣告第一版完工或正式技术栈选型。评论、标题、作者和圈子字段的真实空值保留为空；正文为空、详情不存在和状态语义未知不按成功掩盖。全部HTTP 200只证明本轮API通道未出现已识别控制，不证明接口、会话条件或动态参数长期不变。
+**关联**：实现 `poc/candidate-a/src/content_extraction.py`；测试 `poc/shared/tests/test_content_extraction.py`；单帖 `artifacts/poc/results/candidate-a/content-functional-20260812-02/`；最终回归 `artifacts/poc/results/candidate-a/content-regression-100-offset620-c8-20260812/`；最终500条 `artifacts/poc/results/candidate-a/content-final-500-offset720-c8-20260812/`；完整2000条与Excel `artifacts/poc/results/candidate-a/content-full-2000-c8-20260812-210616/`。
 
 ---
 
