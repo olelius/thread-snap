@@ -60,6 +60,8 @@ class HttpThroughputTests(unittest.TestCase):
         self.assertEqual(1, summary["success_count"])
         self.assertEqual(1.0, summary["effective_urls_per_second"])
         self.assertEqual("empty", summary["first_control"]["response_class"])
+        self.assertEqual(2, summary["first_control"]["result_ordinal"])
+        self.assertEqual(1, summary["first_control"]["success_before_control"])
         self.assertFalse(summary["meets_correctness_gate"])
         self.assertTrue(summary["direct_http_only"])
 

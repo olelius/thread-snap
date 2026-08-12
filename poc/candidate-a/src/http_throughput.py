@@ -276,6 +276,7 @@ def build_summary(
     durations = [int(item["duration_ms"]) for item in results]
     control_results = [item for item in results if item["response_class"] in CONTROL_OR_EMPTY]
     first_control = min(control_results, key=lambda item: completion_offsets_ms[item["url"]]) if control_results else None
+    first_control_ordinal = results.index(first_control) + 1 if first_control else None
     total_requests = sum(int(item["request_count"]) for item in results)
     expected_count = len(results) if requested_count is None else requested_count
     return {
@@ -306,6 +307,10 @@ def build_summary(
             "url_sha256": first_control["url_sha256"],
             "response_class": first_control["response_class"],
             "completed_offset_ms": completion_offsets_ms[first_control["url"]],
+            "result_ordinal": first_control_ordinal,
+            "success_before_control": sum(
+                item["status"] == "success" for item in results[: first_control_ordinal - 1]
+            ),
         },
         "meets_2000_per_hour_speed": duration_ms > 0 and success_count / (duration_ms / 1000) >= 2000 / 3600,
         "meets_correctness_gate": expected_count > 0 and len(results) == expected_count and success_count == expected_count,
@@ -329,6 +334,8 @@ def write_checksums(output_dir: Path) -> None:
     """为本轮核心结果生成 SHA-256 清单。"""
 
     names = ["environment.json", "input-urls.txt", "request-events.jsonl", "summary.json", "url-results.jsonl"]
+    if (output_dir / "control-analysis.json").is_file():
+        names.append("control-analysis.json")
     lines = [f"{hashlib.sha256((output_dir / name).read_bytes()).hexdigest()}  {name}\n" for name in names]
     (output_dir / "SHA256SUMS").write_text("".join(lines), encoding="utf-8", newline="\n")
 

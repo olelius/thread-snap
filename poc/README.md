@@ -126,7 +126,7 @@ Remove-Item Env:THREADSNAP_PLATFORM_PASSWORD
 ## Candidate A 认证直接 HTTP 首版
 
 Candidate A 浏览器认证成功后，`throughput.py` 会在候选隔离 profile 中显式写出
-`storage-state.json`。纯 HTTP 探针接受1至500条同域样本，固定并发1、每URL一次
+`storage-state.json`。纯 HTTP 探针接受1至2000条同域样本，固定并发1、每URL一次
 请求，不启动浏览器或切换兜底；首次出现登录、空文档、验证码、挑战或限流时，
 由Spider暂停剩余队列并记录覆盖率和停止原因：
 

@@ -91,5 +91,11 @@ class RiskAnalysisTests(unittest.TestCase):
         self.assertEqual("input_not_found", analysis["category"])
 
 
+class StopPolicyTests(unittest.TestCase):
+    def test_spider_pause_reason_is_a_valid_stop_even_if_framework_flag_lags(self) -> None:
+        self.assertTrue(MODULE.was_stopped_by_policy(False, "login"))
+        self.assertFalse(MODULE.was_stopped_by_policy(False, None))
+
+
 if __name__ == "__main__":
     unittest.main()
