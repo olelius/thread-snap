@@ -260,3 +260,34 @@ Candidate B 的框架日志记录 `requestsFinished=2000`、`requestsFailed=0` �
 因此本次等待没有解除项目Session/profile/客户端身份组合的静默控制，剩余1292条未发送。代码已支持 `--offset 708 --limit 1292`保留原清单位置和来源SHA-256；只有重新认证并通过小样本后才使用该入口，且输出必须作为新Session恢复段独立报告，不能与旧Session的708个终态合并为2000条通过。
 
 证据目录：`artifacts/poc/results/candidate-a/cooldown-session-probe-20260812-140937/`；5/5校验一致，`SHA256SUMS` 文件SHA-256为 `7528b47f999ed1f44bfe5513cdc36680170d3188aeca7e128dfe3b1ddba0a44d`。
+
+## 14. 新Scrapling Session未完成段恢复测试
+
+本轮不覆盖旧profile，而是由Scrapling建立新的隔离profile并重新密码登录。登录提交成功、无二次验证，浏览器样本取得真实帖子；新的storage state交给 `Spider + FetcherSession` 后，3条纯HTTP门禁为3/3有效、1.088秒、请求放大率1.0，没有登录、空文档、验证码、挑战或限流。
+
+随后以原固定清单SHA-256 `4558a54cbe96259c1a64d6fda02658b3b344b8a269fcd85ea32a793572ea5d70`、`offset=708` 启动剩余1292条独立恢复段：
+
+| 指标 | 结果 |
+|---|---:|
+| 计划输入 | 1292 |
+| 产生终态 | 767（59.37%） |
+| 有效帖子 | 640 |
+| HTTP 404 | 126 |
+| 首次控制 | 本段第767个终态，HTTP 200零字节 `empty` |
+| 首控时间 | 262.041秒 |
+| 剩余未请求 | 525 |
+| 请求放大率 | 1.0 |
+| 控制前有效速度 | 约2.44 URL/秒 |
+| 本轮结论 | 新身份暂时恢复，随后再次受控并暂停 |
+
+控制分析：
+
+1. 首控后只复查门禁中已确认有效的1条样本，立即再次得到HTTP 200零字节；因此不是恢复段第767条输入自身异常，而是该新Session/profile/HTTP客户端身份组合已整体转空。
+2. 门禁时34个目标域Cookie有效；控制后有2个显示过期。匿名核对到期时间后确认，这2个Cookie在恢复段开始后约2至5秒即到期，而前760余个请求随后仍取得帖子或标准404，首控发生在262秒且附近没有Cookie到期。因此当前客户端Cookie自然到期不能解释首控时点。
+3. 旧持续轮次在第708个终态、228.635秒转空；新恢复段在第767个终态、262.041秒转空。两次都在并发1、约3请求/秒的相近规模出现，但只有两轮证据，尚不能区分累计请求数、持续时间、请求速率、账号信誉、profile或HTTP客户端身份。
+4. 新Session恢复成功证明旧项目身份当时不可用且刷新身份能暂时恢复；它不证明旧Session只是自然过期。本轮同时更换了Session与profile，不能把恢复归因于单一变量。
+5. 本段对应原清单第709至第1475条的终态范围，原第1476至2000条未请求；本段不得与旧Session前708条合并为2000条通过。
+
+下一步不继续剩余525条，改为每个实验臂使用独立新Session/profile和固定有效样本，至少比较当前约3请求/秒、1请求/秒与分批暂停，以首控请求序号和首控时间区分请求量、持续时间与速率影响。
+
+证据目录：登录 `artifacts/poc/results/candidate-a/auth-recovery-bootstrap-20260812-141852/`；门禁 `artifacts/poc/results/candidate-a/auth-recovery-preflight-20260812-141852/`（5/5，`SHA256SUMS` SHA-256 `a7eb46ffe734a3f649afb807801d097edd1b1bf68eea170aaa88e88c7fec0e13`）；恢复段 `artifacts/poc/results/candidate-a/auth-recovery-offset708-20260812-141852/`（含 `control-analysis.json`，6/6，`SHA256SUMS` SHA-256 `ee36e7517e2e6ee8c68d4aedf4bdb4fce9f9250ca4d86df90a40727b3ba47e72`）；停控复查 `artifacts/poc/results/candidate-a/auth-recovery-postcontrol-20260812-141852/`（5/5，`SHA256SUMS` SHA-256 `8aece299b2d06ac49b5bd9fbc67601c71883e2b9310993b3835d0bb4d3e3cc40`）。

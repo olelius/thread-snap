@@ -15,6 +15,25 @@
 
 ---
 
+## 2026-08-12 — 完成新Scrapling Session未完成段恢复测试
+
+**总目标**：重新由Scrapling建立独立认证Session，先通过3条纯HTTP门禁，再从原固定清单第709条开始执行剩余1292条独立恢复段，并判断旧Session不可用是否等同于自然过期。
+**状态**：✅ 新Session恢复访问后在恢复段第767个终态再次转为空文档；剩余525条未发送
+
+**干到哪了**：
+- [x] 使用新的Scrapling隔离profile执行密码登录，`submitted=true`、`logged_in=true`、无二次验证；浏览器样本取得真实帖子并导出新的 `storage-state.json`，旧profile和旧失败证据未覆盖。
+- [x] 新状态交给 `Spider + FetcherSession` 后，3条门禁为3/3 `post/success`，1.088秒、请求放大率1.0，无登录、空文档、验证码、挑战或限流。
+- [x] 以原清单SHA-256 `4558a54cbe96259c1a64d6fda02658b3b344b8a269fcd85ea32a793572ea5d70`、`offset=708`启动1292条独立恢复段；第767个终态、262.041秒出现HTTP 200零字节 `empty` 并暂停，此前640条有效、126条HTTP 404，剩余525条未请求，请求放大率1.0。
+- [x] 首控后只复查门禁中已确认有效的1条样本，立即再次得到HTTP 200零字节，确认不是恢复段第767条单独异常，而是新会话/profile/客户端身份组合已整体转空。
+- [x] 匿名核对Cookie到期时间：控制后统计中的2个过期Cookie实际在恢复段开始后约2至5秒即到期，而首控发生在262秒；首控附近没有Cookie到期，因此现有证据不支持把本次转变简化为客户端Cookie自然到期。
+- [x] 门禁、恢复段和停控复查分别为5/5、6/6、5/5校验一致；`SHA256SUMS` 文件SHA-256依次为 `a7eb46ffe734a3f649afb807801d097edd1b1bf68eea170aaa88e88c7fec0e13`、`ee36e7517e2e6ee8c68d4aedf4bdb4fce9f9250ca4d86df90a40727b3ba47e72`、`8aece299b2d06ac49b5bd9fbc67601c71883e2b9310993b3835d0bb4d3e3cc40`。
+
+**下一步**：不再刷新Session续跑剩余525条。使用新的独立Session/profile为每个实验臂执行固定有效样本的速率与间隔矩阵，至少比较当前约3请求/秒、1请求/秒和分批暂停；以首控请求序号和首控时间区分请求量、持续时间与请求速率影响。
+**边界**：新Session恢复成功只证明旧项目身份不可用且刷新身份可以暂时恢复，不证明旧Session是自然过期；本轮同时更换了Session与profile，账号、profile、HTTP客户端身份和速率仍未被单独控制。恢复段不得与旧Session前708条合并为2000条通过。
+**关联**：登录 `artifacts/poc/results/candidate-a/auth-recovery-bootstrap-20260812-141852/`；门禁 `artifacts/poc/results/candidate-a/auth-recovery-preflight-20260812-141852/`；恢复段 `artifacts/poc/results/candidate-a/auth-recovery-offset708-20260812-141852/`；停控复查 `artifacts/poc/results/candidate-a/auth-recovery-postcontrol-20260812-141852/`。
+
+---
+
 ## 2026-08-12 — 完成2000条未完成段冷却恢复探测
 
 **总目标**：在2000条主轮次暂停一段时间后，验证原认证Session是否自然恢复；若恢复，则从原固定清单第709条开始执行剩余1292条独立恢复段。
