@@ -146,6 +146,27 @@ Candidate A 浏览器认证成功后，`throughput.py` 会在候选隔离 profil
 `CrawlStats` 与 `ItemList.to_jsonl()`；项目逻辑只补充帖子真实性、HTTP 200 控制页
 分类、脱敏事件、摘要和校验清单。Cookie 名称和值不会写入输出或日志。
 
+出现 `empty/login` 后需要验证自动恢复时，使用有界恢复入口。它先暂停旧 Spider，
+使用 Scrapling `AsyncDynamicSession` 在新隔离 profile 中重新登录，再执行固定3条
+纯 HTTP 门禁；门禁通过后从触发 URL 本身重新处理，而不是跳过触发项：
+
+```powershell
+.\.vevn\Scripts\python.exe .\poc\candidate-a\src\bounded_session_recovery.py `
+  --config .\artifacts\poc\inputs\auth-http-bootstrap-config.json `
+  --input .\artifacts\poc\inputs\round-1-urls.txt `
+  --gate-input .\artifacts\poc\inputs\auth-http-probe-urls.txt `
+  --initial-storage-state .\artifacts\poc\inputs\profiles\candidate-a\storage-state.json `
+  --output-dir .\artifacts\poc\results\candidate-a\bounded-recovery-001 `
+  --limit 2000 `
+  --max-recoveries 2
+```
+
+`captcha/challenge/rate_limited`、重新登录失败、门禁失败、超过恢复次数或超过窗口
+都会保留终态并结束；不会无限重登。门禁和重试均计入采集HTTP请求数及请求放大率，
+不同 Session 的结果只在该有界恢复轮次中按逐 URL 最终结果汇总，原始控制尝试仍保留
+在 `request-events.jsonl`。该HTTP指标不包含浏览器重新登录过程中的页面子请求；
+Session刷新次数单独统计。
+
 ## Linux 2000 条认证吞吐运行器
 
 Linux 入口、明文配置模板、安装/健康检查、资源采样和结果目录说明见

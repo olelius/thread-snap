@@ -15,6 +15,25 @@
 
 ---
 
+## 2026-08-12 — 实现认证HTTP有界Session自动恢复控制
+
+**总目标**：在认证HTTP出现 `empty/login` 时暂停旧Session，通过Scrapling重新登录建立新Session，经3条门禁后从触发URL继续处理，同时限制恢复次数并保留真实请求放大率。
+**状态**：✅ 控制器与真实1条闭环验证完成；尚未执行带恢复控制的完整2000条轮次
+
+**干到哪了**：
+- [x] 新增 `bounded_session_recovery.py`：HTTP段继续使用 `Spider + FetcherSession`；`empty/login` 触发首控后由Scrapling `AsyncDynamicSession` 建立全新隔离profile和storage state，3条门禁通过后把触发URL放回新段首位，不跳过失败项。
+- [x] 恢复次数默认2次、允许0至5次；`captcha/challenge/rate_limited`、登录失败、门禁失败、恢复预算耗尽和一小时窗口耗尽均停止，不形成无限登录循环。
+- [x] 最终 `url-results.jsonl` 每个输入最多一个最终结果；所有旧Session控制尝试、门禁和新Session重试保留在 `request-events.jsonl`，并计入采集HTTP请求数与请求放大率；浏览器登录子请求不混入该指标，Session刷新次数单列。`recovery-events.jsonl`记录Session序号、原因、范围和是否恢复，不记录凭证与Cookie。
+- [x] 两份历史状态在17:11至17:12再次做3条门禁时均恢复为3/3有效，说明此前冷却探测失败不代表永久失效；当前只确认恢复发生在约数小时后，未测得最短恢复时间。
+- [x] 使用仅含无效夹具Cookie的状态执行真实闭环：旧门禁首条为 `login`，控制器自动重新密码登录、无二次验证，新Session门禁3/3，随后原目标URL重试成功；共5个HTTP请求、1次成功Session刷新、最终1/1有效，耗时16.999秒，请求放大率5.0。
+- [x] 项目 `.vevn` 47项测试、Python编译、`pip check` 和 `git diff --check` 通过；真实闭环公开结果6/6校验一致，`SHA256SUMS` 文件SHA-256为 `e8ea5ee09bc2eae96e474040829d163daf6fbc5be35f5dd3c51335bb24f32992`。
+
+**下一步**：先用固定有效样本执行低速/间隔矩阵，再选择一个请求节奏运行带最多2次Session恢复的全新2000条轮次；验收看2000个逐URL最终结果、总请求放大率、总时长、Session刷新次数和未恢复控制数，不把分段HTTP 200数量当作通过。
+**边界**：自动重新登录目前只在无二次验证的密码登录条件下实测通过；它是有界恢复能力，不证明每次控制都能通过换Session解除，也不替代验证码、挑战或限流处理。旧状态数小时后恢复与重新登录恢复是两个现象，尚未证明二者机制相同。
+**关联**：实现 `poc/candidate-a/src/bounded_session_recovery.py`；真实闭环 `artifacts/poc/results/candidate-a/bounded-recovery-login-smoke-20260812-171252/`。
+
+---
+
 ## 2026-08-12 — 完成新Scrapling Session未完成段恢复测试
 
 **总目标**：重新由Scrapling建立独立认证Session，先通过3条纯HTTP门禁，再从原固定清单第709条开始执行剩余1292条独立恢复段，并判断旧Session不可用是否等同于自然过期。
