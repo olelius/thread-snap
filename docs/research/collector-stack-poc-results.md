@@ -482,4 +482,4 @@ Candidate B 已补齐与 Candidate A 同结构的认证直接HTTP路径。Crawle
 
 证据目录：`artifacts/poc/results/candidate-a/content-api-round-1-20260813T111930+0800/`。外层归档SHA-256为 `f8a8fb443c8cf0aaa6e368d8044cfa5f875b0cfea17095ebf34dc5c5e8e19c3c`；顶层、bulk和gate的 `SHA256SUMS` 文件SHA-256分别为 `d83e27994a7bbea2991603368e49d14cb036ce3b0d79280a7a80c044a85b73c9`、`f95c6cb7373c5c148f8ef0a2db49b056145a79c1396bf4a2c6926263b5f951b3`、`6eb09f7dc9ac215617c865c1ff41a423954400781adb1d8e0051c82f09a448c9`，各层校验全部通过。加入人工复核和确认口径后的本地脱敏复核文件为同目录旁的 `content-api-round-1-20260813T111930+0800-verification.json`，SHA-256为 `d9e18650a2935c6b650523a13ffc4592faf8eda36a16778ae1582641612c10c6`；它不改写原始结果包。
 
-确认口径已进入源码提交 `68af73f15836d36bbf47b9b8333f4d80821f462e`。v0.2.20完整Linux包SHA-256为 `ebc34a439a8ac06018fba832e48f78c60aa9da206578e8e8cb9f6810753f07e1`；基于已部署0.2.19内容入口的免重装补丁SHA-256为 `3ba87a3ec0ba660d5c24da3af5cf7d768850ef8a54c512c25f5d999a213db57c`。
+确认口径已进入源码提交 `68af73f15836d36bbf47b9b8333f4d80821f462e`。v0.2.20完整Linux包SHA-256为 `ebc34a439a8ac06018fba832e48f78c60aa9da206578e8e8cb9f6810753f07e1`；基于已部署0.2.19内容入口的免重装补丁SHA-256为 `eea8765939fe596305a51e51260b5e935f866a9c54f07a75c4a67b746a8d72cf`。
