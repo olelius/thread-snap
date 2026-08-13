@@ -19,7 +19,7 @@
 
 **总目标**：把 Windows 已验证的 Scrapling 字段级 HTTP API 提取路径纳入现有 Linux PoC 包，在目标 CentOS 复用已登录 Session，先做最多3条门禁，再对固定输入执行详情、媒体和最多10条一级评论提取；批量阶段不得逐条启动浏览器。
 
-**状态**：✅ Linux 内容 API 源码包 v0.2.19 已构建并完成外层、包内、语法、编译与敏感运行文件边界复核。
+**状态**：✅ Linux 内容 API 源码包与免重装补丁已完成；目标 CentOS 首轮2000条已形成完整证据，速度门通过但字段完整率81.7%，未通过100%字段门。
 
 **干到哪了**：
 - [x] 新增 `poc/linux/run-content-api.sh`：读取 Candidate A 的 `storage-state.json`，先以并发1执行1至3条内容 API 门禁，全部完整后才按 `content_api_concurrency` 启动计划分母；批量阶段只运行 `content_extraction.py` 的 `Spider + FetcherSession`，记录资源指标并打包完整结果。
@@ -28,12 +28,16 @@
 - [x] Linux 配置、健康检查、README 和构建清单已纳入内容 API 入口及全部本地 Python 依赖；新增结构测试保证门禁先于批量、状态文件复用且运行脚本不包含浏览器 Session 类。
 - [x] 当前验证：项目 `.vevn` 的60项 `unittest` 全部通过；Python `compileall`、`pip check`、新增/修改 Shell 的 Bash 语法和 PowerShell 构建脚本解析均通过。
 - [x] 从源码提交 `71fbdb19354af63891d64da136d96b5a659d3900` 构建 `artifacts/poc/packages/linux-dual-runner/threadsnap-poc-dual-runner-0.2.19-linux.tar.gz`，外层 SHA-256 为 `721e2f5df9988c90f51e167153fb80a8da4605cbb24d6c542232b412931e931f`；解包后37/37项内部校验通过，13个 Shell 脚本语法和提取目录 Python 编译通过，38个文件中无 `config.json`、`storage-state.json`、输入清单或 `profiles/` 运行状态。
+- [x] 针对目标主机已有0.2.17运行状态补充免重装包 `threadsnap-content-api-hotfix-0.2.19.tar.gz`，SHA-256为 `a3f14b3c24ac2b59f97f5dffd4e86ec5aa2d6697ec46a3a35d0097ad7f11f72a`；以0.2.1基础目录合成覆盖验证确认14/14文件、Python编译和3个关键Shell语法通过，且 `.runtime`、配置、输入与Session均保持不变。该补丁累计包含Candidate A所需的0.2.18变更，不补Candidate B的0.2.18文件。
+- [x] 目标Linux结果包外层SHA-256 `f8a8fb443c8cf0aaa6e368d8044cfa5f875b0cfea17095ebf34dc5c5e8e19c3c` 与回传值一致，顶层12项以及gate/bulk各4项内部校验全部通过；输入2000条互不重复、结果2000条互不重复且顺序一致，输入SHA-256为原固定清单 `4558a54cbe96259c1a64d6fda02658b3b344b8a269fcd85ea32a793572ea5d70`。本地脱敏复核摘要为同目录旁的 `content-api-round-1-20260813T111930+0800-verification.json`，SHA-256为 `5fa4a1b68b37934402d0b0ec646a8317e7f0eee5879ee7059bb79811a8e85853`。
+- [x] Linux门禁3/3完整；批量并发8在130.243秒形成2000/2000终态，处理15.36 URL/秒、字段完整1634条（81.7%）、完整速度12.55 URL/秒、3130次HTTP请求、放大率1.565。全部HTTP 200，无登录/验证码/挑战/限流，页面请求和浏览器进程均为0；最大RSS约83.1MiB。
+- [x] 366条不完整已分类为355条空详情、9条空正文和2条 `operation_status=2` 未知状态；其余1645条评论判定均完成，共提取4987条一级评论。600条详情/评论计数差异按确认口径只作诊断，不属于失败原因。摘要P50/P95从进入队列开始计时并包含等待，不能解释为网络延迟，后续需修正指标口径。
 
-**下一步**：在目标 Linux 替换为 v0.2.19 源码包并保留本地 `config.json`、输入清单与 Candidate A 状态；部署/健康检查后执行 `./poc/linux/run-content-api.sh content-api-round-1`，复制回 `content-api-results/` 生成的 `.tar.gz` 与 `.sha256`，再依据门禁、字段完整率、实际评论和资源指标更新 Linux 结论。
+**下一步**：先核对355条空详情在测试时点是否为失效输入，确认9条纯图片/空正文帖子和2条 `operation_status=2` 的产品状态口径；事前形成当前可访问且符合字段契约的固定2000条功能样本后，在目标Linux继续执行第2、3轮。另修正单条P50/P95的队列等待口径，不能让该指标冒充HTTP延迟。
 
 **边界**：本包只补齐 Candidate A 的 Linux 字段级测试入口，不把 Candidate A 提前宣布为正式技术栈；目标 Linux 的真实验证码、Session寿命、字段完整率和三轮硬门禁仍必须实测。人工滑块/短信初始化位于测试窗口外，批量过程中遇到控制响应停止并保留证据，不用自动重登掩盖单轮身份变化。
 
-**关联**：`poc/linux/run-content-api.sh`、`poc/candidate-a/src/content_extraction.py`、`poc/linux/README.md`、`poc/shared/tests/test_linux_content_package.py`、`docs/research/collector-stack-poc-plan.md`、`docs/chains/first-platform-delivery.md`。
+**关联**：`poc/linux/run-content-api.sh`、`poc/candidate-a/src/content_extraction.py`、`poc/linux/README.md`、`poc/shared/tests/test_linux_content_package.py`、`docs/research/collector-stack-poc-plan.md`、`docs/research/collector-stack-poc-results.md`、`docs/chains/first-platform-delivery.md`；Linux证据 `artifacts/poc/results/candidate-a/content-api-round-1-20260813T111930+0800/`。
 
 ---
 
