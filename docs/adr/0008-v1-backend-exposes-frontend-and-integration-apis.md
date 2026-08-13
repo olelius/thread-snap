@@ -1,5 +1,6 @@
 ---
 status: accepted
+amended_by: 0011-adopt-python-backend-before-deferred-linux-gate.md
 ---
 
 # 第一版独立后端同时提供前端与后续集成接口
@@ -22,9 +23,9 @@ status: accepted
 
 ## Python 映射
 
-如果 Candidate A 通过最终技术选型门禁，推荐以一个 Python 后端代码库实现该架构：FastAPI 同时承载 `/api/v1` 和 `/internal/v1` 控制器，Scrapling 实现平台采集与浏览器 Session。API 进程与采集 Worker 可以按运行稳定性拆成同一服务下的独立进程，但它们共用应用契约和领域实现，不形成第二个业务后端。
+> 更新说明：本节原有条件式映射已由 ADR 0011 落实为 Python/FastAPI/Scrapling 第一版后端；目标 Linux 门禁改为暂缓的最终部署验收，不再是本次编码前置。
 
-Python、FastAPI 和 Scrapling 当前仍是最有证据的候选映射，不因本 ADR 自动变成最终技术栈；最终选型仍以目标 Linux 门禁和单独技术栈 ADR 为准。若最终选择 Node.js，同一双接口、单业务层边界保持不变。
+ADR 0011 已采用一个 Python 后端代码库实现该架构：FastAPI 同时承载 `/api/v1` 和 `/internal/v1` 控制器，Scrapling 实现平台采集，Patchright 提供服务器认证浏览器。第一版 API、调度器和 Worker 在同一进程运行并共享应用契约与领域实现，不形成第二个业务后端。目标 Linux 门禁仍是最终部署验收条件。
 
 ## 后续接入
 

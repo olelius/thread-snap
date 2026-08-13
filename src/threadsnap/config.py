@@ -1,0 +1,48 @@
+"""运行配置。所有可变运行参数从环境读取，业务配置保存在数据库。"""
+
+from __future__ import annotations
+
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    """ThreadSnap 进程级配置。"""
+
+    model_config = SettingsConfigDict(env_prefix="THREADSNAP_", env_file=".env", extra="ignore")
+
+    database_url: str = "sqlite:///./data/threadsnap.db"
+    data_dir: Path = Path("data")
+    timezone: str = "Asia/Shanghai"
+    scheduler_poll_seconds: float = Field(default=15.0, gt=0)
+    worker_poll_seconds: float = Field(default=1.0, gt=0)
+    start_background_services: bool = True
+    platform_level_concurrency: int = Field(default=1, ge=1, le=1)
+    dongchedi_storage_state: Path | None = None
+    session_fernet_key: str | None = None
+    auth_browser_headless: bool = True
+
+    @property
+    def template_dir(self) -> Path:
+        return self.data_dir / "templates"
+
+    @property
+    def export_dir(self) -> Path:
+        return self.data_dir / "exports"
+
+    def ensure_directories(self) -> None:
+        """创建后端持久文件目录。"""
+
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.template_dir.mkdir(parents=True, exist_ok=True)
+        self.export_dir.mkdir(parents=True, exist_ok=True)
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """返回进程级配置单例。"""
+
+    return Settings()

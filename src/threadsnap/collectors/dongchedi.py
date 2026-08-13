@@ -1,0 +1,591 @@
+"""懂车帝动态圈子、帖子详情和一级评论适配器。"""
+
+from __future__ import annotations
+
+import json
+import math
+import re
+import threading
+import time
+from datetime import datetime, timezone
+from typing import Any, Iterable
+from urllib.parse import urlencode, urljoin, urlsplit
+
+from curl_cffi import requests
+from curl_cffi.requests import Cookies
+from lxml import html
+from scrapling.fetchers import DynamicSession
+
+ADAPTER_VERSION = "dongchedi-dynamic-v1"
+BASE_URL = "https://www.dongchedi.com"
+DETAIL_ROOT = f"{BASE_URL}/motor/pc/ugc/detail"
+COMMON_PARAMS = {"aid": "1839", "app_name": "auto_web_pc"}
+CIRCLE_RE = re.compile(
+    r"^https?://(?:www\.)?dongchedi\.com/community/(?P<id>\d+)(?:/\d+)?/?(?:\?.*)?$"
+)
+POST_RE = re.compile(
+    r"^https?://(?:www\.)?dongchedi\.com/(?:ugc/)?article/(?P<id>\d+)(?:[/?#].*)?$"
+)
+SORT_LABEL_RE = re.compile(r"(?:\d{4}-\d{2}-\d{2}|\d+(?:分钟|小时|天|个月|年)前)(?:回复)?")
+VISIBLE_OPERATION_STATUSES = frozenset({0, 2})
+
+
+class AuthenticationRequired(RuntimeError):
+    """平台明确要求登录或当前身份已经失效，并携带本次已完成结果。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        trigger_url: str | None = None,
+        records: list[dict[str, Any]] | None = None,
+        failures: list[dict[str, str]] | None = None,
+    ):
+        super().__init__(message)
+        self.message = message
+        self.trigger_url = trigger_url
+        self.records = records or []
+        self.failures = failures or []
+
+
+class CollectorFailure(RuntimeError):
+    """带稳定错误码的采集失败。"""
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
+def normalize_circle_url(url: str) -> tuple[str, str]:
+    match = CIRCLE_RE.match(url.strip())
+    if not match:
+        raise CollectorFailure(
+            "CIRCLE_URL_INVALID", "圈子链接格式无效，必须是懂车帝 community 圈子链接。"
+        )
+    circle_id = match.group("id")
+    return circle_id, f"{BASE_URL}/community/{circle_id}"
+
+
+def normalize_post_url(url: str) -> tuple[str, str]:
+    match = POST_RE.match(url.strip())
+    if not match:
+        raise CollectorFailure("POST_URL_INVALID", "帖子链接格式无效，必须是懂车帝文章链接。")
+    post_id = match.group("id")
+    return post_id, f"{BASE_URL}/ugc/article/{post_id}"
+
+
+def _cookies_from_state(state: dict[str, Any] | None) -> Cookies:
+    jar = Cookies()
+    now = time.time()
+    for item in (state or {}).get("cookies", []):
+        if not isinstance(item, dict):
+            continue
+        domain = str(item.get("domain") or "")
+        if "dongchedi.com" not in domain:
+            continue
+        expires = item.get("expires", -1)
+        if isinstance(expires, (int, float)) and expires > 0 and expires <= now:
+            continue
+        if all(item.get(key) for key in ("name", "value", "path")):
+            jar.set(
+                item["name"],
+                item["value"],
+                domain=domain,
+                path=item["path"],
+                secure=bool(item.get("secure")),
+            )
+    return jar
+
+
+def _iso_time(value: object) -> datetime | None:
+    try:
+        timestamp = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if timestamp <= 0:
+        return None
+    try:
+        return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _unique_urls(values: Iterable[object]) -> list[str]:
+    output: list[str] = []
+    for value in values:
+        if (
+            isinstance(value, str)
+            and value.startswith(("http://", "https://"))
+            and value not in output
+        ):
+            output.append(value)
+    return output
+
+
+def _first_sentence(text: str) -> str | None:
+    for value in re.split(r"(?<=[。！？!?])|\r?\n+", text):
+        if value.strip():
+            return value.strip()
+    return None
+
+
+class DongchediCollector:
+    """单实例可由同一平台多个圈子任务共享请求并发信号量。"""
+
+    code = "dongchedi"
+    display_name = "懂车帝"
+    adapter_version = ADAPTER_VERSION
+
+    def __init__(
+        self,
+        storage_state: dict[str, Any] | None,
+        concurrency: int = 1,
+        timeout_seconds: int = 30,
+    ):
+        self.storage_state = storage_state
+        self.cookies = _cookies_from_state(storage_state)
+        self.timeout_seconds = timeout_seconds
+        self.concurrency = max(1, concurrency)
+        self.semaphore = threading.BoundedSemaphore(self.concurrency)
+        self._thread_local = threading.local()
+
+    def _http_session(self) -> requests.Session:
+        """为每个采集线程创建独立 HTTP Session，避免跨线程共享可变请求状态。"""
+
+        session = getattr(self._thread_local, "http", None)
+        if session is None:
+            session = requests.Session(impersonate="chrome")
+            session.cookies.update(self.cookies)
+            self._thread_local.http = session
+        return session
+
+    def _get(self, url: str) -> requests.Response:
+        last_error: Exception | None = None
+        for attempt in range(3):
+            try:
+                with self.semaphore:
+                    response = self._http_session().get(
+                        url, timeout=self.timeout_seconds, allow_redirects=True
+                    )
+                if response.status_code >= 500 and attempt < 2:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                return response
+            except Exception as exc:  # curl_cffi 抛出多种传输异常，统一有界重试。
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(0.5 * (attempt + 1))
+        raise CollectorFailure("PLATFORM_NETWORK_ERROR", f"访问懂车帝失败：{last_error}")
+
+    @staticmethod
+    def _detect_auth(response: requests.Response) -> None:
+        path = urlsplit(str(response.url)).path
+        body = response.content[:200_000].lower()
+        content_type = str(getattr(response, "headers", {}).get("content-type", "")).lower()
+        is_html = "html" in content_type or body.lstrip().startswith((b"<!doctype html", b"<html"))
+        if "/login-required" in path or is_html and b"login-required" in body:
+            raise AuthenticationRequired("懂车帝当前要求重新完成平台认证。")
+
+    def _browser_page_rows(self, url: str) -> list[dict[str, Any]]:
+        state: dict[str, Any] = {}
+        cookie_items = [
+            item for item in (self.storage_state or {}).get("cookies", []) if isinstance(item, dict)
+        ]
+
+        def action(page: Any) -> None:
+            page.wait_for_timeout(1500)
+            state["url"] = page.url
+            state["rows"] = page.locator("section.community-card").evaluate_all(
+                "els => els.map((e,i) => ({index:i,text:(e.innerText||''),hrefs:Array.from(e.querySelectorAll('a')).map(a=>a.href)}))"
+            )
+
+        with self.semaphore:
+            with DynamicSession(
+                headless=True,
+                real_chrome=True,
+                google_search=False,
+                max_pages=1,
+                timeout=self.timeout_seconds * 1000,
+                retries=1,
+                cookies=cookie_items or None,
+                disable_resources=True,
+            ) as browser:
+                browser.fetch(url, page_action=action, wait=500, network_idle=False)
+        if "/login-required" in str(state.get("url", "")):
+            raise AuthenticationRequired("懂车帝当前要求重新完成平台认证。")
+        return self._normalize_card_rows(state.get("rows", []))
+
+    @staticmethod
+    def _normalize_card_rows(
+        raw_rows: Iterable[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for raw in raw_rows:
+            post_id = None
+            for href in raw.get("hrefs", []):
+                normalized_href = urljoin(BASE_URL, str(href)).split("#", 1)[0]
+                match = POST_RE.match(normalized_href)
+                if match:
+                    post_id = match.group("id")
+                    break
+            if not post_id:
+                continue
+            text = str(raw.get("text") or "")
+            labels = SORT_LABEL_RE.findall(text)
+            rows.append(
+                {
+                    "post_id": post_id,
+                    "url": f"{BASE_URL}/ugc/article/{post_id}",
+                    "sort_label": labels[-1] if labels else None,
+                    "order_index": int(raw.get("index", len(rows))),
+                }
+            )
+        return rows
+
+    def _fetch_circle_page(
+        self, circle_id: str, page: int, expected_count: int | None
+    ) -> dict[str, Any]:
+        url = f"{BASE_URL}/community/{circle_id}" + ("" if page == 1 else f"/{page}")
+        response = self._get(url)
+        self._detect_auth(response)
+        if response.status_code != 200:
+            raise CollectorFailure(
+                "CIRCLE_PAGE_ERROR",
+                f"圈子第 {page} 页返回 HTTP {response.status_code}。",
+            )
+        document = html.fromstring(response.content)
+        title = document.xpath("string(//title)")
+        body = document.text_content()
+        raw_rows = []
+        for index, card in enumerate(document.cssselect("section.community-card")):
+            raw_rows.append(
+                {
+                    "index": index,
+                    "text": " ".join(
+                        value.strip() for value in card.xpath(".//text()") if value.strip()
+                    ),
+                    "hrefs": card.xpath(".//a/@href"),
+                }
+            )
+        total_match = re.search(r"共\s*(\d+)\s*条内容", body)
+        page_match = re.search(r"_(\d+)/(\d+)页_", title)
+        name_match = re.search(r"^(.*?)车友圈", title)
+        total_count = int(total_match.group(1)) if total_match else None
+        page_count = int(page_match.group(2)) if page_match else None
+        rows = self._normalize_card_rows(raw_rows)
+        # 首页请求时尚不知总数，解析后再推导该页应有数量，避免 SSR 残缺被误当成完整列表。
+        effective_expected = expected_count
+        if effective_expected is None and total_count is not None:
+            effective_expected = min(30, max(0, total_count - (page - 1) * 30))
+        if effective_expected is not None and len(rows) < effective_expected:
+            rows = self._browser_page_rows(url)
+        return {
+            "url": url,
+            "title": title,
+            "circle_name": f"{name_match.group(1)}车友圈" if name_match else None,
+            "total_count": total_count,
+            "page_count": page_count,
+            "rows": rows,
+        }
+
+    def validate_circle(self, circle_url: str) -> dict[str, Any]:
+        circle_id, normalized = normalize_circle_url(circle_url)
+        page = self._fetch_circle_page(circle_id, 1, expected_count=None)
+        if not page["circle_name"] or not page["rows"]:
+            raise CollectorFailure("CIRCLE_VALIDATION_FAILED", "圈子页面未返回可识别的动态帖子。")
+        record = self.fetch_post(page["rows"][0]["url"])
+        if record is None:
+            raise CollectorFailure("CIRCLE_VALIDATION_FAILED", "圈子首条帖子未返回有效详情。")
+        return {
+            "platform_code": self.code,
+            "external_id": circle_id,
+            "name": page["circle_name"],
+            "url": normalized,
+            "section": "dynamic",
+            "sort": "latest_reply",
+            "sample_post_id": record["platform_post_id"],
+            "adapter_version": self.adapter_version,
+        }
+
+    def discover_posts(
+        self, circle_url: str, target_count: int, start_page: int = 1
+    ) -> tuple[list[dict[str, Any]], str]:
+        circle_id, _ = normalize_circle_url(circle_url)
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        page_number = max(1, start_page)
+        page_count: int | None = None
+        total_count: int | None = None
+        while len(rows) < target_count:
+            expected = None
+            if page_count is not None:
+                expected = min(30, max(0, (total_count or 0) - (page_number - 1) * 30))
+            page = self._fetch_circle_page(circle_id, page_number, expected)
+            if page_number == 1:
+                total_count = page["total_count"]
+                page_count = (
+                    math.ceil(total_count / 30) if total_count is not None else page["page_count"]
+                )
+            novel = [item for item in page["rows"] if item["post_id"] not in seen]
+            for item in novel:
+                seen.add(item["post_id"])
+                rows.append(item)
+                if len(rows) >= target_count:
+                    return rows, "达到配置的有效结果候选数量。"
+            if not novel or not page["rows"]:
+                return rows, "平台没有返回更多动态内容。"
+            if page_count is not None and page_number >= page_count:
+                return rows, "已经到达圈子动态列表末页。"
+            page_number += 1
+        return rows, "达到配置的有效结果候选数量。"
+
+    def _json_api(self, endpoint: str, **params: object) -> tuple[dict[str, Any], int]:
+        url = f"{DETAIL_ROOT}/{endpoint}?{urlencode({**COMMON_PARAMS, **params})}"
+        response = self._get(url)
+        self._detect_auth(response)
+        try:
+            payload = json.loads(response.content)
+        except json.JSONDecodeError as exc:
+            raise CollectorFailure(
+                "PLATFORM_RESPONSE_INVALID", "懂车帝接口返回了无法识别的数据。"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise CollectorFailure("PLATFORM_RESPONSE_INVALID", "懂车帝接口返回结构无效。")
+        message = str(payload.get("message") or payload.get("status_message") or "")
+        if payload.get("status") not in (None, 0) and any(
+            marker in message.lower() for marker in ("登录", "login")
+        ):
+            raise AuthenticationRequired("懂车帝当前要求重新完成平台认证。", trigger_url=url)
+        return payload, int(response.status_code)
+
+    def fetch_post(self, post_url: str) -> dict[str, Any] | None:
+        post_id, normalized_url = normalize_post_url(post_url)
+        payload, http_status = self._json_api("common", group_id=post_id)
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        if http_status == 404 or payload.get("status") != 0 or not data:
+            return None
+        observed = str(data.get("group_id_str") or data.get("group_id") or "")
+        if observed != post_id:
+            return None
+        profile = (
+            data.get("motor_profile_info")
+            if isinstance(data.get("motor_profile_info"), dict)
+            else {}
+        )
+        car_info = (
+            data.get("motor_car_info") if isinstance(data.get("motor_car_info"), dict) else {}
+        )
+        content = str(data.get("content") or data.get("motor_title") or "").strip()
+        image_items = data.get("image_urls") if isinstance(data.get("image_urls"), list) else []
+        images = _unique_urls(
+            item.get("url") if isinstance(item, dict) else item for item in image_items
+        )
+        videos = self._video_urls(data.get("video_play_info"))
+        operation_status = data.get("operation_status")
+        visibility = "visible" if operation_status in VISIBLE_OPERATION_STATUSES else "unknown"
+        comments = self._fetch_comments(post_id, int(data.get("comment_count") or 0))
+        return {
+            "platform_post_id": post_id,
+            "url": normalized_url,
+            "title": str(data.get("thread_title") or "").strip() or _first_sentence(content),
+            "author": str(profile.get("name") or "").strip() or None,
+            "published_at": _iso_time(data.get("content_publish_time") or data.get("created_time")),
+            "content": content or None,
+            "image_urls": images,
+            "video_urls": videos,
+            "reply_count": data.get("comment_count")
+            if isinstance(data.get("comment_count"), int)
+            else None,
+            "like_count": data.get("digg_count")
+            if isinstance(data.get("digg_count"), int)
+            else None,
+            "section": str(car_info.get("source_desc") or car_info.get("motor_name") or "").strip()
+            or None,
+            "visibility": visibility,
+            "raw_status": {
+                "api_status": payload.get("status"),
+                "operation_status": operation_status,
+                "visibility_level": data.get("visibility_level"),
+            },
+            "comments": comments,
+        }
+
+    @staticmethod
+    def _video_urls(value: object) -> list[str]:
+        if isinstance(value, str) and value.strip():
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                return []
+        output: list[str] = []
+
+        def walk(item: object, path: str = "") -> None:
+            if isinstance(item, dict):
+                for key, child in item.items():
+                    walk(child, f"{path}.{key}")
+            elif isinstance(item, list):
+                for child in item:
+                    walk(child, path)
+            elif (
+                isinstance(item, str)
+                and item.startswith(("http://", "https://"))
+                and any(mark in path.lower() for mark in ("play", "video", "url"))
+            ):
+                if item not in output:
+                    output.append(item)
+
+        walk(value)
+        return output
+
+    def _fetch_comments(self, post_id: str, reply_count: int) -> list[dict[str, Any]]:
+        if reply_count <= 0:
+            return []
+        comments: list[dict[str, Any]] = []
+        cursor = 0
+        while len(comments) < 10:
+            payload, _ = self._json_api("comment_list", group_id=post_id, count=10, cursor=cursor)
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            items = data.get("comment_data") if isinstance(data.get("comment_data"), list) else []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                profile = (
+                    item.get("profile_info") if isinstance(item.get("profile_info"), dict) else {}
+                )
+                comments.append(
+                    {
+                        "platform_comment_id": str(
+                            item.get("comment_id_str") or item.get("comment_id") or ""
+                        )
+                        or None,
+                        "author": str(profile.get("name") or "").strip() or None,
+                        "content": str(item.get("text") or "").strip() or None,
+                        "published_at": _iso_time(item.get("create_time")),
+                        "like_count": item.get("digg_count")
+                        if isinstance(item.get("digg_count"), int)
+                        else None,
+                    }
+                )
+                if len(comments) >= 10:
+                    break
+            if len(comments) >= 10 or not data.get("has_more"):
+                break
+            next_cursor = data.get("cursor")
+            if not isinstance(next_cursor, int) or next_cursor == cursor:
+                break
+            cursor = next_cursor
+        return comments
+
+    def collect_circle(
+        self, circle_url: str, target_count: int, skip_post_ids: set[str] | None = None
+    ) -> dict[str, Any]:
+        circle_id, _ = normalize_circle_url(circle_url)
+        records: list[dict[str, Any]] = []
+        failures: list[dict[str, str]] = []
+        seen: set[str] = set(skip_post_ids or set())
+        page_number = 1
+        page_count: int | None = None
+        total_count: int | None = None
+        exhausted = False
+        while len(records) < target_count:
+            expected = (
+                None
+                if total_count is None
+                else min(30, max(0, total_count - (page_number - 1) * 30))
+            )
+            page = self._fetch_circle_page(circle_id, page_number, expected)
+            if page_number == 1:
+                total_count = page["total_count"]
+                page_count = (
+                    math.ceil(total_count / 30) if total_count is not None else page["page_count"]
+                )
+            candidates = [item for item in page["rows"] if item["post_id"] not in seen]
+            if not candidates:
+                exhausted = True
+                break
+            for candidate in candidates:
+                seen.add(candidate["post_id"])
+                try:
+                    record = self.fetch_post(candidate["url"])
+                except AuthenticationRequired as exc:
+                    raise AuthenticationRequired(
+                        exc.message,
+                        trigger_url=candidate["url"],
+                        records=records,
+                        failures=failures,
+                    ) from exc
+                except CollectorFailure as exc:
+                    failures.append(
+                        {
+                            "url": candidate["url"],
+                            "code": exc.code,
+                            "message": exc.message,
+                        }
+                    )
+                    continue
+                if record is None:
+                    failures.append(
+                        {
+                            "url": candidate["url"],
+                            "code": "POST_NOT_FOUND",
+                            "message": "帖子详情当前不可用。",
+                        }
+                    )
+                    continue
+                record["order_index"] = len(records)
+                records.append(record)
+                if len(records) >= target_count:
+                    break
+            if len(records) >= target_count:
+                break
+            if page_count is not None and page_number >= page_count:
+                exhausted = True
+                break
+            page_number += 1
+        if len(records) >= target_count:
+            stop_reason = "已经取得配置数量的有效帖子。"
+        elif exhausted:
+            stop_reason = "平台没有更多可用内容，按实际有效数量结束。"
+        else:
+            stop_reason = "候选帖子存在错误，未能取得配置数量的有效结果。"
+        return {"records": records, "failures": failures, "stop_reason": stop_reason}
+
+    def collect_urls(self, urls: list[str]) -> dict[str, Any]:
+        records: list[dict[str, Any]] = []
+        failures: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for url in urls:
+            try:
+                post_id, normalized = normalize_post_url(url)
+            except CollectorFailure as exc:
+                failures.append({"url": url, "code": exc.code, "message": exc.message})
+                continue
+            if post_id in seen:
+                continue
+            seen.add(post_id)
+            try:
+                record = self.fetch_post(normalized)
+            except AuthenticationRequired as exc:
+                raise AuthenticationRequired(
+                    exc.message,
+                    trigger_url=normalized,
+                    records=records,
+                    failures=failures,
+                ) from exc
+            if record is None:
+                failures.append(
+                    {
+                        "url": normalized,
+                        "code": "POST_NOT_FOUND",
+                        "message": "帖子详情当前不可用。",
+                    }
+                )
+                continue
+            record["order_index"] = len(records)
+            records.append(record)
+        return {
+            "records": records,
+            "failures": failures,
+            "stop_reason": "已处理全部导入帖子链接。",
+        }
