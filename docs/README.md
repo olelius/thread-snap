@@ -84,6 +84,7 @@
 | `docs/adr/0005-adopt-forged-in-prod-workflow-control.md` | 采用 forged-in-prod 方法并按 Codex 能力建立唯一账本和流程门禁 |
 | `docs/adr/0006-split-collector-access-poc-from-v1-functional-acceptance.md` | 当前先执行采集框架访问 PoC，第一版完整功能仍在后续开发与验收 |
 | `docs/adr/0007-official-login-and-encrypted-platform-session.md` | 不保存平台账号密码，通过官方页面建立加密 Session，并优先有界自动刷新 |
+| `docs/adr/0008-v1-backend-exposes-frontend-and-integration-apis.md` | 第一版独立后端同时提供前端 API 和稳定集成 API，后续现有后端直接复用集成接口 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 
