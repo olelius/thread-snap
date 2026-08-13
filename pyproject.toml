@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "threadsnap"
+version = "0.1.0"
+description = "ThreadSnap 多平台论坛链接快照提取后端"
+requires-python = ">=3.11"
+dependencies = [
+  "alembic==1.19.1",
+  "cryptography==46.0.7",
+  "fastapi==0.141.1",
+  "httpx==0.28.1",
+  "openpyxl==3.1.5",
+  "pydantic-settings==2.15.0",
+  "python-multipart==0.0.32",
+  "scrapling==0.4.12",
+  "sqlalchemy==2.0.52",
+  "tzdata==2026.3",
+  "uvicorn[standard]==0.52.3",
+]
+
+[project.scripts]
+threadsnap = "threadsnap.cli:main"
+
+[project.optional-dependencies]
+dev = ["ruff==0.16.3"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+threadsnap = [
+  "migrations/README",
+  "migrations/*.py",
+  "migrations/*.mako",
+  "migrations/versions/*.py",
+]
+
+[tool.unittest]
+start-directory = "tests"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

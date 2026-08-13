@@ -7,6 +7,12 @@
 # 项目 Python 虚拟环境
 /.vevn/
 
+# 本地运行数据、环境文件和可编辑安装元数据
+/data/
+/build/
+/.env
+*.egg-info/
+
 # PoC 本地依赖、缓存与构建产物
 **/__pycache__/
 *.py[cod]

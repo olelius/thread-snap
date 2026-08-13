@@ -23,6 +23,7 @@
 | 已证实的可复用根因、坑和杠杆 | `docs/memories/` |
 | 已冻结且确有保留价值的历史记录 | `docs/project-notes/` |
 | PoC 样本、阶段、指标和结果格式 | `docs/research/collector-stack-poc-plan.md` |
+| 第一版后端安装、配置、启动和验证 | `docs/deployment/backend-v1.md` |
 | 已接收 PoC 输入的数量、环境摘要和哈希 | `docs/research/poc-input-intake-2026-08-08.md` |
 | 通用技术背景与方案比较 | `docs/research/collection-and-antibot-landscape.md` |
 | 甲方输入模板 | `docs/templates/poc/` |
@@ -79,7 +80,7 @@
 |---|---|
 | `docs/adr/0001-extraction-service-owns-extraction-data.md` | 提取功能服务持续拥有提取领域数据 |
 | `docs/adr/0002-plaintext-platform-credentials-for-internal-validation.md` | 已被 ADR 0007 替代的历史明文凭证决策 |
-| `docs/adr/0003-package-poc-for-linux-before-formal-development.md` | 正式功能开发前完成 Linux PoC 打包与最终主机测试 |
+| `docs/adr/0003-package-poc-for-linux-before-formal-development.md` | 已被 ADR 0011 替代的历史开发前置门禁 |
 | `docs/adr/0004-treat-platform-controls-as-poc-outcome-gate.md` | 平台风控影响按 PoC 结果门禁判定 |
 | `docs/adr/0005-adopt-forged-in-prod-workflow-control.md` | 采用 forged-in-prod 方法并按 Codex 能力建立唯一账本和流程门禁 |
 | `docs/adr/0006-split-collector-access-poc-from-v1-functional-acceptance.md` | 当前先执行采集框架访问 PoC，第一版完整功能仍在后续开发与验收 |
@@ -87,6 +88,7 @@
 | `docs/adr/0008-v1-backend-exposes-frontend-and-integration-apis.md` | 第一版独立后端同时提供前端 API 和稳定集成 API，后续现有后端直接复用集成接口 |
 | `docs/adr/0009-global-scheduler-and-platform-fifo.md` | 一个全局调度源创建批次，执行时按平台严格 FIFO 隔离认证阻塞 |
 | `docs/adr/0010-versioned-tag-driven-xlsx-templates.md` | 多模板使用不可变版本和稳定英文标签驱动 XLSX 导出 |
+| `docs/adr/0011-adopt-python-backend-before-deferred-linux-gate.md` | 采用 Python 第一版后端，CentOS 三轮暂缓但保留为最终部署门禁 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 

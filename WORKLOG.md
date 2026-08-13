@@ -15,6 +15,36 @@
 
 ---
 
+## 2026-08-14 — 完成第一版提取后端
+
+**总目标**：在用户明确暂缓 CentOS 连续三轮门禁的前提下，完成懂车帝动态/最新回复圈子发现、事前固定 2000 条有效样本、持久队列、双接口、认证续跑、结果管理和 XLSX 模板导出后端。
+
+**状态**：✅ 第一版提取后端、Windows 真实闭环和交付验证已完成；目标 CentOS 三轮仍按 ADR 0011 暂缓。
+
+**干到哪了**：
+- [x] 圈子 `24729` 已验证 42 页、1259 个唯一动态候选、跨页最新回复顺序与第 43 页空页停止；候选清单 SHA-256 为 `81acb993abf36d8ef19e6c9464d1f5dbab03b3bf84cfe778b4393ae64876d0d1`。
+- [x] 事前固定 2000 条有效样本，URL 清单 SHA-256 为 `24f921036677c8d1ce933a81ec10d15a700c765fccf3401121a99787f0f9f21e`；2500 条候选中有 2025 条当前有效且可用字段完整，固定取前 2000 条。
+- [x] 新增 Python/FastAPI 应用、SQLAlchemy 领域模型、Alembic 首版迁移、SQLite 第一版持久化、`/api/v1` 和回环限制的 `/internal/v1`。
+- [x] 实现全局多时间调度、定时幂等、平台 FIFO、平台内部并发安全收敛、进程重启恢复、认证只阻塞对应平台。
+- [x] 实现懂车帝直接 HTTP 列表优先、SSR 不足时浏览器补全、详情与最多 10 条一级评论接口，并按有效结果数继续翻页补足。
+- [x] 实现 Fernet 加密平台 Session、既有 Session 有界自动刷新、`waiting_for_auth`、Patchright 服务器官方页面 WebSocket 中继、真实样本验证后续跑。
+- [x] 实现手动圈子历史、中文错误、幂等提交、终态删除、只补提失败 URL、原批次与补提结果去重汇总。
+- [x] 实现多模板不可变版本、稳定英文标签校验、一帖一行、评论/媒体单元格编号换行、样式复制、冲突错误和结果版本复用。
+- [x] 正式采集器真实圈子冒烟为 30/30 有效、0 失败、10.166 秒，摘要 SHA-256 为 `87c10faa23e1a9043015581c56215a917d98ac56c6ca10f4877e64bdca5c44ae`。
+- [x] 真实端到端链路的会话导入、圈子保存/验证、手动提取 3/3、结果查询、模板上传和 XLSX 下载 10 个接口全部返回 200/202，摘要 SHA-256 为 `c256ba7aa13fa8862d749459b34ed0f1fdccd497589908e10a670fb9a3077510`。
+- [x] ADR 0011 已接受：采用 Python 第一版后端，目标 CentOS 三轮从开发前置调整为暂缓的最终部署验收门禁。
+- [x] `python -m unittest discover -s tests -v` 为 18/18，`python -m unittest discover -s poc/shared/tests -v` 为 64/64；`ruff format --check`、`ruff check`、`compileall`、`pip check` 和 `git diff --check` 全部通过。
+- [x] 最终源码 wheel 独立安装后由包内 Alembic 资源创建 15 张表；wheel SHA-256 为 `4bec552d1496a5728c2b83c0c97c2a6328de9300ec8385fccf719fa95eec148c`。
+- [x] 134 个候选提交文件与本地 33 个真实 Cookie 值比对为 0 命中；Git 中敏感状态文件和具体 Cookie/Bearer 凭证形态均为 0 命中。
+
+**下一步**：前端按 `/api/v1` 联调第一版配置、队列、认证和导出页面；准备最终 Linux 部署时，再恢复目标 CentOS 连续三轮门禁及服务管理验收。
+
+**边界**：本条只宣布第一版提取后端和 Windows 真实闭环，不宣布前端、公网权限、后续两个平台或目标 CentOS 三轮已完成。业务运行目录、Session、模板、导出和原始验证证据均不进入 Git。
+
+**关联**：`src/threadsnap/`、`src/threadsnap/migrations/versions/84d25130bc33_v1_backend_schema.py`、`tests/test_backend.py`、`docs/adr/0011-adopt-python-backend-before-deferred-linux-gate.md`、`docs/deployment/backend-v1.md`、`docs/design/technical-route.md`、`docs/chains/first-platform-delivery.md`。
+
+---
+
 ## 2026-08-14 — 第一版后端领域契约与交付边界
 
 **总目标**：把已逐项确认的第一版配置层级、统一调度、平台队列、手动/定时提取、补提、认证阻塞、中文错误和 XLSX 模板规则写入唯一 owner 文档，为技术选型门禁通过后的后端实现提供无歧义契约。

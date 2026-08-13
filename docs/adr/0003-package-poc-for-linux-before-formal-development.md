@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: superseded
+superseded_by: 0011-adopt-python-backend-before-deferred-linux-gate.md
 ---
 
 # 正式功能开发前以最简测试包完成 Linux PoC
