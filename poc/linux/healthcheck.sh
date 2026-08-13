@@ -10,12 +10,19 @@ export PLAYWRIGHT_BROWSERS_PATH="$ROOT/.runtime/browsers"
 
 .runtime/candidate-a/bin/python - <<'PY'
 import asyncio
-from scrapling.fetchers import AsyncDynamicSession
+import sys
+from pathlib import Path
+from scrapling.fetchers import AsyncDynamicSession, FetcherSession
+from scrapling.spiders import Spider
+root = Path.cwd()
+sys.path[:0] = [str(root / "poc" / "shared"), str(root / "poc" / "candidate-a" / "src")]
+import content_extraction
+assert content_extraction.MAX_FIRST_LEVEL_COMMENTS == 10
 async def main():
     async with AsyncDynamicSession(headless=True, max_pages=1):
         pass
 asyncio.run(main())
-print("candidate-a browser ok")
+print("candidate-a browser and content api imports ok")
 PY
 
 node --input-type=module - <<'JS'

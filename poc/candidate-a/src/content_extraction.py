@@ -24,13 +24,14 @@ from scrapling.spiders.result import ItemList
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "poc" / "shared"))
 
-from contract import extract_input_post_id, url_sha256  # noqa: E402
+from contract import classify_document, extract_input_post_id, url_sha256  # noqa: E402
 from http_throughput import percentile, utc_now, write_json  # noqa: E402
 from session_handoff import load_http_cookies  # noqa: E402
 
 API_ROOT = "https://www.dongchedi.com/motor/pc/ugc/detail"
 API_COMMON = {"aid": "1839", "app_name": "auto_web_pc"}
 MAX_FIRST_LEVEL_COMMENTS = 10
+API_CONTROL_CLASSES = frozenset({"login", "captcha", "challenge", "rate_limited", "empty", "error"})
 
 
 def api_url(endpoint: str, **params: object) -> str:
@@ -218,6 +219,12 @@ def comment_page(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def comment_collection_complete(*, collected_count: int, has_more: bool) -> bool:
+    """达到十条或接口明确无下一页时，以本次实际返回评论作为最终结果。"""
+
+    return collected_count >= MAX_FIRST_LEVEL_COMMENTS or not has_more
+
+
 def response_payload(response: Response) -> dict[str, Any]:
     """直接从原始字节解析 JSON，避免响应头编码导致中文失真。"""
 
@@ -226,6 +233,14 @@ def response_payload(response: Response) -> dict[str, Any]:
     except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def classify_api_error(url: str, http_status: int, body: bytes, input_post_id: str) -> str:
+    """识别 API 返回的登录、验证码、挑战、限流和空响应；其他异常归为 API 错误。"""
+
+    document = body.decode("utf-8", errors="replace")
+    response_class = classify_document(url, http_status, document, input_post_id)["response_class"]
+    return response_class if response_class in API_CONTROL_CLASSES else "api_error"
 
 
 def finalize_record(
@@ -342,12 +357,18 @@ class ContentExtractionSpider(Spider):
         record["comment_http_statuses"] = []
         if int(response.status) != 200 or payload.get("status") != 0:
             record["missing_fields"] = sorted(set(record["missing_fields"] + ["detail_api"]))
+            error_category = classify_api_error(
+                str(response.url),
+                int(response.status),
+                response.body,
+                extract_input_post_id(input_url),
+            )
             final = finalize_record(
                 record,
                 started_perf=started_perf,
                 request_count=1,
                 api_durations_ms=durations,
-                comments_error="detail_api_error",
+                comments_error=error_category,
             )
             self._complete(input_url, final)
             yield final
@@ -413,12 +434,18 @@ class ContentExtractionSpider(Spider):
 
         if int(response.status) != 200 or not page["api_ok"]:
             record["comments"] = comments
+            error_category = classify_api_error(
+                str(response.url),
+                int(response.status),
+                response.body,
+                extract_input_post_id(input_url),
+            )
             final = finalize_record(
                 record,
                 started_perf=started_perf,
                 request_count=request_count,
                 api_durations_ms=durations,
-                comments_error="comments_api_error",
+                comments_error=error_category,
             )
             self._complete(input_url, final)
             yield final
@@ -427,19 +454,19 @@ class ContentExtractionSpider(Spider):
         total_count = page["total_count"]
         record["comment_api_total_count"] = total_count
         record["comment_count_consistent"] = total_count is not None and record.get("reply_count") == total_count
-        enough = len(comments) >= MAX_FIRST_LEVEL_COMMENTS
-        exhausted = not page["has_more"]
-        if total_count is not None:
-            exhausted = exhausted or len(comments) >= min(total_count, MAX_FIRST_LEVEL_COMMENTS)
-        if enough or exhausted:
+        collection_complete = comment_collection_complete(
+            collected_count=len(comments),
+            has_more=bool(page["has_more"]),
+        )
+        if collection_complete:
             record["comments"] = comments[:MAX_FIRST_LEVEL_COMMENTS]
-            record["comments_complete"] = enough or total_count is None or len(comments) >= min(total_count, 10)
+            record["comments_complete"] = True
             final = finalize_record(
                 record,
                 started_perf=started_perf,
                 request_count=request_count,
                 api_durations_ms=durations,
-                comments_error=None if record["comments_complete"] else "comments_incomplete",
+                comments_error=None,
             )
             self._complete(input_url, final)
             yield final
@@ -510,6 +537,7 @@ def build_content_summary(results: list[dict[str, Any]], duration_ms: int, concu
     missing = Counter(field for item in results for field in item["missing_fields"])
     true_empty_comments = sum(item.get("reply_count") == 0 and item.get("comments_complete") for item in results)
     comments = [comment for item in results for comment in item["comments"]]
+    error_categories = Counter(str(item["error_category"]) for item in results if item.get("error_category"))
     return {
         "schema_version": "1.0",
         "candidate": "candidate-a",
@@ -537,6 +565,7 @@ def build_content_summary(results: list[dict[str, Any]], duration_ms: int, concu
             for field in ("author", "content", "published_at", "like_count")
         },
         "missing_field_counts": dict(sorted(missing.items())),
+        "error_category_counts": dict(sorted(error_categories.items())),
         "duration_ms": duration_ms,
         "effective_complete_urls_per_second": round(complete_count / (duration_ms / 1000), 6) if duration_ms else 0,
         "processed_urls_per_second": round(len(results) / (duration_ms / 1000), 6) if duration_ms else 0,

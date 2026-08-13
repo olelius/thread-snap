@@ -15,6 +15,27 @@
 
 ---
 
+## 2026-08-13 — Candidate A Linux 内容 API 包
+
+**总目标**：把 Windows 已验证的 Scrapling 字段级 HTTP API 提取路径纳入现有 Linux PoC 包，在目标 CentOS 复用已登录 Session，先做最多3条门禁，再对固定输入执行详情、媒体和最多10条一级评论提取；批量阶段不得逐条启动浏览器。
+
+**状态**：🟡 源码、运行入口、包清单和测试已完成；待从干净提交构建并复核 v0.2.19 归档。
+
+**干到哪了**：
+- [x] 新增 `poc/linux/run-content-api.sh`：读取 Candidate A 的 `storage-state.json`，先以并发1执行1至3条内容 API 门禁，全部完整后才按 `content_api_concurrency` 启动计划分母；批量阶段只运行 `content_extraction.py` 的 `Spider + FetcherSession`，记录资源指标并打包完整结果。
+- [x] 门禁和批量结果现区分 `login`、`captcha`、`challenge`、`rate_limited`、空响应与普通 API 错误；Session 缺失或门禁受控时指向现有 `bootstrap-sms-session.sh candidate-a`，不在2000条计时窗口中自动重登或拼接新轮次。
+- [x] 评论完成口径按用户确认改为接口本次实际返回：达到10条或 `has_more=false` 即完成；详情回复数、评论总数和实际返回不一致只保留 `comment_count_consistent` 诊断，`has_more=true` 但游标缺失、接口失败或控制响应仍为不完整。
+- [x] Linux 配置、健康检查、README 和构建清单已纳入内容 API 入口及全部本地 Python 依赖；新增结构测试保证门禁先于批量、状态文件复用且运行脚本不包含浏览器 Session 类。
+- [x] 当前验证：项目 `.vevn` 的60项 `unittest` 全部通过；Python `compileall`、`pip check`、新增/修改 Shell 的 Bash 语法和 PowerShell 构建脚本解析均通过。
+
+**下一步**：提交当前源码与文档，从干净提交构建 `threadsnap-poc-dual-runner-0.2.19-linux.tar.gz`，复核外层及包内 SHA-256、文件清单、无凭证边界；随后记录归档证据并自动完成 Git 收尾。目标 Linux 运行时先复用现有 Candidate A 状态执行 `./poc/linux/run-content-api.sh content-api-round-1`。
+
+**边界**：本包只补齐 Candidate A 的 Linux 字段级测试入口，不把 Candidate A 提前宣布为正式技术栈；目标 Linux 的真实验证码、Session寿命、字段完整率和三轮硬门禁仍必须实测。人工滑块/短信初始化位于测试窗口外，批量过程中遇到控制响应停止并保留证据，不用自动重登掩盖单轮身份变化。
+
+**关联**：`poc/linux/run-content-api.sh`、`poc/candidate-a/src/content_extraction.py`、`poc/linux/README.md`、`poc/shared/tests/test_linux_content_package.py`、`docs/research/collector-stack-poc-plan.md`、`docs/chains/first-platform-delivery.md`。
+
+---
+
 ## 2026-08-12 — 完成 Candidate A 帖子内容与一级评论 HTTP API 提取测试
 
 **总目标**：在不逐条打开帖子页面、不重复详情请求的前提下，使用现有 Scrapling 登录状态和直接 HTTP API 提取第一版需要的帖子、媒体 URL、状态及最多十条一级评论，同时验证字段完整性与有效速度。
