@@ -238,12 +238,12 @@ Candidate A 的实现优先复用 Scrapling：Session、TLS/请求头、Cookie�
 1. 从输入URL路径提取 `group_id`，不请求帖子页面；
 2. 每帖先且只请求一次 `/motor/pc/ugc/detail/common`；
 3. 详情 `comment_count=0` 时评论数组按真实空值完成，不请求评论接口；
-4. 评论数大于0时请求 `/motor/pc/ugc/detail/comment_list?count=10&cursor=0`；只有返回不足10条且 `has_more=true` 时才按游标继续；
+4. 评论数大于0时请求 `/motor/pc/ugc/detail/comment_list?count=10&cursor=0`；只有返回不足10条且 `has_more=true` 时才按游标继续；不足10条且 `has_more=false` 时以接口本次实际返回为最终结果，详情/接口计数差异只保留诊断；
 5. 可见状态、媒体URL、正文和计数全部复用详情响应，不为相同字段重复请求；
 6. Scrapling承担 `FetcherSession`、Chrome模拟、隐蔽请求头、Cookie、Spider并发、Request/Response、CrawlStats和JSONL导出；项目代码只处理平台字段映射、严格完整性和业务状态；
 7. 当前对照中移除 `msToken/a_bogus` 后详情约301ms、评论约279ms且仍返回完整JSON，因此本版不生成动态签名。该事实绑定当前测试时点，接口变化时重新验证。
 
-字段覆盖帖子URL、平台帖子ID、标题、作者、发布时间、正文、图片URL、视频URL、回复数、点赞数、圈子、标准化及原始状态；一级评论覆盖评论ID、作者、文本、发布时间和点赞数，最多10条，不采集楼中楼。平台真实未提供的标题、作者、圈子或评论文本保留为空；正文为空、详情不存在、评论分页证据不完整和状态语义未知继续判为不完整。
+字段覆盖帖子URL、平台帖子ID、标题、作者、发布时间、正文、图片URL、视频URL、回复数、点赞数、圈子、标准化及原始状态；一级评论覆盖评论ID、作者、文本、发布时间和点赞数，最多10条，不采集楼中楼。平台真实未提供的标题、作者、圈子或评论文本保留为空；正文为空、详情不存在、`has_more=true` 但游标缺失、评论API失败和状态语义未知继续判为不完整。
 
 最终500条使用原固定清单偏移720至1219、并发8，全部500条形成唯一终态：
 

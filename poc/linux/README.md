@@ -15,7 +15,7 @@
 
 `config.json` 是本地运行配置，不进入 Git、日志、结果或标准源码压缩包。直接交付目录会把该文件作为压缩包旁的明文 sidecar；`deploy.sh` 解压后再复制到运行目录。
 
-默认每个候选并发数为 8。Linux 预跑后应依据 `resource-metrics.csv` 调整，两个候选必须继续使用各自固定技术。
+默认每个候选并发数为 8。Candidate A 内容 API 使用 `candidate_a.content_api_concurrency`，默认同样为 8；`content_api_gate_count` 固定只允许 1 至 3。Linux 预跑后应依据 `resource-metrics.csv` 调整，两个候选必须继续使用各自固定技术。
 
 ## Linux 执行
 
@@ -71,6 +71,35 @@ CDP 只监听服务器回环地址并经 SSH 隧道访问，不需要在服务�
 Candidate A 的普通登录确认和逐 URL 访问使用 Scrapling 原有 `page_setup`，把首次导航及框架随后固定的完整 `load` 等待映射为 `domcontentloaded`，避免页面长期后台资源占满单 URL 超时；DOM 就绪后仍执行配置中的短等待并按帖子 ID 与标题/正文证明判断成功。候选异常退出且尚未写入登录结果时，联通包会记录 `runner_failed_before_login_result` 及退出码，而不是保留初始化占位状态。
 
 该入口只用于当前 PoC 测试。正式项目采用人工续期、自动接码、外部会话托管还是其他方式仍为未决项，本脚本不构成正式方案。
+
+## Candidate A 内容 API 测试
+
+Windows 已验证的详情与一级评论 API 入口通过以下命令在 Linux 运行：
+
+```bash
+./poc/linux/run-content-api.sh content-api-round-1
+```
+
+该入口只使用 Candidate A：
+
+1. 从 `config.json` 的 `candidate_a.profile_dir/storage-state.json` 加载由 Scrapling 建立的 Session；
+2. 先对 `connectivity-urls.txt` 的前 `content_api_gate_count` 条执行并发 1 门禁；
+3. 门禁全部完整才对 `input-urls.txt` 的前 `expected_count` 条执行内容 API 测试；
+4. 批量阶段只使用 Scrapling `Spider + FetcherSession` 请求详情和评论 JSON API，不启动浏览器、不逐条打开帖子页面；
+5. 门禁识别到 `login`、`captcha`、`challenge`、`rate_limited`、空响应或字段不完整时停止，不把门禁结果拼入2000条；
+6. Session不存在时执行 `./poc/linux/bootstrap-sms-session.sh candidate-a`，成功后重新运行本命令。Linux可能触发滑块和短信验证，该人工初始化不计入2000条测试窗口。
+
+评论按接口本次实际返回结果保存：达到10条即停止；不足10条且 `has_more=false` 时视为接口本次已结束。详情回复数与评论API总数不一致只记录在 `comment_count_consistent`，不据此虚构缺失评论；`has_more=true` 但游标缺失、评论接口失败或控制响应仍属于不完整。
+
+结果位于 `content-api-results/<round>-<timestamp>/`，其中：
+
+- `gate/`：1至3条Session/API门禁结果；
+- `bulk/`：完整输入的 `content-results.jsonl`、`summary.json`、`environment.json` 和校验清单；
+- `resource-metrics.csv`：批量阶段进程资源；
+- `run-metadata.json`：门禁/批量退出码、并发和计划分母，不包含Cookie；
+- 同名 `.tar.gz` 与 `.sha256`：复制回开发电脑的完整结果包。
+
+退出码 `0` 表示全部记录满足当前字段规则；退出码 `6` 表示所有URL都形成结果但仍有 `partial`；其他非零码表示门禁或运行失败。即使退出非零，只要结果目录已经创建，脚本仍会生成结果压缩包。
 
 该脚本最多访问 `connectivity-urls.txt` 中的 3 条已验证样本，不启动 2000 条任务。它依次记录：
 

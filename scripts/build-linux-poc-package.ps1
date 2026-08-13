@@ -42,6 +42,7 @@ $files = @(
     'poc/linux/monitor-resources.sh',
     'poc/linux/process-control.sh',
     'poc/linux/run-poc.sh',
+    'poc/linux/run-content-api.sh',
     'poc/linux/run-all.sh',
     'poc/linux/test-connectivity.sh',
     'poc/linux/test-access-transition.sh',
@@ -49,6 +50,8 @@ $files = @(
     'poc/linux/bootstrap-sms-session.sh',
     'poc/candidate-a/requirements.lock',
     'poc/candidate-a/src/throughput.py',
+    'poc/candidate-a/src/content_extraction.py',
+    'poc/candidate-a/src/http_throughput.py',
     'poc/candidate-b/package.json',
     'poc/candidate-b/package-lock.json',
     'poc/candidate-b/tsconfig.json',
@@ -61,6 +64,7 @@ $files = @(
     'poc/shared/prepare_connectivity_config.py',
     'poc/shared/prepare_single_concurrency_config.py',
     'poc/shared/session_profile.py',
+    'poc/shared/session_handoff.py',
     'poc/shared/validate_single_concurrency_probe.py',
     'poc/shared/finalize_connectivity.py',
     'poc/shared/validate_results.py',
@@ -140,11 +144,12 @@ chmod 600 "`$runner/config.json"
 chmod +x "`$runner"/poc/linux/*.sh
 echo "deployed: `$runner"
 echo "next: cd `$runner && ./poc/linux/install.sh && ./poc/linux/start.sh && ./poc/linux/test-connectivity.sh"
+echo "content_api: ./poc/linux/run-content-api.sh content-api-round-1"
 "@
     [IO.File]::WriteAllText((Join-Path $operator 'deploy.sh'), $deploy.Replace("`r`n", "`n"), [Text.UTF8Encoding]::new($false))
     [IO.File]::WriteAllText(
         (Join-Path $operator 'README.txt'),
-        "将本目录完整复制到 Linux，执行: chmod +x deploy.sh && ./deploy.sh`n部署后先运行 test-connectivity.sh，把 connectivity-results 中的 tar.gz 和 sha256 复制回来。`n配置文件为明文，仅保留在受控测试目录。`n",
+        "将本目录完整复制到 Linux，执行: chmod +x deploy.sh && ./deploy.sh`n部署后先运行 test-connectivity.sh；Candidate A Session可用后运行 run-content-api.sh content-api-round-1。把 connectivity-results 或 content-api-results 中的 tar.gz 和 sha256 复制回来。`n配置文件为明文，仅保留在受控测试目录。`n",
         [Text.UTF8Encoding]::new($false)
     )
 }

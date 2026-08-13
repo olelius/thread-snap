@@ -12,6 +12,8 @@
   "retry_delay_ms": 1500,
   "candidate_a": {
     "concurrency": 8,
+    "content_api_concurrency": 8,
+    "content_api_gate_count": 3,
     "profile_dir": "profiles/candidate-a",
     "real_chrome": false
   },

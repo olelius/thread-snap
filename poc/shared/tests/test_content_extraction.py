@@ -52,6 +52,27 @@ class ApiRouteTests(unittest.TestCase):
         self.assertNotIn("a_bogus", url)
         self.assertNotIn("/ugc/article/", url)
 
+    def test_api_error_classifies_login_and_captcha_before_bulk(self) -> None:
+        post_id = "1234567890123456789"
+        self.assertEqual(
+            "login",
+            MODULE.classify_api_error(
+                "https://www.dongchedi.com/motor/pc/ugc/detail/common",
+                200,
+                "请登录".encode(),
+                post_id,
+            ),
+        )
+        self.assertEqual(
+            "captcha",
+            MODULE.classify_api_error(
+                "https://www.dongchedi.com/motor/pc/ugc/detail/common",
+                200,
+                "需要验证码".encode(),
+                post_id,
+            ),
+        )
+
 
 class DetailNormalizationTests(unittest.TestCase):
     def test_extracts_all_project_fields_and_treats_empty_comments_as_complete(self) -> None:
@@ -130,6 +151,15 @@ class CommentNormalizationTests(unittest.TestCase):
 
         payload = MODULE.response_payload(FakeResponse())
         self.assertEqual("四川成都IT民工", payload["data"]["name"])
+
+    def test_final_actual_comments_are_complete_when_api_has_no_more_page(self) -> None:
+        """详情计数与实际返回不一致时，不凭计数虚构缺失评论。"""
+
+        self.assertTrue(MODULE.comment_collection_complete(collected_count=1, has_more=False))
+
+    def test_more_page_still_requires_cursor_collection(self) -> None:
+        self.assertFalse(MODULE.comment_collection_complete(collected_count=1, has_more=True))
+        self.assertTrue(MODULE.comment_collection_complete(collected_count=10, has_more=True))
 
 
 class SummaryTests(unittest.TestCase):
