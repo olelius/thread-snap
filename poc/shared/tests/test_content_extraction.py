@@ -114,6 +114,45 @@ class DetailNormalizationTests(unittest.TestCase):
         self.assertFalse(record["comments_complete"])
         self.assertIn("platform_post_id", record["missing_fields"])
 
+    def test_title_falls_back_to_first_body_sentence(self) -> None:
+        payload = detail_payload()
+        payload["data"]["thread_title"] = ""
+        payload["data"]["motor_title"] = "第一句话。第二句话！\n第三行"
+
+        record = MODULE.normalize_detail(
+            "https://www.dongchedi.com/ugc/article/1234567890123456789",
+            payload,
+        )
+
+        self.assertEqual("第一句话。", record["title"])
+        self.assertEqual("第一句话。第二句话！\n第三行", record["body"])
+
+    def test_image_only_post_is_complete_with_null_title_and_empty_body(self) -> None:
+        payload = detail_payload()
+        payload["data"].update({"thread_title": "", "motor_title": "", "content": ""})
+
+        record = MODULE.normalize_detail(
+            "https://www.dongchedi.com/ugc/article/1234567890123456789",
+            payload,
+        )
+
+        self.assertIsNone(record["title"])
+        self.assertEqual("", record["body"])
+        self.assertNotIn("body", record["missing_fields"])
+        self.assertEqual("success", record["status"])
+
+    def test_verified_operation_status_two_is_visible(self) -> None:
+        payload = detail_payload()
+        payload["data"]["operation_status"] = 2
+
+        record = MODULE.normalize_detail(
+            "https://www.dongchedi.com/ugc/article/1234567890123456789",
+            payload,
+        )
+
+        self.assertEqual("visible", record["visible_status"])
+        self.assertNotIn("visible_status", record["missing_fields"])
+
 
 class CommentNormalizationTests(unittest.TestCase):
     def test_extracts_only_normalized_first_level_comment_fields(self) -> None:
@@ -185,6 +224,29 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(1.5, summary["request_amplification"])
         self.assertEqual(1, summary["single_request_count"])
         self.assertEqual(0, summary["page_document_requests"])
+        self.assertEqual(2, summary["available_count"])
+        self.assertEqual(2, summary["available_complete_count"])
+        self.assertEqual(1.0, summary["available_content_completeness_rate"])
+
+    def test_summary_separates_source_availability_from_field_completeness(self) -> None:
+        available = MODULE.normalize_detail(
+            "https://www.dongchedi.com/ugc/article/1234567890123456789",
+            detail_payload(comment_count=0),
+        )
+        available.update({"status": "success", "request_count": 1, "duration_ms": 200})
+        missing = MODULE.normalize_detail(
+            "https://www.dongchedi.com/ugc/article/2234567890123456789",
+            {"status": 0, "message": "success", "data": {}},
+        )
+        missing.update({"status": "partial", "request_count": 1, "duration_ms": 200})
+
+        summary = MODULE.build_content_summary([available, missing], duration_ms=400, concurrency=1)
+
+        self.assertEqual(1, summary["source_missing_count"])
+        self.assertEqual(1, summary["available_count"])
+        self.assertEqual(0.5, summary["input_resolution_rate"])
+        self.assertEqual(1, summary["available_complete_count"])
+        self.assertEqual(1.0, summary["available_content_completeness_rate"])
 
 
 if __name__ == "__main__":

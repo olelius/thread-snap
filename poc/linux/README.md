@@ -91,6 +91,10 @@ Windows 已验证的详情与一级评论 API 入口通过以下命令在 Linux 
 
 评论按接口本次实际返回结果保存：达到10条即停止；不足10条且 `has_more=false` 时视为接口本次已结束。详情回复数与评论API总数不一致只记录在 `comment_count_consistent`，不据此虚构缺失评论；`has_more=true` 但游标缺失、评论接口失败或控制响应仍属于不完整。
 
+标题优先采用平台标题；平台没有标题但有正文文字时取正文第一句话；标题和正文都没有时标题为空。纯图片或纯视频帖子只要详情、状态和媒体URL已正确提取，正文与标题为空仍是完整结果。当前人工核对样本证明 `operation_status=2` 页面可见，因此与值 `0` 一同映射为 `visible`，原始值继续保留；其他未验证的新值仍为 `unknown`。
+
+`summary.json` 同时报告两套分母：`input_resolution_rate` 表示完整输入中取得详情的比例，`available_content_completeness_rate` 表示可取得详情的帖子字段完整率。来源已丢失的URL单列为 `source_missing_count`，不会伪装成解析字段缺失；正式2000条验收仍要求运行前固定2000条有效输入。
+
 结果位于 `content-api-results/<round>-<timestamp>/`，其中：
 
 - `gate/`：1至3条Session/API门禁结果；
