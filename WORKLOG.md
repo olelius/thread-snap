@@ -19,7 +19,7 @@
 
 **总目标**：把 Windows 已验证的 Scrapling 字段级 HTTP API 提取路径纳入现有 Linux PoC 包，在目标 CentOS 复用已登录 Session，先做最多3条门禁，再对固定输入执行详情、媒体和最多10条一级评论提取；批量阶段不得逐条启动浏览器。
 
-**状态**：🟡 源码、运行入口、包清单和测试已完成；待从干净提交构建并复核 v0.2.19 归档。
+**状态**：✅ Linux 内容 API 源码包 v0.2.19 已构建并完成外层、包内、语法、编译与敏感运行文件边界复核。
 
 **干到哪了**：
 - [x] 新增 `poc/linux/run-content-api.sh`：读取 Candidate A 的 `storage-state.json`，先以并发1执行1至3条内容 API 门禁，全部完整后才按 `content_api_concurrency` 启动计划分母；批量阶段只运行 `content_extraction.py` 的 `Spider + FetcherSession`，记录资源指标并打包完整结果。
@@ -27,8 +27,9 @@
 - [x] 评论完成口径按用户确认改为接口本次实际返回：达到10条或 `has_more=false` 即完成；详情回复数、评论总数和实际返回不一致只保留 `comment_count_consistent` 诊断，`has_more=true` 但游标缺失、接口失败或控制响应仍为不完整。
 - [x] Linux 配置、健康检查、README 和构建清单已纳入内容 API 入口及全部本地 Python 依赖；新增结构测试保证门禁先于批量、状态文件复用且运行脚本不包含浏览器 Session 类。
 - [x] 当前验证：项目 `.vevn` 的60项 `unittest` 全部通过；Python `compileall`、`pip check`、新增/修改 Shell 的 Bash 语法和 PowerShell 构建脚本解析均通过。
+- [x] 从源码提交 `71fbdb19354af63891d64da136d96b5a659d3900` 构建 `artifacts/poc/packages/linux-dual-runner/threadsnap-poc-dual-runner-0.2.19-linux.tar.gz`，外层 SHA-256 为 `721e2f5df9988c90f51e167153fb80a8da4605cbb24d6c542232b412931e931f`；解包后37/37项内部校验通过，13个 Shell 脚本语法和提取目录 Python 编译通过，38个文件中无 `config.json`、`storage-state.json`、输入清单或 `profiles/` 运行状态。
 
-**下一步**：提交当前源码与文档，从干净提交构建 `threadsnap-poc-dual-runner-0.2.19-linux.tar.gz`，复核外层及包内 SHA-256、文件清单、无凭证边界；随后记录归档证据并自动完成 Git 收尾。目标 Linux 运行时先复用现有 Candidate A 状态执行 `./poc/linux/run-content-api.sh content-api-round-1`。
+**下一步**：在目标 Linux 替换为 v0.2.19 源码包并保留本地 `config.json`、输入清单与 Candidate A 状态；部署/健康检查后执行 `./poc/linux/run-content-api.sh content-api-round-1`，复制回 `content-api-results/` 生成的 `.tar.gz` 与 `.sha256`，再依据门禁、字段完整率、实际评论和资源指标更新 Linux 结论。
 
 **边界**：本包只补齐 Candidate A 的 Linux 字段级测试入口，不把 Candidate A 提前宣布为正式技术栈；目标 Linux 的真实验证码、Session寿命、字段完整率和三轮硬门禁仍必须实测。人工滑块/短信初始化位于测试窗口外，批量过程中遇到控制响应停止并保留证据，不用自动重登掩盖单轮身份变化。
 
