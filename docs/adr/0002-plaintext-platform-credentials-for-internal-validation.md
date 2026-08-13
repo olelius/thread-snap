@@ -1,8 +1,11 @@
 ---
-status: accepted
+status: superseded
+superseded_by: 0007-official-login-and-encrypted-platform-session.md
 ---
 
 # 内部验证版明文持久化平台密码
+
+> 本决策已被 ADR 0007 替代。以下内容只保留历史决策依据，不再作为当前第一版实现规范。
 
 ThreadSnap 优先使用未登录方式采集。真实样本证明必须登录时，内部验证版允许用户通过配置页面录入平台账号和密码，并由提取功能服务在本地数据库中明文保存密码。
 
