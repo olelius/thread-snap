@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import platform
+import re
 import sys
 import time
 from collections import Counter
@@ -32,6 +33,8 @@ API_ROOT = "https://www.dongchedi.com/motor/pc/ugc/detail"
 API_COMMON = {"aid": "1839", "app_name": "auto_web_pc"}
 MAX_FIRST_LEVEL_COMMENTS = 10
 API_CONTROL_CLASSES = frozenset({"login", "captcha", "challenge", "rate_limited", "empty", "error"})
+VISIBLE_OPERATION_STATUSES = frozenset({0, 2})
+SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[。！？!?])|\r?\n+")
 
 
 def api_url(endpoint: str, **params: object) -> str:
@@ -69,6 +72,16 @@ def unique_urls(values: Iterable[object]) -> list[str]:
         seen.add(value)
         result.append(value)
     return result
+
+
+def first_sentence(text: str) -> str | None:
+    """返回正文第一句；没有正文时保留空值，不为纯媒体帖子虚构标题。"""
+
+    for part in SENTENCE_BOUNDARY_RE.split(text):
+        sentence = part.strip()
+        if sentence:
+            return sentence
+    return None
 
 
 def extract_video_urls(data: dict[str, Any]) -> list[str]:
@@ -112,7 +125,8 @@ def normalize_detail(input_url: str, payload: dict[str, Any]) -> dict[str, Any]:
     car_info = data.get("motor_car_info") if isinstance(data.get("motor_car_info"), dict) else {}
     observed_post_id = str(data.get("group_id_str") or data.get("group_id") or "") or None
     body = str(data.get("content") or data.get("motor_title") or "").strip()
-    title = str(data.get("thread_title") or "").strip() or None
+    platform_title = str(data.get("thread_title") or "").strip() or None
+    title = platform_title or first_sentence(body)
     author = str(profile.get("name") or "").strip() or None
 
     image_items = data.get("image_urls") if isinstance(data.get("image_urls"), list) else []
@@ -120,6 +134,7 @@ def normalize_detail(input_url: str, payload: dict[str, Any]) -> dict[str, Any]:
         item.get("url") if isinstance(item, dict) else item
         for item in image_items
     )
+    video_urls = extract_video_urls(data)
     reply_count = data.get("comment_count") if isinstance(data.get("comment_count"), int) else None
     like_count = data.get("digg_count") if isinstance(data.get("digg_count"), int) else None
     section = str(
@@ -127,13 +142,17 @@ def normalize_detail(input_url: str, payload: dict[str, Any]) -> dict[str, Any]:
     ).strip() or None
     published_at = epoch_to_iso8601(data.get("content_publish_time") or data.get("created_time"))
     operation_status = data.get("operation_status")
-    is_visible = api_status == 0 and observed_post_id == input_post_id and operation_status == 0
+    is_visible = (
+        api_status == 0
+        and observed_post_id == input_post_id
+        and operation_status in VISIBLE_OPERATION_STATUSES
+    )
     normalized_status = "visible" if is_visible else "unknown"
 
     missing_fields: list[str] = []
     if observed_post_id != input_post_id:
         missing_fields.append("platform_post_id")
-    if not body:
+    if not body and not image_urls and not video_urls:
         missing_fields.append("body")
     if published_at is None:
         missing_fields.append("published_at")
@@ -163,7 +182,7 @@ def normalize_detail(input_url: str, payload: dict[str, Any]) -> dict[str, Any]:
         "published_at": published_at,
         "body": body,
         "image_urls": image_urls,
-        "video_urls": extract_video_urls(data),
+        "video_urls": video_urls,
         "reply_count": reply_count,
         "like_count": like_count,
         "section": section,
@@ -532,6 +551,12 @@ def build_content_summary(results: list[dict[str, Any]], duration_ms: int, concu
     """统计内容完整率、真实空评论和有效速度。"""
 
     complete_count = sum(item["status"] == "success" for item in results)
+    source_missing_count = sum(item.get("error_category") == "detail_not_found" for item in results)
+    available_count = len(results) - source_missing_count
+    available_complete_count = sum(
+        item["status"] == "success" and item.get("error_category") != "detail_not_found"
+        for item in results
+    )
     request_count = sum(int(item["request_count"]) for item in results)
     durations = [int(item["duration_ms"]) for item in results]
     missing = Counter(field for item in results for field in item["missing_fields"])
@@ -546,11 +571,18 @@ def build_content_summary(results: list[dict[str, Any]], duration_ms: int, concu
         "result_count": len(results),
         "complete_count": complete_count,
         "content_completeness_rate": round(complete_count / len(results), 6) if results else 0,
+        "source_missing_count": source_missing_count,
+        "available_count": available_count,
+        "input_resolution_rate": round(available_count / len(results), 6) if results else 0,
+        "available_complete_count": available_complete_count,
+        "available_content_completeness_rate": (
+            round(available_complete_count / available_count, 6) if available_count else 0
+        ),
         "comments_complete_count": sum(bool(item["comments_complete"]) for item in results),
         "true_empty_comment_count": true_empty_comments,
         "comment_count_mismatch_count": sum(item.get("comment_count_consistent") is False for item in results),
         "comment_count_unknown_count": sum(item.get("comment_count_consistent") is None for item in results),
-        "detail_not_found_count": sum(item.get("error_category") == "detail_not_found" for item in results),
+        "detail_not_found_count": source_missing_count,
         "body_present_count": sum(bool(item["body"]) for item in results),
         "title_present_count": sum(bool(item["title"]) for item in results),
         "author_present_count": sum(bool(item["author"]) for item in results),
