@@ -6,7 +6,7 @@ import asyncio
 import json
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -182,6 +182,63 @@ class FakeAuthSocket:
 
     async def send_json(self, message: dict) -> None:
         self.messages.append(message)
+
+
+class FakeCDPSession:
+    def __init__(self):
+        self.calls: list[tuple[str, dict | None]] = []
+        self.listeners: dict[str, object] = {}
+        self.detached = False
+
+    def on(self, event: str, listener: object) -> None:
+        self.listeners[event] = listener
+
+    async def send(self, method: str, params: dict | None = None) -> dict:
+        self.calls.append((method, params))
+        if method == "Page.startScreencast":
+            listener = self.listeners["Page.screencastFrame"]
+            asyncio.get_running_loop().call_soon(
+                listener,  # type: ignore[arg-type]
+                {"data": "jpeg-frame", "sessionId": 7},
+            )
+        return {}
+
+    async def detach(self) -> None:
+        self.detached = True
+
+
+class FakeCDPContext(FakeAuthContext):
+    def __init__(self, state: dict, cdp: FakeCDPSession):
+        super().__init__(state)
+        self.cdp = cdp
+
+    async def new_cdp_session(self, _page: object) -> FakeCDPSession:
+        return self.cdp
+
+
+class FakeStreamSocket(FakeAuthSocket):
+    def __init__(self):
+        super().__init__()
+        self.frame_sent = asyncio.Event()
+        self.accepted = False
+        self.accepted_subprotocol: str | None = None
+        self.closed = False
+
+    async def accept(self, *, subprotocol: str | None = None) -> None:
+        self.accepted = True
+        self.accepted_subprotocol = subprotocol
+
+    async def receive_json(self) -> dict:
+        await self.frame_sent.wait()
+        return {"type": "close"}
+
+    async def send_json(self, message: dict) -> None:
+        await super().send_json(message)
+        if message.get("type") == "frame":
+            self.frame_sent.set()
+
+    async def close(self, **_kwargs: object) -> None:
+        self.closed = True
 
 
 def auth_state(value: str) -> dict:
@@ -419,6 +476,58 @@ class AuthComponentTests(AppCase):
                 response,
             )
         )
+
+    def test_cdp_stream_sends_latest_frame_and_acknowledges_it(self) -> None:
+        cdp = FakeCDPSession()
+        task = AuthTask(
+            id="auth-cdp-stream",
+            platform_code="dongchedi",
+            ticket="ticket",
+            expires_at=datetime.now(timezone.utc) + timedelta(minutes=1),
+            status="active",
+            page_status="ready",
+        )
+        task.page = FakeAuthPage()  # type: ignore[assignment]
+        task.context = FakeCDPContext(auth_state("session"), cdp)  # type: ignore[assignment]
+        self.container.auth.tasks[task.id] = task
+        socket = FakeStreamSocket()
+
+        asyncio.run(self.container.auth.stream(task.id, task.ticket, socket))  # type: ignore[arg-type]
+
+        self.assertTrue(socket.accepted)
+        self.assertEqual("threadsnap-auth", socket.accepted_subprotocol)
+        self.assertTrue(socket.closed)
+        frame = next(message for message in socket.messages if message["type"] == "frame")
+        self.assertEqual("jpeg-frame", frame["data"])
+        start = next(params for method, params in cdp.calls if method == "Page.startScreencast")
+        self.assertEqual(85, start["quality"])
+        self.assertEqual(1280, start["maxWidth"])
+        self.assertIn(("Page.screencastFrameAck", {"sessionId": 7}), cdp.calls)
+        self.assertIn(("Page.stopScreencast", None), cdp.calls)
+        self.assertTrue(cdp.detached)
+
+    def test_cdp_pointer_input_preserves_drag_state_and_clamps_coordinates(self) -> None:
+        cdp = FakeCDPSession()
+        asyncio.run(
+            self.container.auth._dispatch_pointer(
+                cdp,  # type: ignore[arg-type]
+                "mouseMoved",
+                {
+                    "x": 1400,
+                    "y": -12,
+                    "button": "left",
+                    "buttons": 1,
+                    "modifiers": 99,
+                },
+            )
+        )
+
+        self.assertEqual("Input.dispatchMouseEvent", cdp.calls[-1][0])
+        payload = cdp.calls[-1][1]
+        self.assertEqual(1280.0, payload["x"])
+        self.assertEqual(0.0, payload["y"])
+        self.assertEqual(1, payload["buttons"])
+        self.assertEqual(15, payload["modifiers"])
 
     def test_profile_is_encrypted_at_rest_and_restored_per_task(self) -> None:
         profiles = self.container.auth.profiles

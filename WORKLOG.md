@@ -15,6 +15,23 @@
 
 ---
 
+## 2026-08-14 — 平台认证切换为受控 CDP 实时画面
+
+**总目标**：把平台认证 Dialog 的输入空闲后整帧截图中继替换为后端封装的 CDP Screencast，补齐悬停、拖动和组合键路径，并在保持现有 Profile、Session、任务票据和批次恢复边界的前提下降低本地交互等待。
+**状态**：✅ Windows 本地实现、自动化验证和真实 UI 联调完成；FastAPI PID 33576 与 Vite PID 33412 已使用新代码重启，目标 Linux 的 Xvfb 与连续三轮部署门禁仍按 ADR 0011 独立保留。
+**干到哪了**：
+- [x] 后端通过 Patchright `BrowserContext.new_cdp_session` 在进程内启动 `Page.startScreencast`，使用 `1280 × 800`、JPEG 质量 85、逐帧确认和单帧背压替代原 700 毫秒输入超时截图；前端仍只连接短期认证 WebSocket，不开放原始 CDP 端口。
+- [x] 前端认证画布新增按动画帧合并的持续指针移动、按下、释放、拖动、滚轮、右键本地菜单抑制、普通文本、组合键和粘贴；高频移动在 WebSocket 缓冲增长时跳过中间位置，画面 DOM 直接更新，避免每帧触发整棵 Dialog React 状态刷新。
+- [x] `patchright==1.61.2` 已从传递依赖提升为 `pyproject.toml` 直接锁定依赖；新增 ADR 0014，并同步产品设计、技术路线、部署说明、文档索引和首平台交付链档。
+- [x] 后端完整 `unittest discover` 为 25/25，`ruff format --check`、`ruff check`、`compileall`、`pip check` 通过；前端 `npm run check` 和 `npm run build` 通过，生产构建转换 2456 个模块。
+- [x] 重启后经 Vite 反向代理收到 `browser_starting → ready → frame`，固定子协议协商为 `threadsnap-auth`，首帧 JPEG 为 127278 字节并以 1000 正常关闭；三个具有明确视觉变化的指针位置在 12.7 至 25.0 毫秒收到变化帧。真实 React 页面将 1280×800 源画面缩小为 1214×759 显示，搜索框 hover 后 49.3 毫秒取得变化帧；点击、测试文本输入和清空通过，浏览器控制台错误/警告为 0。这些延迟只是当前 Windows 回环单连接冒烟值，不作为固定性能指标。
+- [x] 高风险日志门禁发现 URL 查询票据会被 Uvicorn 访问日志记录，随后将票据迁移到 `Sec-WebSocket-Protocol` 候选值并只回显固定子协议；错误票据在握手阶段返回 HTTP 403。重启并完成真实 UI 操作后，前后端四份运行日志中的 `ticket=`、Cookie、Authorization、error 和 traceback 命中均为 0。
+**下一步**：在目标 Linux 同一服务管理环境中配置 Xvfb，真实创建认证任务，验证 CDP Screencast、完整指针输入、会话门禁和认证后批次续跑，再恢复 ADR 0011 的连续三轮部署验收。
+**边界**：CDP Screencast 绑定锁定的 Chromium/Patchright 版本且接口标记为实验性；本次没有开放调试端口、引入 VNC/WebRTC 服务、提交认证截图或保存测试输入，也没有把 Windows 结果外推为 Linux 已验收。变更没有数据库迁移或 Profile/Session 格式变化，回退可直接撤销本任务提交并恢复上一版 WebSocket 截图中继。
+**关联**：`src/threadsnap/auth.py`、`frontend/src/features/auth/auth-dialog.tsx`、`tests/test_backend.py`、`pyproject.toml`、`docs/adr/0014-use-controlled-cdp-screencast-for-auth.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/deployment/backend-v1.md`、`docs/chains/first-platform-delivery.md`。
+
+---
+
 ## 2026-08-14 — 修复平台认证白屏并完成真实联调
 
 **总目标**：修复近全屏认证 Dialog 中服务器浏览器只显示白色空页的问题，使人工认证入口真实加载官方页面、区分中继与页面状态，并在门禁通过后安全更新 Profile、Session 和等待批次。

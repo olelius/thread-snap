@@ -512,7 +512,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     @app.websocket("/api/v1/auth/tasks/{task_id}/stream")
-    async def auth_stream(websocket: WebSocket, task_id: str, ticket: str = Query(...)) -> None:
+    async def auth_stream(websocket: WebSocket, task_id: str) -> None:
+        protocols = {
+            item.strip()
+            for item in websocket.headers.get("sec-websocket-protocol", "").split(",")
+            if item.strip()
+        }
+        prefix = "threadsnap-ticket."
+        ticket = next(
+            (item.removeprefix(prefix) for item in protocols if item.startswith(prefix)),
+            "",
+        )
+        if "threadsnap-auth" not in protocols:
+            ticket = ""
         await websocket.app.state.container.auth.stream(task_id, ticket, websocket)
 
     return app
