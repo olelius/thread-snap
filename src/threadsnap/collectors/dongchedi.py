@@ -482,12 +482,13 @@ class DongchediCollector:
     ) -> dict[str, Any]:
         circle_id, _ = normalize_circle_url(circle_url)
         records: list[dict[str, Any]] = []
-        failures: list[dict[str, str]] = []
+        failures: list[dict[str, Any]] = []
         seen: set[str] = set(skip_post_ids or set())
         page_number = 1
         page_count: int | None = None
         total_count: int | None = None
         exhausted = False
+        candidate_position = 0
         while len(records) < target_count:
             expected = (
                 None
@@ -505,6 +506,8 @@ class DongchediCollector:
                 exhausted = True
                 break
             for candidate in candidates:
+                source_index = candidate_position
+                candidate_position += 1
                 seen.add(candidate["post_id"])
                 try:
                     record = self.fetch_post(candidate["url"])
@@ -521,6 +524,7 @@ class DongchediCollector:
                             "url": candidate["url"],
                             "code": exc.code,
                             "message": exc.message,
+                            "source_index": source_index,
                         }
                     )
                     continue
@@ -530,10 +534,11 @@ class DongchediCollector:
                             "url": candidate["url"],
                             "code": "POST_NOT_FOUND",
                             "message": "帖子详情当前不可用。",
+                            "source_index": source_index,
                         }
                     )
                     continue
-                record["order_index"] = len(records)
+                record["order_index"] = source_index
                 records.append(record)
                 if len(records) >= target_count:
                     break
@@ -553,13 +558,20 @@ class DongchediCollector:
 
     def collect_urls(self, urls: list[str]) -> dict[str, Any]:
         records: list[dict[str, Any]] = []
-        failures: list[dict[str, str]] = []
+        failures: list[dict[str, Any]] = []
         seen: set[str] = set()
-        for url in urls:
+        for source_index, url in enumerate(urls):
             try:
                 post_id, normalized = normalize_post_url(url)
             except CollectorFailure as exc:
-                failures.append({"url": url, "code": exc.code, "message": exc.message})
+                failures.append(
+                    {
+                        "url": url,
+                        "code": exc.code,
+                        "message": exc.message,
+                        "source_index": source_index,
+                    }
+                )
                 continue
             if post_id in seen:
                 continue
@@ -579,10 +591,11 @@ class DongchediCollector:
                         "url": normalized,
                         "code": "POST_NOT_FOUND",
                         "message": "帖子详情当前不可用。",
+                        "source_index": source_index,
                     }
                 )
                 continue
-            record["order_index"] = len(records)
+            record["order_index"] = source_index
             records.append(record)
         return {
             "records": records,

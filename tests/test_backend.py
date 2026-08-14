@@ -157,26 +157,55 @@ class ApiAndConfigTests(AppCase):
         self.assertEqual(403, raised.exception.status_code)
         self.assertIn("本机", raised.exception.message)
 
-    def test_platform_clamping_schedule_and_chinese_validation(self) -> None:
+    def test_platform_clamping_plan_and_chinese_validation(self) -> None:
         response = self.client.put(
             "/api/v1/platforms/dongchedi",
-            json={"enabled": True, "auto_quantity": 9999, "internal_concurrency": 99},
+            json={"enabled": True, "internal_concurrency": 99},
         )
         self.assertEqual(200, response.status_code)
-        self.assertEqual(2000, response.json()["auto_quantity"])
         self.assertEqual(8, response.json()["internal_concurrency"])
-        self.assertEqual(2, len(response.json()["notes"]))
+        self.assertEqual(1, len(response.json()["notes"]))
 
         disabled = self.client.put(
             "/api/v1/platforms/autohome",
-            json={"enabled": True, "auto_quantity": 30, "internal_concurrency": 1},
+            json={"enabled": True, "internal_concurrency": 1},
         )
         self.assertEqual(409, disabled.status_code)
         self.assertIn("暂未接入", disabled.json()["message"])
 
-        schedule = self.client.put("/api/v1/schedule", json={"times": ["17:00", "10:00", "10:00"]})
-        self.assertEqual(["10:00", "17:00"], schedule.json()["times"])
-        invalid = self.client.put("/api/v1/schedule", json={"times": ["25:99"]})
+        plan = self.client.put(
+            "/api/v1/extraction-plan",
+            json={
+                "revision": 1,
+                "rules": [
+                    {
+                        "id": "rule-0001",
+                        "name": "工作日规则",
+                        "platform_quantities": {"dongchedi": 30},
+                    }
+                ],
+                "nodes": [
+                    {
+                        "id": "node-0001",
+                        "weekdays": [4, 0, 0],
+                        "time": "17:00:05",
+                        "enabled": True,
+                        "rule_id": "rule-0001",
+                    }
+                ],
+            },
+        )
+        self.assertEqual(200, plan.status_code)
+        self.assertEqual([0, 4], plan.json()["nodes"][0]["weekdays"])
+        self.assertEqual("17:00:05", plan.json()["nodes"][0]["time"])
+        invalid = self.client.put(
+            "/api/v1/extraction-plan",
+            json={
+                "revision": 2,
+                "rules": plan.json()["rules"],
+                "nodes": [{**plan.json()["nodes"][0], "time": "25:99"}],
+            },
+        )
         self.assertEqual(422, invalid.status_code)
         self.assertEqual("请求参数校验失败。", invalid.json()["message"])
         self.assertTrue(
@@ -357,6 +386,17 @@ class QueueAndRetryTests(AppCase):
         merged = self.container.runs.posts(retry["id"])
         self.assertEqual(2, merged["total"])
         self.assertEqual(["2001", "2002"], [item["platform_post_id"] for item in merged["items"]])
+        first_id, second_id = [item["id"] for item in merged["items"]]
+        first_navigation = self.container.runs.post_navigation(retry["id"], first_id)
+        self.assertIsNone(first_navigation["previous_id"])
+        self.assertEqual(second_id, first_navigation["next_id"])
+        self.assertEqual(1, first_navigation["position"])
+        self.assertEqual(2, first_navigation["total"])
+        reverse_navigation = self.container.runs.post_navigation(
+            retry["id"], first_id, sort_by="source", sort_direction="desc"
+        )
+        self.assertEqual(second_id, reverse_navigation["previous_id"])
+        self.assertIsNone(reverse_navigation["next_id"])
 
     def test_auth_wait_blocks_only_its_platform_queue(self) -> None:
         with self.container.sessions.begin() as db:
@@ -409,21 +449,43 @@ class QueueAndRetryTests(AppCase):
         self.assertEqual("waiting_for_auth", self.container.runs.get_run(blocked_run.id)["status"])
         self.assertEqual("success", self.container.runs.get_run(free_run.id)["status"])
 
-    def test_global_scheduler_deduplicates_same_minute(self) -> None:
+    def test_weekly_scheduler_deduplicates_same_second(self) -> None:
         circle = self.save_verified_circle()
         with self.container.sessions.begin() as db:
             stored = db.get(Circle, circle.id)
             stored.auto_enabled = True
-        updated = self.client.put("/api/v1/schedule", json={"times": ["10:00"]}).json()
+        updated = self.client.put(
+            "/api/v1/extraction-plan",
+            json={
+                "revision": 1,
+                "rules": [
+                    {
+                        "id": "rule-0001",
+                        "name": "定时规则",
+                        "platform_quantities": {"dongchedi": 1},
+                    }
+                ],
+                "nodes": [
+                    {
+                        "id": "node-0001",
+                        "weekdays": [4],
+                        "time": "10:00:00",
+                        "enabled": True,
+                        "rule_id": "rule-0001",
+                    }
+                ],
+            },
+        ).json()
         now = datetime(2026, 8, 14, 2, 0, tzinfo=timezone.utc)
         first = self.container.scheduler.tick(now)
         second = self.container.scheduler.tick(now)
         self.assertIsNotNone(first)
-        self.assertEqual(first["id"], second["run_id"])
+        self.assertIsNone(second)
         with self.container.sessions() as db:
             events = list(db.scalars(select(ScheduleEvent)))
             self.assertEqual(1, len(events))
-            self.assertEqual(updated["version"], events[0].schedule_version)
+            self.assertEqual(updated["revision"], events[0].schedule_revision)
+            self.assertEqual("node-0001", events[0].schedule_node_id)
 
     def test_automatic_auth_refresh_retries_inside_same_run(self) -> None:
         circle = self.save_verified_circle()

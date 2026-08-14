@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
+from typing import Any, Callable
 
 from patchright.sync_api import sync_playwright
 from sqlalchemy import func, select
@@ -33,10 +33,12 @@ class WorkerService:
         factory: sessionmaker[Session],
         session_store: SessionStore,
         poll_seconds: float = 1.0,
+        event_publisher: Callable[..., Any] | None = None,
     ):
         self.factory = factory
         self.session_store = session_store
         self.poll_seconds = poll_seconds
+        self.event_publisher = event_publisher
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.refresh_lock = threading.Lock()
@@ -112,6 +114,7 @@ class WorkerService:
         )
 
     def _process_validation_job(self) -> bool:
+        missing = False
         with self.factory.begin() as db:
             job = db.scalar(
                 select(ValidationJob)
@@ -121,6 +124,8 @@ class WorkerService:
             )
             if not job:
                 return False
+            job_id = job.id
+            circle_id = job.circle_id
             circle = db.get(Circle, job.circle_id)
             platform = db.get(PlatformConfig, circle.platform_code) if circle else None
             if not circle or not platform:
@@ -128,12 +133,15 @@ class WorkerService:
                 job.error_code = "CIRCLE_NOT_FOUND"
                 job.error_message = "圈子配置已经不存在。"
                 job.finished_at = utc_now()
-                return True
-            job.status = "running"
-            job.started_at = utc_now()
-            circle_id = circle.id
-            circle_url = circle.url
-            platform_code = platform.code
+                missing = True
+            else:
+                job.status = "running"
+                job.started_at = utc_now()
+                circle_url = circle.url
+                platform_code = platform.code
+        if missing:
+            self._publish_validation(circle_id, job_id, "failed")
+            return True
         try:
             with self.factory() as db:
                 platform = db.get(PlatformConfig, platform_code)
@@ -150,6 +158,7 @@ class WorkerService:
                 if circle:
                     circle.validation_status = "unverified"
                     circle.validation_error = exc.message
+            self._publish_validation(circle_id, job_id, "waiting_for_auth")
             return True
         except (CollectorFailure, Exception) as exc:
             code = exc.code if isinstance(exc, CollectorFailure) else "VALIDATION_FAILED"
@@ -165,6 +174,7 @@ class WorkerService:
                 if circle:
                     circle.validation_status = "failed"
                     circle.validation_error = message
+            self._publish_validation(circle_id, job_id, "failed")
             return True
         with self.factory.begin() as db:
             job = db.get(ValidationJob, job.id)
@@ -182,7 +192,12 @@ class WorkerService:
                 circle.validation_error = None
                 circle.validated_at = utc_now()
                 circle.adapter_version = result["adapter_version"]
+        self._publish_validation(circle_id, job_id, "success")
         return True
+
+    def _publish_validation(self, circle_id: str, job_id: str, status: str) -> None:
+        if self.event_publisher:
+            self.event_publisher("validation.changed", circle_id, job_id=job_id, status=status)
 
     def _process_platform_head(self, platform_code: str) -> bool:
         with self.factory.begin() as db:
@@ -264,6 +279,12 @@ class WorkerService:
                 if task:
                     self._apply_result(db, task, result)
             aggregate_run(db, run)
+            summary_version = run.summary_version
+            status = run.status
+        if self.event_publisher:
+            self.event_publisher(
+                "run.changed", run_id, summary_version=summary_version, status=status
+            )
         return True
 
     def _execute_task(self, collector: DongchediCollector, task_id: str) -> dict[str, Any]:
@@ -276,6 +297,7 @@ class WorkerService:
             transient = bool(snapshot.get("transient"))
             circle_id = task.circle_id
             known_urls = list(snapshot.get("known_post_urls") or [])
+            source_indexes = dict(snapshot.get("source_indexes") or {})
             completed_post_ids = set(
                 db.scalars(
                     select(PostSnapshot.platform_post_id).where(
@@ -301,6 +323,15 @@ class WorkerService:
                     circle_url, remaining, skip_post_ids=completed_post_ids
                 )
             )
+            if source_indexes:
+                for record in payload.get("records") or []:
+                    record["order_index"] = int(
+                        source_indexes.get(record.get("url"), record.get("order_index", 0))
+                    )
+                for failure in payload.get("failures") or []:
+                    failure["source_index"] = int(
+                        source_indexes.get(failure.get("url"), failure.get("source_index", 0))
+                    )
             return {"kind": "done", "validation": validation, **payload}
         except AuthenticationRequired as exc:
             trigger_url = exc.trigger_url or circle_url
@@ -321,6 +352,17 @@ class WorkerService:
                             skip_post_ids=completed_post_ids,
                         )
                     )
+                    if source_indexes:
+                        for record in payload.get("records") or []:
+                            record["order_index"] = int(
+                                source_indexes.get(record.get("url"), record.get("order_index", 0))
+                            )
+                        for failure in payload.get("failures") or []:
+                            failure["source_index"] = int(
+                                source_indexes.get(
+                                    failure.get("url"), failure.get("source_index", 0)
+                                )
+                            )
                     return {"kind": "done", "validation": validation, **payload}
                 except AuthenticationRequired as repeated:
                     exc = repeated
@@ -443,11 +485,11 @@ class WorkerService:
                 section=record.get("section"),
                 visibility=record.get("visibility", "unknown"),
                 raw_status=record.get("raw_status"),
-                order_index=next_order,
+                order_index=int(record.get("order_index", next_order)),
             )
             db.add(post)
             db.flush()
-            next_order += 1
+            next_order = max(next_order + 1, int(record.get("order_index", next_order)) + 1)
             for index, comment in enumerate(record.get("comments") or []):
                 db.add(
                     CommentSnapshot(

@@ -38,7 +38,6 @@ class PlatformConfig(Base):
         String(32), nullable=False, default="not_integrated"
     )
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    auto_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=30)
     internal_concurrency: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     min_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     max_quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=2000)
@@ -50,13 +49,58 @@ class PlatformConfig(Base):
     )
 
 
-class GlobalSchedule(Base):
-    __tablename__ = "global_schedules"
+class ScheduleConfig(Base):
+    __tablename__ = "schedule_configs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     timezone_name: Mapped[str] = mapped_column(String(64), nullable=False, default="Asia/Shanghai")
-    times: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
-    version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class ExtractionRule(Base):
+    __tablename__ = "extraction_rules"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
+    current_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+    versions: Mapped[list["ExtractionRuleVersion"]] = relationship(
+        cascade="all, delete-orphan", passive_deletes=True
+    )
+
+
+class ExtractionRuleVersion(Base):
+    __tablename__ = "extraction_rule_versions"
+    __table_args__ = (UniqueConstraint("rule_id", "version", name="uq_extraction_rule_version"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    rule_id: Mapped[str] = mapped_column(
+        ForeignKey("extraction_rules.id", ondelete="CASCADE"), nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    platform_quantities: Mapped[dict[str, int]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class ScheduleNode(Base):
+    __tablename__ = "schedule_nodes"
+    __table_args__ = (Index("ix_schedule_nodes_enabled_time", "enabled", "time_of_day"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    weekdays: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
+    time_of_day: Mapped[str] = mapped_column(String(8), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    rule_id: Mapped[str] = mapped_column(
+        ForeignKey("extraction_rules.id", ondelete="RESTRICT"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
@@ -135,6 +179,13 @@ class ExtractionRun(Base):
     related_run_id: Mapped[str | None] = mapped_column(
         ForeignKey("extraction_runs.id", ondelete="SET NULL")
     )
+    schedule_node_id: Mapped[str | None] = mapped_column(
+        ForeignKey("schedule_nodes.id", ondelete="SET NULL")
+    )
+    extraction_rule_id: Mapped[str | None] = mapped_column(
+        ForeignKey("extraction_rules.id", ondelete="SET NULL")
+    )
+    extraction_rule_version: Mapped[int | None] = mapped_column(Integer)
     config_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     planned_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     completed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -174,6 +225,7 @@ class CircleTask(Base):
     section: Mapped[str] = mapped_column(String(32), nullable=False, default="dynamic")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
     queue_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     target_count: Mapped[int] = mapped_column(Integer, nullable=False)
     completed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -299,10 +351,20 @@ class PlatformSession(Base):
 
 class ScheduleEvent(Base):
     __tablename__ = "schedule_events"
+    __table_args__ = (
+        UniqueConstraint("schedule_node_id", "planned_at", name="uq_schedule_node_planned"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
     planned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    schedule_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    schedule_node_id: Mapped[str | None] = mapped_column(
+        ForeignKey("schedule_nodes.id", ondelete="SET NULL")
+    )
+    schedule_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    extraction_rule_id: Mapped[str | None] = mapped_column(
+        ForeignKey("extraction_rules.id", ondelete="SET NULL")
+    )
+    extraction_rule_version: Mapped[int | None] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     run_id: Mapped[str | None] = mapped_column(

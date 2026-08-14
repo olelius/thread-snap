@@ -1,0 +1,163 @@
+import { useMemo, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { CircleDot, FileText, Loader2, Plus, X } from 'lucide-react'
+import { toast } from 'sonner'
+import { api, errorMessage } from '@/lib/api'
+import type { Run, Vehicle } from '@/lib/types'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Sheet, SheetClose, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
+import { Textarea } from '@/components/ui/textarea'
+
+type Mode = 'circle_discovery' | 'url_list'
+
+export function NewExtractionSheet() {
+  const client = useQueryClient()
+  const [open, setOpen] = useState(false)
+  const [mode, setMode] = useState<Mode>('circle_discovery')
+  const [platform, setPlatform] = useState('dongchedi')
+  const [quantity, setQuantity] = useState(30)
+  const [selectedCircleIds, setSelectedCircleIds] = useState<string[]>([])
+  const [circleUrls, setCircleUrls] = useState('')
+  const [postUrls, setPostUrls] = useState('')
+  const vehicles = useQuery({ queryKey: ['vehicles'], queryFn: () => api<Vehicle[]>('/vehicles') })
+  const circles = useMemo(() => vehicles.data?.flatMap((item) => item.circles) ?? [], [vehicles.data])
+
+  const submit = useMutation({
+    mutationFn: () => {
+      const body =
+        mode === 'circle_discovery'
+          ? {
+              platform_code: platform,
+              circle_ids: selectedCircleIds,
+              circle_urls: lines(circleUrls),
+              known_post_urls: [],
+              quantity,
+              idempotency_key: crypto.randomUUID(),
+            }
+          : {
+              platform_code: platform,
+              circle_ids: [],
+              circle_urls: [],
+              known_post_urls: lines(postUrls),
+              quantity,
+              idempotency_key: crypto.randomUUID(),
+            }
+      return api<Run>('/runs/manual', { method: 'POST', body: JSON.stringify(body) })
+    },
+    onSuccess: (run) => {
+      toast.success('提取任务已创建', { description: `批次 ${run.number} 已进入队列。` })
+      window.dispatchEvent(new CustomEvent('threadsnap:new-run', { detail: run.id }))
+      client.invalidateQueries({ queryKey: ['runs'] })
+      setOpen(false)
+      reset()
+    },
+    onError: (error) => toast.error('提交失败', { description: errorMessage(error) }),
+  })
+
+  function reset() {
+    setMode('circle_discovery')
+    setSelectedCircleIds([])
+    setCircleUrls('')
+    setPostUrls('')
+    setQuantity(30)
+  }
+
+  const currentEmpty =
+    mode === 'circle_discovery'
+      ? selectedCircleIds.length === 0 && lines(circleUrls).length === 0
+      : lines(postUrls).length === 0
+
+  return (
+    <Sheet
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) reset()
+      }}
+    >
+      <SheetTrigger asChild>
+        <Button className='shadow-lg shadow-primary/20'>
+          <Plus className='size-4' />
+          新建提取
+        </Button>
+      </SheetTrigger>
+      <SheetContent className='flex w-full flex-col gap-0 p-0 sm:max-w-xl'>
+        <SheetHeader className='border-b p-6'>
+          <div className='flex items-start justify-between gap-4'>
+            <div>
+              <SheetTitle className='text-xl'>新建提取</SheetTitle>
+              <SheetDescription className='mt-1'>选择一种输入方式，提交时只读取当前模式。</SheetDescription>
+            </div>
+            <SheetClose asChild>
+              <Button variant='ghost' size='icon' aria-label='关闭并放弃当前输入'>
+                <X className='size-4' />
+              </Button>
+            </SheetClose>
+          </div>
+        </SheetHeader>
+        <ScrollArea className='min-h-0 flex-1'>
+          <div className='space-y-6 p-6'>
+            <div className='space-y-2'>
+              <Label>平台</Label>
+              <Select value={platform} onValueChange={setPlatform}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent><SelectItem value='dongchedi'>懂车帝</SelectItem></SelectContent>
+              </Select>
+            </div>
+            <RadioGroup value={mode} onValueChange={(value) => setMode(value as Mode)} className='grid grid-cols-2 gap-3'>
+              <Label htmlFor='mode-circle' className='flex cursor-pointer gap-3 rounded-xl border p-4 has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-primary/5'>
+                <RadioGroupItem id='mode-circle' value='circle_discovery' className='mt-0.5' />
+                <span><CircleDot className='mb-2 size-5 text-primary' /><b className='block text-sm'>圈子发现</b><span className='text-xs text-muted-foreground'>按圈子提取最新帖子</span></span>
+              </Label>
+              <Label htmlFor='mode-url' className='flex cursor-pointer gap-3 rounded-xl border p-4 has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-primary/5'>
+                <RadioGroupItem id='mode-url' value='url_list' className='mt-0.5' />
+                <span><FileText className='mb-2 size-5 text-cyan-500' /><b className='block text-sm'>URL 清单</b><span className='text-xs text-muted-foreground'>逐条提取指定帖子</span></span>
+              </Label>
+            </RadioGroup>
+
+            {mode === 'circle_discovery' ? (
+              <div className='space-y-5'>
+                <div className='space-y-2'>
+                  <Label>已配置圈子</Label>
+                  <div className='max-h-48 space-y-2 overflow-auto rounded-xl border p-2'>
+                    {circles.length ? circles.map((circle) => {
+                      const checked = selectedCircleIds.includes(circle.id)
+                      return (
+                        <label key={circle.id} className='flex cursor-pointer items-center gap-3 rounded-lg p-2 hover:bg-muted'>
+                          <input type='checkbox' checked={checked} onChange={() => setSelectedCircleIds((items) => checked ? items.filter((id) => id !== circle.id) : [...items, circle.id])} className='size-4 accent-[var(--primary)]' />
+                          <span className='min-w-0'><span className='block truncate text-sm font-medium'>{circle.name || circle.external_id}</span><span className='block truncate text-xs text-muted-foreground'>{circle.url}</span></span>
+                        </label>
+                      )
+                    }) : <div className='p-5 text-center text-sm text-muted-foreground'>暂无已配置圈子，可直接输入圈子链接。</div>}
+                  </div>
+                </div>
+                <div className='space-y-2'><Label htmlFor='circle-urls'>临时圈子链接</Label><Textarea id='circle-urls' rows={5} value={circleUrls} onChange={(event) => setCircleUrls(event.target.value)} placeholder='每行一个圈子 URL' /><p className='text-xs text-muted-foreground'>临时链接验证成功后只进入手动圈子历史。</p></div>
+                <div className='space-y-2'><Label htmlFor='quantity'>每圈有效结果目标数</Label><Input id='quantity' type='number' min={1} max={2000} value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} /></div>
+              </div>
+            ) : (
+              <div className='space-y-2'><Label htmlFor='post-urls'>帖子 URL 清单</Label><Textarea id='post-urls' rows={12} value={postUrls} onChange={(event) => setPostUrls(event.target.value)} placeholder='每行一个帖子 URL，重复链接会自动去重' /><p className='text-xs text-muted-foreground'>当前共识别 {lines(postUrls).length} 行非空输入。</p></div>
+            )}
+            <Alert><AlertTitle>提交范围</AlertTitle><AlertDescription>切换模式会保留两边输入；关闭窗口会直接放弃，提交只包含当前选择的模式。</AlertDescription></Alert>
+          </div>
+        </ScrollArea>
+        <SheetFooter className='border-t bg-background/95 p-4 backdrop-blur'>
+          <SheetClose asChild><Button variant='outline'>关闭</Button></SheetClose>
+          <Button disabled={currentEmpty || submit.isPending} onClick={() => submit.mutate()}>
+            {submit.isPending && <Loader2 className='size-4 animate-spin' />}
+            提交提取
+          </Button>
+        </SheetFooter>
+      </SheetContent>
+    </Sheet>
+  )
+}
+
+function lines(value: string) {
+  return [...new Set(value.split(/\r?\n/).map((item) => item.trim()).filter(Boolean))]
+}
