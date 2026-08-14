@@ -38,6 +38,7 @@ from .models import (
 )
 from .schemas import (
     CircleBatchUpdate,
+    CircleRow,
     ExtractionPlanUpdate,
     ManualRunCreate,
     PlatformConfigUpdate,
@@ -482,8 +483,23 @@ class ConfigService:
         with self.factory() as read_db:
             platforms = {x.code: x for x in read_db.scalars(select(PlatformConfig))}
             existing_ids = {x.id: x for x in read_db.scalars(select(Circle))}
-            existing_keys = {(x.platform_code, x.external_id): x.id for x in existing_ids.values()}
             vehicle_ids = set(read_db.scalars(select(Vehicle.id)))
+        deleted_ids = list(dict.fromkeys(value.deleted_ids))
+        for circle_id in deleted_ids:
+            circle = existing_ids.get(circle_id)
+            if not circle or circle.source_kind != "configured":
+                errors.append(
+                    {
+                        "field": "deleted_ids",
+                        "reason": f"要删除的圈子不存在：{circle_id}",
+                    }
+                )
+        deleted_id_set = set(deleted_ids)
+        existing_keys = {
+            (x.platform_code, x.external_id): x.id
+            for x in existing_ids.values()
+            if x.id not in deleted_id_set
+        }
         for index, row in enumerate(value.rows):
             platform = platforms.get(row.platform_code)
             if not platform:
@@ -524,6 +540,14 @@ class ConfigService:
             seen.add(key)
             if row.id and row.id not in existing_ids:
                 errors.append({"row": index + 1, "field": "id", "reason": "要修改的圈子不存在"})
+            if row.id and row.id in deleted_id_set:
+                errors.append(
+                    {
+                        "row": index + 1,
+                        "field": "id",
+                        "reason": "同一圈子不可同时保存和删除",
+                    }
+                )
             owner_id = existing_keys.get(key)
             if owner_id and owner_id != row.id:
                 errors.append(
@@ -551,6 +575,12 @@ class ConfigService:
 
         with self.factory.begin() as db:
             output = []
+            for circle_id in deleted_ids:
+                circle = db.get(Circle, circle_id)
+                if circle:
+                    db.delete(circle)
+            if deleted_ids:
+                db.flush()
             for item in normalized:
                 row = item["row"]
                 vehicle_id = row.vehicle_id
@@ -607,10 +637,73 @@ class ConfigService:
                     details=errors,
                 )
             db.flush()
+            response_items = []
+            for circle in output:
+                vehicle = db.get(Vehicle, circle.vehicle_id) if circle.vehicle_id else None
+                response_items.append(
+                    dict(self.circle_dict(circle), vehicle_name=vehicle.name if vehicle else None)
+                )
             return {
-                "items": [self.circle_dict(x) for x in output],
+                "items": response_items,
                 "saved_count": len(output),
+                "deleted_count": len(deleted_ids),
             }
+
+    def list_circles(self) -> list[dict[str, Any]]:
+        """返回配置圈子资源列表，并包含前端编辑所需的车型名称。"""
+
+        with self.factory() as db:
+            rows = db.execute(
+                select(Circle, Vehicle.name)
+                .outerjoin(Vehicle, Vehicle.id == Circle.vehicle_id)
+                .where(Circle.source_kind == "configured")
+                .order_by(Circle.created_at)
+            )
+            return [
+                dict(self.circle_dict(circle), vehicle_name=vehicle_name)
+                for circle, vehicle_name in rows
+            ]
+
+    def get_circle(self, circle_id: str) -> dict[str, Any]:
+        """返回单个配置圈子资源。"""
+
+        with self.factory() as db:
+            row = db.execute(
+                select(Circle, Vehicle.name)
+                .outerjoin(Vehicle, Vehicle.id == Circle.vehicle_id)
+                .where(Circle.id == circle_id, Circle.source_kind == "configured")
+            ).one_or_none()
+            if not row:
+                raise DomainError("CIRCLE_NOT_FOUND", "指定圈子不存在。", status_code=404)
+            circle, vehicle_name = row
+            return dict(self.circle_dict(circle), vehicle_name=vehicle_name)
+
+    def create_circle(self, value: CircleRow) -> dict[str, Any]:
+        """创建一个配置圈子，复用批量保存的完整校验。"""
+
+        if value.id:
+            raise DomainError("CIRCLE_ID_NOT_ALLOWED", "新增圈子时不应提交圈子 ID。")
+        result = self.save_circle_batch(CircleBatchUpdate(rows=[value]))
+        return result["items"][0]
+
+    def update_circle(self, circle_id: str, value: CircleRow) -> dict[str, Any]:
+        """更新一个配置圈子，复用批量保存的完整校验。"""
+
+        result = self.save_circle_batch(
+            CircleBatchUpdate(rows=[value.model_copy(update={"id": circle_id})])
+        )
+        return result["items"][0]
+
+    def delete_circle(self, circle_id: str) -> dict[str, Any]:
+        """删除配置圈子，并保留历史批次内已冻结的圈子信息。"""
+
+        with self.factory.begin() as db:
+            circle = db.get(Circle, circle_id)
+            if not circle or circle.source_kind != "configured":
+                raise DomainError("CIRCLE_NOT_FOUND", "指定圈子不存在。", status_code=404)
+            result = self.circle_dict(circle)
+            db.delete(circle)
+            return result
 
     def list_manual_history(self) -> list[dict[str, Any]]:
         with self.factory() as db:

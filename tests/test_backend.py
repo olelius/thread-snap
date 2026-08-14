@@ -408,6 +408,76 @@ class ApiAndConfigTests(AppCase):
             )
         self.assertIn("验证通过", raised.exception.details[0]["reason"])
 
+    def test_circle_crud_and_explicit_batch_delete(self) -> None:
+        created = self.client.post(
+            "/api/v1/circles",
+            json={
+                "platform_code": "dongchedi",
+                "url": "https://www.dongchedi.com/community/24729",
+                "vehicle_name": "A9",
+            },
+        )
+        self.assertEqual(201, created.status_code)
+        circle_id = created.json()["id"]
+        self.assertEqual("A9", created.json()["vehicle_name"])
+
+        listed = self.client.get("/api/v1/circles")
+        self.assertEqual(200, listed.status_code)
+        self.assertEqual([circle_id], [item["id"] for item in listed.json()])
+        self.assertEqual(circle_id, self.client.get(f"/api/v1/circles/{circle_id}").json()["id"])
+
+        updated = self.client.put(
+            f"/api/v1/circles/{circle_id}",
+            json={
+                "platform_code": "dongchedi",
+                "url": "https://www.dongchedi.com/community/24729",
+                "vehicle_name": "A9 Pro",
+            },
+        )
+        self.assertEqual(200, updated.status_code)
+        self.assertEqual("A9 Pro", updated.json()["vehicle_name"])
+
+        conflict = self.client.put(
+            "/api/v1/circles/batch",
+            json={
+                "rows": [
+                    {
+                        "id": circle_id,
+                        "platform_code": "dongchedi",
+                        "url": "https://www.dongchedi.com/community/24729",
+                        "vehicle_id": updated.json()["vehicle_id"],
+                    }
+                ],
+                "deleted_ids": [circle_id],
+            },
+        )
+        self.assertEqual(400, conflict.status_code)
+        self.assertEqual(1, len(self.client.get("/api/v1/circles").json()))
+
+        removed = self.client.put(
+            "/api/v1/circles/batch",
+            json={"rows": [], "deleted_ids": [circle_id]},
+        )
+        self.assertEqual(200, removed.status_code)
+        self.assertEqual(1, removed.json()["deleted_count"])
+        self.assertEqual([], self.client.get("/api/v1/circles").json())
+        self.assertTrue(
+            all(not vehicle["circles"] for vehicle in self.client.get("/api/v1/vehicles").json())
+        )
+
+        second = self.client.post(
+            "/api/v1/circles",
+            json={
+                "platform_code": "dongchedi",
+                "url": "https://www.dongchedi.com/community/24730",
+                "vehicle_name": "A9",
+            },
+        )
+        self.assertEqual(201, second.status_code)
+        deleted = self.client.delete(f"/api/v1/circles/{second.json()['id']}")
+        self.assertEqual(200, deleted.status_code)
+        self.assertEqual([], self.client.get("/api/v1/circles").json())
+
     def test_manual_idempotency_and_dual_api_contract(self) -> None:
         payload = {
             "platform_code": "dongchedi",

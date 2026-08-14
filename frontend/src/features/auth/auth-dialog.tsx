@@ -85,7 +85,7 @@ export function AuthDialog({
     socket.onopen = () => { if (socketRef.current === socket) setConnection('online') }
     socket.onclose = () => { if (socketRef.current === socket) setConnection('offline') }
     socket.onerror = () => { if (socketRef.current === socket) setConnection('offline') }
-    socket.onmessage = (event) => {
+    socket.onmessage = async (event) => {
       if (socketRef.current !== socket) return
       const message = JSON.parse(event.data) as FrameMessage
       if (message.type === 'browser_starting') {
@@ -105,8 +105,8 @@ export function AuthDialog({
         setPageStatus('validating')
       } else if (message.type === 'completed') {
         setPageStatus('completed')
+        await queryClient.invalidateQueries()
         toast.success('平台认证成功', { description: message.message })
-        queryClient.invalidateQueries()
         onOpenChange(false)
       } else if (message.type === 'validation_failed') {
         setPageStatus('ready')
@@ -162,7 +162,7 @@ export function AuthDialog({
 
   const endRun = useMutation({
     mutationFn: () => api(`/runs/${runId}/end-auth-wait`, { method: 'POST' }),
-    onSuccess: () => { toast.success('本次等待已结束'); onOpenChange(false); queryClient.invalidateQueries({ queryKey: ['runs'] }) },
+    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ['runs'] }); toast.success('本次等待已结束'); onOpenChange(false) },
     onError: (error) => toast.error('操作未完成', { description: errorMessage(error) }),
   })
 
