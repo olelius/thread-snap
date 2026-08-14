@@ -50,6 +50,9 @@ export function AuthDialog({
   const queryClient = useQueryClient()
   const socketRef = useRef<WebSocket | null>(null)
   const imageRef = useRef<HTMLImageElement | null>(null)
+  const pointerFrameRef = useRef<number | undefined>(undefined)
+  const pendingPointerRef = useRef<Record<string, unknown> | undefined>(undefined)
+  const lastPointerRef = useRef({ x: 0, y: 0 })
   const [task, setTask] = useState<AuthTask | null>(null)
   const [frame, setFrame] = useState<string>()
   const [pageUrl, setPageUrl] = useState('')
@@ -73,7 +76,10 @@ export function AuthDialog({
     socketRef.current?.close()
     if (!current.ticket) return
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const socket = new WebSocket(`${protocol}//${location.host}${current.websocket_path}?ticket=${encodeURIComponent(current.ticket)}`)
+    const socket = new WebSocket(
+      `${protocol}//${location.host}${current.websocket_path}`,
+      ['threadsnap-auth', `threadsnap-ticket.${current.ticket}`],
+    )
     socketRef.current = socket
     setConnection('connecting')
     socket.onopen = () => { if (socketRef.current === socket) setConnection('online') }
@@ -90,7 +96,9 @@ export function AuthDialog({
         setPageUrl(message.url ?? '')
         setPageStatus('ready')
       } else if (message.type === 'frame' && message.data) {
-        setFrame(`data:image/jpeg;base64,${message.data}`)
+        const source = `data:image/jpeg;base64,${message.data}`
+        if (imageRef.current) imageRef.current.src = source
+        else setFrame(source)
         setPageUrl(message.url ?? '')
         setPageStatus((current) => current === 'validating' ? current : 'ready')
       } else if (message.type === 'validating') {
@@ -124,9 +132,19 @@ export function AuthDialog({
     if (!open) return
     start()
     return () => {
-      socketRef.current?.send(JSON.stringify({ type: 'close' }))
-      socketRef.current?.close()
+      const socket = socketRef.current
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'close' }))
+        window.setTimeout(() => {
+          if (socket.readyState !== WebSocket.CLOSED) socket.close()
+        }, 250)
+      } else {
+        socket?.close()
+      }
       socketRef.current = null
+      if (pointerFrameRef.current !== undefined) window.cancelAnimationFrame(pointerFrameRef.current)
+      pointerFrameRef.current = undefined
+      pendingPointerRef.current = undefined
       setFrame(undefined)
       setTask(null)
       setPageStatus('idle')
@@ -152,11 +170,41 @@ export function AuthDialog({
     if (socketRef.current?.readyState === WebSocket.OPEN) socketRef.current.send(JSON.stringify(command))
   }
 
-  function click(event: React.MouseEvent<HTMLImageElement>) {
-    if (pageStatus !== 'ready') return
+  function pointerCoordinates(event: React.PointerEvent<HTMLImageElement> | React.WheelEvent<HTMLImageElement>) {
     const bounds = event.currentTarget.getBoundingClientRect()
-    send({ type: 'click', x: ((event.clientX - bounds.left) / bounds.width) * browserSize.width, y: ((event.clientY - bounds.top) / bounds.height) * browserSize.height })
-    event.currentTarget.parentElement?.focus()
+    const point = {
+      x: ((event.clientX - bounds.left) / bounds.width) * browserSize.width,
+      y: ((event.clientY - bounds.top) / bounds.height) * browserSize.height,
+    }
+    lastPointerRef.current = point
+    return point
+  }
+
+  function pointerButton(button: number) {
+    return ['left', 'middle', 'right', 'back', 'forward'][button] ?? 'none'
+  }
+
+  function modifiers(event: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) {
+    return (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.metaKey ? 4 : 0) | (event.shiftKey ? 8 : 0)
+  }
+
+  function pointerMove(event: React.PointerEvent<HTMLImageElement>) {
+    if (pageStatus !== 'ready') return
+    const point = pointerCoordinates(event)
+    pendingPointerRef.current = {
+      type: 'pointer_move',
+      ...point,
+      button: pointerButton(event.button),
+      buttons: event.buttons,
+      modifiers: modifiers(event),
+    }
+    if (pointerFrameRef.current !== undefined) return
+    pointerFrameRef.current = window.requestAnimationFrame(() => {
+      pointerFrameRef.current = undefined
+      const command = pendingPointerRef.current
+      pendingPointerRef.current = undefined
+      if (command && (socketRef.current?.bufferedAmount ?? 0) < 64 * 1024) send(command)
+    })
   }
 
   return (
@@ -177,13 +225,18 @@ export function AuthDialog({
           aria-label='服务器浏览器操作区域'
           onKeyDown={(event) => {
             if (pageStatus !== 'ready') return
-            if (event.ctrlKey || event.metaKey || event.altKey) return
             event.preventDefault()
-            if (event.key.length === 1) send({ type: 'type', text: event.key })
-            else send({ type: 'key', key: event.key })
+            if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) send({ type: 'type', text: event.key })
+            else send({ type: 'key_down', key: event.key })
+          }}
+          onKeyUp={(event) => {
+            if (pageStatus !== 'ready') return
+            if (event.key.length > 1 || event.ctrlKey || event.metaKey || event.altKey) {
+              event.preventDefault()
+              send({ type: 'key_up', key: event.key })
+            }
           }}
           onPaste={(event) => { if (pageStatus !== 'ready') return; event.preventDefault(); send({ type: 'type', text: event.clipboardData.getData('text') }) }}
-          onWheel={(event) => { if (pageStatus !== 'ready') return; event.preventDefault(); send({ type: 'scroll', dx: event.deltaX, dy: event.deltaY }) }}
         >
           {pageError ? (
             <Alert variant='destructive' className='max-w-xl border-red-400/40 bg-background/95 shadow-2xl'>
@@ -194,11 +247,41 @@ export function AuthDialog({
                 <p className='font-mono text-xs'>错误码：{pageError.code ?? 'AUTH_BROWSER_FAILED'}{pageError.httpStatus ? ` · HTTP ${pageError.httpStatus}` : ''}</p>
               </AlertDescription>
             </Alert>
-          ) : frame ? <img ref={imageRef} src={frame} onClick={click} draggable={false} alt='服务器浏览器实时画面' className='max-h-full max-w-full cursor-default select-none rounded-md object-contain shadow-2xl ring-1 ring-white/10' /> : <div className='flex flex-col items-center gap-3 text-slate-300'><Loader2 className='size-8 animate-spin text-cyan-400' /><span className='text-sm'>{pageStatusNames[pageStatus]}</span></div>}
+          ) : frame ? <img
+            ref={imageRef}
+            src={frame}
+            draggable={false}
+            alt='服务器浏览器实时画面'
+            className='max-h-full max-w-full touch-none cursor-default select-none rounded-md object-contain shadow-2xl ring-1 ring-white/10'
+            onPointerMove={pointerMove}
+            onPointerDown={(event) => {
+              if (pageStatus !== 'ready') return
+              event.preventDefault()
+              event.currentTarget.setPointerCapture(event.pointerId)
+              event.currentTarget.parentElement?.focus()
+              send({ type: 'pointer_down', ...pointerCoordinates(event), button: pointerButton(event.button), buttons: event.buttons, modifiers: modifiers(event), click_count: 1 })
+            }}
+            onPointerUp={(event) => {
+              if (pageStatus !== 'ready') return
+              event.preventDefault()
+              send({ type: 'pointer_up', ...pointerCoordinates(event), button: pointerButton(event.button), buttons: event.buttons, modifiers: modifiers(event), click_count: 1 })
+              if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+            }}
+            onPointerCancel={(event) => {
+              if (pageStatus !== 'ready') return
+              send({ type: 'pointer_up', ...lastPointerRef.current, button: pointerButton(event.button), buttons: 0, modifiers: modifiers(event), click_count: 0 })
+            }}
+            onWheel={(event) => {
+              if (pageStatus !== 'ready') return
+              event.preventDefault()
+              send({ type: 'scroll', ...pointerCoordinates(event), dx: event.deltaX, dy: event.deltaY, buttons: 0, modifiers: modifiers(event) })
+            }}
+            onContextMenu={(event) => event.preventDefault()}
+          /> : <div className='flex flex-col items-center gap-3 text-slate-300'><Loader2 className='size-8 animate-spin text-cyan-400' /><span className='text-sm'>{pageStatusNames[pageStatus]}</span></div>}
           <div className='pointer-events-none absolute right-4 bottom-4 flex items-center gap-2 rounded-full bg-black/55 px-3 py-1.5 text-[11px] text-slate-300 backdrop-blur'><Expand className='size-3.5' />1280 × 800 交互画布</div>
         </div>
         <div className='flex flex-wrap items-center justify-between gap-3 border-t bg-background px-5 py-3'>
-          <div className='text-xs text-muted-foreground'>点击画面后可直接输入；剪贴板文本会发送到当前页面焦点。</div>
+          <div className='text-xs text-muted-foreground'>画面支持悬停、点击、拖动、滚动和键盘输入；剪贴板文本会发送到当前页面焦点。</div>
           <div className='flex items-center gap-2'>
             <Button variant='outline' onClick={() => pageStatus === 'failed' || !task?.ticket ? start() : connect(task)}><RefreshCw className='size-4' />{pageStatus === 'failed' ? '重新创建认证浏览器' : '重新连接'}</Button>
             <Button variant='outline' onClick={() => onOpenChange(false)}>关闭窗口</Button>

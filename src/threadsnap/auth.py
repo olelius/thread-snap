@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import io
 import os
 import secrets
@@ -17,7 +16,7 @@ from urllib.parse import urlencode
 
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import WebSocket, WebSocketDisconnect
-from patchright.async_api import BrowserContext, Page, Playwright, async_playwright
+from patchright.async_api import BrowserContext, CDPSession, Page, Playwright, async_playwright
 
 from .collectors import AuthenticationRequired, CollectorFailure, DongchediCollector
 from .config import Settings
@@ -303,7 +302,7 @@ class BrowserAuthManager:
         ):
             await websocket.close(code=4404, reason="认证任务不存在或已经过期")
             return
-        await websocket.accept()
+        await websocket.accept(subprotocol="threadsnap-auth")
         async with task.lock:
             try:
                 await websocket.send_json({"type": "browser_starting"})
@@ -317,20 +316,65 @@ class BrowserAuthManager:
                         "page_status": task.page_status,
                     }
                 )
-                while task.status == "active" and datetime.now(timezone.utc) < task.expires_at:
+                cdp = await task.context.new_cdp_session(page)
+                frame_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=1)
+
+                async def acknowledge_discarded_frame(frame: dict[str, Any]) -> None:
                     try:
-                        command = await asyncio.wait_for(websocket.receive_json(), timeout=0.7)
-                        await self._command(task, command, websocket)
-                    except asyncio.TimeoutError:
-                        image = await page.screenshot(type="jpeg", quality=70)
+                        await cdp.send(
+                            "Page.screencastFrameAck",
+                            {"sessionId": frame["sessionId"]},
+                        )
+                    except Exception:
+                        pass
+
+                def receive_frame(frame: dict[str, Any]) -> None:
+                    # CDP 要求逐帧确认；队列只保留一个待发送帧，避免客户端变慢时堆积旧画面。
+                    if frame_queue.full():
+                        asyncio.create_task(acknowledge_discarded_frame(frame))
+                        return
+                    frame_queue.put_nowait(frame)
+
+                cdp.on("Page.screencastFrame", receive_frame)
+                await cdp.send("Page.enable")
+                await cdp.send(
+                    "Page.startScreencast",
+                    {
+                        "format": "jpeg",
+                        "quality": 85,
+                        "maxWidth": 1280,
+                        "maxHeight": 800,
+                        "everyNthFrame": 1,
+                    },
+                )
+                receive_task = asyncio.create_task(websocket.receive_json())
+                frame_task = asyncio.create_task(frame_queue.get())
+                while task.status == "active" and datetime.now(timezone.utc) < task.expires_at:
+                    done, _ = await asyncio.wait(
+                        {receive_task, frame_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if receive_task in done:
+                        command = receive_task.result()
+                        await self._command(task, command, websocket, cdp)
+                        if command.get("type") == "close" or task.status != "active":
+                            break
+                        receive_task = asyncio.create_task(websocket.receive_json())
+                    if frame_task in done and task.status == "active":
+                        frame = frame_task.result()
                         await websocket.send_json(
                             {
                                 "type": "frame",
-                                "data": base64.b64encode(image).decode("ascii"),
+                                "data": frame["data"],
                                 "url": page.url,
                                 "page_status": task.page_status,
                             }
                         )
+                        await cdp.send(
+                            "Page.screencastFrameAck",
+                            {"sessionId": frame["sessionId"]},
+                        )
+                        frame_task = asyncio.create_task(frame_queue.get())
             except WebSocketDisconnect:
                 # 连接断开只关闭本次入口，浏览器保留到任务到期，允许重新打开。
                 return
@@ -368,21 +412,61 @@ class BrowserAuthManager:
                 except Exception:
                     pass
                 await self._close(task)
+            finally:
+                for pending in (locals().get("receive_task"), locals().get("frame_task")):
+                    if pending and not pending.done():
+                        pending.cancel()
+                active_cdp = locals().get("cdp")
+                if active_cdp:
+                    try:
+                        await active_cdp.send("Page.stopScreencast")
+                    except Exception:
+                        pass
+                    try:
+                        await active_cdp.detach()
+                    except Exception:
+                        pass
 
-    async def _command(self, task: AuthTask, command: dict[str, Any], websocket: WebSocket) -> None:
+    async def _command(
+        self,
+        task: AuthTask,
+        command: dict[str, Any],
+        websocket: WebSocket,
+        cdp: CDPSession | None = None,
+    ) -> None:
         page = task.page
         if not page:
             return
         kind = command.get("type")
         if kind == "click":
-            await page.mouse.click(float(command.get("x", 0)), float(command.get("y", 0)))
+            if cdp:
+                await self._dispatch_pointer(cdp, "mousePressed", command)
+                await self._dispatch_pointer(cdp, "mouseReleased", command)
+            else:
+                await page.mouse.click(float(command.get("x", 0)), float(command.get("y", 0)))
+        elif kind == "pointer_move" and cdp:
+            await self._dispatch_pointer(cdp, "mouseMoved", command)
+        elif kind == "pointer_down" and cdp:
+            await self._dispatch_pointer(cdp, "mousePressed", command)
+        elif kind == "pointer_up" and cdp:
+            await self._dispatch_pointer(cdp, "mouseReleased", command)
         elif kind == "type":
             # 输入只送往当前官方页面焦点，不写日志或数据库。
-            await page.keyboard.insert_text(str(command.get("text", "")))
+            if cdp:
+                await cdp.send("Input.insertText", {"text": str(command.get("text", ""))})
+            else:
+                await page.keyboard.insert_text(str(command.get("text", "")))
         elif kind == "key":
             await page.keyboard.press(str(command.get("key", "Enter")))
+        elif kind == "key_down":
+            await page.keyboard.down(str(command.get("key", "")))
+        elif kind == "key_up":
+            await page.keyboard.up(str(command.get("key", "")))
         elif kind == "scroll":
-            await page.mouse.wheel(float(command.get("dx", 0)), float(command.get("dy", 0)))
+            if cdp:
+                await self._dispatch_pointer(cdp, "mouseWheel", command)
+            else:
+                await page.mouse.wheel(float(command.get("dx", 0)), float(command.get("dy", 0)))
         elif kind == "finish":
             if not task.context or not task.profile_dir:
                 return
@@ -432,6 +516,41 @@ class BrowserAuthManager:
             )
         elif kind == "close":
             await websocket.close(code=1000)
+
+    @staticmethod
+    async def _dispatch_pointer(
+        cdp: CDPSession,
+        event_type: str,
+        command: dict[str, Any],
+    ) -> None:
+        """把认证画布坐标和指针状态映射为受控 Chromium 的 CDP 输入事件。"""
+
+        button = str(command.get("button", "left"))
+        if button not in {"none", "left", "middle", "right", "back", "forward"}:
+            button = "none"
+        payload: dict[str, Any] = {
+            "type": event_type,
+            "x": max(0.0, min(1280.0, float(command.get("x", 0)))),
+            "y": max(0.0, min(800.0, float(command.get("y", 0)))),
+            "modifiers": max(0, min(15, int(command.get("modifiers", 0)))),
+        }
+        if event_type == "mouseWheel":
+            payload.update(
+                {
+                    "deltaX": float(command.get("dx", 0)),
+                    "deltaY": float(command.get("dy", 0)),
+                    "buttons": max(0, min(31, int(command.get("buttons", 0)))),
+                }
+            )
+        else:
+            payload.update(
+                {
+                    "button": button,
+                    "buttons": max(0, min(31, int(command.get("buttons", 0)))),
+                    "clickCount": max(0, min(2, int(command.get("click_count", 0)))),
+                }
+            )
+        await cdp.send("Input.dispatchMouseEvent", payload)
 
     async def cleanup_expired(self) -> None:
         now = datetime.now(timezone.utc)

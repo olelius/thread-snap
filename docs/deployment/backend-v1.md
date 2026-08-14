@@ -52,6 +52,8 @@ OpenAPI 页面位于 `http://127.0.0.1:8000/docs`。页面 API 和集成 API 使
 
 正常业务使用 `/api/v1/platforms/dongchedi/auth/tasks` 创建短期认证任务，由前端通过返回的 WebSocket 入口操作服务器官方页面。后端不接收或保存平台账号密码。
 
+认证 WebSocket 内部使用 Patchright `CDPSession` 的 `Page.startScreencast` 和输入域；CDP Session 通过当前浏览器上下文在进程内创建，不需要配置或开放 `9222` 调试端口，也不需要部署 VNC、noVNC、websockify、FFmpeg 或 WebRTC 服务。短期票据通过 `Sec-WebSocket-Protocol` 候选子协议传递，服务端只选择固定 `threadsnap-auth`，避免票据进入 URL 访问日志；反向代理必须保留该请求头且不得记录其完整值。代理还必须允许认证路径的 WebSocket 长连接和足以承载单帧 JPEG 的消息大小，客户端断开时保留现有短期任务到期语义。
+
 懂车帝认证浏览器默认以有头模式运行，因为当前无头模式会收到 HTTP 200 零字节页面。Windows 本地运行时使用当前桌面会话；目标 Linux 部署必须在同一服务进程环境中提供 Xvfb，并在正式部署门禁中真实创建认证任务、确认 Dialog 收到非空画面和“页面可操作”状态。`THREADSNAP_AUTH_BROWSER_HEADLESS=true` 只用于已重新验证目标平台可正常返回认证页面的环境，不是当前推荐配置。
 
 正式浏览器 Profile 保存为 `data/auth-profiles/<platform>/current.profile.enc` 加密归档；任务运行期间才解密到隔离任务目录。圈子样本门禁通过后才原子替换 Profile 和加密 Session，失败时保留旧版本。服务启动会清理异常退出遗留的任务目录，但仍应限制 `data/` 只允许服务账号访问，并确保所有 ThreadSnap 实例使用同一 `THREADSNAP_SESSION_FERNET_KEY`。
