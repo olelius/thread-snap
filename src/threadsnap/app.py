@@ -35,6 +35,7 @@ from .models import ValidationJob
 from .scheduler import SchedulerService
 from .schemas import (
     CircleBatchUpdate,
+    CircleRow,
     ExportCreate,
     ExtractionPlanUpdate,
     ManualRunCreate,
@@ -168,6 +169,35 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
         container = _container(request)
         result = container.config.save_circle_batch(value)
         container.events.publish("circles.changed", "circles")
+        return result
+
+    @router.get("/circles")
+    def list_circles(request: Request) -> list[dict[str, Any]]:
+        return _container(request).config.list_circles()
+
+    @router.get("/circles/{circle_id}")
+    def get_circle(circle_id: str, request: Request) -> dict[str, Any]:
+        return _container(request).config.get_circle(circle_id)
+
+    @router.post("/circles", status_code=201)
+    def create_circle(value: CircleRow, request: Request) -> dict[str, Any]:
+        container = _container(request)
+        result = container.config.create_circle(value)
+        container.events.publish("circles.changed", result["id"])
+        return result
+
+    @router.put("/circles/{circle_id}")
+    def update_circle(circle_id: str, value: CircleRow, request: Request) -> dict[str, Any]:
+        container = _container(request)
+        result = container.config.update_circle(circle_id, value)
+        container.events.publish("circles.changed", circle_id)
+        return result
+
+    @router.delete("/circles/{circle_id}")
+    def delete_circle(circle_id: str, request: Request) -> dict[str, Any]:
+        container = _container(request)
+        result = container.config.delete_circle(circle_id)
+        container.events.publish("circles.changed", circle_id)
         return result
 
     @router.post("/circles/{circle_id}/validate", status_code=202)

@@ -50,10 +50,10 @@ export function NewExtractionSheet() {
             }
       return api<Run>('/runs/manual', { method: 'POST', body: JSON.stringify(body) })
     },
-    onSuccess: (run) => {
-      toast.success('提取任务已创建', { description: `批次 ${run.number} 已进入队列。` })
+    onSuccess: async (run) => {
       window.dispatchEvent(new CustomEvent('threadsnap:new-run', { detail: run.id }))
-      client.invalidateQueries({ queryKey: ['runs'] })
+      await client.invalidateQueries({ queryKey: ['runs'] })
+      toast.success('提取任务已创建', { description: `批次 ${run.number} 已进入队列。` })
       setOpen(false)
       reset()
     },

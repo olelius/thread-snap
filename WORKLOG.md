@@ -15,6 +15,21 @@
 
 ---
 
+
+## 2026-08-15 — 修复配置保存后的服务端状态回填与圈子删除
+
+**总目标**：修复“车型与圈子”保存后仍保留无 ID 草稿、删除保存后刷新复现的问题，并审计第一版前端所有数据库写操作后的可见列表一致性。
+**状态**：✅ 前后端修复、完整自动化、真实 API 与真实 UI 闭环完成；FastAPI PID 27508 和既有 Vite 服务已加载新代码。
+**干到哪了**：
+- [x] 圈子批量协议新增显式 `deleted_ids`，后端在同一事务内校验并执行新增、修改和删除，返回带真实 ID、车型名称的剩余行以及保存数、删除数；补齐圈子查询、新增、更新、删除资源接口，删除配置不影响历史批次快照。
+- [x] “车型与圈子”保存成功后立即用服务端响应重建本地表格与 Query 缓存，再等待 `/vehicles` 回查；删除已保存行会记录真实 ID，删除新草稿只改变本地状态。提取计划、平台配置和圈子配置只在清洁状态下接收 SSE/焦点回查，未提交草稿保持隔离。
+- [x] 审计全部前端写操作：计划和平台已直接使用写响应；手动历史、模板、Session、新建批次、补提、结束认证等待和批次删除改为等待相关 Query 刷新后再反馈；异步圈子验证继续由事件/有界回查刷新。结构化后端行错误现在会进入中文 Toast 详情。
+- [x] 后端 `unittest discover` 26/26，`ruff format --check`、`ruff check`、`compileall`、`pip check`，前端 `npm run check`、`npm run build`（2456 modules）及 `git diff --check` 全部通过。
+- [x] 重启 FastAPI 后完成非破坏真实 API 冒烟：临时圈子新增可见、批量删除数为 1、刷新后消失且原圈子 24729 保留。真实 React 页面再次完成临时圈子“新增→保存取得验证按钮→删除→保存→刷新”，两次 PUT 均为 200，刷新后临时行消失、原圈子保留；证据 `artifacts/runtime/server-state-sync/circle-save-delete-refresh.png`。
+**下一步**：用户可直接在当前页面删除目标圈子并点击“保存当前标签”；后续第一版主线仍按既定计划进入目标 Linux 部署门禁。
+**边界**：批量请求遗漏某条记录不自动删除，只有 `deleted_ids` 中的明确 ID 执行删除；本次未删除用户现有圈子 24729，真实 UI 验证只创建并清理了临时圈子。
+**关联**：`frontend/src/features/config/config-page.tsx`、`frontend/src/lib/api.ts`、`frontend/src/features/runs/`、`frontend/src/features/auth/auth-dialog.tsx`、`src/threadsnap/app.py`、`src/threadsnap/schemas.py`、`src/threadsnap/services.py`、`tests/test_backend.py`、`docs/design/technical-route.md`。
+
 ## 2026-08-14 — 平台认证切换为受控 CDP 实时画面
 
 **总目标**：把平台认证 Dialog 的输入空闲后整帧截图中继替换为后端封装的 CDP Screencast，补齐悬停、拖动和组合键路径，并在保持现有 Profile、Session、任务票据和批次恢复边界的前提下降低本地交互等待。

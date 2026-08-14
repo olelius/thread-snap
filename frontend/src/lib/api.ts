@@ -40,6 +40,14 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function errorMessage(error: unknown) {
+  if (error instanceof ApiError && error.payload.details?.length) {
+    const details = error.payload.details.map((item) => {
+      const location = typeof item.row === 'number' ? `第 ${item.row} 行` : ''
+      const reason = typeof item.reason === 'string' ? item.reason : ''
+      return [location, reason].filter(Boolean).join('：')
+    }).filter(Boolean)
+    if (details.length) return `${error.message} ${details.join('；')}`
+  }
   return error instanceof Error ? error.message : '操作未完成，请稍后重试。'
 }
 

@@ -66,6 +66,7 @@ class CircleRow(StrictModel):
 
 class CircleBatchUpdate(StrictModel):
     rows: list[CircleRow]
+    deleted_ids: list[str] = Field(default_factory=list)
 
 
 class ManualRunCreate(StrictModel):
