@@ -15,6 +15,23 @@
 
 ---
 
+## 2026-08-14 — 修复平台认证白屏并完成真实联调
+
+**总目标**：修复近全屏认证 Dialog 中服务器浏览器只显示白色空页的问题，使人工认证入口真实加载官方页面、区分中继与页面状态，并在门禁通过后安全更新 Profile、Session 和等待批次。
+**状态**：✅ Windows 本地修复与真实 UI 联调完成；目标 Linux 的 Xvfb/连续三轮部署门禁仍按 ADR 0011 独立保留。
+**干到哪了**：
+- [x] 真实对照确认同一登录 URL 在 Patchright 无头浏览器和已安装 Chrome 无头模式下均返回 HTTP 200、`Content-Length: 0`，而 Patchright 随附完整 Chromium 有头持久化上下文返回完整登录页；白屏不是 React Dialog、WebSocket 或 Windows 本身导致。
+- [x] 认证管理器改为默认启动完整 Chromium 有头持久化上下文，并新增 `starting/loading/ready/validating/failed/completed` 页面生命周期；只有非空可交互 DOM 才进入 `ready`，HTTP 错误、零字节响应和空 DOM 返回稳定错误码及中文原因。
+- [x] 每次认证使用独立临时 Profile；正式 Profile 以 Fernet 加密 ZIP 归档保存，成功门禁后关闭浏览器、加密并原子替换 Profile，再恢复对应平台等待队列；校验失败保留旧 Session/Profile 和当前页面，启动时清理异常退出遗留任务目录。
+- [x] 前端将“中继已连接”和“页面可操作”分开显示，增加加载失败 Alert、阶段语义色、失败后重新创建浏览器、未就绪时禁用输入与提交，并用 `insert_text` 支持中文/粘贴文本中继。
+- [x] 新增 5 个认证专项测试，完整后端 `unittest discover` 为 23/23；`ruff check`、`compileall`、前端 `npm run check` 和 `npm run build` 均通过，生产构建转换 2456 个模块。
+- [x] 本地启动独立数据目录的 FastAPI 与 Vite，通过真实页面点击“去认证”后取得官方手机验证码登录页，Dialog 显示“页面可操作 / 中继已连接”；鼠标定位和 11 位测试文本经前端 WebSocket 成功写入服务器浏览器输入框。视觉证据位于被 Git 忽略的 `artifacts/runtime/auth-component-live/auth-dialog-ready.png` 和 `auth-dialog-input-relay.png`，浏览器控制台错误/警告为 0，测试服务和认证浏览器已停止。
+**下一步**：在目标 Linux 的同一服务管理环境中配置 Xvfb，真实创建认证任务并完成一次人工认证与圈子门禁，再继续 ADR 0011 保留的连续三轮部署验收；该门禁通过前不把 Windows 结果外推为 Linux 已验收。
+**边界**：本次没有输入真实手机号、短信码或账号密码，也没有把登录页可见误记为 Session 门禁已通过；自动化测试覆盖成功提升与失败回滚，真实账号认证仍由项目负责人在目标环境自行完成。
+**关联**：`src/threadsnap/auth.py`、`src/threadsnap/config.py`、`frontend/src/features/auth/auth-dialog.tsx`、`frontend/src/components/status-badge.tsx`、`frontend/src/lib/types.ts`、`tests/test_backend.py`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/deployment/backend-v1.md`。
+
+---
+
 ## 2026-08-14 — 完成第一版前后端闭环
 
 **总目标**：基于已确认的 React + Vite 控制台方案完成第一版全部前端页面，同时补齐页面联调所需的后端配置、调度、实时信号、筛选分页、结果导航与新数据库基线，形成前后端分离的单平台完整产品闭环。

@@ -23,7 +23,9 @@ class Settings(BaseSettings):
     platform_level_concurrency: int = Field(default=1, ge=1, le=1)
     dongchedi_storage_state: Path | None = None
     session_fernet_key: str | None = None
-    auth_browser_headless: bool = True
+    # 懂车帝当前会对无头浏览器返回 HTTP 200 零字节文档；认证浏览器默认使用
+    # 完整 Chromium 的有头模式，Linux 由 Xvfb 提供虚拟显示。
+    auth_browser_headless: bool = False
 
     @property
     def template_dir(self) -> Path:
@@ -33,12 +35,19 @@ class Settings(BaseSettings):
     def export_dir(self) -> Path:
         return self.data_dir / "exports"
 
+    @property
+    def auth_profile_dir(self) -> Path:
+        """平台认证浏览器的隔离 Profile 根目录。"""
+
+        return self.data_dir / "auth-profiles"
+
     def ensure_directories(self) -> None:
         """创建后端持久文件目录。"""
 
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.template_dir.mkdir(parents=True, exist_ok=True)
         self.export_dir.mkdir(parents=True, exist_ok=True)
+        self.auth_profile_dir.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache(maxsize=1)

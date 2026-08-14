@@ -1,22 +1,23 @@
-"""短期服务器浏览器认证任务和 WebSocket 中继。"""
+"""短期服务器浏览器认证任务、隔离 Profile 和 WebSocket 中继。"""
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import io
+import os
 import secrets
+import shutil
+import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlencode
 
+from cryptography.fernet import Fernet, InvalidToken
 from fastapi import WebSocket, WebSocketDisconnect
-from patchright.async_api import (
-    Browser,
-    BrowserContext,
-    Page,
-    Playwright,
-    async_playwright,
-)
+from patchright.async_api import BrowserContext, Page, Playwright, async_playwright
 
 from .collectors import AuthenticationRequired, CollectorFailure, DongchediCollector
 from .config import Settings
@@ -26,6 +27,114 @@ from .session_store import SessionStore
 from .worker import WorkerService
 
 
+class AuthPageLoadError(RuntimeError):
+    """认证页面未形成可操作 DOM。"""
+
+    def __init__(self, code: str, message: str, *, http_status: int | None = None):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.http_status = http_status
+
+
+class AuthProfileStore:
+    """以任务临时目录运行 Profile，并仅加密持久化正式副本。"""
+
+    TRANSIENT_FILES = {
+        "DevToolsActivePort",
+        "SingletonCookie",
+        "SingletonLock",
+        "SingletonSocket",
+    }
+
+    def __init__(self, root: Path, fernet: Fernet):
+        self.root = root.resolve()
+        self.fernet = fernet
+        self.root.mkdir(parents=True, exist_ok=True)
+        self.cleanup_stale_tasks()
+
+    def cleanup_stale_tasks(self) -> None:
+        """单进程服务启动时清除上次异常退出遗留的任务明文目录。"""
+
+        for platform_root in self.root.iterdir():
+            if not platform_root.is_dir():
+                continue
+            shutil.rmtree(platform_root / "tasks", ignore_errors=True)
+            for pending in platform_root.glob(".*.profile.enc.tmp"):
+                pending.unlink(missing_ok=True)
+
+    def prepare(self, platform_code: str, task_id: str) -> Path:
+        profile = self.root / platform_code / "tasks" / task_id
+        if profile.exists():
+            shutil.rmtree(profile)
+        profile.mkdir(parents=True, mode=0o700)
+        encrypted = self.current(platform_code)
+        if encrypted.is_file():
+            try:
+                payload = self.fernet.decrypt(encrypted.read_bytes())
+                with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                    for member in archive.infolist():
+                        target = (profile / member.filename).resolve()
+                        if not target.is_relative_to(profile.resolve()):
+                            raise ValueError("浏览器 Profile 压缩包包含越界路径。")
+                    archive.extractall(profile)
+            except (InvalidToken, OSError, ValueError, zipfile.BadZipFile) as exc:
+                shutil.rmtree(profile, ignore_errors=True)
+                raise AuthPageLoadError(
+                    "AUTH_PROFILE_DECRYPT_FAILED",
+                    "服务器浏览器 Profile 读取失败，请检查认证密钥或清理损坏的 Profile。",
+                ) from exc
+        try:
+            os.chmod(profile, 0o700)
+        except OSError:
+            pass
+        return profile
+
+    def current(self, platform_code: str) -> Path:
+        return self.root / platform_code / "current.profile.enc"
+
+    def promote(self, platform_code: str, source: Path, task_id: str) -> Path:
+        """加密并原子替换正式 Profile，成功后清理任务明文目录。"""
+
+        source = source.resolve()
+        if not source.is_dir() or not source.is_relative_to(self.root):
+            raise ValueError("认证临时 Profile 不存在或超出认证目录。")
+        platform_root = self.root / platform_code
+        platform_root.mkdir(parents=True, exist_ok=True)
+        current = self.current(platform_code)
+        pending = platform_root / f".{task_id}.profile.enc.tmp"
+        try:
+            buffer = io.BytesIO()
+            with zipfile.ZipFile(
+                buffer,
+                mode="w",
+                compression=zipfile.ZIP_DEFLATED,
+                compresslevel=3,
+            ) as archive:
+                for path in source.rglob("*"):
+                    if not path.is_file() or path.is_symlink() or path.name in self.TRANSIENT_FILES:
+                        continue
+                    archive.write(path, path.relative_to(source).as_posix())
+            pending.write_bytes(self.fernet.encrypt(buffer.getvalue()))
+            try:
+                os.chmod(pending, 0o600)
+            except OSError:
+                pass
+            pending.replace(current)
+        except Exception:
+            pending.unlink(missing_ok=True)
+            raise
+        shutil.rmtree(source)
+        return current
+
+    def discard(self, profile: Path | None) -> None:
+        if not profile:
+            return
+        resolved = profile.resolve()
+        if resolved.is_relative_to(self.root) and resolved.exists():
+            shutil.rmtree(resolved)
+
+
 @dataclass
 class AuthTask:
     id: str
@@ -33,17 +142,24 @@ class AuthTask:
     ticket: str
     expires_at: datetime
     status: str = "created"
+    page_status: str = "pending"
+    error_code: str | None = None
     error_message: str | None = None
-    claimed: bool = False
+    http_status: int | None = None
     playwright: Playwright | None = None
-    browser: Browser | None = None
     context: BrowserContext | None = None
     page: Page | None = None
+    profile_dir: Path | None = None
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class BrowserAuthManager:
     """认证任务不接收或持久化账号密码，只中继用户对官方页面的输入。"""
+
+    LOGIN_REDIRECT_PATH = "/community/24729"
+    LOGIN_URL = "https://www.dongchedi.com/login-required?" + urlencode(
+        {"redirect": LOGIN_REDIRECT_PATH}
+    )
 
     def __init__(
         self,
@@ -56,6 +172,7 @@ class BrowserAuthManager:
         self.session_store = session_store
         self.worker = worker
         self.event_publisher = event_publisher
+        self.profiles = AuthProfileStore(settings.auth_profile_dir, session_store.fernet)
         self.tasks: dict[str, AuthTask] = {}
 
     async def create(self, platform_code: str) -> dict[str, Any]:
@@ -106,36 +223,76 @@ class BrowserAuthManager:
             "platform_code": task.platform_code,
             "status": task.status,
             "status_name": status_names.get(task.status, task.status),
+            "page_status": task.page_status,
             "expires_at": task.expires_at,
+            "error_code": task.error_code,
             "error_message": task.error_message,
+            "http_status": task.http_status,
             "ticket": task.ticket if task.status in {"created", "active"} else None,
             "websocket_path": f"/api/v1/auth/tasks/{task.id}/stream",
         }
 
     async def _ensure_browser(self, task: AuthTask) -> Page:
-        if task.page and not task.page.is_closed():
+        if task.page and not task.page.is_closed() and task.page_status == "ready":
             return task.page
+        task.page_status = "starting"
+        task.profile_dir = self.profiles.prepare(task.platform_code, task.id)
         task.playwright = await async_playwright().start()
-        task.browser = await task.playwright.chromium.launch(
-            headless=self.settings.auth_browser_headless
+        task.context = await task.playwright.chromium.launch_persistent_context(
+            user_data_dir=str(task.profile_dir),
+            headless=self.settings.auth_browser_headless,
+            viewport={"width": 1280, "height": 800},
+            locale="zh-CN",
+            timezone_id=self.settings.timezone,
         )
-        current = self.session_store.get_state(task.platform_code)
-        context_args = {
-            "viewport": {"width": 1280, "height": 800},
-            "locale": "zh-CN",
-            "timezone_id": self.settings.timezone,
-        }
-        if current:
-            context_args["storage_state"] = current
-        task.context = await task.browser.new_context(**context_args)
-        task.page = await task.context.new_page()
-        await task.page.goto(
-            "https://www.dongchedi.com/community/24729",
+        task.page = task.context.pages[0] if task.context.pages else await task.context.new_page()
+        task.page_status = "loading"
+        response = await task.page.goto(
+            self.LOGIN_URL,
             wait_until="domcontentloaded",
             timeout=60_000,
         )
+        task.http_status = response.status if response else None
+        await self._require_interactive_page(task.page, response)
         task.status = "active"
+        task.page_status = "ready"
+        task.error_code = None
+        task.error_message = None
         return task.page
+
+    @staticmethod
+    async def _require_interactive_page(page: Page, response: Any) -> None:
+        """拒绝平台返回的零字节文档和不可操作空 DOM。"""
+
+        status = response.status if response else None
+        headers = await response.all_headers() if response else {}
+        if status is not None and status >= 400:
+            raise AuthPageLoadError(
+                "AUTH_PAGE_HTTP_ERROR",
+                f"平台认证页面返回 HTTP {status}。",
+                http_status=status,
+            )
+        if headers.get("content-length", "").strip() == "0":
+            raise AuthPageLoadError(
+                "AUTH_PAGE_EMPTY",
+                "平台向当前服务器浏览器返回了零字节空页面，请重新创建认证浏览器。",
+                http_status=status,
+            )
+        html = ""
+        body_text = ""
+        controls = 0
+        for _ in range(10):
+            html = await page.content()
+            body_text = await page.locator("body").inner_text(timeout=2_000)
+            controls = await page.locator("input,button,iframe,a").count()
+            if len(html) > 200 and (body_text.strip() or controls > 0):
+                return
+            await page.wait_for_timeout(500)
+        raise AuthPageLoadError(
+            "AUTH_PAGE_EMPTY_DOM",
+            "平台认证页面没有形成可操作内容，请重新创建认证浏览器。",
+            http_status=status,
+        )
 
     async def stream(self, task_id: str, ticket: str, websocket: WebSocket) -> None:
         task = self.tasks.get(task_id)
@@ -149,9 +306,16 @@ class BrowserAuthManager:
         await websocket.accept()
         async with task.lock:
             try:
+                await websocket.send_json({"type": "browser_starting"})
                 page = await self._ensure_browser(task)
                 await websocket.send_json(
-                    {"type": "ready", "width": 1280, "height": 800, "url": page.url}
+                    {
+                        "type": "ready",
+                        "width": 1280,
+                        "height": 800,
+                        "url": page.url,
+                        "page_status": task.page_status,
+                    }
                 )
                 while task.status == "active" and datetime.now(timezone.utc) < task.expires_at:
                     try:
@@ -164,18 +328,46 @@ class BrowserAuthManager:
                                 "type": "frame",
                                 "data": base64.b64encode(image).decode("ascii"),
                                 "url": page.url,
+                                "page_status": task.page_status,
                             }
                         )
             except WebSocketDisconnect:
                 # 连接断开只关闭本次入口，浏览器保留到任务到期，允许重新打开。
                 return
-            except Exception as exc:
+            except AuthPageLoadError as exc:
                 task.status = "failed"
-                task.error_message = f"平台认证浏览器运行失败：{exc}"
+                task.page_status = "failed"
+                task.error_code = exc.code
+                task.error_message = exc.message
+                task.http_status = exc.http_status
                 try:
-                    await websocket.send_json({"type": "error", "message": task.error_message})
+                    await websocket.send_json(
+                        {
+                            "type": "page_failed",
+                            "code": exc.code,
+                            "message": exc.message,
+                            "http_status": exc.http_status,
+                        }
+                    )
                 except Exception:
                     pass
+                await self._close(task)
+            except Exception as exc:
+                task.status = "failed"
+                task.page_status = "failed"
+                task.error_code = "AUTH_BROWSER_FAILED"
+                task.error_message = f"平台认证浏览器运行失败：{exc}"
+                try:
+                    await websocket.send_json(
+                        {
+                            "type": "error",
+                            "code": task.error_code,
+                            "message": task.error_message,
+                        }
+                    )
+                except Exception:
+                    pass
+                await self._close(task)
 
     async def _command(self, task: AuthTask, command: dict[str, Any], websocket: WebSocket) -> None:
         page = task.page
@@ -186,14 +378,16 @@ class BrowserAuthManager:
             await page.mouse.click(float(command.get("x", 0)), float(command.get("y", 0)))
         elif kind == "type":
             # 输入只送往当前官方页面焦点，不写日志或数据库。
-            await page.keyboard.type(str(command.get("text", "")))
+            await page.keyboard.insert_text(str(command.get("text", "")))
         elif kind == "key":
             await page.keyboard.press(str(command.get("key", "Enter")))
         elif kind == "scroll":
             await page.mouse.wheel(float(command.get("dx", 0)), float(command.get("dy", 0)))
         elif kind == "finish":
-            if not task.context:
+            if not task.context or not task.profile_dir:
                 return
+            task.page_status = "validating"
+            await websocket.send_json({"type": "validating", "message": "正在校验平台会话…"})
             state = await task.context.storage_state()
             try:
                 await asyncio.to_thread(
@@ -201,20 +395,41 @@ class BrowserAuthManager:
                     "https://www.dongchedi.com/community/24729",
                 )
             except (AuthenticationRequired, CollectorFailure) as exc:
+                task.page_status = "ready"
+                task.error_code = "AUTH_VALIDATION_FAILED"
                 task.error_message = f"平台认证状态校验未通过：{exc}"
                 await websocket.send_json(
-                    {"type": "validation_failed", "message": task.error_message}
+                    {
+                        "type": "validation_failed",
+                        "code": task.error_code,
+                        "message": task.error_message,
+                    }
                 )
                 return
+
+            previous_state = self.session_store.get_state(task.platform_code)
+            profile_dir = task.profile_dir
+            await self._close_browser(task)
             self.session_store.import_state(task.platform_code, state)
+            try:
+                self.profiles.promote(task.platform_code, profile_dir, task.id)
+            except Exception:
+                if previous_state:
+                    self.session_store.import_state(task.platform_code, previous_state)
+                else:
+                    self.session_store.clear(task.platform_code)
+                raise
+            task.profile_dir = None
             self.worker.resume_platform(task.platform_code)
             if self.event_publisher:
                 self.event_publisher("session.changed", task.platform_code, status="valid")
             task.status = "completed"
+            task.page_status = "completed"
+            task.error_code = None
+            task.error_message = None
             await websocket.send_json(
                 {"type": "completed", "message": "平台会话已更新，等待任务将自动续跑。"}
             )
-            await self._close(task)
         elif kind == "close":
             await websocket.close(code=1000)
 
@@ -223,19 +438,22 @@ class BrowserAuthManager:
         for task in list(self.tasks.values()):
             if task.expires_at <= now and task.status in {"created", "active"}:
                 task.status = "expired"
+                task.page_status = "expired"
                 await self._close(task)
 
-    async def _close(self, task: AuthTask) -> None:
+    async def _close_browser(self, task: AuthTask) -> None:
         if task.context:
             await task.context.close()
             task.context = None
             task.page = None
-        if task.browser:
-            await task.browser.close()
-            task.browser = None
         if task.playwright:
             await task.playwright.stop()
             task.playwright = None
+
+    async def _close(self, task: AuthTask) -> None:
+        await self._close_browser(task)
+        self.profiles.discard(task.profile_dir)
+        task.profile_dir = None
 
     async def close_all(self) -> None:
         for task in self.tasks.values():
@@ -250,4 +468,5 @@ class BrowserAuthManager:
                 "active",
             }:
                 task.status = "cancelled"
+                task.page_status = "cancelled"
                 await self._close(task)

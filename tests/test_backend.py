@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
 from sqlalchemy import select
 
 from threadsnap.app import create_app, require_internal_loopback
+from threadsnap.auth import AuthPageLoadError, AuthTask
 from threadsnap.collectors.dongchedi import AuthenticationRequired, DongchediCollector
 from threadsnap.config import Settings
 from threadsnap.errors import DomainError
@@ -108,6 +111,91 @@ class FakeCollector:
             "failures": [],
             "stop_reason": "已处理全部导入帖子链接。",
         }
+
+
+class FakeAuthResponse:
+    def __init__(self, *, status: int = 200, headers: dict[str, str] | None = None):
+        self.status = status
+        self.headers = headers or {}
+
+    async def all_headers(self) -> dict[str, str]:
+        return self.headers
+
+
+class FakeAuthLocator:
+    def __init__(self, *, text: str = "", count: int = 0):
+        self.text = text
+        self.value_count = count
+
+    async def inner_text(self, **_kwargs: object) -> str:
+        return self.text
+
+    async def count(self) -> int:
+        return self.value_count
+
+
+class FakeAuthPage:
+    url = "https://www.dongchedi.com/login-required"
+
+    def __init__(self, *, html: str = "<html><body>登录</body></html>", controls: int = 1):
+        self.html = html
+        self.controls = controls
+
+    def is_closed(self) -> bool:
+        return False
+
+    async def content(self) -> str:
+        return self.html
+
+    def locator(self, selector: str) -> FakeAuthLocator:
+        if selector == "body":
+            return FakeAuthLocator(text="登录" if "登录" in self.html else "")
+        return FakeAuthLocator(count=self.controls)
+
+    async def wait_for_timeout(self, _milliseconds: float) -> None:
+        return None
+
+
+class FakeAuthContext:
+    def __init__(self, state: dict):
+        self.state = state
+        self.closed = False
+
+    async def storage_state(self) -> dict:
+        return self.state
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class FakePlaywright:
+    def __init__(self):
+        self.stopped = False
+
+    async def stop(self) -> None:
+        self.stopped = True
+
+
+class FakeAuthSocket:
+    def __init__(self):
+        self.messages: list[dict] = []
+
+    async def send_json(self, message: dict) -> None:
+        self.messages.append(message)
+
+
+def auth_state(value: str) -> dict:
+    return {
+        "cookies": [
+            {
+                "name": "sessionid",
+                "value": value,
+                "domain": ".dongchedi.com",
+                "path": "/",
+            }
+        ],
+        "origins": [],
+    }
 
 
 class AppCase(unittest.TestCase):
@@ -313,6 +401,139 @@ class ApiAndConfigTests(AppCase):
         with self.container.sessions() as db:
             encrypted = db.get(PlatformSession, "dongchedi").encrypted_state
             self.assertNotIn(b"secret-value", encrypted)
+
+
+class AuthComponentTests(AppCase):
+    def test_zero_byte_auth_page_is_reported_as_failed(self) -> None:
+        response = FakeAuthResponse(headers={"content-length": "0"})
+        with self.assertRaises(AuthPageLoadError) as raised:
+            asyncio.run(self.container.auth._require_interactive_page(FakeAuthPage(), response))
+        self.assertEqual("AUTH_PAGE_EMPTY", raised.exception.code)
+        self.assertEqual(200, raised.exception.http_status)
+
+    def test_auth_page_requires_an_interactive_dom(self) -> None:
+        response = FakeAuthResponse(headers={"content-type": "text/html"})
+        asyncio.run(
+            self.container.auth._require_interactive_page(
+                FakeAuthPage(html="<html><body><button>登录</button></body></html>" * 8),
+                response,
+            )
+        )
+
+    def test_profile_is_encrypted_at_rest_and_restored_per_task(self) -> None:
+        profiles = self.container.auth.profiles
+        source = profiles.prepare("dongchedi", "task-one")
+        marker = source / "Default" / "profile-marker.txt"
+        marker.parent.mkdir(parents=True)
+        marker.write_text("sensitive-profile-state", encoding="utf-8")
+
+        encrypted = profiles.promote("dongchedi", source, "task-one")
+        self.assertFalse(source.exists())
+        self.assertNotIn(b"sensitive-profile-state", encrypted.read_bytes())
+
+        restored = profiles.prepare("dongchedi", "task-two")
+        self.assertEqual(
+            "sensitive-profile-state",
+            (restored / "Default" / "profile-marker.txt").read_text(encoding="utf-8"),
+        )
+        type(profiles)(profiles.root, self.container.session_store.fernet)
+        self.assertFalse(restored.exists())
+        self.assertTrue(encrypted.is_file())
+
+    def test_successful_validation_promotes_profile_and_resumes_platform(self) -> None:
+        task = AuthTask(
+            id="auth-success",
+            platform_code="dongchedi",
+            ticket="ticket",
+            expires_at=datetime.now(timezone.utc),
+            status="active",
+            page_status="ready",
+        )
+        task.profile_dir = self.container.auth.profiles.prepare("dongchedi", task.id)
+        (task.profile_dir / "Default").mkdir(parents=True)
+        (task.profile_dir / "Default" / "marker.txt").write_text("new-profile", encoding="utf-8")
+        task.context = FakeAuthContext(auth_state("new-session"))  # type: ignore[assignment]
+        task.playwright = FakePlaywright()  # type: ignore[assignment]
+        task.page = FakeAuthPage()  # type: ignore[assignment]
+        socket = FakeAuthSocket()
+        resumed: list[str] = []
+
+        class ValidCollector:
+            def __init__(self, *_args: object, **_kwargs: object):
+                pass
+
+            def validate_circle(self, _url: str) -> dict:
+                return {"external_id": "24729"}
+
+        with (
+            patch("threadsnap.auth.DongchediCollector", ValidCollector),
+            patch.object(
+                self.container.worker,
+                "resume_platform",
+                side_effect=lambda platform: resumed.append(platform),
+            ),
+        ):
+            asyncio.run(
+                self.container.auth._command(task, {"type": "finish"}, socket)  # type: ignore[arg-type]
+            )
+
+        self.assertEqual("completed", task.status)
+        self.assertEqual("completed", task.page_status)
+        self.assertEqual(["dongchedi"], resumed)
+        self.assertEqual(
+            "new-session",
+            self.container.session_store.get_state("dongchedi")["cookies"][0]["value"],
+        )
+        encrypted = self.container.auth.profiles.current("dongchedi")
+        self.assertTrue(encrypted.is_file())
+        self.assertNotIn(b"new-profile", encrypted.read_bytes())
+        self.assertEqual("completed", socket.messages[-1]["type"])
+
+    def test_failed_validation_keeps_previous_session_and_profile(self) -> None:
+        self.container.session_store.import_state("dongchedi", auth_state("old-session"))
+        profiles = self.container.auth.profiles
+        old_profile = profiles.prepare("dongchedi", "old-profile")
+        (old_profile / "Default").mkdir(parents=True)
+        (old_profile / "Default" / "marker.txt").write_text("old", encoding="utf-8")
+        current = profiles.promote("dongchedi", old_profile, "old-profile")
+        previous_encrypted = current.read_bytes()
+
+        task = AuthTask(
+            id="auth-failed",
+            platform_code="dongchedi",
+            ticket="ticket",
+            expires_at=datetime.now(timezone.utc),
+            status="active",
+            page_status="ready",
+        )
+        task.profile_dir = profiles.prepare("dongchedi", task.id)
+        (task.profile_dir / "Default" / "marker.txt").write_text("new", encoding="utf-8")
+        task.context = FakeAuthContext(auth_state("new-session"))  # type: ignore[assignment]
+        task.playwright = FakePlaywright()  # type: ignore[assignment]
+        task.page = FakeAuthPage()  # type: ignore[assignment]
+        socket = FakeAuthSocket()
+
+        class InvalidCollector:
+            def __init__(self, *_args: object, **_kwargs: object):
+                pass
+
+            def validate_circle(self, _url: str) -> dict:
+                raise AuthenticationRequired("仍需登录")
+
+        with patch("threadsnap.auth.DongchediCollector", InvalidCollector):
+            asyncio.run(
+                self.container.auth._command(task, {"type": "finish"}, socket)  # type: ignore[arg-type]
+            )
+
+        self.assertEqual("active", task.status)
+        self.assertEqual("ready", task.page_status)
+        self.assertEqual("validation_failed", socket.messages[-1]["type"])
+        self.assertEqual(previous_encrypted, current.read_bytes())
+        self.assertEqual(
+            "old-session",
+            self.container.session_store.get_state("dongchedi")["cookies"][0]["value"],
+        )
+        asyncio.run(self.container.auth._close(task))
 
 
 class QueueAndRetryTests(AppCase):
