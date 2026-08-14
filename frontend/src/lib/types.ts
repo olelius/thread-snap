@@ -150,8 +150,11 @@ export type AuthTask = {
   platform_code: string
   status: string
   status_name: string
+  page_status: string
   expires_at: string
+  error_code?: string
   error_message?: string
+  http_status?: number
   ticket?: string
   websocket_path: string
 }
