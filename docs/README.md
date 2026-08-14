@@ -89,6 +89,8 @@
 | `docs/adr/0009-global-scheduler-and-platform-fifo.md` | 一个全局调度源创建批次，执行时按平台严格 FIFO 隔离认证阻塞 |
 | `docs/adr/0010-versioned-tag-driven-xlsx-templates.md` | 多模板使用不可变版本和稳定英文标签驱动 XLSX 导出 |
 | `docs/adr/0011-adopt-python-backend-before-deferred-linux-gate.md` | 采用 Python 第一版后端，CentOS 三轮暂缓但保留为最终部署门禁 |
+| `docs/adr/0012-reuse-vite-shadcn-admin-ui-baseline.md` | 第一版采用 Vite React 技术栈并选择性复用 shadcn-admin UI 基线 |
+| `docs/adr/0013-separate-schedule-nodes-from-extraction-rules.md` | 每周计划节点只引用可复用自动提取规则，各配置页面保持唯一编辑归属 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 
