@@ -13,6 +13,10 @@
 /.env
 *.egg-info/
 
+# 前端本地依赖和构建产物
+/frontend/node_modules/
+/frontend/dist/
+
 # PoC 本地依赖、缓存与构建产物
 **/__pycache__/
 *.py[cod]

@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from .collectors.dongchedi import (
@@ -24,20 +24,23 @@ from .models import (
     CircleTask,
     CommentSnapshot,
     ExportRecord,
+    ExtractionRule,
+    ExtractionRuleVersion,
     ExtractionRun,
-    GlobalSchedule,
     PlatformConfig,
     PostSnapshot,
+    ScheduleConfig,
     ScheduleEvent,
+    ScheduleNode,
     ValidationJob,
     Vehicle,
     utc_now,
 )
 from .schemas import (
     CircleBatchUpdate,
+    ExtractionPlanUpdate,
     ManualRunCreate,
     PlatformConfigUpdate,
-    ScheduleUpdate,
 )
 
 TERMINAL_STATUSES = frozenset({"success", "partial_success", "failed"})
@@ -86,7 +89,7 @@ def canonical_hash(value: Any) -> str:
 
 
 def bootstrap_database(db: Session) -> None:
-    """写入第一版平台和全局配置默认值。"""
+    """写入第一版平台目录和计划配置默认值。"""
 
     defaults = [
         PlatformConfig(
@@ -94,7 +97,6 @@ def bootstrap_database(db: Session) -> None:
             display_name="懂车帝",
             adapter_status="available",
             enabled=True,
-            auto_quantity=30,
             internal_concurrency=2,
             min_quantity=1,
             max_quantity=2000,
@@ -118,12 +120,12 @@ def bootstrap_database(db: Session) -> None:
     for item in defaults:
         if not db.get(PlatformConfig, item.code):
             db.add(item)
-    if not db.get(GlobalSchedule, 1):
-        db.add(GlobalSchedule(id=1, timezone_name="Asia/Shanghai", times=[], version=1))
+    if not db.get(ScheduleConfig, 1):
+        db.add(ScheduleConfig(id=1, timezone_name="Asia/Shanghai", revision=1))
 
 
 class ConfigService:
-    """全局时间、平台和车型圈子配置。"""
+    """提取计划、平台和车型圈子配置。"""
 
     def __init__(self, factory: sessionmaker[Session]):
         self.factory = factory
@@ -142,7 +144,6 @@ class ConfigService:
             "display_name": item.display_name,
             "adapter_status": item.adapter_status,
             "enabled": item.enabled,
-            "auto_quantity": item.auto_quantity,
             "internal_concurrency": item.internal_concurrency,
             "quantity_range": {"min": item.min_quantity, "max": item.max_quantity},
             "concurrency_range": {
@@ -160,51 +161,283 @@ class ConfigService:
             if item.adapter_status != "available" and value.enabled:
                 raise DomainError(
                     "PLATFORM_NOT_INTEGRATED",
-                    f"{item.display_name}暂未接入，当前不能启用。",
+                    f"{item.display_name}暂未接入，当前不允许启用。",
                     status_code=409,
                 )
-            actual_quantity = min(max(value.auto_quantity, item.min_quantity), item.max_quantity)
+            if value.enabled and not item.enabled:
+                missing_rules: list[dict[str, Any]] = []
+                nodes = list(db.scalars(select(ScheduleNode).where(ScheduleNode.enabled.is_(True))))
+                for node in nodes:
+                    rule = db.get(ExtractionRule, node.rule_id)
+                    version = (
+                        db.scalar(
+                            select(ExtractionRuleVersion).where(
+                                ExtractionRuleVersion.rule_id == node.rule_id,
+                                ExtractionRuleVersion.version == rule.current_version,
+                            )
+                        )
+                        if rule
+                        else None
+                    )
+                    if not version or int(version.platform_quantities.get(code, 0)) < 1:
+                        missing_rules.append(
+                            {
+                                "node_id": node.id,
+                                "rule_id": node.rule_id,
+                                "rule_name": rule.name if rule else "未知规则",
+                            }
+                        )
+                if missing_rules:
+                    raise DomainError(
+                        "PLATFORM_RULE_QUANTITY_MISSING",
+                        "启用平台前，请先在提取计划中补齐所有启用节点引用规则的平台数量。",
+                        status_code=409,
+                        details=missing_rules,
+                    )
             actual_concurrency = min(
                 max(value.internal_concurrency, item.min_concurrency),
                 item.max_concurrency,
             )
             item.enabled = value.enabled
-            item.auto_quantity = actual_quantity
             item.internal_concurrency = actual_concurrency
             db.flush()
             result = self.platform_dict(item)
             notes = []
-            if actual_quantity != value.auto_quantity:
-                notes.append(f"自动每圈提取数已收敛为平台最大安全值 {actual_quantity}。")
             if actual_concurrency != value.internal_concurrency:
                 notes.append(f"平台内部并发已收敛为安全值 {actual_concurrency}。")
             result["notes"] = notes
             return result
 
-    def get_schedule(self) -> dict[str, Any]:
+    def get_extraction_plan(self) -> dict[str, Any]:
         with self.factory() as db:
-            item = db.get(GlobalSchedule, 1)
-            assert item is not None
+            config = db.get(ScheduleConfig, 1)
+            assert config is not None
+            rules = list(db.scalars(select(ExtractionRule).order_by(ExtractionRule.created_at)))
+            versions = {
+                (item.rule_id, item.version): item
+                for item in db.scalars(select(ExtractionRuleVersion))
+            }
+            nodes = list(db.scalars(select(ScheduleNode).order_by(ScheduleNode.created_at)))
+
+            def rule_dict(rule: ExtractionRule) -> dict[str, Any]:
+                version = versions[(rule.id, rule.current_version)]
+                return {
+                    "id": rule.id,
+                    "name": rule.name,
+                    "version": rule.current_version,
+                    "platform_quantities": version.platform_quantities,
+                    "archived": rule.archived,
+                    "updated_at": rule.updated_at,
+                }
+
             return {
-                "times": item.times,
-                "timezone": item.timezone_name,
-                "version": item.version,
-                "enabled": bool(item.times),
+                "timezone": config.timezone_name,
+                "revision": config.revision,
+                "rules": [rule_dict(item) for item in rules if not item.archived],
+                "archived_rules": [rule_dict(item) for item in rules if item.archived],
+                "nodes": [
+                    {
+                        "id": item.id,
+                        "weekdays": item.weekdays,
+                        "time": item.time_of_day,
+                        "enabled": item.enabled,
+                        "rule_id": item.rule_id,
+                        "updated_at": item.updated_at,
+                    }
+                    for item in nodes
+                ],
             }
 
-    def update_schedule(self, value: ScheduleUpdate) -> dict[str, Any]:
+    def update_extraction_plan(self, value: ExtractionPlanUpdate) -> dict[str, Any]:
         with self.factory.begin() as db:
-            item = db.get(GlobalSchedule, 1)
-            assert item is not None
-            item.times = value.times
-            item.version += 1
-            db.flush()
-            return {
-                "times": item.times,
-                "timezone": item.timezone_name,
-                "version": item.version,
-                "enabled": bool(item.times),
+            config = db.get(ScheduleConfig, 1)
+            assert config is not None
+            if value.revision != config.revision:
+                raise DomainError(
+                    "EXTRACTION_PLAN_REVISION_CONFLICT",
+                    "提取计划已被更新，请刷新后合并当前修改。",
+                    status_code=409,
+                    details=[{"current_revision": config.revision}],
+                )
+            names: dict[str, str] = {}
+            for draft in value.rules:
+                normalized = draft.name.strip()
+                key = normalized.casefold()
+                if key in names:
+                    raise DomainError(
+                        "EXTRACTION_RULE_NAME_DUPLICATED",
+                        "规则名称需要保持唯一。",
+                        details=[{"rule_id": draft.id, "conflicts_with": names[key]}],
+                    )
+                names[key] = draft.id
+            rule_ids = {item.id for item in value.rules}
+            node_ids = {item.id for item in value.nodes}
+            missing_refs = [item.id for item in value.nodes if item.rule_id not in rule_ids]
+            if missing_refs:
+                raise DomainError(
+                    "SCHEDULE_NODE_RULE_MISSING",
+                    "计划节点引用了当前计划中不存在的规则。",
+                    details=[{"node_id": item} for item in missing_refs],
+                )
+            conflicts: dict[tuple[int, str], list[str]] = {}
+            for node in value.nodes:
+                if not node.enabled:
+                    continue
+                for weekday in node.weekdays:
+                    conflicts.setdefault((weekday, node.time), []).append(node.id)
+            duplicated = [
+                {"weekday": key[0], "time": key[1], "node_ids": ids}
+                for key, ids in conflicts.items()
+                if len(ids) > 1
+            ]
+            if duplicated:
+                raise DomainError(
+                    "SCHEDULE_NODE_TIME_CONFLICT",
+                    "启用节点的星期和时间发生冲突。",
+                    details=duplicated,
+                )
+            platforms = list(db.scalars(select(PlatformConfig)))
+            integrated = {
+                item.code: item for item in platforms if item.adapter_status == "available"
             }
+            enabled_codes = {item.code for item in platforms if item.enabled}
+            rule_quantities: dict[str, dict[str, int]] = {}
+            for draft in value.rules:
+                unknown = sorted(set(draft.platform_quantities) - set(integrated))
+                if unknown:
+                    raise DomainError(
+                        "EXTRACTION_RULE_PLATFORM_INVALID",
+                        "规则包含尚未接入的平台数量。",
+                        details=[{"platform_code": code, "rule_id": draft.id} for code in unknown],
+                    )
+                quantities: dict[str, int] = {}
+                for code, quantity in draft.platform_quantities.items():
+                    platform = integrated[code]
+                    if quantity < platform.min_quantity or quantity > platform.max_quantity:
+                        raise DomainError(
+                            "EXTRACTION_RULE_QUANTITY_INVALID",
+                            "规则中的平台数量超出有效范围。",
+                            details=[
+                                {
+                                    "rule_id": draft.id,
+                                    "platform_code": code,
+                                    "min": platform.min_quantity,
+                                    "max": platform.max_quantity,
+                                }
+                            ],
+                        )
+                    quantities[code] = quantity
+                rule_quantities[draft.id] = quantities
+            invalid_nodes = [
+                {
+                    "node_id": node.id,
+                    "rule_id": node.rule_id,
+                    "missing_platforms": sorted(enabled_codes - set(rule_quantities[node.rule_id])),
+                }
+                for node in value.nodes
+                if node.enabled and enabled_codes - set(rule_quantities[node.rule_id])
+            ]
+            if invalid_nodes:
+                raise DomainError(
+                    "SCHEDULE_NODE_RULE_INCOMPLETE",
+                    "启用节点引用的规则缺少已启用平台数量。",
+                    details=invalid_nodes,
+                )
+
+            existing_rules = {item.id: item for item in db.scalars(select(ExtractionRule))}
+            for draft in value.rules:
+                rule = existing_rules.get(draft.id)
+                quantities = rule_quantities[draft.id]
+                if rule and rule.archived:
+                    raise DomainError(
+                        "EXTRACTION_RULE_ARCHIVED",
+                        "已归档规则需要先恢复后再编辑。",
+                        status_code=409,
+                        details=[{"rule_id": draft.id}],
+                    )
+                if not rule:
+                    rule = ExtractionRule(id=draft.id, name=draft.name.strip(), current_version=1)
+                    db.add(rule)
+                    db.add(
+                        ExtractionRuleVersion(
+                            rule_id=draft.id, version=1, platform_quantities=quantities
+                        )
+                    )
+                else:
+                    current = db.scalar(
+                        select(ExtractionRuleVersion).where(
+                            ExtractionRuleVersion.rule_id == rule.id,
+                            ExtractionRuleVersion.version == rule.current_version,
+                        )
+                    )
+                    changed = rule.name != draft.name.strip() or (
+                        current is None or current.platform_quantities != quantities
+                    )
+                    rule.name = draft.name.strip()
+                    if changed:
+                        rule.current_version += 1
+                        db.add(
+                            ExtractionRuleVersion(
+                                rule_id=rule.id,
+                                version=rule.current_version,
+                                platform_quantities=quantities,
+                            )
+                        )
+
+            for node in list(db.scalars(select(ScheduleNode))):
+                if node.id not in node_ids:
+                    db.delete(node)
+            db.flush()
+            existing_nodes = {item.id: item for item in db.scalars(select(ScheduleNode))}
+            for draft in value.nodes:
+                node = existing_nodes.get(draft.id)
+                if not node:
+                    node = ScheduleNode(id=draft.id)
+                    db.add(node)
+                node.weekdays = draft.weekdays
+                node.time_of_day = draft.time
+                node.enabled = draft.enabled
+                node.rule_id = draft.rule_id
+            db.flush()
+
+            for rule in existing_rules.values():
+                if rule.archived or rule.id in rule_ids:
+                    continue
+                referenced = db.scalar(
+                    select(func.count())
+                    .select_from(ScheduleNode)
+                    .where(ScheduleNode.rule_id == rule.id)
+                )
+                if referenced:
+                    raise DomainError(
+                        "EXTRACTION_RULE_IN_USE",
+                        "仍被计划节点引用的规则需要先解除引用。",
+                        status_code=409,
+                        details=[{"rule_id": rule.id}],
+                    )
+                used = db.scalar(
+                    select(func.count())
+                    .select_from(ExtractionRun)
+                    .where(ExtractionRun.extraction_rule_id == rule.id)
+                )
+                if used:
+                    rule.archived = True
+                else:
+                    db.delete(rule)
+            config.revision += 1
+            db.flush()
+        return self.get_extraction_plan()
+
+    def restore_extraction_rule(self, rule_id: str) -> dict[str, Any]:
+        with self.factory.begin() as db:
+            rule = db.get(ExtractionRule, rule_id)
+            if not rule:
+                raise DomainError("EXTRACTION_RULE_NOT_FOUND", "指定规则不存在。", status_code=404)
+            rule.archived = False
+            config = db.get(ScheduleConfig, 1)
+            assert config is not None
+            config.revision += 1
+        return self.get_extraction_plan()
 
     def list_vehicles(self) -> list[dict[str, Any]]:
         with self.factory() as db:
@@ -591,7 +824,7 @@ class RunService:
             db.add(run)
             db.flush()
             sequence = self._next_queue_sequence(db)
-            for item in circles:
+            for source_position, item in enumerate(circles):
                 circle = item["circle"]
                 vehicle_name = circle.vehicle.name if circle and circle.vehicle else None
                 task = CircleTask(
@@ -603,6 +836,7 @@ class RunService:
                     circle_url=item["url"],
                     target_count=quantity,
                     queue_sequence=sequence,
+                    source_position=source_position,
                     config_snapshot={
                         "quantity": quantity,
                         "internal_concurrency": platform.internal_concurrency,
@@ -622,6 +856,7 @@ class RunService:
                         circle_url="",
                         target_count=len(normalized_posts),
                         queue_sequence=sequence,
+                        source_position=len(circles),
                         config_snapshot={
                             "known_post_urls": normalized_posts,
                             "internal_concurrency": platform.internal_concurrency,
@@ -639,14 +874,41 @@ class RunService:
             return result
 
     def create_scheduled(
-        self, planned_at: datetime, schedule_version: int
+        self, planned_at: datetime, schedule_node_id: str, schedule_revision: int
     ) -> dict[str, Any] | None:
-        key = f"{planned_at.astimezone(timezone.utc).isoformat()}:{schedule_version}"
+        key = f"{schedule_node_id}:{planned_at.astimezone(timezone.utc).isoformat()}"
         with self.factory.begin() as db:
+            node = db.get(ScheduleNode, schedule_node_id)
+            if not node or not node.enabled:
+                return None
+            rule = db.get(ExtractionRule, node.rule_id)
+            if not rule or rule.archived:
+                db.add(
+                    ScheduleEvent(
+                        planned_at=planned_at,
+                        schedule_node_id=schedule_node_id,
+                        schedule_revision=schedule_revision,
+                        extraction_rule_id=node.rule_id,
+                        status="blocked",
+                        message="计划节点引用的提取规则当前不可用。",
+                    )
+                )
+                return None
+            rule_version = db.scalar(
+                select(ExtractionRuleVersion).where(
+                    ExtractionRuleVersion.rule_id == rule.id,
+                    ExtractionRuleVersion.version == rule.current_version,
+                )
+            )
+            if not rule_version:
+                return None
             request_hash = canonical_hash(
                 {
                     "planned_at": planned_at.isoformat(),
-                    "schedule_version": schedule_version,
+                    "schedule_node_id": schedule_node_id,
+                    "schedule_revision": schedule_revision,
+                    "rule_id": rule.id,
+                    "rule_version": rule.current_version,
                 }
             )
             existing = self._idempotent_existing(db, "scheduler", key, request_hash)
@@ -672,11 +934,28 @@ class RunService:
                 )
             )
             circles = [item for item in circles if item.platform_code in platforms]
+            missing = sorted(set(platforms) - set(rule_version.platform_quantities))
+            if missing:
+                db.add(
+                    ScheduleEvent(
+                        planned_at=planned_at,
+                        schedule_node_id=schedule_node_id,
+                        schedule_revision=schedule_revision,
+                        extraction_rule_id=rule.id,
+                        extraction_rule_version=rule.current_version,
+                        status="blocked",
+                        message="提取规则缺少已启用平台数量，整次节点触发已阻止。",
+                    )
+                )
+                return None
             if not circles:
                 db.add(
                     ScheduleEvent(
                         planned_at=planned_at,
-                        schedule_version=schedule_version,
+                        schedule_node_id=schedule_node_id,
+                        schedule_revision=schedule_revision,
+                        extraction_rule_id=rule.id,
+                        extraction_rule_version=rule.current_version,
                         status="skipped",
                         message="当前没有可执行的已验证自动提取圈子。",
                     )
@@ -690,16 +969,24 @@ class RunService:
                 idempotency_scope="scheduler",
                 idempotency_key=key,
                 request_hash=request_hash,
+                schedule_node_id=schedule_node_id,
+                extraction_rule_id=rule.id,
+                extraction_rule_version=rule.current_version,
                 config_snapshot={
                     "planned_at": planned_at.isoformat(),
-                    "schedule_version": schedule_version,
+                    "schedule_node_id": schedule_node_id,
+                    "schedule_revision": schedule_revision,
+                    "extraction_rule_id": rule.id,
+                    "extraction_rule_version": rule.current_version,
+                    "platform_quantities": rule_version.platform_quantities,
                 },
             )
             db.add(run)
             db.flush()
             sequence = self._next_queue_sequence(db)
-            for circle in circles:
+            for source_position, circle in enumerate(circles):
                 platform = platforms[circle.platform_code]
+                quantity = int(rule_version.platform_quantities[circle.platform_code])
                 db.add(
                     CircleTask(
                         run_id=run.id,
@@ -708,21 +995,25 @@ class RunService:
                         external_id=circle.external_id,
                         circle_name=circle.name,
                         circle_url=circle.url,
-                        target_count=platform.auto_quantity,
+                        target_count=quantity,
                         queue_sequence=sequence,
+                        source_position=source_position,
                         config_snapshot={
-                            "quantity": platform.auto_quantity,
+                            "quantity": quantity,
                             "internal_concurrency": platform.internal_concurrency,
                             "vehicle_name": circle.vehicle.name if circle.vehicle else None,
                         },
                     )
                 )
-                run.planned_count += platform.auto_quantity
+                run.planned_count += quantity
                 sequence += 1
             db.add(
                 ScheduleEvent(
                     planned_at=planned_at,
-                    schedule_version=schedule_version,
+                    schedule_node_id=schedule_node_id,
+                    schedule_revision=schedule_revision,
+                    extraction_rule_id=rule.id,
+                    extraction_rule_version=rule.current_version,
                     status="created",
                     message="定时提取批次已创建。",
                     run_id=run.id,
@@ -761,10 +1052,12 @@ class RunService:
             snapshot = []
             for task in selected:
                 failed_urls = []
+                source_indexes: dict[str, int] = {}
                 for failure in (task.checkpoint or {}).get("failed_urls", []):
                     url = failure.get("url") if isinstance(failure, dict) else None
                     if isinstance(url, str) and url and url not in failed_urls:
                         failed_urls.append(url)
+                        source_indexes[url] = int(failure.get("source_index", len(source_indexes)))
                 if failed_urls:
                     snapshot.append(
                         {
@@ -773,9 +1066,11 @@ class RunService:
                             "url": task.circle_url,
                             "name": task.circle_name,
                             "target_count": len(failed_urls),
+                            "source_position": task.source_position,
                             "config_snapshot": {
                                 **(task.config_snapshot or {}),
                                 "known_post_urls": failed_urls,
+                                "source_indexes": source_indexes,
                                 "retry_of_task_id": task.id,
                             },
                         }
@@ -824,6 +1119,7 @@ class RunService:
                     circle_url=item["url"],
                     target_count=item["target_count"],
                     queue_sequence=sequence,
+                    source_position=item["source_position"],
                     config_snapshot=item["config_snapshot"],
                 )
                 db.add(task)
@@ -834,17 +1130,67 @@ class RunService:
             result.update({"already_submitted": False, "message": "手动补提任务已提交。"})
             return result
 
-    def list_runs(self, offset: int = 0, limit: int = 50) -> dict[str, Any]:
+    def list_runs(
+        self,
+        offset: int = 0,
+        limit: int = 50,
+        *,
+        number: str | None = None,
+        statuses: list[str] | None = None,
+        trigger_type: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
+    ) -> dict[str, Any]:
         with self.factory() as db:
-            total = db.scalar(select(func.count()).select_from(ExtractionRun)) or 0
-            items = db.scalars(
-                select(ExtractionRun)
-                .order_by(ExtractionRun.created_at.desc())
-                .offset(offset)
-                .limit(limit)
+            conditions = []
+            if number:
+                conditions.append(ExtractionRun.number.ilike(f"%{number.strip()}%"))
+            if statuses:
+                conditions.append(ExtractionRun.status.in_(statuses))
+            if trigger_type:
+                conditions.append(ExtractionRun.trigger_type == trigger_type)
+            if created_from:
+                conditions.append(ExtractionRun.created_at >= created_from)
+            if created_to:
+                conditions.append(ExtractionRun.created_at <= created_to)
+            total = (
+                db.scalar(select(func.count()).select_from(ExtractionRun).where(*conditions)) or 0
+            )
+            runs = list(
+                db.scalars(
+                    select(ExtractionRun)
+                    .where(*conditions)
+                    .order_by(ExtractionRun.created_at.desc(), ExtractionRun.id.desc())
+                    .offset(offset)
+                    .limit(limit)
+                )
+            )
+            run_ids = [item.id for item in runs]
+            tasks = (
+                list(
+                    db.scalars(
+                        select(CircleTask)
+                        .where(CircleTask.run_id.in_(run_ids))
+                        .order_by(CircleTask.queue_sequence)
+                    )
+                )
+                if run_ids
+                else []
+            )
+            grouped: dict[str, list[CircleTask]] = {}
+            for task in tasks:
+                grouped.setdefault(task.run_id, []).append(task)
+            queued = list(
+                db.scalars(
+                    select(CircleTask)
+                    .where(CircleTask.status == "queued")
+                    .order_by(CircleTask.platform_code, CircleTask.queue_sequence)
+                )
             )
             return {
-                "items": [run_dict(db, item) for item in items],
+                "items": [
+                    run_dict_from_tasks(item, grouped.get(item.id, []), queued) for item in runs
+                ],
                 "total": total,
                 "offset": offset,
                 "limit": limit,
@@ -902,41 +1248,126 @@ class RunService:
             db.delete(run)
             return paths
 
-    def posts(self, run_id: str, offset: int = 0, limit: int = 100) -> dict[str, Any]:
+    @staticmethod
+    def _ranked_posts(
+        db: Session,
+        run_id: str,
+        *,
+        title: str | None = None,
+        circle: str | None = None,
+        visibility: str | None = None,
+    ):
+        run_ids = related_run_ids(db, run_id)
+        conditions = [PostSnapshot.run_id.in_(run_ids)]
+        if title:
+            conditions.append(PostSnapshot.title.ilike(f"%{title.strip()}%"))
+        if circle:
+            text = f"%{circle.strip()}%"
+            conditions.append(
+                or_(CircleTask.circle_name.ilike(text), CircleTask.external_id.ilike(text))
+            )
+        if visibility:
+            conditions.append(PostSnapshot.visibility == visibility)
+        return (
+            select(
+                PostSnapshot.id.label("post_id"),
+                PostSnapshot.published_at,
+                PostSnapshot.reply_count,
+                PostSnapshot.like_count,
+                CircleTask.source_position,
+                PostSnapshot.order_index,
+                func.row_number()
+                .over(
+                    partition_by=(
+                        CircleTask.platform_code,
+                        CircleTask.external_id,
+                        PostSnapshot.platform_post_id,
+                    ),
+                    order_by=(
+                        CircleTask.source_position,
+                        PostSnapshot.order_index,
+                        PostSnapshot.created_at,
+                    ),
+                )
+                .label("dedupe_rank"),
+            )
+            .join(CircleTask, CircleTask.id == PostSnapshot.circle_task_id)
+            .where(*conditions)
+            .subquery()
+        )
+
+    def _filtered_post_ids(
+        self,
+        db: Session,
+        run_id: str,
+        *,
+        title: str | None = None,
+        circle: str | None = None,
+        visibility: str | None = None,
+        sort_by: str = "source",
+        sort_direction: str = "asc",
+    ) -> tuple[Any, int]:
+        ranked = self._ranked_posts(db, run_id, title=title, circle=circle, visibility=visibility)
+        total = (
+            db.scalar(select(func.count()).select_from(ranked).where(ranked.c.dedupe_rank == 1))
+            or 0
+        )
+        sort_column = {
+            "published_at": ranked.c.published_at,
+            "reply_count": ranked.c.reply_count,
+            "like_count": ranked.c.like_count,
+        }.get(sort_by)
+        if sort_column is None:
+            direction = "desc" if sort_direction == "desc" else "asc"
+            order = tuple(
+                getattr(column, direction)()
+                for column in (
+                    ranked.c.source_position,
+                    ranked.c.order_index,
+                    ranked.c.post_id,
+                )
+            )
+        else:
+            direction = sort_column.desc if sort_direction == "desc" else sort_column.asc
+            order = (direction().nulls_last(), ranked.c.source_position, ranked.c.order_index)
+        query = select(ranked.c.post_id).where(ranked.c.dedupe_rank == 1).order_by(*order)
+        return query, int(total)
+
+    def posts(
+        self,
+        run_id: str,
+        offset: int = 0,
+        limit: int = 100,
+        *,
+        title: str | None = None,
+        circle: str | None = None,
+        visibility: str | None = None,
+        sort_by: str = "source",
+        sort_direction: str = "asc",
+    ) -> dict[str, Any]:
         with self.factory() as db:
             if not db.get(ExtractionRun, run_id):
                 raise DomainError("RUN_NOT_FOUND", "指定提取批次不存在。", status_code=404)
-            run_ids = related_run_ids(db, run_id)
+            id_query, total = self._filtered_post_ids(
+                db,
+                run_id,
+                title=title,
+                circle=circle,
+                visibility=visibility,
+                sort_by=sort_by,
+                sort_direction=sort_direction,
+            )
+            post_ids = list(db.scalars(id_query.offset(offset).limit(limit)))
+            post_map = {
+                item.id: item
+                for item in db.scalars(select(PostSnapshot).where(PostSnapshot.id.in_(post_ids)))
+            }
+            posts = [post_map[item] for item in post_ids if item in post_map]
+            task_ids = [item.circle_task_id for item in posts]
             tasks = {
                 item.id: item
-                for item in db.scalars(
-                    select(CircleTask)
-                    .where(CircleTask.run_id.in_(run_ids))
-                    .order_by(CircleTask.created_at, CircleTask.queue_sequence)
-                )
+                for item in db.scalars(select(CircleTask).where(CircleTask.id.in_(task_ids)))
             }
-            all_posts = (
-                list(
-                    db.scalars(
-                        select(PostSnapshot)
-                        .where(PostSnapshot.circle_task_id.in_(list(tasks)))
-                        .order_by(PostSnapshot.created_at, PostSnapshot.order_index)
-                    )
-                )
-                if tasks
-                else []
-            )
-            seen: set[tuple[str, str, str]] = set()
-            merged: list[PostSnapshot] = []
-            for post in all_posts:
-                task = tasks[post.circle_task_id]
-                identity = (task.platform_code, task.external_id, post.platform_post_id)
-                if identity in seen:
-                    continue
-                seen.add(identity)
-                merged.append(post)
-            total = len(merged)
-            posts = merged[offset : offset + limit]
             comments = (
                 list(
                     db.scalars(
@@ -952,11 +1383,118 @@ class RunService:
             for item in comments:
                 grouped.setdefault(item.post_id, []).append(comment_dict(item))
             return {
-                "items": [post_dict(item, grouped.get(item.id, [])) for item in posts],
+                "items": [
+                    post_dict(item, grouped.get(item.id, []), tasks.get(item.circle_task_id))
+                    for item in posts
+                ],
                 "total": total,
                 "offset": offset,
                 "limit": limit,
             }
+
+    def post_detail(self, run_id: str, post_id: str) -> dict[str, Any]:
+        with self.factory() as db:
+            if not db.get(ExtractionRun, run_id):
+                raise DomainError("RUN_NOT_FOUND", "指定提取批次不存在。", status_code=404)
+            post = db.get(PostSnapshot, post_id)
+            if not post or post.run_id not in related_run_ids(db, run_id):
+                raise DomainError("POST_NOT_FOUND", "指定帖子快照不存在。", status_code=404)
+            task = db.get(CircleTask, post.circle_task_id)
+            comments = [
+                comment_dict(item)
+                for item in db.scalars(
+                    select(CommentSnapshot)
+                    .where(CommentSnapshot.post_id == post.id)
+                    .order_by(CommentSnapshot.order_index)
+                )
+            ]
+            return post_dict(post, comments, task)
+
+    def post_navigation(self, run_id: str, post_id: str, **filters: Any) -> dict[str, Any]:
+        """返回帖子在当前完整筛选和排序结果中的相邻项。"""
+
+        with self.factory() as db:
+            if not db.get(ExtractionRun, run_id):
+                raise DomainError("RUN_NOT_FOUND", "指定提取批次不存在。", status_code=404)
+            id_query, total = self._filtered_post_ids(db, run_id, **filters)
+            ids = list(db.scalars(id_query))
+            try:
+                index = ids.index(post_id)
+            except ValueError as error:
+                raise DomainError(
+                    "POST_NOT_IN_RESULT",
+                    "指定帖子不在当前筛选结果中。",
+                    status_code=404,
+                ) from error
+            return {
+                "previous_id": ids[index - 1] if index > 0 else None,
+                "next_id": ids[index + 1] if index + 1 < len(ids) else None,
+                "position": index + 1,
+                "total": total,
+            }
+
+    def post_urls(self, run_id: str, **filters: Any) -> dict[str, Any]:
+        with self.factory() as db:
+            if not db.get(ExtractionRun, run_id):
+                raise DomainError("RUN_NOT_FOUND", "指定提取批次不存在。", status_code=404)
+            id_query, total = self._filtered_post_ids(db, run_id, **filters)
+            ids = list(db.scalars(id_query))
+            rows = db.execute(
+                select(PostSnapshot.id, PostSnapshot.url).where(PostSnapshot.id.in_(ids))
+            ).all()
+            by_id = {row.id: row.url for row in rows}
+            urls: list[str] = []
+            seen: set[str] = set()
+            for post_id in ids:
+                url = by_id.get(post_id)
+                if url and url not in seen:
+                    seen.add(url)
+                    urls.append(url)
+            return {"urls": urls, "total": total}
+
+
+def run_dict_from_tasks(
+    run: ExtractionRun, tasks: list[CircleTask], queued_tasks: list[CircleTask] | None = None
+) -> dict[str, Any]:
+    """使用已集合加载的任务构造批次摘要，避免列表逐行查询。"""
+
+    queue_position = None
+    queued_sequences = [task.queue_sequence for task in tasks if task.status == "queued"]
+    if queued_sequences and tasks:
+        earliest = min(queued_sequences)
+        queue_position = 1 + sum(
+            1
+            for item in (queued_tasks or [])
+            if item.platform_code == tasks[0].platform_code and item.queue_sequence < earliest
+        )
+    return {
+        "id": run.id,
+        "number": run.number,
+        "trigger_type": run.trigger_type,
+        "trigger_type_name": TRIGGER_ZH.get(run.trigger_type, run.trigger_type),
+        "input_mode": run.input_mode,
+        "status": run.status,
+        "status_name": RUN_STATUS_ZH.get(run.status, run.status),
+        "queue_position": queue_position,
+        "platform_count": len({task.platform_code for task in tasks}),
+        "platform_codes": sorted({task.platform_code for task in tasks}),
+        "circle_count": len(tasks),
+        "circle_names": [task.circle_name or task.external_id for task in tasks[:3]],
+        "planned_count": run.planned_count,
+        "completed_count": run.completed_count,
+        "failed_count": run.failed_count,
+        "waiting_reason": run.waiting_reason,
+        "error_message": run.error_message,
+        "related_run_id": run.related_run_id,
+        "schedule_node_id": run.schedule_node_id,
+        "extraction_rule_id": run.extraction_rule_id,
+        "extraction_rule_version": run.extraction_rule_version,
+        "summary_version": run.summary_version,
+        "created_at": run.created_at,
+        "queued_at": run.queued_at,
+        "started_at": run.started_at,
+        "finished_at": run.finished_at,
+    }
 
 
 def run_dict(db: Session, run: ExtractionRun, include_tasks: bool = False) -> dict[str, Any]:
@@ -983,29 +1521,8 @@ def run_dict(db: Session, run: ExtractionRun, include_tasks: bool = False) -> di
             )
             or 0
         ) + 1
-    result = {
-        "id": run.id,
-        "number": run.number,
-        "trigger_type": run.trigger_type,
-        "trigger_type_name": TRIGGER_ZH.get(run.trigger_type, run.trigger_type),
-        "input_mode": run.input_mode,
-        "status": run.status,
-        "status_name": RUN_STATUS_ZH.get(run.status, run.status),
-        "queue_position": queue_position,
-        "platform_count": len({task.platform_code for task in tasks}),
-        "circle_count": len(tasks),
-        "planned_count": run.planned_count,
-        "completed_count": run.completed_count,
-        "failed_count": run.failed_count,
-        "waiting_reason": run.waiting_reason,
-        "error_message": run.error_message,
-        "related_run_id": run.related_run_id,
-        "summary_version": run.summary_version,
-        "created_at": run.created_at,
-        "queued_at": run.queued_at,
-        "started_at": run.started_at,
-        "finished_at": run.finished_at,
-    }
+    result = run_dict_from_tasks(run, tasks)
+    result["queue_position"] = queue_position
     if include_tasks:
         result["tasks"] = [task_dict(task) for task in tasks]
     return result
@@ -1033,11 +1550,18 @@ def task_dict(item: CircleTask) -> dict[str, Any]:
     }
 
 
-def post_dict(item: PostSnapshot, comments: list[dict[str, Any]]) -> dict[str, Any]:
+def post_dict(
+    item: PostSnapshot,
+    comments: list[dict[str, Any]],
+    task: CircleTask | None = None,
+) -> dict[str, Any]:
     return {
         "id": item.id,
         "run_id": item.run_id,
         "circle_task_id": item.circle_task_id,
+        "platform_code": task.platform_code if task else None,
+        "circle_id": task.circle_id if task else None,
+        "circle_name": (task.circle_name or task.external_id) if task else None,
         "platform_post_id": item.platform_post_id,
         "url": item.url,
         "title": item.title,

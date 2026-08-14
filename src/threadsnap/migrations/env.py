@@ -3,6 +3,7 @@ from logging.config import fileConfig
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
+from threadsnap import models as _models  # noqa: F401  # 注册全部持久化模型
 from threadsnap.config import Settings
 from threadsnap.db import Base
 

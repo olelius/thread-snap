@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 from contextlib import asynccontextmanager
+from datetime import datetime
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Annotated, Any
@@ -20,21 +23,22 @@ from fastapi import (
     WebSocket,
 )
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from .auth import BrowserAuthManager
 from .config import Settings, get_settings
 from .db import build_engine, build_session_factory, migrate_database
 from .errors import DomainError, domain_error_handler
+from .events import EventBus
 from .ids import uuid7
 from .models import ValidationJob
 from .scheduler import SchedulerService
 from .schemas import (
     CircleBatchUpdate,
     ExportCreate,
+    ExtractionPlanUpdate,
     ManualRunCreate,
     PlatformConfigUpdate,
-    ScheduleUpdate,
     SessionImport,
 )
 from .services import ConfigService, RunService, bootstrap_database, validation_job_dict
@@ -63,10 +67,26 @@ class Container:
             self.session_store.import_file("dongchedi", settings.dongchedi_storage_state)
         self.config = ConfigService(self.sessions)
         self.runs = RunService(self.sessions, settings.timezone)
-        self.worker = WorkerService(self.sessions, self.session_store, settings.worker_poll_seconds)
-        self.scheduler = SchedulerService(self.sessions, self.runs, settings.scheduler_poll_seconds)
+        self.events = EventBus()
+        self.worker = WorkerService(
+            self.sessions,
+            self.session_store,
+            settings.worker_poll_seconds,
+            event_publisher=self.events.publish,
+        )
+        self.scheduler = SchedulerService(
+            self.sessions,
+            self.runs,
+            settings.scheduler_poll_seconds,
+            event_publisher=self.events.publish,
+        )
         self.templates = TemplateService(self.sessions, settings)
-        self.auth = BrowserAuthManager(settings, self.session_store, self.worker)
+        self.auth = BrowserAuthManager(
+            settings,
+            self.session_store,
+            self.worker,
+            event_publisher=self.events.publish,
+        )
 
     async def start(self) -> None:
         if self.settings.start_background_services:
@@ -112,15 +132,32 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
 
     @router.put("/platforms/{code}")
     def update_platform(code: str, value: PlatformConfigUpdate, request: Request) -> dict[str, Any]:
-        return _container(request).config.update_platform(code, value)
+        container = _container(request)
+        result = container.config.update_platform(code, value)
+        container.events.publish("platform.changed", code, enabled=result["enabled"])
+        return result
 
-    @router.get("/schedule")
-    def get_schedule(request: Request) -> dict[str, Any]:
-        return _container(request).config.get_schedule()
+    @router.get("/extraction-plan")
+    def get_extraction_plan(request: Request) -> dict[str, Any]:
+        return _container(request).config.get_extraction_plan()
 
-    @router.put("/schedule")
-    def update_schedule(value: ScheduleUpdate, request: Request) -> dict[str, Any]:
-        return _container(request).config.update_schedule(value)
+    @router.put("/extraction-plan")
+    def update_extraction_plan(value: ExtractionPlanUpdate, request: Request) -> dict[str, Any]:
+        container = _container(request)
+        result = container.config.update_extraction_plan(value)
+        container.events.publish(
+            "extraction-plan.changed", "extraction-plan", summary_version=result["revision"]
+        )
+        return result
+
+    @router.post("/extraction-rules/{rule_id}/restore")
+    def restore_extraction_rule(rule_id: str, request: Request) -> dict[str, Any]:
+        container = _container(request)
+        result = container.config.restore_extraction_rule(rule_id)
+        container.events.publish(
+            "extraction-plan.changed", "extraction-plan", summary_version=result["revision"]
+        )
+        return result
 
     @router.get("/vehicles")
     def list_vehicles(request: Request) -> list[dict[str, Any]]:
@@ -128,7 +165,10 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
 
     @router.put("/circles/batch")
     def save_circles(value: CircleBatchUpdate, request: Request) -> dict[str, Any]:
-        return _container(request).config.save_circle_batch(value)
+        container = _container(request)
+        result = container.config.save_circle_batch(value)
+        container.events.publish("circles.changed", "circles")
+        return result
 
     @router.post("/circles/{circle_id}/validate", status_code=202)
     def validate_circle(circle_id: str, request: Request) -> dict[str, Any]:
@@ -162,11 +202,19 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
         request: Request,
         idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
     ) -> dict[str, Any]:
-        return _container(request).runs.create_manual(
+        container = _container(request)
+        result = container.runs.create_manual(
             value,
             scope="internal" if internal else "api",
             header_key=idempotency_key if internal else None,
         )
+        container.events.publish(
+            "run.changed",
+            result["id"],
+            summary_version=result["summary_version"],
+            status=result["status"],
+        )
+        return result
 
     @router.post("/runs/{run_id}/retry", status_code=202)
     def retry_run(
@@ -176,17 +224,36 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
     ) -> dict[str, Any]:
         if not idempotency_key:
             raise DomainError("IDEMPOTENCY_KEY_REQUIRED", "手动补提必须提供 Idempotency-Key。")
-        return _container(request).runs.retry(
-            run_id, idempotency_key, "internal" if internal else "api"
+        container = _container(request)
+        result = container.runs.retry(run_id, idempotency_key, "internal" if internal else "api")
+        container.events.publish(
+            "run.changed",
+            result["id"],
+            summary_version=result["summary_version"],
+            status=result["status"],
         )
+        return result
 
     @router.get("/runs")
     def list_runs(
         request: Request,
         offset: int = Query(0, ge=0),
         limit: int = Query(50, ge=1, le=200),
+        number: str | None = None,
+        status: list[str] | None = Query(None),
+        trigger_type: str | None = None,
+        created_from: datetime | None = None,
+        created_to: datetime | None = None,
     ) -> dict[str, Any]:
-        return _container(request).runs.list_runs(offset, limit)
+        return _container(request).runs.list_runs(
+            offset,
+            limit,
+            number=number,
+            statuses=status,
+            trigger_type=trigger_type,
+            created_from=created_from,
+            created_to=created_to,
+        )
 
     @router.get("/runs/{run_id}")
     def get_run(run_id: str, request: Request) -> dict[str, Any]:
@@ -198,6 +265,12 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
         result = container.runs.end_auth_wait(run_id)
         for platform_code in {task["platform_code"] for task in result.get("tasks", [])}:
             await container.auth.close_platform(platform_code)
+        container.events.publish(
+            "run.changed",
+            run_id,
+            summary_version=result["summary_version"],
+            status=result["status"],
+        )
         return result
 
     @router.delete("/runs/{run_id}")
@@ -205,6 +278,7 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
         paths = _container(request).runs.delete_run(run_id)
         for raw in paths:
             Path(raw).unlink(missing_ok=True)
+        _container(request).events.publish("run.deleted", run_id)
         return {"message": "提取批次及其关联数据已永久删除。"}
 
     @router.get("/runs/{run_id}/posts")
@@ -213,8 +287,66 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
         request: Request,
         offset: int = Query(0, ge=0),
         limit: int = Query(100, ge=1, le=500),
+        title: str | None = None,
+        circle: str | None = None,
+        visibility: str | None = None,
+        sort_by: str = Query("source", pattern="^(source|published_at|reply_count|like_count)$"),
+        sort_direction: str = Query("asc", pattern="^(asc|desc)$"),
     ) -> dict[str, Any]:
-        return _container(request).runs.posts(run_id, offset, limit)
+        return _container(request).runs.posts(
+            run_id,
+            offset,
+            limit,
+            title=title,
+            circle=circle,
+            visibility=visibility,
+            sort_by=sort_by,
+            sort_direction=sort_direction,
+        )
+
+    @router.get("/runs/{run_id}/posts/urls")
+    def list_post_urls(
+        run_id: str,
+        request: Request,
+        title: str | None = None,
+        circle: str | None = None,
+        visibility: str | None = None,
+        sort_by: str = Query("source", pattern="^(source|published_at|reply_count|like_count)$"),
+        sort_direction: str = Query("asc", pattern="^(asc|desc)$"),
+    ) -> dict[str, Any]:
+        return _container(request).runs.post_urls(
+            run_id,
+            title=title,
+            circle=circle,
+            visibility=visibility,
+            sort_by=sort_by,
+            sort_direction=sort_direction,
+        )
+
+    @router.get("/runs/{run_id}/posts/{post_id}")
+    def post_detail(run_id: str, post_id: str, request: Request) -> dict[str, Any]:
+        return _container(request).runs.post_detail(run_id, post_id)
+
+    @router.get("/runs/{run_id}/posts/{post_id}/navigation")
+    def post_navigation(
+        run_id: str,
+        post_id: str,
+        request: Request,
+        title: str | None = None,
+        circle: str | None = None,
+        visibility: str | None = None,
+        sort_by: str = Query("source", pattern="^(source|published_at|reply_count|like_count)$"),
+        sort_direction: str = Query("asc", pattern="^(asc|desc)$"),
+    ) -> dict[str, Any]:
+        return _container(request).runs.post_navigation(
+            run_id,
+            post_id,
+            title=title,
+            circle=circle,
+            visibility=visibility,
+            sort_by=sort_by,
+            sort_direction=sort_direction,
+        )
 
     @router.get("/template-fields")
     def template_fields(
@@ -259,7 +391,9 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
 
     @router.delete("/platforms/{code}/session")
     def clear_session(code: str, request: Request) -> dict[str, str]:
-        _container(request).session_store.clear(code)
+        container = _container(request)
+        container.session_store.clear(code)
+        container.events.publish("session.changed", code, status="missing")
         return {"message": "平台会话已清除。"}
 
     if internal:
@@ -269,6 +403,7 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
             container = _container(request)
             container.session_store.import_state(code, value.storage_state)
             container.worker.resume_platform(code)
+            container.events.publish("session.changed", code, status="valid")
             return {"message": "平台会话已加密保存，等待任务将自动续跑。"}
 
     @router.post("/platforms/{code}/auth/tasks", status_code=202)
@@ -342,6 +477,39 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(build_router("/api/v1", internal=False))
     app.include_router(build_router("/internal/v1", internal=True))
+
+    @app.get("/api/v1/events")
+    async def event_stream(
+        request: Request,
+        last_event_id: int = Query(0, ge=0),
+    ) -> StreamingResponse:
+        """推送轻量变化信号，业务数据仍由普通 HTTP 接口返回。"""
+
+        header_value = request.headers.get("Last-Event-ID")
+        cursor = int(header_value) if header_value and header_value.isdigit() else last_event_id
+
+        async def generate():
+            nonlocal cursor
+            yield ": connected\n\n"
+            while True:
+                if await request.is_disconnected():
+                    break
+                events = await asyncio.to_thread(
+                    request.app.state.container.events.wait_after, cursor, 20.0
+                )
+                if not events:
+                    yield ": heartbeat\n\n"
+                    continue
+                for event in events:
+                    cursor = event["id"]
+                    payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+                    yield f"id: {cursor}\nevent: {event['type']}\ndata: {payload}\n\n"
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     @app.websocket("/api/v1/auth/tasks/{task_id}/stream")
     async def auth_stream(websocket: WebSocket, task_id: str, ticket: str = Query(...)) -> None:

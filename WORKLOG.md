@@ -15,6 +15,32 @@
 
 ---
 
+## 2026-08-14 — 完成第一版前后端闭环
+
+**总目标**：基于已确认的 React + Vite 控制台方案完成第一版全部前端页面，同时补齐页面联调所需的后端配置、调度、实时信号、筛选分页、结果导航与新数据库基线，形成前后端分离的单平台完整产品闭环。
+
+**状态**：✅ 第一版产品功能与代码闭环完成，Windows 前后端联调和真实 UI 验收通过；⏸ ADR 0011 已暂缓的目标 CentOS 连续三轮仍属于独立部署验收门禁，不在本条中记为通过。
+
+**干到哪了**：
+- [x] 新建 `frontend/` React 19、TypeScript、Vite、Tailwind CSS、shadcn/ui、TanStack Router/Query/Table、Lucide 和 Motion 工程；选择性复用 `satnaing/shadcn-admin` 2.2.1 的应用外壳与 UI 原语，并固定上游提交 `e16c87f213a5ba5e45964e9b67c792105ec74d26`、MIT 许可和第三方声明。
+- [x] 完成中文化应用外壳、动态收缩侧栏、移动端 Sidebar Sheet、系统/浅色/深色主题、路由懒加载、真实 SSE 连接状态和统一反馈组件；断点实测在 1024、768、640 像素下均无页面级横向溢出。
+- [x] 完成提取计划、平台与 Session、车型与圈子、手动圈子历史、导出模板五个配置标签；标签切换保留草稿、离开脏页面确认、保存只提交当前标签，星期与 24 小时制 `HH:mm:ss` 计划节点和可复用规则已真实保存。
+- [x] 完成批次列表、新建提取 Sheet、圈子发现与 URL 清单双模式、服务端筛选分页、状态变化高亮、失败项补提、等待认证入口、近全屏 WebSocket 认证 Dialog、结束等待和终态删除确认。
+- [x] 完成批次详情、任务进度、帖子服务端筛选排序分页、单条与完整筛选结果批量复制、非安全上下文复制回退、XLSX 导出、快照详情 Sheet，以及跨页上一条/下一条导航。
+- [x] 后端新增规则版本与每周计划节点模型、原子计划保存与冲突校验、调度快照、稳定来源位置、集合加载批次摘要、数据库侧去重筛选排序分页、帖子详情/URL/导航接口和进程内有界事件总线；浏览器认证继续使用 WebSocket，普通状态变化由 SSE 信号触发前端回查 `/api/v1`。
+- [x] 用全新 Alembic 基线 `8d3806d229c1` 替换未交付的旧基线；唯一临时数据库从零升级后生成 18 张表，`/health`、提取计划和 OpenAPI 事件路由冒烟通过。新 wheel 已确认只包含新迁移，不包含已删除的旧迁移。
+- [x] 后端 `ruff format --check`、`ruff check`、`compileall`、`pip check` 通过；业务测试 18/18、PoC 回归 64/64 通过。前端 `npm run check` 和 `npm run build` 通过，生产构建完成 2456 个模块转换。
+- [x] 真实浏览器完成深浅主题、导航收缩、配置草稿与离开确认、计划保存、认证窗口、批次列表/详情、等待认证与危险确认、帖子跨页导航、模板字段与批量复制验收；浏览器控制台错误与警告为 0。
+- [x] 新增前端开发与同源反向代理部署说明，更新产品设计、技术路线和文档索引；前端只调用 `/api/v1`，后端继续保留回环 `/internal/v1`，未新增 BFF 或第二套业务后端。
+
+**下一步**：第一版不再有待实现的产品功能；准备正式 Linux 部署时恢复目标 CentOS 连续三轮门禁并确认 CPU/进程管理方式，后续两个平台按统一采集器契约分别接入，三个平台完成后再以真实前端生成完全可实现的 Figma 设计稿。
+
+**边界**：本条“第一版完成”指一个平台的前端、后端、调度、认证、批次、结果与导出产品闭环及 Windows 验证；不包含后续两个平台、公网身份权限、Figma 设计稿，也不把暂缓的 CentOS 三轮描述成已验收。
+
+**关联**：`frontend/`、`src/threadsnap/`、`src/threadsnap/migrations/versions/8d3806d229c1_v1_fresh_baseline.py`、`tests/test_backend.py`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/deployment/frontend-v1.md`、`docs/adr/0011-adopt-python-backend-before-deferred-linux-gate.md`、`docs/adr/0012-adopt-shadcn-admin-ui-baseline.md`、`docs/adr/0013-use-versioned-extraction-rules-and-weekly-schedule-nodes.md`。
+
+---
+
 ## 2026-08-14 — 第一版前端方案访谈
 
 **总目标**：在既有 `/api/v1` 页面接口和三个基础页面范围内，收敛第一版前端的信息架构、视觉系统、动态交互、框架复用边界和真实 UI 验收口径。

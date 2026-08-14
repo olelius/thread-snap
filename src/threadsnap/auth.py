@@ -7,7 +7,7 @@ import base64
 import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Callable
 
 from fastapi import WebSocket, WebSocketDisconnect
 from patchright.async_api import (
@@ -45,10 +45,17 @@ class AuthTask:
 class BrowserAuthManager:
     """认证任务不接收或持久化账号密码，只中继用户对官方页面的输入。"""
 
-    def __init__(self, settings: Settings, session_store: SessionStore, worker: WorkerService):
+    def __init__(
+        self,
+        settings: Settings,
+        session_store: SessionStore,
+        worker: WorkerService,
+        event_publisher: Callable[..., Any] | None = None,
+    ):
         self.settings = settings
         self.session_store = session_store
         self.worker = worker
+        self.event_publisher = event_publisher
         self.tasks: dict[str, AuthTask] = {}
 
     async def create(self, platform_code: str) -> dict[str, Any]:
@@ -201,6 +208,8 @@ class BrowserAuthManager:
                 return
             self.session_store.import_state(task.platform_code, state)
             self.worker.resume_platform(task.platform_code)
+            if self.event_publisher:
+                self.event_publisher("session.changed", task.platform_code, status="valid")
             task.status = "completed"
             await websocket.send_json(
                 {"type": "completed", "message": "平台会话已更新，等待任务将自动续跑。"}
