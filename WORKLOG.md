@@ -15,6 +15,19 @@
 
 ---
 
+## 2026-08-15 — 增加帖子详情的背景列表选中轨迹
+
+**总目标**：在帖子详情 Sheet 内切换上一条、下一条时，让背景结果表明确显示当前快照所在行，并以现代、克制的方向性过渡维持空间连续性。
+**状态**：✅ 前端交互、设计口径、静态检查、生产构建和真实 Chrome 目标路径验证完成。
+**干到哪了**：
+- [x] 结果表当前行新增“当前查看”文字标签、语义主色浅色行面与左侧液态光晕；`aria-current` 保证辅助技术可识别，颜色、描边和光晕全部基于既有主题 Token。
+- [x] 光晕使用 Motion `layoutId` 的弹簧 `transform` 位移，形成细窄光带和扩散尾迹，而不使用整页水滴或大面积高饱和填充；系统减少动态效果时即时定位。
+- [x] 相邻导航建立 `selectionRevealPostId`，目标行在可视区域外才以 `scrollIntoView({ block: 'nearest' })` 最小距离平滑揭示；跨页列表以 `placeholderData` 保留旧布局，关闭 Sheet 仍保留既有打开前滚动复位行为。
+- [x] `npm.cmd run check`、`npm.cmd run build`（2456 modules）和 `git diff --check` 通过；真实 Chrome 目标页检测到唯一 `aria-current` 行、当前查看标签、4px 光晕及主题渐变/阴影，点击下一条后详情更新为筛选结果第 21 / 30 条、当前行仍唯一，背景 `scrollY` 保持 `1390`。
+**下一步**：用户可在保留的本地详情 Sheet 中直接观察相邻切换的光晕轨迹；后续第一版主线继续目标 Linux 部署门禁。
+**边界**：本次不改变帖子排序、后端分页接口、快照内容或 Radix 遮罩滚动锁；跨页不伪造长距离行间动画，只在目标页行出现后标示。
+**关联**：`frontend/src/features/runs/run-detail-page.tsx`、`frontend/src/styles/index.css`、`docs/design/product-design.md`、`docs/design/technical-route.md`
+
 ## 2026-08-15 — 修复帖子详情相邻切换按钮闪色
 
 **总目标**：消除帖子快照 Sheet 中上一条、下一条切换时按钮先闪出蓝色底色再更新内容的割裂反馈，同时保持导航顺序、按钮可访问性和详情布局稳定。

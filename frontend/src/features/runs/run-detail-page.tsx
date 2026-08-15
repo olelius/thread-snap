@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { motion, useReducedMotion } from 'motion/react'
 import { ArrowLeft, CircleStop, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, KeyRound, LoaderCircle, RefreshCw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AuthDialog } from '@/features/auth/auth-dialog'
@@ -20,6 +21,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Textarea } from '@/components/ui/textarea'
+import { cn } from '@/lib/utils'
 
 type SearchState = { page?: number; pageSize?: 20 | 50 | 100; title?: string; circle?: string; visibility?: 'visible' | 'hidden' | 'unknown'; sort?: 'source' | 'published_at' | 'reply_count' | 'like_count'; direction?: 'asc' | 'desc'; post?: string }
 type PostSwitch = { id: string; direction: 'previous' | 'next' }
@@ -39,6 +41,8 @@ export function RunDetailPage() {
   const [authOpen, setAuthOpen] = useState(false)
   const [manualCopy, setManualCopy] = useState<string>()
   const [postSwitch, setPostSwitch] = useState<PostSwitch>()
+  const [selectionRevealPostId, setSelectionRevealPostId] = useState<string>()
+  const reduceMotion = useReducedMotion()
   const detailBackgroundScroll = useRef(0)
   const detailTrigger = useRef<HTMLElement | null>(null)
   const debouncedTitle = useDebouncedValue(search.title)
@@ -48,6 +52,7 @@ export function RunDetailPage() {
   const posts = useQuery({
     queryKey: ['posts', runId, { page: search.page, pageSize: search.pageSize, ...postQueryValues }],
     queryFn: () => api<PageResult<Post>>(`/runs/${runId}/posts${queryString({ offset: ((search.page ?? 1) - 1) * (search.pageSize ?? 50), limit: search.pageSize, ...postQueryValues })}`),
+    placeholderData: keepPreviousData,
   })
   const templates = useQuery({ queryKey: ['templates'], queryFn: () => api<Template[]>('/templates') })
   const detail = useQuery({
@@ -67,6 +72,17 @@ export function RunDetailPage() {
     if (!postSwitch || search.post !== postSwitch.id) return
     if (!detail.isFetching && !navigation.isFetching) setPostSwitch(undefined)
   }, [detail.isFetching, navigation.isFetching, postSwitch, search.post])
+
+  useEffect(() => {
+    if (!selectionRevealPostId || search.post !== selectionRevealPostId) return
+    const row = document.getElementById(`post-row-${selectionRevealPostId}`)
+    if (!row) return
+    const frame = window.requestAnimationFrame(() => {
+      row.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: reduceMotion ? 'auto' : 'smooth' })
+      setSelectionRevealPostId(undefined)
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [posts.data?.items, reduceMotion, search.post, selectionRevealPostId])
 
   function patch(values: Partial<SearchState>, options?: { resetScroll?: boolean }) {
     navigate({
@@ -114,6 +130,7 @@ export function RunDetailPage() {
   function moveToPost(postId: string | undefined, position: number, direction: PostSwitch['direction']) {
     if (!postId || postSwitch) return
     setPostSwitch({ id: postId, direction })
+    setSelectionRevealPostId(postId)
     const page = Math.ceil(position / (search.pageSize ?? 50))
     patch({ post: postId, page }, { resetScroll: false })
   }
@@ -122,6 +139,7 @@ export function RunDetailPage() {
   const canRetry = run.data?.status === 'failed' || run.data?.status === 'partial_success'
   const canDelete = ['success', 'partial_success', 'failed'].includes(run.data?.status ?? '')
   const inputModeName = run.data?.input_mode === 'url_list' ? 'URL 清单' : '圈子发现'
+  const selectionTransition = reduceMotion ? { duration: 0 } : { type: 'spring' as const, stiffness: 430, damping: 34, mass: 0.55 }
 
   return (
     <div className='space-y-6'>
@@ -138,9 +156,30 @@ export function RunDetailPage() {
       {run.data?.error_message && <Alert variant='destructive'><AlertTitle>批次错误</AlertTitle><AlertDescription>{run.data.error_message}</AlertDescription></Alert>}
       {run.data?.tasks?.length ? <Card className='border-border/70 bg-card/88'><CardContent className='p-0'><div className='border-b px-5 py-4'><h2 className='font-semibold'>圈子任务</h2><p className='mt-1 text-sm text-muted-foreground'>展示每个平台圈子的独立进度、状态与后端错误。</p></div><div className='overflow-x-auto'><Table className='min-w-[820px]'><TableHeader><TableRow><TableHead>平台</TableHead><TableHead>圈子</TableHead><TableHead>状态</TableHead><TableHead>进度</TableHead><TableHead>错误详情</TableHead></TableRow></TableHeader><TableBody>{run.data.tasks.map((task) => <TableRow key={task.id}><TableCell>{platformName(task.platform_code)}</TableCell><TableCell><div className='font-medium'>{task.circle_name || task.external_id}</div><div className='max-w-72 truncate text-xs text-muted-foreground'>{task.circle_url}</div></TableCell><TableCell><StatusBadge value={task.status} label={task.status_name} /></TableCell><TableCell className='tabular-nums'>{task.completed_count} / {task.target_count}{task.failed_count ? ` · ${task.failed_count} 项失败` : ''}</TableCell><TableCell className='max-w-80 text-sm text-muted-foreground'>{task.error_message || task.stop_reason || '—'}</TableCell></TableRow>)}</TableBody></Table></div></CardContent></Card> : null}
       <Card className='border-border/70 bg-card/88'><CardContent className='grid gap-3 p-4 lg:grid-cols-[1fr_220px_170px_180px_140px_auto]'><Input placeholder='搜索帖子标题' value={search.title ?? ''} onChange={(event) => patch({ title: event.target.value || undefined, page: 1 })} /><Input placeholder='搜索圈子' value={search.circle ?? ''} onChange={(event) => patch({ circle: event.target.value || undefined, page: 1 })} /><Select value={search.visibility ?? 'all'} onValueChange={(value) => patch({ visibility: value === 'all' ? undefined : value as SearchState['visibility'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部可见状态</SelectItem><SelectItem value='visible'>可见</SelectItem><SelectItem value='hidden'>不可见</SelectItem><SelectItem value='unknown'>未知</SelectItem></SelectContent></Select><Select value={search.sort} onValueChange={(value) => patch({ sort: value as SearchState['sort'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='source'>来源顺序</SelectItem><SelectItem value='published_at'>发布时间</SelectItem><SelectItem value='reply_count'>评论数</SelectItem><SelectItem value='like_count'>点赞数</SelectItem></SelectContent></Select><Select value={search.direction} onValueChange={(value) => patch({ direction: value as SearchState['direction'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='asc'>正序</SelectItem><SelectItem value='desc'>倒序</SelectItem></SelectContent></Select><Button variant='outline' onClick={copyAll}><Copy className='size-4' />复制全部</Button></CardContent></Card>
-      <div className='overflow-hidden rounded-xl border border-border/70 bg-card/90'><div className='overflow-x-auto'><Table className='min-w-[1050px]'><TableHeader><TableRow className='bg-muted/35'><TableHead>标题</TableHead><TableHead>圈子</TableHead><TableHead>作者</TableHead><TableHead>发布时间</TableHead><TableHead>可见状态</TableHead><TableHead className='text-right'>评论数</TableHead><TableHead className='text-right'>点赞数</TableHead><TableHead className='text-right'>操作</TableHead></TableRow></TableHeader><TableBody>{posts.isLoading ? Array.from({ length: 6 }).map((_, index) => <TableRow key={index}>{Array.from({ length: 8 }).map((__, cell) => <TableCell key={cell}><Skeleton className='h-6 w-full' /></TableCell>)}</TableRow>) : posts.data?.items.length ? posts.data.items.map((post) => <TableRow key={post.id}><TableCell className='max-w-80'><a href={post.url} target='_blank' rel='noreferrer' className='flex items-center gap-1.5 truncate font-medium hover:text-primary hover:underline'>{post.title || '无标题'}<ExternalLink className='size-3 shrink-0' /></a></TableCell><TableCell>{post.circle_name || '—'}</TableCell><TableCell>{post.author || '—'}</TableCell><TableCell className='whitespace-nowrap'>{formatDate(post.published_at)}</TableCell><TableCell><StatusBadge value={post.visibility} label={{ visible: '可见', hidden: '不可见', unknown: '未知' }[post.visibility]} /></TableCell><TableCell className='text-right tabular-nums'>{post.reply_count ?? '—'}</TableCell><TableCell className='text-right tabular-nums'>{post.like_count ?? '—'}</TableCell><TableCell><div className='flex justify-end gap-1'><Button variant='ghost' size='sm' onClick={(event) => openPost(post.id, event.currentTarget)}>查看</Button><Button variant='ghost' size='icon' onClick={() => copyText(post.url)} aria-label='复制帖子链接'><Copy className='size-4' /></Button></div></TableCell></TableRow>) : <TableRow><TableCell colSpan={8} className='h-52 text-center text-muted-foreground'>当前筛选条件下没有帖子结果。</TableCell></TableRow>}</TableBody></Table></div><div className='flex flex-col gap-3 border-t p-4 sm:flex-row sm:items-center sm:justify-between'><div className='text-sm text-muted-foreground'>共 {posts.data?.total ?? 0} 条，第 {search.page} / {totalPages} 页</div><div className='flex gap-2'><Select value={String(search.pageSize)} onValueChange={(value) => patch({ pageSize: Number(value) as 20 | 50 | 100, page: 1 })}><SelectTrigger className='w-28'><SelectValue /></SelectTrigger><SelectContent><SelectItem value='20'>每页 20</SelectItem><SelectItem value='50'>每页 50</SelectItem><SelectItem value='100'>每页 100</SelectItem></SelectContent></Select><Button variant='outline' size='icon' disabled={(search.page ?? 1) <= 1} onClick={() => patch({ page: (search.page ?? 1) - 1 })}><ChevronLeft className='size-4' /></Button><Button variant='outline' size='icon' disabled={(search.page ?? 1) >= totalPages} onClick={() => patch({ page: (search.page ?? 1) + 1 })}><ChevronRight className='size-4' /></Button></div></div></div>
+      <div className='overflow-hidden rounded-xl border border-border/70 bg-card/90'>
+        <div className='overflow-x-auto'>
+          <Table className='min-w-[1050px]'>
+            <TableHeader><TableRow className='bg-muted/35'><TableHead>标题</TableHead><TableHead>圈子</TableHead><TableHead>作者</TableHead><TableHead>发布时间</TableHead><TableHead>可见状态</TableHead><TableHead className='text-right'>评论数</TableHead><TableHead className='text-right'>点赞数</TableHead><TableHead className='text-right'>操作</TableHead></TableRow></TableHeader>
+            <TableBody>
+              {posts.isLoading ? Array.from({ length: 6 }).map((_, index) => <TableRow key={index}>{Array.from({ length: 8 }).map((__, cell) => <TableCell key={cell}><Skeleton className='h-6 w-full' /></TableCell>)}</TableRow>) : posts.data?.items.length ? posts.data.items.map((post) => {
+                const isCurrentPost = post.id === search.post
+                return <TableRow key={post.id} id={`post-row-${post.id}`} aria-current={isCurrentPost ? 'true' : undefined} className={cn('transition-[background-color,box-shadow] duration-200', isCurrentPost && 'post-row-active')}>
+                  <TableCell className='relative max-w-80'>
+                    {isCurrentPost && <motion.span layoutId='post-row-selection-trail' aria-hidden className='post-row-selection-trail absolute inset-y-1 left-0 w-1 rounded-full' transition={selectionTransition} />}
+                    <a href={post.url} target='_blank' rel='noreferrer' className={cn('relative flex min-w-0 items-center gap-1.5 font-medium hover:text-primary hover:underline', isCurrentPost && 'pl-3 text-primary')}>
+                      {isCurrentPost && <span className='shrink-0 rounded-full border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium leading-none text-primary'>当前查看</span>}
+                      <span className='min-w-0 truncate'>{post.title || '无标题'}</span><ExternalLink className='size-3 shrink-0' />
+                    </a>
+                  </TableCell><TableCell>{post.circle_name || '—'}</TableCell><TableCell>{post.author || '—'}</TableCell><TableCell className='whitespace-nowrap'>{formatDate(post.published_at)}</TableCell><TableCell><StatusBadge value={post.visibility} label={{ visible: '可见', hidden: '不可见', unknown: '未知' }[post.visibility]} /></TableCell><TableCell className='text-right tabular-nums'>{post.reply_count ?? '—'}</TableCell><TableCell className='text-right tabular-nums'>{post.like_count ?? '—'}</TableCell><TableCell><div className='flex justify-end gap-1'><Button variant='ghost' size='sm' onClick={(event) => openPost(post.id, event.currentTarget)}>查看</Button><Button variant='ghost' size='icon' onClick={() => copyText(post.url)} aria-label='复制帖子链接'><Copy className='size-4' /></Button></div></TableCell>
+                </TableRow>
+              }) : <TableRow><TableCell colSpan={8} className='h-52 text-center text-muted-foreground'>当前筛选条件下没有帖子结果。</TableCell></TableRow>}
+            </TableBody>
+          </Table>
+        </div>
+        <div className='flex flex-col gap-3 border-t p-4 sm:flex-row sm:items-center sm:justify-between'><div className='text-sm text-muted-foreground'>共 {posts.data?.total ?? 0} 条，第 {search.page} / {totalPages} 页</div><div className='flex gap-2'><Select value={String(search.pageSize)} onValueChange={(value) => patch({ pageSize: Number(value) as 20 | 50 | 100, page: 1 })}><SelectTrigger className='w-28'><SelectValue /></SelectTrigger><SelectContent><SelectItem value='20'>每页 20</SelectItem><SelectItem value='50'>每页 50</SelectItem><SelectItem value='100'>每页 100</SelectItem></SelectContent></Select><Button variant='outline' size='icon' disabled={(search.page ?? 1) <= 1} onClick={() => patch({ page: (search.page ?? 1) - 1 })}><ChevronLeft className='size-4' /></Button><Button variant='outline' size='icon' disabled={(search.page ?? 1) >= totalPages} onClick={() => patch({ page: (search.page ?? 1) + 1 })}><ChevronRight className='size-4' /></Button></div></div>
+      </div>
       <div className='flex justify-end'><Select onValueChange={(value) => exportRun.mutate(value)} disabled={!templates.data?.length || exportRun.isPending}><SelectTrigger className='w-56'><Download className='size-4' /><SelectValue placeholder={templates.data?.length ? '导出 Excel' : '暂无导出模板'} /></SelectTrigger><SelectContent>{templates.data?.map((item) => item.versions[0] && <SelectItem key={item.versions[0].version_id} value={item.versions[0].version_id}>{item.name}</SelectItem>)}</SelectContent></Select></div>
-      <Sheet open={Boolean(search.post)} onOpenChange={(open) => { if (!open) { setPostSwitch(undefined); patch({ post: undefined }, { resetScroll: false }) } }}>
+      <Sheet open={Boolean(search.post)} onOpenChange={(open) => { if (!open) { setPostSwitch(undefined); setSelectionRevealPostId(undefined); patch({ post: undefined }, { resetScroll: false }) } }}>
         <SheetContent className='w-full overflow-y-auto p-0 sm:max-w-[58vw]' onOpenAutoFocus={handleDetailOpenAutoFocus} onCloseAutoFocus={handleDetailCloseAutoFocus}>
           <SheetHeader className='sticky top-0 z-10 border-b bg-background/90 p-6 backdrop-blur'>
             <div className='flex items-start justify-between gap-4 pr-8'>
