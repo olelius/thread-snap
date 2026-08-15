@@ -24,9 +24,10 @@
     background: color-mix(in oklab, var(--primary) 28%, transparent);
   }
 
-  /* Override Radix scroll locking for sticky headers */
+  /* 保留 Radix 模态滚动锁定，并避免 html 滚动容器因 body 定位和弹层聚焦跳回顶部。 */
   body[data-scroll-locked] {
     overflow: unset !important;
+    position: static !important;
   }
 
   /* Cursor pointer for buttons */
