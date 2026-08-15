@@ -15,6 +15,24 @@
 
 ---
 
+## 2026-08-15 — 移除新建提取 Sheet 的重复关闭图标
+
+**总目标**：修复“新建提取”右侧 Sheet 顶部同时出现框架默认 X 与页面自定义 X 的重复关闭入口，保留具备统一悬停和焦点反馈的页面关闭按钮。
+
+**状态**：✅ 前端修复、静态检查、生产构建和真实 Chrome 关闭路径验证完成。
+
+**干到哪里了**：
+- [x] 共享 `SheetContent` 新增默认开启的 `showClose` 参数，现有 Sheet 的框架默认关闭控件保持不变；“新建提取”明确传入 `showClose={false}`，只隐藏该页绝对定位的框架默认 X。
+- [x] 标题栏保留 `SheetClose` 包裹的 `ghost` 图标按钮，页脚“关闭”按钮保持原有行为；两者均继续触发同一受控 `onOpenChange(false)` 和输入重置路径。
+- [x] 真实 Chrome 打开“新建提取”后检测到标题栏关闭按钮 1 个、页脚“关闭”按钮 1 个、`SheetContent` 直接子关闭按钮 0 个；点击标题栏 X 后退出动画结束，Sheet 节点数量为 0。
+- [x] `npm.cmd --prefix frontend run check`、`npm.cmd --prefix frontend run build`（2456 modules）和 `git diff --check` 通过。
+
+**下一步**：继续第一版目标 Linux 部署门禁；后续新增自定义 Sheet 标题栏关闭按钮时，显式使用 `showClose={false}`，避免重复入口。
+
+**边界**：本次只处理“新建提取” Sheet 的重复关闭入口；不修改其他 Sheet 的默认关闭方式、提取提交逻辑、后台接口、输入重置规则或页面动效。
+
+**关联**：`frontend/src/components/ui/sheet.tsx`、`frontend/src/features/runs/new-extraction-sheet.tsx`
+
 ## 2026-08-15 — 保留帖子详情 Sheet 关闭时的当前列表位置
 
 **总目标**：帖子详情 Sheet 内切换相邻记录后，关闭 Sheet 不再把背景结果表拉回首次打开位置；用户能在当前视口中立即辨识刚才查看的帖子。

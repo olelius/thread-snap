@@ -87,7 +87,7 @@ export function NewExtractionSheet() {
           新建提取
         </Button>
       </SheetTrigger>
-      <SheetContent className='flex w-full flex-col gap-0 p-0 sm:max-w-xl'>
+      <SheetContent showClose={false} className='flex w-full flex-col gap-0 p-0 sm:max-w-xl'>
         <SheetHeader className='border-b p-6'>
           <div className='flex items-start justify-between gap-4'>
             <div>
