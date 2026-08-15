@@ -24,9 +24,13 @@
     background: color-mix(in oklab, var(--primary) 28%, transparent);
   }
 
-  /* 保留 Radix 模态滚动锁定，并避免 html 滚动容器因 body 定位和弹层聚焦跳回顶部。 */
+  /* 当前页面由 html 承担纵向滚动；Radix 只锁 body 时还会发生遮罩滚轮穿透。 */
+  html:has(body[data-scroll-locked]) {
+    overflow: hidden;
+  }
+
+  /* 保留 Radix 的 body overflow 锁定，仅覆盖会导致背景跳回顶部的 body 定位。 */
   body[data-scroll-locked] {
-    overflow: unset !important;
     position: static !important;
   }
 

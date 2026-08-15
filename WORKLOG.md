@@ -16,18 +16,18 @@
 ---
 
 
-## 2026-08-15 — 修复帖子详情 Sheet 打开时背景置顶
+## 2026-08-15 — 修复帖子详情 Sheet 背景跳顶与滚轮穿透
 
-**总目标**：打开、关闭或切换帖子快照详情时保持批次详情背景的滚动位置、列表数据和操作焦点，消除点击“查看”后背景回到页首的问题。
-**状态**：✅ 前端修复、静态检查、生产构建和真实 UI 交互验证完成。
+**总目标**：打开、关闭或切换帖子快照详情时保持批次详情背景的滚动位置、列表数据和操作焦点，并在 Sheet 打开期间彻底锁定背景滚动。
+**状态**：✅ 前端修复、静态检查、生产构建、自动化和真实 Chrome 滚轮验证完成。
 **干到哪了**：
 - [x] 详情帖子 ID 的同路由查询参数更新显式关闭 TanStack Router 滚动重置；打开前记录背景 `scrollY` 和触发按钮，Sheet 打开与关闭时以 `preventScroll` 转移焦点并同步恢复背景位置。
 - [x] 帖子列表 Query Key 只保留分页、搜索、筛选和排序参数，详情选中 ID 不再触发背景列表重新查询；Sheet 内上一条、下一条继续保持背景位置，跨页时才请求必要列表页。
-- [x] `npm.cmd run check` 与 `npm.cmd run build` 通过；真实批次 `20260815-002433-001` 在 1440×900 下测得打开前、打开后、遮罩区域滚轮后和关闭后的 `window.scrollY` 均为 `1502`，打开与关闭产生的背景帖子列表请求为 `0`，焦点由触发按钮进入 `role=dialog` 并在关闭后返回原“查看”按钮。
-- [x] 真实页面截图位于 `artifacts/runtime/post-detail-scroll/sheet-scroll-verified.png`；该目录被 Git 忽略，仅作为本地验证证据。
-**下一步**：用户可直接刷新批次详情，滚动到任意帖子后打开、切换和关闭快照 Sheet 复核。
-**边界**：本次不修改后端 API、数据库和帖子内容；页面级正常导航仍使用默认滚动恢复，只约束同页详情弹层状态。
-**关联**：`frontend/src/features/runs/run-detail-page.tsx`、`frontend/src/styles/index.css`、`docs/design/technical-route.md`。
+- [x] 纠正上一轮为处理跳顶而加入的 `overflow: unset !important`：恢复 Radix 对 `body` 的 `overflow: hidden`，并通过 `html:has(body[data-scroll-locked])` 锁定实际页面滚动容器；`position: static` 只负责规避背景跳顶。
+- [x] `npm.cmd run check`、`npm.cmd run build`（2456 modules）和 `git diff --check` 通过；Patchright 复核 `body/html` 均为 `overflow: hidden`，遮罩滚轮前后背景保持 `8`，Sheet 内滚动从 `0` 增至 `109`。真实 Chrome 中遮罩连续滚轮前后背景保持 `1390`，Sheet 内滚动从 `0` 增至 `96` 时背景仍为 `1390`，关闭后恢复打开时记录的 `963`，焦点返回原“查看”按钮。
+**下一步**：用户刷新现有批次详情页，在遮罩区域与 Sheet 内容区域分别滚动复核；后续第一版主线仍进入目标 Linux 部署门禁。
+**边界**：本次不修改后端 API、数据库或服务进程；前端页面级正常导航仍使用默认滚动恢复，仅锁定模态 Sheet/Dialog 打开期间的背景滚动。
+**关联**：`frontend/src/features/runs/run-detail-page.tsx`、`frontend/src/styles/index.css`、`docs/design/product-design.md`、`docs/design/technical-route.md`。
 ## 2026-08-15 — 修复配置保存后的服务端状态回填与圈子删除
 
 **总目标**：修复“车型与圈子”保存后仍保留无 ID 草稿、删除保存后刷新复现的问题，并审计第一版前端所有数据库写操作后的可见列表一致性。
