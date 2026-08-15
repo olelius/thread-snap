@@ -15,6 +15,18 @@
 
 ---
 
+## 2026-08-15 — 修复帖子详情相邻切换按钮闪色
+
+**总目标**：消除帖子快照 Sheet 中上一条、下一条切换时按钮先闪出蓝色底色再更新内容的割裂反馈，同时保持导航顺序、按钮可访问性和详情布局稳定。
+**状态**：✅ 前端交互修复、设计口径同步、静态检查、生产构建和用户真实页面确认完成。
+**干到哪了**：
+- [x] 详情与相邻导航查询使用 TanStack Query `placeholderData` 保留当前快照，避免查询键变化时旧数据清空、按钮临时禁用再恢复。
+- [x] 相邻按钮覆盖为局部颜色过渡和中性悬停态；切换期间保持尺寸与背景稳定，仅在被点击箭头内显示 Spinner，并通过 `aria-disabled` 阻止重复切换；关闭 Sheet 时清理等待状态。
+- [x] `npm.cmd run check`、`npm.cmd run build`（2456 modules）与 `git diff --check` 通过；用户在现有本地 Chrome 页面手动切换确认蓝色瞬闪已经消失。
+**下一步**：继续第一版目标 Linux 部署门禁；后续如调整统一按钮动态，只修改共享变体和语义 Token，不在页面中新增品牌色特例。
+**边界**：本次只修改详情 Sheet 的相邻记录切换反馈，不改后端 API、数据库、全局按钮变体或分页按钮行为；现有前后端进程保持运行。
+**关联**：`frontend/src/features/runs/run-detail-page.tsx`、`docs/design/product-design.md`、`docs/design/technical-route.md`
+
 
 ## 2026-08-15 — 修复帖子详情 Sheet 背景跳顶与滚轮穿透
 
