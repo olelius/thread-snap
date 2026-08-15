@@ -42,9 +42,13 @@ export function RunDetailPage() {
   const [manualCopy, setManualCopy] = useState<string>()
   const [postSwitch, setPostSwitch] = useState<PostSwitch>()
   const [selectionRevealPostId, setSelectionRevealPostId] = useState<string>()
+  const [lastViewedPostId, setLastViewedPostId] = useState<string>()
   const reduceMotion = useReducedMotion()
   const detailBackgroundScroll = useRef(0)
   const detailTrigger = useRef<HTMLElement | null>(null)
+  const currentDetailPostId = useRef<string | undefined>(undefined)
+  const closeHighlightTimer = useRef<number | undefined>(undefined)
+  const closeFocusFrame = useRef<number | undefined>(undefined)
   const debouncedTitle = useDebouncedValue(search.title)
   const debouncedCircle = useDebouncedValue(search.circle)
   const run = useQuery({ queryKey: ['run', runId], queryFn: () => api<Run>(`/runs/${runId}`), refetchInterval: 60_000 })
@@ -84,6 +88,18 @@ export function RunDetailPage() {
     return () => window.cancelAnimationFrame(frame)
   }, [posts.data?.items, reduceMotion, search.post, selectionRevealPostId])
 
+  useEffect(() => {
+    if (!search.post) return
+    currentDetailPostId.current = search.post
+    window.clearTimeout(closeHighlightTimer.current)
+    setLastViewedPostId(undefined)
+  }, [search.post])
+
+  useEffect(() => () => {
+    window.clearTimeout(closeHighlightTimer.current)
+    if (closeFocusFrame.current !== undefined) window.cancelAnimationFrame(closeFocusFrame.current)
+  }, [])
+
   function patch(values: Partial<SearchState>, options?: { resetScroll?: boolean }) {
     navigate({
       to: '/runs/$runId',
@@ -111,8 +127,11 @@ export function RunDetailPage() {
   }
 
   function openPost(postId: string, trigger: HTMLElement) {
+    window.clearTimeout(closeHighlightTimer.current)
+    setLastViewedPostId(undefined)
     detailBackgroundScroll.current = window.scrollY
     detailTrigger.current = trigger
+    currentDetailPostId.current = postId
     patch({ post: postId }, { resetScroll: false })
   }
 
@@ -124,13 +143,36 @@ export function RunDetailPage() {
 
   function handleDetailCloseAutoFocus(event: Event) {
     event.preventDefault()
-    detailTrigger.current?.focus({ preventScroll: true })
-    window.scrollTo(window.scrollX, detailBackgroundScroll.current)
+    if (closeFocusFrame.current !== undefined) window.cancelAnimationFrame(closeFocusFrame.current)
+    closeFocusFrame.current = window.requestAnimationFrame(() => {
+      const row = currentDetailPostId.current ? document.getElementById(`post-row-${currentDetailPostId.current}`) : undefined
+      const currentTrigger = row?.querySelector<HTMLElement>('[data-post-detail-trigger="true"]')
+      const focusTarget = currentTrigger ?? detailTrigger.current
+      focusTarget?.focus({ preventScroll: true })
+      closeFocusFrame.current = undefined
+    })
+  }
+
+  function closePostDetail() {
+    const postId = currentDetailPostId.current ?? search.post
+    if (postId) {
+      window.clearTimeout(closeHighlightTimer.current)
+      setLastViewedPostId(postId)
+      closeHighlightTimer.current = window.setTimeout(() => {
+        setLastViewedPostId((current) => current === postId ? undefined : current)
+      }, reduceMotion ? 1200 : 1800)
+    }
+    setPostSwitch(undefined)
+    setSelectionRevealPostId(undefined)
+    patch({ post: undefined }, { resetScroll: false })
   }
   function moveToPost(postId: string | undefined, position: number, direction: PostSwitch['direction']) {
     if (!postId || postSwitch) return
+    window.clearTimeout(closeHighlightTimer.current)
+    setLastViewedPostId(undefined)
     setPostSwitch({ id: postId, direction })
     setSelectionRevealPostId(postId)
+    currentDetailPostId.current = postId
     const page = Math.ceil(position / (search.pageSize ?? 50))
     patch({ post: postId, page }, { resetScroll: false })
   }
@@ -163,14 +205,16 @@ export function RunDetailPage() {
             <TableBody>
               {posts.isLoading ? Array.from({ length: 6 }).map((_, index) => <TableRow key={index}>{Array.from({ length: 8 }).map((__, cell) => <TableCell key={cell}><Skeleton className='h-6 w-full' /></TableCell>)}</TableRow>) : posts.data?.items.length ? posts.data.items.map((post) => {
                 const isCurrentPost = post.id === search.post
-                return <TableRow key={post.id} id={`post-row-${post.id}`} aria-current={isCurrentPost ? 'true' : undefined} className={cn('transition-[background-color,box-shadow] duration-200', isCurrentPost && 'post-row-active')}>
+                const isLastViewedPost = !search.post && post.id === lastViewedPostId
+                const isHighlightedPost = isCurrentPost || isLastViewedPost
+                return <TableRow key={post.id} id={`post-row-${post.id}`} aria-current={isCurrentPost ? 'true' : undefined} className={cn('transition-[background-color,box-shadow] duration-200', isHighlightedPost && 'post-row-active', isLastViewedPost && 'post-row-dismissed')}>
                   <TableCell className='relative max-w-80'>
-                    {isCurrentPost && <motion.span layoutId='post-row-selection-trail' aria-hidden className='post-row-selection-trail absolute inset-y-1 left-0 w-1 rounded-full' transition={selectionTransition} />}
-                    <a href={post.url} target='_blank' rel='noreferrer' className={cn('relative flex min-w-0 items-center gap-1.5 font-medium hover:text-primary hover:underline', isCurrentPost && 'pl-3 text-primary')}>
-                      {isCurrentPost && <span className='shrink-0 rounded-full border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium leading-none text-primary'>当前查看</span>}
+                    {isHighlightedPost && <motion.span layoutId='post-row-selection-trail' aria-hidden className='post-row-selection-trail absolute inset-y-1 left-0 w-1 rounded-full' transition={selectionTransition} />}
+                    <a href={post.url} target='_blank' rel='noreferrer' className={cn('relative flex min-w-0 items-center gap-1.5 font-medium hover:text-primary hover:underline', isHighlightedPost && 'pl-3 text-primary')}>
+                      {isCurrentPost ? <span className='shrink-0 rounded-full border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium leading-none text-primary'>当前查看</span> : isLastViewedPost ? <span className='post-row-last-viewed-label shrink-0 rounded-full border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium leading-none text-primary'>刚刚查看</span> : null}
                       <span className='min-w-0 truncate'>{post.title || '无标题'}</span><ExternalLink className='size-3 shrink-0' />
                     </a>
-                  </TableCell><TableCell>{post.circle_name || '—'}</TableCell><TableCell>{post.author || '—'}</TableCell><TableCell className='whitespace-nowrap'>{formatDate(post.published_at)}</TableCell><TableCell><StatusBadge value={post.visibility} label={{ visible: '可见', hidden: '不可见', unknown: '未知' }[post.visibility]} /></TableCell><TableCell className='text-right tabular-nums'>{post.reply_count ?? '—'}</TableCell><TableCell className='text-right tabular-nums'>{post.like_count ?? '—'}</TableCell><TableCell><div className='flex justify-end gap-1'><Button variant='ghost' size='sm' onClick={(event) => openPost(post.id, event.currentTarget)}>查看</Button><Button variant='ghost' size='icon' onClick={() => copyText(post.url)} aria-label='复制帖子链接'><Copy className='size-4' /></Button></div></TableCell>
+                  </TableCell><TableCell>{post.circle_name || '—'}</TableCell><TableCell>{post.author || '—'}</TableCell><TableCell className='whitespace-nowrap'>{formatDate(post.published_at)}</TableCell><TableCell><StatusBadge value={post.visibility} label={{ visible: '可见', hidden: '不可见', unknown: '未知' }[post.visibility]} /></TableCell><TableCell className='text-right tabular-nums'>{post.reply_count ?? '—'}</TableCell><TableCell className='text-right tabular-nums'>{post.like_count ?? '—'}</TableCell><TableCell><div className='flex justify-end gap-1'><Button variant='ghost' size='sm' data-post-detail-trigger='true' onClick={(event) => openPost(post.id, event.currentTarget)}>查看</Button><Button variant='ghost' size='icon' onClick={() => copyText(post.url)} aria-label='复制帖子链接'><Copy className='size-4' /></Button></div></TableCell>
                 </TableRow>
               }) : <TableRow><TableCell colSpan={8} className='h-52 text-center text-muted-foreground'>当前筛选条件下没有帖子结果。</TableCell></TableRow>}
             </TableBody>
@@ -179,7 +223,7 @@ export function RunDetailPage() {
         <div className='flex flex-col gap-3 border-t p-4 sm:flex-row sm:items-center sm:justify-between'><div className='text-sm text-muted-foreground'>共 {posts.data?.total ?? 0} 条，第 {search.page} / {totalPages} 页</div><div className='flex gap-2'><Select value={String(search.pageSize)} onValueChange={(value) => patch({ pageSize: Number(value) as 20 | 50 | 100, page: 1 })}><SelectTrigger className='w-28'><SelectValue /></SelectTrigger><SelectContent><SelectItem value='20'>每页 20</SelectItem><SelectItem value='50'>每页 50</SelectItem><SelectItem value='100'>每页 100</SelectItem></SelectContent></Select><Button variant='outline' size='icon' disabled={(search.page ?? 1) <= 1} onClick={() => patch({ page: (search.page ?? 1) - 1 })}><ChevronLeft className='size-4' /></Button><Button variant='outline' size='icon' disabled={(search.page ?? 1) >= totalPages} onClick={() => patch({ page: (search.page ?? 1) + 1 })}><ChevronRight className='size-4' /></Button></div></div>
       </div>
       <div className='flex justify-end'><Select onValueChange={(value) => exportRun.mutate(value)} disabled={!templates.data?.length || exportRun.isPending}><SelectTrigger className='w-56'><Download className='size-4' /><SelectValue placeholder={templates.data?.length ? '导出 Excel' : '暂无导出模板'} /></SelectTrigger><SelectContent>{templates.data?.map((item) => item.versions[0] && <SelectItem key={item.versions[0].version_id} value={item.versions[0].version_id}>{item.name}</SelectItem>)}</SelectContent></Select></div>
-      <Sheet open={Boolean(search.post)} onOpenChange={(open) => { if (!open) { setPostSwitch(undefined); setSelectionRevealPostId(undefined); patch({ post: undefined }, { resetScroll: false }) } }}>
+      <Sheet open={Boolean(search.post)} onOpenChange={(open) => { if (!open) closePostDetail() }}>
         <SheetContent className='w-full overflow-y-auto p-0 sm:max-w-[58vw]' onOpenAutoFocus={handleDetailOpenAutoFocus} onCloseAutoFocus={handleDetailCloseAutoFocus}>
           <SheetHeader className='sticky top-0 z-10 border-b bg-background/90 p-6 backdrop-blur'>
             <div className='flex items-start justify-between gap-4 pr-8'>
