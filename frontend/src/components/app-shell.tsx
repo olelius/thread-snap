@@ -40,10 +40,10 @@ export function AppShell() {
     <TooltipProvider delayDuration={150}>
       <SidebarProvider defaultOpen>
         <Sidebar collapsible='icon' variant='inset'>
-          <SidebarHeader className='border-b border-sidebar-border/70 p-3'>
-            <div className='flex h-11 items-center gap-3 overflow-hidden rounded-lg bg-gradient-to-br from-primary/15 to-cyan-400/10 px-2 ring-1 ring-primary/10'>
-              <div className='grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground shadow-lg shadow-primary/20'>
-                <Sparkles className='size-4' />
+          <SidebarHeader className='border-b border-sidebar-border/70 p-3 transition-[padding] duration-200 ease-out motion-reduce:transition-none group-data-[collapsible=icon]:p-2!'>
+            <div className='flex h-11 items-center gap-3 overflow-hidden rounded-lg bg-gradient-to-br from-primary/15 to-cyan-400/10 px-2 ring-1 ring-primary/10 transition-[width,height,padding,gap] duration-200 ease-out motion-reduce:transition-none group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:self-center group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0! group-data-[collapsible=icon]:px-0!'>
+              <div className='grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground shadow-lg shadow-primary/20 transition-[width,height,border-radius] duration-200 ease-out motion-reduce:transition-none group-data-[collapsible=icon]:size-7! group-data-[collapsible=icon]:rounded-md!'>
+                <Sparkles className='size-4 transition-[width,height] duration-200 ease-out motion-reduce:transition-none group-data-[collapsible=icon]:size-3.5!' />
               </div>
               <div className='min-w-0 group-data-[collapsible=icon]:hidden'>
                 <div className='truncate text-sm font-semibold tracking-wide'>ThreadSnap</div>
