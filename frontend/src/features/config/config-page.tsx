@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useBlocker, useNavigate, useSearch } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArchiveRestore, CalendarClock, CarFront, Check, ChevronDown, ChevronsUpDown, CirclePlus, Copy, KeyRound, Loader2, Plus, RefreshCw, Save, Settings2, Trash2, Upload } from 'lucide-react'
+import { ArchiveRestore, CalendarClock, CarFront, Check, ChevronDown, ChevronsUpDown, CirclePlus, Copy, KeyRound, Loader2, Plus, RefreshCw, RotateCcw, Save, Settings2, Trash2, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { AuthDialog } from '@/features/auth/auth-dialog'
 import { PageHeader } from '@/components/page-header'
@@ -173,7 +173,21 @@ function usePlanWorkspace(onReveal: (tab: PlanSection, targetId?: string) => voi
     client.setQueryData(['extraction-plan'], value)
   }
 
-  return { query, draft, setDraft, rulesDirty, scheduleDirty, dirty: rulesDirty || scheduleDirty, save, revisionConflict, setRevisionConflict, reloadServerPlan, replacePlan }
+  function discardSection(section: PlanSection) {
+    if (!draft || !query.data) return
+    const otherSectionDirty = section === 'rules'
+      ? editableNodesSignature(draft.nodes) !== editableNodesSignature(query.data.nodes)
+      : editableRulesSignature(draft.rules) !== editableRulesSignature(query.data.rules)
+    setDraft({
+      ...draft,
+      revision: otherSectionDirty ? draft.revision : query.data.revision,
+      rules: section === 'rules' ? structuredClone(query.data.rules) : draft.rules,
+      nodes: section === 'schedule' ? structuredClone(query.data.nodes) : draft.nodes,
+    })
+    if (!otherSectionDirty) setRevisionConflict(false)
+  }
+
+  return { query, draft, setDraft, rulesDirty, scheduleDirty, dirty: rulesDirty || scheduleDirty, save, discardSection, revisionConflict, setRevisionConflict, reloadServerPlan, replacePlan }
 }
 
 type PlanWorkspace = ReturnType<typeof usePlanWorkspace>
@@ -232,7 +246,7 @@ export function ConfigPage() {
 }
 
 function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
-  const { query, draft, setDraft, rulesDirty, dirty, save, replacePlan } = workspace
+  const { query, draft, setDraft, rulesDirty, dirty, save, discardSection, replacePlan } = workspace
   const platforms = useQuery({ queryKey: ['platforms'], queryFn: () => api<Platform[]>('/platforms') })
   const vehicles = useQuery({ queryKey: ['vehicles'], queryFn: () => api<Vehicle[]>('/vehicles') })
   const [selectedRuleId, setSelectedRuleId] = useState<string>()
@@ -297,6 +311,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
     <fieldset disabled={save.isPending} className='m-0 min-w-0 space-y-5 border-0 p-0 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:gap-5 xl:space-y-0'>
       <ConfigSectionToolbar icon={<CalendarClock className='size-4.5' />} title='自动提取规则' summary={`${draft.rules.length} 条规则${rulesDirty ? ` · ${changeCount} 项未保存` : ''}`} description='定义提取范围和每圈目标数；保存时与服务器现有每周计划统一校验。'>
         <Button variant='outline' onClick={createRule}><Plus className='size-4' />新建规则</Button>
+        <Button variant='outline' disabled={!rulesDirty || save.isPending} onClick={() => discardSection('rules')}><RotateCcw className='size-4' />放弃修改</Button>
         <Button disabled={!rulesDirty || save.isPending} onClick={() => save.mutate({ section: 'rules', current: draft })}>{save.isPending ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}{save.isPending ? '正在保存' : `保存当前标签${rulesDirty ? ` (${changeCount})` : ''}`}</Button>
       </ConfigSectionToolbar>
 
@@ -336,7 +351,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
 }
 
 function SchedulePanel({ workspace }: { workspace: PlanWorkspace }) {
-  const { query, draft, setDraft, scheduleDirty, save } = workspace
+  const { query, draft, setDraft, scheduleDirty, save, discardSection } = workspace
   if (!draft) return <Card><CardContent className='p-10 text-center text-sm text-muted-foreground'>正在加载每周计划…</CardContent></Card>
 
   const savedRules = query.data?.rules ?? []
@@ -354,6 +369,7 @@ function SchedulePanel({ workspace }: { workspace: PlanWorkspace }) {
     <fieldset disabled={save.isPending} className='m-0 min-w-0 space-y-5 border-0 p-0'>
       <ConfigSectionToolbar icon={<CalendarClock className='size-4.5' />} title='每周计划' summary={`${draft.nodes.length} 个节点${scheduleDirty ? ` · ${changeCount} 项未保存` : ''}`} description='设置星期、时刻和已保存规则引用；保存时与服务器现有自动提取规则统一校验。'>
         <Button variant='outline' disabled={!savedRules.length} onClick={createNode}><CirclePlus className='size-4' />新增节点</Button>
+        <Button variant='outline' disabled={!scheduleDirty || save.isPending} onClick={() => discardSection('schedule')}><RotateCcw className='size-4' />放弃修改</Button>
         <Button disabled={!scheduleDirty || save.isPending} onClick={() => save.mutate({ section: 'schedule', current: draft })}>{save.isPending ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}{save.isPending ? '正在保存' : `保存当前标签${scheduleDirty ? ` (${changeCount})` : ''}`}</Button>
       </ConfigSectionToolbar>
 
@@ -362,10 +378,11 @@ function SchedulePanel({ workspace }: { workspace: PlanWorkspace }) {
       <div className='space-y-3'>{draft.nodes.length ? draft.nodes.map((node, index) => {
         const baselineNode = baselineNodes.get(node.id)
         const isNew = !baselineNode
+        const nodeDirty = changedNodeIds.has(node.id)
         const enabledDirty = Boolean(baselineNode) && node.enabled !== baselineNode?.enabled
         const timeDirty = Boolean(baselineNode) && node.time !== baselineNode?.time
         const ruleIdsDirty = Boolean(baselineNode) && JSON.stringify(node.rule_ids) !== JSON.stringify(baselineNode?.rule_ids)
-        return <Card id={`schedule-node-${node.id}`} key={node.id} className='border-border/70 bg-card/88'><CardContent className='grid gap-4 p-4 xl:grid-cols-[5rem_auto_1fr_170px_260px_auto] xl:items-center'><Badge variant='secondary' className='w-fit gap-1.5 font-normal'>节点 {index + 1}{isNew && <span className='size-1.5 rounded-full bg-amber-500' aria-label='新增节点' />}</Badge><Switch checked={node.enabled} data-dirty={enabledDirty || undefined} className={cn(enabledDirty && dirtyControlClass)} onCheckedChange={(enabled) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, enabled } : item))} aria-label='启用计划节点' /><div className='flex flex-wrap gap-1.5'>{weekdays.map((label, dayIndex) => { const dayDirty = Boolean(baselineNode) && node.weekdays.includes(dayIndex) !== (baselineNode?.weekdays.includes(dayIndex) ?? false); return <Button key={label} type='button' variant={node.weekdays.includes(dayIndex) ? 'default' : 'outline'} size='icon' data-dirty={dayDirty || undefined} className={cn('size-8 rounded-full', dayDirty && dirtyControlClass)} onClick={() => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, weekdays: item.weekdays.includes(dayIndex) ? item.weekdays.filter((day) => day !== dayIndex) : [...item.weekdays, dayIndex].sort() } : item))} aria-label={`星期${label}`}>{label}</Button> })}</div><Input type='time' step={1} value={node.time} data-dirty={timeDirty || undefined} className={cn(timeDirty && dirtyFieldClass)} onChange={(event) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, time: event.target.value.length === 5 ? `${event.target.value}:00` : event.target.value } : item))} /><RuleMultiCombobox rules={savedRules} values={node.rule_ids} disabled={save.isPending} dirty={ruleIdsDirty} onChange={(rule_ids) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, rule_ids } : item))} /><Button variant='ghost' size='icon' onClick={() => updateNodes(draft.nodes.filter((item) => item.id !== node.id))} aria-label='删除计划节点'><Trash2 className='size-4' /></Button></CardContent></Card>
+        return <Card id={`schedule-node-${node.id}`} key={node.id} data-dirty={nodeDirty || undefined} className='border-border/70 bg-card/88'><CardContent className='grid gap-4 p-4 xl:grid-cols-[5rem_auto_1fr_170px_260px_auto] xl:items-center'><Badge variant={nodeDirty ? 'outline' : 'secondary'} className={cn('w-fit gap-1.5 font-normal', nodeDirty && 'border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-300')}>节点 {index + 1}{nodeDirty && <span className='size-1.5 rounded-full bg-amber-500' aria-label={isNew ? '新增节点' : '本节点有未保存修改'} />}</Badge><Switch checked={node.enabled} data-dirty={enabledDirty || undefined} className={cn(enabledDirty && dirtyControlClass)} onCheckedChange={(enabled) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, enabled } : item))} aria-label='启用计划节点' /><div className='flex flex-wrap gap-1.5'>{weekdays.map((label, dayIndex) => { const dayDirty = Boolean(baselineNode) && node.weekdays.includes(dayIndex) !== (baselineNode?.weekdays.includes(dayIndex) ?? false); return <Button key={label} type='button' variant={node.weekdays.includes(dayIndex) ? 'default' : 'outline'} size='icon' data-dirty={dayDirty || undefined} className={cn('size-8 rounded-full', dayDirty && dirtyControlClass)} onClick={() => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, weekdays: item.weekdays.includes(dayIndex) ? item.weekdays.filter((day) => day !== dayIndex) : [...item.weekdays, dayIndex].sort() } : item))} aria-label={`星期${label}`}>{label}</Button> })}</div><Input type='time' step={1} value={node.time} data-dirty={timeDirty || undefined} className={cn(timeDirty && dirtyFieldClass)} onChange={(event) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, time: event.target.value.length === 5 ? `${event.target.value}:00` : event.target.value } : item))} /><RuleMultiCombobox rules={savedRules} values={node.rule_ids} disabled={save.isPending} dirty={ruleIdsDirty} onChange={(rule_ids) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, rule_ids } : item))} /><Button variant='ghost' size='icon' onClick={() => updateNodes(draft.nodes.filter((item) => item.id !== node.id))} aria-label='删除计划节点'><Trash2 className='size-4' /></Button></CardContent></Card>
       }) : <Card className='border-dashed bg-card/70'><CardContent className='p-10 text-center text-sm text-muted-foreground'><CalendarClock className='mx-auto mb-3 size-8 text-primary/60' />尚未配置每周计划节点。</CardContent></Card>}</div>
     </fieldset>
   </div>
@@ -388,12 +405,19 @@ function PlatformPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => v
     setDirty(nextDirty)
     onDirtyChange(nextDirty)
   }
+  const discard = () => {
+    if (!query.data) return
+    setDraft(structuredClone(query.data))
+    setDirty(false)
+    onDirtyChange(false)
+  }
   const availableCount = draft.filter((platform) => platform.adapter_status === 'available').length
-  return <div className='space-y-5'><ConfigSectionToolbar icon={<Settings2 className='size-4.5' />} title='平台采集配置' summary={`已接入 ${availableCount}/${draft.length}${dirty ? ` · ${changedPlatformCodes.size} 项未保存` : ''}`} description='管理平台接入状态、任务启用、内部并发与 Session。'><Button disabled={!dirty || save.isPending} onClick={() => save.mutate()}><Save className='size-4' />保存当前标签{dirty ? ` (${changedPlatformCodes.size})` : ''}</Button></ConfigSectionToolbar><div className='grid gap-4 xl:grid-cols-3'>{draft.map((platform) => {
+  return <div className='space-y-5'><ConfigSectionToolbar icon={<Settings2 className='size-4.5' />} title='平台采集配置' summary={`已接入 ${availableCount}/${draft.length}${dirty ? ` · ${changedPlatformCodes.size} 项未保存` : ''}`} description='管理平台接入状态、任务启用、内部并发与 Session。'><Button variant='outline' disabled={!dirty || save.isPending} onClick={discard}><RotateCcw className='size-4' />放弃修改</Button><Button disabled={!dirty || save.isPending} onClick={() => save.mutate()}><Save className='size-4' />保存当前标签{dirty ? ` (${changedPlatformCodes.size})` : ''}</Button></ConfigSectionToolbar><div className='grid gap-4 xl:grid-cols-3'>{draft.map((platform) => {
     const baseline = baselinePlatforms.get(platform.code)
+    const platformDirty = changedPlatformCodes.has(platform.code)
     const enabledDirty = platform.enabled !== baseline?.enabled
     const concurrencyDirty = platform.internal_concurrency !== baseline?.internal_concurrency
-    return <Card key={platform.code} className='border-border/70 bg-card/88'><CardHeader><div className='flex items-start justify-between'><div><CardTitle>{platform.display_name}</CardTitle><CardDescription className='mt-1'>{platform.adapter_status === 'available' ? `适配器 ${platform.adapter_version ?? '已接入'}` : '后续平台预留'}</CardDescription></div><StatusBadge value={platform.adapter_status === 'available' ? 'success' : 'unknown'} label={platform.adapter_status === 'available' ? '已接入' : '未接入'} /></div></CardHeader><CardContent className='space-y-5'><div className='flex items-center justify-between rounded-lg border p-3'><div><div className='text-sm font-medium'>平台启用</div><div className='text-xs text-muted-foreground'>决定是否允许新任务</div></div><Switch disabled={platform.adapter_status !== 'available'} checked={platform.enabled} data-dirty={enabledDirty || undefined} className={cn(enabledDirty && dirtyControlClass)} onCheckedChange={(enabled) => update(platform.code, { enabled })} /></div><div><Label>平台内部并发</Label><Input className={cn('mt-2', concurrencyDirty && dirtyFieldClass)} data-dirty={concurrencyDirty || undefined} type='number' disabled={platform.adapter_status !== 'available'} min={platform.concurrency_range.min} max={platform.concurrency_range.max} value={platform.internal_concurrency} onChange={(event) => update(platform.code, { internal_concurrency: Number(event.target.value) })} /></div>{platform.adapter_status === 'available' && <SessionCard platform={platform} onAuth={() => setAuth(platform)} />}</CardContent></Card>
+    return <Card key={platform.code} data-dirty={platformDirty || undefined} className='border-border/70 bg-card/88'><CardHeader><div className='flex items-start justify-between gap-3'><div><CardTitle>{platform.display_name}</CardTitle><CardDescription className='mt-1'>{platform.adapter_status === 'available' ? `适配器 ${platform.adapter_version ?? '已接入'}` : '后续平台预留'}</CardDescription></div><div className='flex flex-wrap items-center justify-end gap-2'>{platformDirty && <Badge variant='outline' className='border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-300'>已修改</Badge>}<StatusBadge value={platform.adapter_status === 'available' ? 'success' : 'unknown'} label={platform.adapter_status === 'available' ? '已接入' : '未接入'} /></div></div></CardHeader><CardContent className='space-y-5'><div className='flex items-center justify-between rounded-lg border p-3'><div><div className='text-sm font-medium'>平台启用</div><div className='text-xs text-muted-foreground'>决定是否允许新任务</div></div><Switch disabled={platform.adapter_status !== 'available'} checked={platform.enabled} data-dirty={enabledDirty || undefined} className={cn(enabledDirty && dirtyControlClass)} onCheckedChange={(enabled) => update(platform.code, { enabled })} /></div><div><Label>平台内部并发</Label><Input className={cn('mt-2', concurrencyDirty && dirtyFieldClass)} data-dirty={concurrencyDirty || undefined} type='number' disabled={platform.adapter_status !== 'available'} min={platform.concurrency_range.min} max={platform.concurrency_range.max} value={platform.internal_concurrency} onChange={(event) => update(platform.code, { internal_concurrency: Number(event.target.value) })} /></div>{platform.adapter_status === 'available' && <SessionCard platform={platform} onAuth={() => setAuth(platform)} />}</CardContent></Card>
   })}</div><AuthDialog open={Boolean(auth)} onOpenChange={(open) => !open && setAuth(undefined)} platformCode={auth?.code} platformName={auth?.display_name} /></div>
 }
 
@@ -443,6 +467,12 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
     const nextDeletedIds = row.id && !deletedIds.includes(row.id) ? [...deletedIds, row.id] : deletedIds
     commitRows(rows.filter((_, rowIndex) => rowIndex !== index), nextDeletedIds)
   }
+  const discard = () => {
+    setRows(structuredClone(baselineRows))
+    setDeletedIds([])
+    setDirty(false)
+    onDirtyChange(false)
+  }
   const save = async () => { setSaving(true); try { const result = await api<CircleBatchResult>('/circles/batch', { method: 'PUT', body: JSON.stringify({ rows: rows.map((item) => ({ id: item.id || undefined, platform_code: item.platform_code || 'dongchedi', url: item.url, vehicle_id: item.vehicle_id || undefined, vehicle_name: item.vehicle_name || undefined, auto_enabled: item.auto_enabled, section: item.section || 'dynamic' })), deleted_ids: deletedIds }) }); const vehicles = rowsAsVehicles(result.items); client.setQueryData(['vehicles'], vehicles); setRows(vehicleRows(vehicles)); setDeletedIds([]); setDirty(false); onDirtyChange(false); await client.invalidateQueries({ queryKey: ['vehicles'] }); toast.success('车型与圈子已保存', { description: `保存 ${result.saved_count} 条，删除 ${result.deleted_count} 条` }) } catch (error) { toast.error('保存失败', { description: errorMessage(error) }) } finally { setSaving(false) } }
   const unverifiedCount = rows.filter((row) => row.id && row.validation_status === 'unverified').length
   const changedRows = rows.filter((row) => {
@@ -471,6 +501,7 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
           {bulkValidation.isPending ? <Loader2 className='size-4 animate-spin' /> : <RefreshCw className='size-4' />}验证全部待验证（{unverifiedCount}）
         </Button>
         <Button variant='outline' onClick={() => commitRows([...rows, { id: '', platform_code: 'dongchedi', external_id: '', url: '', vehicle_name: '未分组', auto_enabled: false, section: 'dynamic', validation_status: 'unverified' }])}><Plus className='size-4' />新增圈子</Button>
+        <Button variant='outline' disabled={!dirty || saving} onClick={discard}><RotateCcw className='size-4' />放弃修改</Button>
         <Button disabled={!dirty || saving} onClick={save}>{saving ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}保存当前标签{dirty ? ` (${changeCount})` : ''}</Button>
     </ConfigSectionToolbar>
     {validationJobIds.length > 0 && <Alert>
@@ -484,8 +515,8 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
     <div className='max-h-[min(65svh,680px)] overflow-auto rounded-xl border bg-card/90' data-list-viewport='circles'>
       <Table className='min-w-[1050px]'>
         <TableHeader><TableRow><TableHead className='w-16 text-center'>序号</TableHead><TableHead>车型</TableHead><TableHead>圈子 URL</TableHead><TableHead>名称</TableHead><TableHead>验证状态</TableHead><TableHead>自动参与</TableHead><TableHead className='text-right'>操作</TableHead></TableRow></TableHeader>
-        <TableBody>{rows.map((row, index) => { const baseline = baselineById.get(row.id); const isNew = !baseline; const vehicleDirty = isNew || row.vehicle_name !== baseline.vehicle_name || row.vehicle_id !== baseline.vehicle_id; const urlDirty = isNew || row.url !== baseline.url; const autoDirty = Boolean(baseline) && row.auto_enabled !== baseline?.auto_enabled; return <TableRow key={row.id || `new-${index}`}>
-          <TableCell className='w-16 text-center tabular-nums text-muted-foreground'><span className='inline-flex items-center gap-1.5'>{index + 1}{isNew && <span className='size-1.5 rounded-full bg-amber-500' aria-label='新增圈子' />}</span></TableCell><TableCell><Input value={row.vehicle_name ?? ''} data-dirty={vehicleDirty || undefined} className={cn(vehicleDirty && dirtyFieldClass)} onChange={(event) => update(index, { vehicle_name: event.target.value, vehicle_id: undefined })} placeholder='车型名称' /></TableCell>
+        <TableBody>{rows.map((row, index) => { const baseline = baselineById.get(row.id); const isNew = !baseline; const vehicleDirty = isNew || row.vehicle_name !== baseline.vehicle_name || row.vehicle_id !== baseline.vehicle_id; const urlDirty = isNew || row.url !== baseline.url; const autoDirty = Boolean(baseline) && row.auto_enabled !== baseline?.auto_enabled; const rowDirty = isNew || vehicleDirty || urlDirty || autoDirty; return <TableRow key={row.id || `new-${index}`} data-dirty={rowDirty || undefined} className={cn(rowDirty && 'bg-amber-500/[0.035]')}>
+          <TableCell className='w-16 text-center tabular-nums text-muted-foreground'><span className='inline-flex items-center gap-1.5'>{index + 1}{rowDirty && <span className='size-1.5 rounded-full bg-amber-500' aria-label={isNew ? '新增圈子' : '本行有未保存修改'} />}</span></TableCell><TableCell><Input value={row.vehicle_name ?? ''} data-dirty={vehicleDirty || undefined} className={cn(vehicleDirty && dirtyFieldClass)} onChange={(event) => update(index, { vehicle_name: event.target.value, vehicle_id: undefined })} placeholder='车型名称' /></TableCell>
           <TableCell><Input value={row.url} data-dirty={urlDirty || undefined} className={cn(urlDirty && dirtyFieldClass)} onChange={(event) => update(index, { url: event.target.value })} placeholder='圈子 URL' /></TableCell>
           <TableCell>{row.name || (row.id ? '等待验证' : '保存后验证')}</TableCell>
           <TableCell><div className='space-y-1'><StatusBadge value={row.validation_status === 'verified' ? 'success' : row.validation_status === 'failed' ? 'failed' : 'unknown'} label={{ verified: '已验证', failed: '验证失败', unverified: '未验证' }[row.validation_status] ?? row.validation_status} />{row.id && !row.first_validated_at && row.validation_status !== 'verified' && <div className='text-xs text-muted-foreground'>首次通过后自动参与</div>}</div></TableCell>
