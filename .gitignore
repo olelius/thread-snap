@@ -4,6 +4,9 @@
 # 多 Agent 和长任务的详细临时证据，不作为长期事实源
 /artifacts/runtime/
 
+# 本地生成的正式部署包；发布时通过校验值交付，不提交 Git
+/artifacts/releases/
+
 # 项目 Python 虚拟环境
 /.vevn/
 

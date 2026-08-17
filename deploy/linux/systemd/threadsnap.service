@@ -1,0 +1,22 @@
+[Unit]
+Description=ThreadSnap extraction service
+Requires=threadsnap-xvfb.service
+After=network-online.target threadsnap-xvfb.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=threadsnap
+Group=threadsnap
+WorkingDirectory=/opt/threadsnap/current
+EnvironmentFile=/etc/threadsnap/threadsnap.env
+Environment=HOME=@DATA_DIR@
+UMask=0077
+ExecStart=/opt/threadsnap/current/venv/bin/threadsnap serve --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=45
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
