@@ -38,7 +38,7 @@ export function AppShell() {
   }, [])
   return (
     <TooltipProvider delayDuration={150}>
-      <SidebarProvider defaultOpen>
+      <SidebarProvider defaultOpen className='h-svh min-h-0 overflow-hidden'>
         <Sidebar collapsible='icon' variant='inset'>
           <SidebarHeader className='border-b border-sidebar-border/70 p-3 transition-[padding] duration-200 ease-out motion-reduce:transition-none group-data-[collapsible=icon]:p-2!'>
             <div className='flex h-11 items-center gap-3 overflow-hidden rounded-lg bg-gradient-to-br from-primary/15 to-cyan-400/10 px-2 ring-1 ring-primary/10 transition-[width,height,padding,gap] duration-200 ease-out motion-reduce:transition-none group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:self-center group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0! group-data-[collapsible=icon]:px-0!'>
@@ -86,7 +86,7 @@ export function AppShell() {
           </SidebarFooter>
           <SidebarRail />
         </Sidebar>
-        <SidebarInset className='h-svh min-h-0 min-w-0 overflow-hidden bg-transparent'>
+        <SidebarInset className='min-h-0 min-w-0 overflow-hidden bg-transparent'>
           <header className='z-30 flex h-14 shrink-0 items-center gap-3 border-b border-border/65 bg-background/82 px-4 backdrop-blur-xl sm:px-6'>
             <SidebarTrigger className='-ml-1 transition-transform duration-200 hover:scale-105' />
             <Separator orientation='vertical' className='h-5' />

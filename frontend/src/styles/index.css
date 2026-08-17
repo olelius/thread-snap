@@ -11,20 +11,23 @@
     scrollbar-color: var(--border) transparent;
   }
   html {
-    @apply overflow-x-hidden;
+    @apply h-full overflow-hidden;
   }
   body {
-    @apply min-h-svh w-full bg-background font-sans text-foreground antialiased has-[div[data-variant='inset']]:bg-sidebar;
+    @apply h-full min-h-0 w-full overflow-hidden bg-background font-sans text-foreground antialiased has-[div[data-variant='inset']]:bg-sidebar;
     background-image:
       radial-gradient(circle at 80% -10%, color-mix(in oklab, var(--primary) 14%, transparent), transparent 36rem),
       linear-gradient(180deg, color-mix(in oklab, var(--background) 96%, white), var(--background));
+  }
+  #root {
+    @apply h-full min-h-0 overflow-hidden;
   }
 
   ::selection {
     background: color-mix(in oklab, var(--primary) 28%, transparent);
   }
 
-  /* 当前页面由 html 承担纵向滚动；Radix 只锁 body 时还会发生遮罩滚轮穿透。 */
+  /* 页面滚动由应用内的数据区承担；Radix 打开遮罩时继续锁定根节点。 */
   html:has(body[data-scroll-locked]) {
     overflow: hidden;
   }
