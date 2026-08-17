@@ -2,20 +2,22 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, useReducedMotion } from 'motion/react'
-import { ArrowLeft, CircleStop, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, KeyRound, ListTree, LoaderCircle, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowLeft, CircleAlert, CircleCheckBig, CircleStop, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, Gauge, KeyRound, Layers3, ListTree, LoaderCircle, RefreshCw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AuthDialog } from '@/features/auth/auth-dialog'
 import { useDebouncedValue } from '@/hooks/use-debounced-value'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
 import { api, errorMessage, formatDate, platformName, queryString } from '@/lib/api'
-import type { PageResult, Post, PostNavigation, Run, Template } from '@/lib/types'
+import type { PageResult, Post, PostNavigation, Run, RunTask, Template } from '@/lib/types'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Progress } from '@/components/ui/progress'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -237,20 +239,7 @@ export function RunDetailPage() {
       </div>
         <div className='flex justify-end'><Select onValueChange={(value) => exportRun.mutate(value)} disabled={!templates.data?.length || exportRun.isPending}><SelectTrigger className='w-56'><Download className='size-4' /><SelectValue placeholder={templates.data?.length ? '导出 Excel' : '暂无导出模板'} /></SelectTrigger><SelectContent>{templates.data?.map((item) => item.versions[0] && <SelectItem key={item.versions[0].version_id} value={item.versions[0].version_id}>{item.name}</SelectItem>)}</SelectContent></Select></div>
       </div>
-      <Dialog open={tasksOpen} onOpenChange={setTasksOpen}>
-        <DialogContent className='max-h-[80svh] gap-0 overflow-hidden p-0 sm:max-w-4xl'>
-          <DialogHeader className='border-b px-5 py-4'>
-            <DialogTitle>圈子任务 · {run.data?.tasks?.length ?? 0}</DialogTitle>
-            <DialogDescription>查看每个平台圈子的独立进度、状态与后端错误。</DialogDescription>
-          </DialogHeader>
-          <div className='max-h-[calc(80svh-5rem)] overflow-auto'>
-            <Table className='min-w-[820px]'>
-              <TableHeader><TableRow><TableHead>平台</TableHead><TableHead>圈子</TableHead><TableHead>状态</TableHead><TableHead>进度</TableHead><TableHead>错误详情</TableHead></TableRow></TableHeader>
-              <TableBody>{run.data?.tasks?.map((task) => <TableRow key={task.id}><TableCell>{platformName(task.platform_code)}</TableCell><TableCell><div className='font-medium'>{task.circle_name || task.external_id}</div><div className='max-w-72 truncate text-xs text-muted-foreground'>{task.circle_url}</div></TableCell><TableCell><StatusBadge value={task.status} label={task.status_name} /></TableCell><TableCell className='tabular-nums'>{task.completed_count} / {task.target_count}{task.failed_count ? ` · ${task.failed_count} 项失败` : ''}</TableCell><TableCell className='max-w-80 text-sm text-muted-foreground'>{task.error_message || task.stop_reason || '—'}</TableCell></TableRow>)}</TableBody>
-            </Table>
-          </div>
-        </DialogContent>
-      </Dialog>
+      <TaskDialog open={tasksOpen} onOpenChange={setTasksOpen} tasks={run.data?.tasks ?? []} />
       <Sheet open={Boolean(search.post)} onOpenChange={(open) => { if (!open) closePostDetail() }}>
         <SheetContent className='w-full overflow-y-auto p-0 sm:max-w-[58vw]' onOpenAutoFocus={handleDetailOpenAutoFocus} onCloseAutoFocus={handleDetailCloseAutoFocus}>
           <SheetHeader className='sticky top-0 z-10 border-b bg-background/90 p-6 backdrop-blur'>
@@ -297,5 +286,126 @@ export function RunDetailPage() {
 }
 
 function Meta({ label, value }: { label: string; value?: string }) { return <div><div className='text-xs text-muted-foreground'>{label}</div><div className='mt-1 break-all text-sm'>{value || '—'}</div></div> }
+
+function TaskDialog({ open, onOpenChange, tasks }: { open: boolean; onOpenChange: (open: boolean) => void; tasks: RunTask[] }) {
+  const groups = Array.from(tasks.reduce<Map<string, RunTask[]>>((result, task) => {
+    const items = result.get(task.platform_code) ?? []
+    items.push(task)
+    result.set(task.platform_code, items)
+    return result
+  }, new Map()))
+  const targetCount = tasks.reduce((total, task) => total + task.target_count, 0)
+  const completedCount = tasks.reduce((total, task) => total + task.completed_count, 0)
+  const successfulCount = tasks.filter((task) => ['success', 'completed'].includes(task.status)).length
+  const issueCount = tasks.filter((task) => task.failed_count > 0 || task.status === 'failed').length
+  const overallProgress = progressValue(completedCount, targetCount)
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className='max-h-[86svh] gap-0 overflow-hidden border-border/80 bg-background p-0 shadow-2xl sm:max-w-5xl'>
+        <DialogHeader className='relative border-b bg-muted/25 px-5 py-5 pr-14 sm:px-6'>
+          <div className='flex items-start gap-3'>
+            <div className='flex size-10 shrink-0 items-center justify-center rounded-xl border border-primary/15 bg-primary/10 text-primary shadow-sm'>
+              <ListTree className='size-5' />
+            </div>
+            <div className='min-w-0 space-y-1'>
+              <DialogTitle className='text-xl'>圈子任务</DialogTitle>
+              <DialogDescription>按平台查看每个圈子的提取状态与结果进度。</DialogDescription>
+            </div>
+          </div>
+
+          <div className='mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4'>
+            <TaskSummary icon={Layers3} label='任务总数' value={`${tasks.length} 个`} />
+            <TaskSummary icon={CircleCheckBig} label='已成功' value={`${successfulCount} 个`} />
+            <TaskSummary icon={Gauge} label='结果进度' value={`${completedCount} / ${targetCount}`} />
+            <TaskSummary icon={CircleAlert} label='存在异常' value={`${issueCount} 个`} tone={issueCount ? 'danger' : 'normal'} />
+          </div>
+
+          <div className='mt-3 flex items-center gap-3'>
+            <Progress value={overallProgress} className='h-1.5 flex-1' />
+            <span className='w-10 text-right text-xs font-medium tabular-nums text-muted-foreground'>{overallProgress}%</span>
+          </div>
+        </DialogHeader>
+
+        <ScrollArea className='h-[min(58svh,580px)]'>
+          <div className='space-y-4 p-4 sm:p-5'>
+            {groups.map(([platformCode, items]) => {
+              const platformTarget = items.reduce((total, task) => total + task.target_count, 0)
+              const platformCompleted = items.reduce((total, task) => total + task.completed_count, 0)
+              const platformProgress = progressValue(platformCompleted, platformTarget)
+
+              return (
+                <section key={platformCode} className='overflow-hidden rounded-xl border border-border/70 bg-card shadow-sm'>
+                  <div className='flex flex-col gap-3 border-b bg-muted/30 px-4 py-3 sm:flex-row sm:items-center sm:justify-between'>
+                    <div className='flex items-center gap-2.5'>
+                      <div className='flex size-8 items-center justify-center rounded-lg border bg-background text-muted-foreground'>
+                        <Layers3 className='size-4' />
+                      </div>
+                      <div>
+                        <h3 className='text-sm font-semibold'>{platformName(platformCode)}</h3>
+                        <p className='text-xs text-muted-foreground'>{items.length} 个圈子任务</p>
+                      </div>
+                    </div>
+                    <div className='flex min-w-48 items-center gap-3'>
+                      <Progress value={platformProgress} className='h-1.5 flex-1' />
+                      <span className='text-xs font-medium tabular-nums text-muted-foreground'>{platformCompleted} / {platformTarget}</span>
+                    </div>
+                  </div>
+
+                  <div className='divide-y divide-border/60'>
+                    {items.map((task) => <TaskRow key={task.id} task={task} />)}
+                  </div>
+                </section>
+              )
+            })}
+          </div>
+        </ScrollArea>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function TaskSummary({ icon: Icon, label, value, tone = 'normal' }: { icon: typeof Layers3; label: string; value: string; tone?: 'normal' | 'danger' }) {
+  return (
+    <div className='rounded-lg border border-border/70 bg-background/85 px-3 py-2.5 shadow-xs'>
+      <div className='flex items-center gap-1.5 text-xs text-muted-foreground'><Icon className={cn('size-3.5', tone === 'danger' && 'text-destructive')} />{label}</div>
+      <div className={cn('mt-1 text-sm font-semibold tabular-nums', tone === 'danger' && 'text-destructive')}>{value}</div>
+    </div>
+  )
+}
+
+function TaskRow({ task }: { task: RunTask }) {
+  const progress = progressValue(task.completed_count, task.target_count)
+  const detail = task.error_message || task.stop_reason
+  const hasIssue = task.failed_count > 0 || task.status === 'failed'
+
+  return (
+    <div className='grid gap-3 px-4 py-3.5 transition-colors hover:bg-muted/20 sm:grid-cols-[minmax(0,1fr)_120px_160px] sm:items-center'>
+      <div className='min-w-0'>
+        <div className='flex min-w-0 items-center gap-2'>
+          <span className='truncate text-sm font-semibold'>{task.circle_name || task.external_id}</span>
+          {task.circle_url && <a href={task.circle_url} target='_blank' rel='noreferrer' className='shrink-0 text-muted-foreground transition-colors hover:text-primary' aria-label={`打开${task.circle_name || task.external_id}`}><ExternalLink className='size-3.5' /></a>}
+        </div>
+        <div className={cn('mt-1 flex items-start gap-1.5 text-xs leading-5 text-muted-foreground', hasIssue && 'text-destructive')}>
+          {hasIssue ? <CircleAlert className='mt-0.5 size-3.5 shrink-0' /> : <CircleCheckBig className='mt-0.5 size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400' />}
+          <span className='line-clamp-2'>{detail || (task.completed_count >= task.target_count ? '已达到配置的有效结果目标。' : '任务正在按配置目标执行。')}</span>
+        </div>
+      </div>
+      <div className='flex items-center sm:justify-center'><StatusBadge value={task.status} label={task.status_name} /></div>
+      <div className='space-y-1.5'>
+        <div className='flex items-center justify-between text-xs'>
+          <span className='text-muted-foreground'>结果进度</span>
+          <span className='font-medium tabular-nums'>{task.completed_count} / {task.target_count}</span>
+        </div>
+        <Progress value={progress} className='h-1.5' />
+        {task.failed_count > 0 && <div className='text-right text-[11px] font-medium text-destructive'>{task.failed_count} 项失败</div>}
+      </div>
+    </div>
+  )
+}
+
+function progressValue(completed: number, target: number) {
+  return target > 0 ? Math.min(100, Math.round((completed / target) * 100)) : 0
+}
 
 const emptyRunsSearch = { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, from: undefined, to: undefined }
