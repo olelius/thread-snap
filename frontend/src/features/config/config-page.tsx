@@ -22,14 +22,13 @@ import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 
-const tabValues = ['plan', 'platforms', 'circles', 'history', 'templates'] as const
+const tabValues = ['rules', 'schedule', 'platforms', 'circles', 'history', 'templates'] as const
 type Tab = typeof tabValues[number]
 const weekdays = ['一', '二', '三', '四', '五', '六', '日']
 
@@ -52,12 +51,12 @@ function ConfigSectionToolbar({ icon, title, summary, description, children }: {
   </div>
 }
 
-function editablePlanSignature(plan?: ExtractionPlan) {
-  if (!plan) return ''
-  return JSON.stringify({
-    rules: plan.rules.map(({ id, name, platform_quantities, circle_ids }) => ({ id, name, platform_quantities, circle_ids: [...circle_ids].sort() })),
-    nodes: plan.nodes.map(({ id, weekdays: days, time, enabled, rule_id }) => ({ id, weekdays: [...days].sort(), time, enabled, rule_id })),
-  })
+function editableRulesSignature(rules?: ExtractionPlan['rules']) {
+  return JSON.stringify((rules ?? []).map(({ id, name, platform_quantities, circle_ids }) => ({ id, name, platform_quantities, circle_ids: [...circle_ids].sort() })))
+}
+
+function editableNodesSignature(nodes?: ExtractionPlan['nodes']) {
+  return JSON.stringify((nodes ?? []).map(({ id, weekdays: days, time, enabled, rule_id }) => ({ id, weekdays: [...days].sort(), time, enabled, rule_id })))
 }
 
 function editableRuleSignature(rule?: ExtractionPlan['rules'][number]) {
@@ -96,20 +95,97 @@ function rowsAsVehicles(rows: Circle[]) {
   return [...vehicles.values()]
 }
 
+type PlanSection = 'rules' | 'schedule'
+
+function usePlanWorkspace(onReveal: (tab: PlanSection, targetId?: string) => void) {
+  const client = useQueryClient()
+  const query = useQuery({ queryKey: ['extraction-plan'], queryFn: () => api<ExtractionPlan>('/extraction-plan') })
+  const [draft, setDraft] = useState<ExtractionPlan>()
+  const [revisionConflict, setRevisionConflict] = useState(false)
+
+  useEffect(() => {
+    if (!query.data) return
+    setDraft((current) => {
+      if (!current) return structuredClone(query.data)
+      const keepRules = editableRulesSignature(current.rules) !== editableRulesSignature(query.data.rules)
+      const keepNodes = editableNodesSignature(current.nodes) !== editableNodesSignature(query.data.nodes)
+      const preserveRevision = (keepRules || keepNodes) && current.revision !== query.data.revision
+      return { ...structuredClone(query.data), revision: preserveRevision ? current.revision : query.data.revision, rules: keepRules ? current.rules : structuredClone(query.data.rules), nodes: keepNodes ? current.nodes : structuredClone(query.data.nodes) }
+    })
+  }, [query.data])
+
+  const rulesDirty = Boolean(draft && query.data) && editableRulesSignature(draft?.rules) !== editableRulesSignature(query.data?.rules)
+  const scheduleDirty = Boolean(draft && query.data) && editableNodesSignature(draft?.nodes) !== editableNodesSignature(query.data?.nodes)
+
+  function revealPlanError(error: unknown) {
+    if (!(error instanceof ApiError)) return
+    if (error.payload.code === 'EXTRACTION_PLAN_REVISION_CONFLICT') setRevisionConflict(true)
+    const details = error.payload.details ?? []
+    const ruleId = details.find((item) => typeof item.rule_id === 'string')?.rule_id
+    const nodeDetail = details.find((item) => typeof item.node_id === 'string' || Array.isArray(item.node_ids))
+    const nodeId = typeof nodeDetail?.node_id === 'string' ? nodeDetail.node_id : Array.isArray(nodeDetail?.node_ids) && typeof nodeDetail.node_ids[0] === 'string' ? nodeDetail.node_ids[0] : undefined
+    const targetTab: PlanSection = nodeId ? 'schedule' : 'rules'
+    const targetId = nodeId ?? (typeof ruleId === 'string' ? ruleId : undefined)
+    onReveal(targetTab, targetId)
+  }
+
+  const save = useMutation({
+    mutationFn: ({ section, current }: { section: PlanSection; current: ExtractionPlan }) => {
+      if (!query.data) throw new Error('提取配置尚未加载完成。')
+      const rules = section === 'rules' ? current.rules : query.data.rules
+      const nodes = section === 'schedule' ? current.nodes : query.data.nodes
+      return api<ExtractionPlan>('/extraction-plan', { method: 'PUT', body: JSON.stringify({ revision: current.revision, rules: rules.map(({ id, name, platform_quantities, circle_ids }) => ({ id, name, platform_quantities, circle_ids })), nodes: nodes.map(({ id, weekdays: days, time, enabled, rule_id }) => ({ id, weekdays: days, time, enabled, rule_id })) }) })
+    },
+    onSuccess: (value, { section }) => {
+      setDraft((current) => ({ ...structuredClone(value), rules: section === 'schedule' && rulesDirty && current ? current.rules : structuredClone(value.rules), nodes: section === 'rules' && scheduleDirty && current ? current.nodes : structuredClone(value.nodes) }))
+      client.setQueryData(['extraction-plan'], value)
+      toast.success(section === 'rules' ? '自动提取规则已保存' : '每周计划已保存')
+    },
+    onError: (error) => { revealPlanError(error); toast.error('保存失败', { description: errorMessage(error) }) },
+  })
+
+  async function reloadServerPlan() {
+    const result = await query.refetch()
+    if (!result.data) return
+    setDraft(structuredClone(result.data))
+    setRevisionConflict(false)
+    toast.success('已加载服务器最新提取配置')
+  }
+
+  function replacePlan(value: ExtractionPlan) {
+    setDraft(structuredClone(value))
+    client.setQueryData(['extraction-plan'], value)
+  }
+
+  return { query, draft, setDraft, rulesDirty, scheduleDirty, dirty: rulesDirty || scheduleDirty, save, revisionConflict, setRevisionConflict, reloadServerPlan, replacePlan }
+}
+
+type PlanWorkspace = ReturnType<typeof usePlanWorkspace>
+
 export function ConfigPage() {
-  const raw = useSearch({ strict: false }) as { tab?: Tab }
+  const raw = useSearch({ strict: false }) as { tab?: string }
   const navigate = useNavigate({ from: '/config' })
-  const [planDirty, setPlanDirty] = useState(false)
+  const plan = usePlanWorkspace((targetTab, targetId) => {
+    navigate({ to: '/config', search: { tab: targetTab }, replace: true, resetScroll: false })
+    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+      const target = targetId ? document.getElementById(targetTab === 'rules' ? `rule-editor-${targetId}` : `schedule-node-${targetId}`) : undefined
+      target?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      target?.querySelector<HTMLElement>('input, button')?.focus({ preventScroll: true })
+    }))
+  })
   const [platformDirty, setPlatformDirty] = useState(false)
   const [circleDirty, setCircleDirty] = useState(false)
-  const dirty = planDirty || platformDirty || circleDirty
+  const dirty = plan.dirty || platformDirty || circleDirty
   const blocker = useBlocker({
     shouldBlockFn: ({ current, next }) => dirty && current.pathname !== next.pathname,
     enableBeforeUnload: dirty,
     disabled: !dirty,
     withResolver: true,
   })
-  const tab = tabValues.includes(raw.tab as Tab) ? raw.tab as Tab : 'plan'
+  useEffect(() => {
+    if (raw.tab === 'plan') navigate({ to: '/config', search: { tab: 'rules' }, replace: true, resetScroll: false })
+  }, [navigate, raw.tab])
+  const tab = raw.tab === 'plan' ? 'rules' : tabValues.includes(raw.tab as Tab) ? raw.tab as Tab : 'rules'
   return (
     <div className='flex h-full min-h-0 flex-col'>
       <div className='shrink-0 space-y-4'>
@@ -117,13 +193,15 @@ export function ConfigPage() {
         {dirty && <Alert className='border-amber-500/30 bg-amber-500/5'><Save className='size-4' /><AlertTitle>存在尚未保存的修改</AlertTitle><AlertDescription>切换标签会保留暂存内容；离开或刷新页面前会提示。保存按钮只提交当前标签。</AlertDescription></Alert>}
       </div>
       <Tabs className='mt-4 flex min-h-0 flex-1 flex-col' value={tab} onValueChange={(value) => navigate({ to: '/config', search: { tab: value as Tab }, replace: true, resetScroll: false })}>
-        <div className='shrink-0 overflow-x-auto'><TabsList className='h-10 min-w-max bg-muted/65 p-1'><TabsTrigger value='plan'>提取计划</TabsTrigger><TabsTrigger value='platforms'>平台配置</TabsTrigger><TabsTrigger value='circles'>车型与圈子</TabsTrigger><TabsTrigger value='history'>手动圈子历史</TabsTrigger><TabsTrigger value='templates'>导出模板</TabsTrigger></TabsList></div>
-        <TabsContent forceMount value='plan' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><PlanPanel onDirtyChange={setPlanDirty} /></TabsContent>
+        <div className='shrink-0 overflow-x-auto'><TabsList className='h-10 min-w-max bg-muted/65 p-1'><TabsTrigger value='rules'>自动提取规则</TabsTrigger><TabsTrigger value='schedule'>每周计划</TabsTrigger><TabsTrigger value='platforms'>平台配置</TabsTrigger><TabsTrigger value='circles'>车型与圈子</TabsTrigger><TabsTrigger value='history'>手动圈子历史</TabsTrigger><TabsTrigger value='templates'>导出模板</TabsTrigger></TabsList></div>
+        <TabsContent forceMount value='rules' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><RulesPanel workspace={plan} /></TabsContent>
+        <TabsContent forceMount value='schedule' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><SchedulePanel workspace={plan} /></TabsContent>
         <TabsContent forceMount value='platforms' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><PlatformPanel onDirtyChange={setPlatformDirty} /></TabsContent>
         <TabsContent forceMount value='circles' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><CirclePanel onDirtyChange={setCircleDirty} /></TabsContent>
         <TabsContent forceMount value='history' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><HistoryPanel /></TabsContent>
         <TabsContent forceMount value='templates' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><TemplatePanel /></TabsContent>
       </Tabs>
+      <AlertDialog open={plan.revisionConflict} onOpenChange={plan.setRevisionConflict}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>服务器提取配置已有更新</AlertDialogTitle><AlertDialogDescription>当前标签的草稿仍保留。可以继续留在页面核对，或放弃规则和计划草稿并加载服务器最新版本。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel onClick={() => plan.setRevisionConflict(false)}>保留当前草稿</AlertDialogCancel><AlertDialogAction onClick={plan.reloadServerPlan}>放弃草稿并重新加载</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
       <AlertDialog open={blocker.status === 'blocked'}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -140,68 +218,25 @@ export function ConfigPage() {
   )
 }
 
-function PlanPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void }) {
-  const client = useQueryClient()
-  const query = useQuery({ queryKey: ['extraction-plan'], queryFn: () => api<ExtractionPlan>('/extraction-plan') })
+function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
+  const { query, draft, setDraft, rulesDirty, dirty, save, replacePlan } = workspace
   const platforms = useQuery({ queryKey: ['platforms'], queryFn: () => api<Platform[]>('/platforms') })
   const vehicles = useQuery({ queryKey: ['vehicles'], queryFn: () => api<Vehicle[]>('/vehicles') })
-  const [draft, setDraft] = useState<ExtractionPlan>()
-  const [dirty, setDirty] = useState(false)
   const [selectedRuleId, setSelectedRuleId] = useState<string>()
   const [ruleSearch, setRuleSearch] = useState('')
-  const [revisionConflict, setRevisionConflict] = useState(false)
 
-  useEffect(() => { if (query.data && !dirty) setDraft(structuredClone(query.data)) }, [query.data, dirty])
   useEffect(() => {
     if (!draft?.rules.length) { if (selectedRuleId) setSelectedRuleId(undefined); return }
     if (!selectedRuleId || !draft.rules.some((rule) => rule.id === selectedRuleId)) setSelectedRuleId(draft.rules[0].id)
   }, [draft?.rules, selectedRuleId])
 
-  function update(next: ExtractionPlan) {
-    const nextDirty = editablePlanSignature(next) !== editablePlanSignature(query.data)
-    setDraft(next)
-    setDirty(nextDirty)
-    onDirtyChange(nextDirty)
-  }
-
-  function revealPlanError(error: unknown) {
-    if (!(error instanceof ApiError)) return
-    if (error.payload.code === 'EXTRACTION_PLAN_REVISION_CONFLICT') setRevisionConflict(true)
-    const details = error.payload.details ?? []
-    const ruleId = details.find((item) => typeof item.rule_id === 'string')?.rule_id
-    const nodeDetail = details.find((item) => typeof item.node_id === 'string' || Array.isArray(item.node_ids))
-    const nodeId = typeof nodeDetail?.node_id === 'string' ? nodeDetail.node_id : Array.isArray(nodeDetail?.node_ids) && typeof nodeDetail.node_ids[0] === 'string' ? nodeDetail.node_ids[0] : undefined
-    if (typeof ruleId === 'string') setSelectedRuleId(ruleId)
-    window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
-      const target = typeof ruleId === 'string' ? document.getElementById(`rule-editor-${ruleId}`) : typeof nodeId === 'string' ? document.getElementById(`schedule-node-${nodeId}`) : undefined
-      target?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-      target?.querySelector<HTMLElement>('input, button')?.focus({ preventScroll: true })
-    }))
-  }
-
-  const save = useMutation({
-    mutationFn: (current: ExtractionPlan) => api<ExtractionPlan>('/extraction-plan', { method: 'PUT', body: JSON.stringify({ revision: current.revision, rules: current.rules.map(({ id, name, platform_quantities, circle_ids }) => ({ id, name, platform_quantities, circle_ids })), nodes: current.nodes.map(({ id, weekdays: days, time, enabled, rule_id }) => ({ id, weekdays: days, time, enabled, rule_id })) }) }),
-    onSuccess: (value) => { setDraft(structuredClone(value)); setDirty(false); onDirtyChange(false); client.setQueryData(['extraction-plan'], value); setSelectedRuleId((current) => value.rules.some((rule) => rule.id === current) ? current : value.rules[0]?.id); toast.success('全部提取计划更改已保存') },
-    onError: (error) => { revealPlanError(error); toast.error('保存失败', { description: errorMessage(error) }) },
-  })
-
-  async function reloadServerPlan() {
-    const result = await query.refetch()
-    if (!result.data) return
-    setDraft(structuredClone(result.data))
-    setDirty(false)
-    onDirtyChange(false)
-    setSelectedRuleId((current) => result.data?.rules.some((rule) => rule.id === current) ? current : result.data?.rules[0]?.id)
-    setRevisionConflict(false)
-    toast.success('已加载服务器最新提取计划')
-  }
-
-  if (!draft) return <Card><CardContent className='p-10 text-center text-sm text-muted-foreground'>正在加载提取计划…</CardContent></Card>
+  if (!draft) return <Card><CardContent className='p-10 text-center text-sm text-muted-foreground'>正在加载自动提取规则…</CardContent></Card>
   const allPlatforms = platforms.data ?? []
   const allCircles = vehicleRows(vehicles.data ?? [])
   const enabledCircles = allCircles.filter((circle) => circle.auto_enabled)
   const defaultQuantity = (platform: Platform) => Math.max(platform.quantity_range.min, Math.min(30, platform.quantity_range.max))
-  const updateRule = (ruleId: string, transform: (rule: ExtractionPlan['rules'][number]) => ExtractionPlan['rules'][number]) => update({ ...draft, rules: draft.rules.map((item) => item.id === ruleId ? transform(item) : item) })
+  const updateRules = (rules: ExtractionPlan['rules']) => setDraft({ ...draft, rules })
+  const updateRule = (ruleId: string, transform: (rule: ExtractionPlan['rules'][number]) => ExtractionPlan['rules'][number]) => updateRules(draft.rules.map((item) => item.id === ruleId ? transform(item) : item))
   const toggleCircle = (ruleId: string, circle: Circle, checked: boolean) => updateRule(ruleId, (rule) => {
     const ids = checked ? [...new Set([...rule.circle_ids, circle.id])] : rule.circle_ids.filter((id) => id !== circle.id)
     const quantities = { ...rule.platform_quantities }
@@ -220,12 +255,10 @@ function PlanPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void 
   })
 
   const baselineRules = new Map((query.data?.rules ?? []).map((rule) => [rule.id, rule]))
-  const baselineNodes = new Map((query.data?.nodes ?? []).map((node) => [node.id, node]))
   const changedRuleIds = new Set(draft.rules.filter((rule) => editableRuleSignature(rule) !== editableRuleSignature(baselineRules.get(rule.id))).map((rule) => rule.id))
-  const changedNodeIds = new Set(draft.nodes.filter((node) => editableNodeSignature(node) !== editableNodeSignature(baselineNodes.get(node.id))).map((node) => node.id))
   const removedRules = [...baselineRules.keys()].filter((id) => !draft.rules.some((rule) => rule.id === id)).length
-  const removedNodes = [...baselineNodes.keys()].filter((id) => !draft.nodes.some((node) => node.id === id)).length
-  const changeCount = changedRuleIds.size + changedNodeIds.size + removedRules + removedNodes
+  const changeCount = changedRuleIds.size + removedRules
+  const savedNodes = query.data?.nodes ?? []
   const selectedRule = draft.rules.find((rule) => rule.id === selectedRuleId)
   const search = ruleSearch.trim().toLocaleLowerCase('zh-CN')
   const filteredRules = draft.rules.filter((rule) => !search || `${rule.name} ${rule.id} ${rule.circle_ids.map((id) => allCircles.find((circle) => circle.id === id)?.name ?? '').join(' ')}`.toLocaleLowerCase('zh-CN').includes(search))
@@ -234,7 +267,7 @@ function PlanPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void 
     const rule: ExtractionPlan['rules'][number] = { id: crypto.randomUUID(), name: `新规则 ${draft!.rules.length + 1}`, version: 1, platform_quantities: {}, circle_ids: [], archived: false, updated_at: new Date().toISOString() }
     setSelectedRuleId(rule.id)
     setRuleSearch('')
-    update({ ...draft!, rules: [...draft!.rules, rule] })
+    updateRules([...draft!.rules, rule])
   }
 
   function removeSelectedRule() {
@@ -242,14 +275,14 @@ function PlanPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void 
     const index = draft!.rules.findIndex((rule) => rule.id === selectedRule.id)
     const remaining = draft!.rules.filter((rule) => rule.id !== selectedRule.id)
     setSelectedRuleId(remaining[index]?.id ?? remaining[index - 1]?.id)
-    update({ ...draft!, rules: remaining })
+    updateRules(remaining)
   }
 
   return <div className='space-y-5'>
     <fieldset disabled={save.isPending} className='m-0 min-w-0 space-y-5 border-0 p-0'>
-      <ConfigSectionToolbar icon={<CalendarClock className='size-4.5' />} title='自动提取规则' summary={`${draft.rules.length} 条规则${dirty ? ` · ${changeCount} 项未保存` : ''}`} description='左侧定位规则，右侧只编辑当前规则；保存时仍与每周计划节点统一校验并原子提交。'>
+      <ConfigSectionToolbar icon={<CalendarClock className='size-4.5' />} title='自动提取规则' summary={`${draft.rules.length} 条规则${rulesDirty ? ` · ${changeCount} 项未保存` : ''}`} description='定义提取范围和每圈目标数；保存时与服务器现有每周计划统一校验。'>
         <Button variant='outline' onClick={createRule}><Plus className='size-4' />新建规则</Button>
-        <Button disabled={!dirty || save.isPending} onClick={() => save.mutate(draft)}>{save.isPending ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}{save.isPending ? '正在保存' : `保存全部更改${dirty ? ` (${changeCount})` : ''}`}</Button>
+        <Button disabled={!rulesDirty || save.isPending} onClick={() => save.mutate({ section: 'rules', current: draft })}>{save.isPending ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}{save.isPending ? '正在保存' : `保存当前标签${rulesDirty ? ` (${changeCount})` : ''}`}</Button>
       </ConfigSectionToolbar>
 
       <div className='grid gap-4 xl:h-[min(65svh,620px)] xl:min-h-[500px] xl:grid-cols-[320px_minmax(0,1fr)]'>
@@ -258,7 +291,7 @@ function PlanPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void 
           <CardContent className='min-h-0 flex-1 space-y-1 overflow-y-auto p-2'>
             {filteredRules.length ? filteredRules.map((rule) => {
               const active = rule.id === selectedRuleId
-              const referenceCount = draft.nodes.filter((node) => node.rule_id === rule.id).length
+              const referenceCount = savedNodes.filter((node) => node.rule_id === rule.id).length
               return <Button key={rule.id} type='button' variant='ghost' aria-current={active ? 'true' : undefined} className={cn('h-auto w-full justify-start rounded-lg px-3 py-2.5 text-left', active && 'bg-primary/10 ring-1 ring-primary/20 hover:bg-primary/12')} onClick={() => setSelectedRuleId(rule.id)}>
                 <span className='min-w-0 flex-1'><span className='flex items-center gap-2'><span className='truncate font-medium'>{rule.name}</span>{changedRuleIds.has(rule.id) && <span className='size-2 shrink-0 rounded-full bg-amber-500' aria-label='有未保存修改' />}</span><span className='mt-1 block truncate text-xs font-normal text-muted-foreground'>版本 {rule.version} · {rule.circle_ids.length} 个圈子 · {referenceCount} 个计划引用</span></span>
               </Button>
@@ -268,7 +301,7 @@ function PlanPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void 
 
         <Card className='min-h-[440px] overflow-hidden border-border/70 bg-card/88 py-0'>
           {selectedRule ? <div className='flex h-full min-h-0 flex-col' id={`rule-editor-${selectedRule.id}`}>
-            <CardHeader className='shrink-0 rounded-t-xl border-b bg-card p-4'><div className='flex items-start gap-3'><div className='min-w-0 flex-1'><Label htmlFor={`rule-${selectedRule.id}`}>规则名称</Label><Input id={`rule-${selectedRule.id}`} className='mt-2' value={selectedRule.name} onChange={(event) => updateRule(selectedRule.id, (item) => ({ ...item, name: event.target.value }))} /></div><Button variant='ghost' size='icon' disabled={draft.nodes.some((node) => node.rule_id === selectedRule.id)} onClick={removeSelectedRule} aria-label={draft.nodes.some((node) => node.rule_id === selectedRule.id) ? '规则仍被计划节点引用' : '删除规则'}><Trash2 className='size-4' /></Button></div><CardDescription>ID {selectedRule.id.slice(0, 8)} · 当前版本 {selectedRule.version} · 已选 {selectedRule.circle_ids.length} 个圈子{changedRuleIds.has(selectedRule.id) && ' · 尚未保存'}</CardDescription></CardHeader>
+            <CardHeader className='shrink-0 rounded-t-xl border-b bg-card p-4'><div className='flex items-start gap-3'><div className='min-w-0 flex-1'><Label htmlFor={`rule-${selectedRule.id}`}>规则名称</Label><Input id={`rule-${selectedRule.id}`} className='mt-2' value={selectedRule.name} onChange={(event) => updateRule(selectedRule.id, (item) => ({ ...item, name: event.target.value }))} /></div><Button variant='ghost' size='icon' disabled={savedNodes.some((node) => node.rule_id === selectedRule.id)} onClick={removeSelectedRule} aria-label={savedNodes.some((node) => node.rule_id === selectedRule.id) ? '规则仍被计划节点引用' : '删除规则'}><Trash2 className='size-4' /></Button></div><CardDescription>ID {selectedRule.id.slice(0, 8)} · 当前版本 {selectedRule.version} · 已选 {selectedRule.circle_ids.length} 个圈子{changedRuleIds.has(selectedRule.id) && ' · 尚未保存'}</CardDescription></CardHeader>
             <CardContent className='min-h-0 flex-1 space-y-3 overflow-y-auto p-4'>{allPlatforms.map((platform) => {
               const platformCircles = enabledCircles.filter((circle) => circle.platform_code === platform.code)
               const selectedCount = platformCircles.filter((circle) => selectedRule.circle_ids.includes(circle.id)).length
@@ -280,14 +313,37 @@ function PlanPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void 
         </Card>
       </div>
 
-      <Separator />
-      <div className='flex flex-wrap items-center justify-between gap-3'><div><h2 className='text-lg font-semibold'>每周计划节点</h2><p className='text-sm text-muted-foreground'>选择星期与 24 小时制时分秒，每个节点引用一个规则；规则较多时可按名称或 ID 搜索。</p></div><Button variant='outline' disabled={!draft.rules.length} onClick={() => update({ ...draft, nodes: [...draft.nodes, { id: crypto.randomUUID(), weekdays: [0, 1, 2, 3, 4], time: '09:00:00', enabled: false, rule_id: selectedRule?.id ?? draft.rules[0].id, updated_at: new Date().toISOString() }] })}><CirclePlus className='size-4' />新增节点</Button></div>
-      <div className='space-y-3'>{draft.nodes.length ? draft.nodes.map((node) => <Card id={`schedule-node-${node.id}`} key={node.id} className={cn('border-border/70', changedNodeIds.has(node.id) && 'ring-1 ring-amber-500/30')}><CardContent className='grid gap-4 p-4 xl:grid-cols-[auto_1fr_170px_260px_auto] xl:items-center'><Switch checked={node.enabled} onCheckedChange={(enabled) => update({ ...draft, nodes: draft.nodes.map((item) => item.id === node.id ? { ...item, enabled } : item) })} aria-label='启用计划节点' /><div className='flex flex-wrap gap-1.5'>{weekdays.map((label, index) => <Button key={label} type='button' variant={node.weekdays.includes(index) ? 'default' : 'outline'} size='icon' className='size-8 rounded-full' onClick={() => update({ ...draft, nodes: draft.nodes.map((item) => item.id === node.id ? { ...item, weekdays: item.weekdays.includes(index) ? item.weekdays.filter((day) => day !== index) : [...item.weekdays, index].sort() } : item) })} aria-label={`星期${label}`}>{label}</Button>)}</div><Input type='time' step={1} value={node.time} onChange={(event) => update({ ...draft, nodes: draft.nodes.map((item) => item.id === node.id ? { ...item, time: event.target.value.length === 5 ? `${event.target.value}:00` : event.target.value } : item) })} /><RuleCombobox rules={draft.rules} value={node.rule_id} disabled={save.isPending} onChange={(rule_id) => update({ ...draft, nodes: draft.nodes.map((item) => item.id === node.id ? { ...item, rule_id } : item) })} /><Button variant='ghost' size='icon' onClick={() => update({ ...draft, nodes: draft.nodes.filter((item) => item.id !== node.id) })} aria-label='删除计划节点'><Trash2 className='size-4' /></Button></CardContent></Card>) : <div className='rounded-xl border border-dashed p-10 text-center text-sm text-muted-foreground'><CalendarClock className='mx-auto mb-3 size-8 text-primary/60' />尚未配置每周计划节点。</div>}</div>
-
-      {draft.archived_rules.length > 0 && <Card><CardHeader><CardTitle className='text-base'>已归档规则</CardTitle><CardDescription>历史批次仍保留规则版本快照；存在未保存修改时先保存，再执行恢复。</CardDescription></CardHeader><CardContent className='space-y-2'>{draft.archived_rules.map((rule) => <div key={rule.id} className='flex items-center justify-between rounded-lg border p-3'><div><div className='text-sm font-medium'>{rule.name}</div><div className='text-xs text-muted-foreground'>版本 {rule.version}</div></div><Button variant='outline' size='sm' disabled={dirty || save.isPending} onClick={async () => { try { const value = await api<ExtractionPlan>(`/extraction-rules/${rule.id}/restore`, { method: 'POST' }); setDraft(value); setDirty(false); onDirtyChange(false); client.setQueryData(['extraction-plan'], value); setSelectedRuleId(rule.id); toast.success('规则已恢复') } catch (error) { toast.error('恢复失败', { description: errorMessage(error) }) } }}><ArchiveRestore className='size-4' />{dirty ? '先保存再恢复' : '恢复'}</Button></div>)}</CardContent></Card>}
+      {draft.archived_rules.length > 0 && <Card><CardHeader><CardTitle className='text-base'>已归档规则</CardTitle><CardDescription>历史批次仍保留规则版本快照；存在未保存修改时先保存，再执行恢复。</CardDescription></CardHeader><CardContent className='space-y-2'>{draft.archived_rules.map((rule) => <div key={rule.id} className='flex items-center justify-between rounded-lg border p-3'><div><div className='text-sm font-medium'>{rule.name}</div><div className='text-xs text-muted-foreground'>版本 {rule.version}</div></div><Button variant='outline' size='sm' disabled={dirty || save.isPending} onClick={async () => { try { const value = await api<ExtractionPlan>(`/extraction-rules/${rule.id}/restore`, { method: 'POST' }); replacePlan(value); setSelectedRuleId(rule.id); toast.success('规则已恢复') } catch (error) { toast.error('恢复失败', { description: errorMessage(error) }) } }}><ArchiveRestore className='size-4' />{dirty ? '先保存再恢复' : '恢复'}</Button></div>)}</CardContent></Card>}
     </fieldset>
+  </div>
+}
 
-    <AlertDialog open={revisionConflict} onOpenChange={setRevisionConflict}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>服务器提取计划已有更新</AlertDialogTitle><AlertDialogDescription>当前草稿仍保留。可以继续留在页面核对，或放弃本地草稿并加载服务器最新版本。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel onClick={() => setRevisionConflict(false)}>保留当前草稿</AlertDialogCancel><AlertDialogAction onClick={reloadServerPlan}>放弃草稿并重新加载</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+function SchedulePanel({ workspace }: { workspace: PlanWorkspace }) {
+  const { query, draft, setDraft, scheduleDirty, save } = workspace
+  if (!draft) return <Card><CardContent className='p-10 text-center text-sm text-muted-foreground'>正在加载每周计划…</CardContent></Card>
+
+  const savedRules = query.data?.rules ?? []
+  const baselineNodes = new Map((query.data?.nodes ?? []).map((node) => [node.id, node]))
+  const changedNodeIds = new Set(draft.nodes.filter((node) => editableNodeSignature(node) !== editableNodeSignature(baselineNodes.get(node.id))).map((node) => node.id))
+  const removedNodes = [...baselineNodes.keys()].filter((id) => !draft.nodes.some((node) => node.id === id)).length
+  const changeCount = changedNodeIds.size + removedNodes
+  const updateNodes = (nodes: ExtractionPlan['nodes']) => setDraft({ ...draft, nodes })
+  const createNode = () => {
+    if (!savedRules.length) return
+    updateNodes([...draft.nodes, { id: crypto.randomUUID(), weekdays: [0, 1, 2, 3, 4], time: '09:00:00', enabled: false, rule_id: savedRules[0].id, updated_at: new Date().toISOString() }])
+  }
+
+  return <div className='space-y-5'>
+    <fieldset disabled={save.isPending} className='m-0 min-w-0 space-y-5 border-0 p-0'>
+      <ConfigSectionToolbar icon={<CalendarClock className='size-4.5' />} title='每周计划' summary={`${draft.nodes.length} 个节点${scheduleDirty ? ` · ${changeCount} 项未保存` : ''}`} description='设置星期、时刻和已保存规则引用；保存时与服务器现有自动提取规则统一校验。'>
+        <Button variant='outline' disabled={!savedRules.length} onClick={createNode}><CirclePlus className='size-4' />新增节点</Button>
+        <Button disabled={!scheduleDirty || save.isPending} onClick={() => save.mutate({ section: 'schedule', current: draft })}>{save.isPending ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}{save.isPending ? '正在保存' : `保存当前标签${scheduleDirty ? ` (${changeCount})` : ''}`}</Button>
+      </ConfigSectionToolbar>
+
+      {!savedRules.length && <Alert className='border-amber-500/30 bg-amber-500/5'><CalendarClock className='size-4' /><AlertTitle>还没有已保存的自动提取规则</AlertTitle><AlertDescription>请先在“自动提取规则”标签创建并保存规则，再新增每周计划节点。</AlertDescription></Alert>}
+
+      <div className='space-y-3'>{draft.nodes.length ? draft.nodes.map((node, index) => <Card id={`schedule-node-${node.id}`} key={node.id} className={cn('border-border/70 bg-card/88', changedNodeIds.has(node.id) && 'ring-1 ring-amber-500/30')}><CardContent className='grid gap-4 p-4 xl:grid-cols-[5rem_auto_1fr_170px_260px_auto] xl:items-center'><Badge variant='secondary' className='w-fit font-normal'>节点 {index + 1}</Badge><Switch checked={node.enabled} onCheckedChange={(enabled) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, enabled } : item))} aria-label='启用计划节点' /><div className='flex flex-wrap gap-1.5'>{weekdays.map((label, dayIndex) => <Button key={label} type='button' variant={node.weekdays.includes(dayIndex) ? 'default' : 'outline'} size='icon' className='size-8 rounded-full' onClick={() => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, weekdays: item.weekdays.includes(dayIndex) ? item.weekdays.filter((day) => day !== dayIndex) : [...item.weekdays, dayIndex].sort() } : item))} aria-label={`星期${label}`}>{label}</Button>)}</div><Input type='time' step={1} value={node.time} onChange={(event) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, time: event.target.value.length === 5 ? `${event.target.value}:00` : event.target.value } : item))} /><RuleCombobox rules={savedRules} value={node.rule_id} disabled={save.isPending} onChange={(rule_id) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, rule_id } : item))} /><Button variant='ghost' size='icon' onClick={() => updateNodes(draft.nodes.filter((item) => item.id !== node.id))} aria-label='删除计划节点'><Trash2 className='size-4' /></Button></CardContent></Card>) : <Card className='border-dashed bg-card/70'><CardContent className='p-10 text-center text-sm text-muted-foreground'><CalendarClock className='mx-auto mb-3 size-8 text-primary/60' />尚未配置每周计划节点。</CardContent></Card>}</div>
+    </fieldset>
   </div>
 }
 

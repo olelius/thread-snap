@@ -24,7 +24,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 
 const navigation = [
   { to: '/runs' as const, search: { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, from: undefined, to: undefined }, label: '提取列表', description: '批次与结果', icon: LayoutList },
-  { to: '/config' as const, search: { tab: 'plan' as const }, label: '配置管理', description: '计划与来源', icon: Settings2 },
+  { to: '/config' as const, search: { tab: 'rules' as const }, label: '配置管理', description: '计划与来源', icon: Settings2 },
 ]
 
 export function AppShell() {
