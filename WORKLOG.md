@@ -15,6 +15,20 @@
 
 ---
 
+## 2026-08-17 — 每周计划节点支持多选规则并合并为单批次
+**总目标**：允许一个每周计划节点引用多条已保存自动提取规则；同一触发时刻只创建一个合并批次，重复圈子只执行一次且采用各来源规则目标数的最大值，同时仅把计划卡片原有规则选择器升级为多选。
+**状态**：✅ 数据模型、迁移、调度合并语义、原位置多选交互、现有数据库升级与服务重启均已完成。
+**干到哪里了**：
+- [x] 新增 `schedule_node_rules` 和 `extraction_run_rules` 有序关联表，计划节点与批次分别保存全部规则引用和触发时版本；保留旧单规则列作为首条规则兼容指针，已有单规则节点和历史批次可增量迁移。
+- [x] 调度按节点一次性冻结全部规则版本，合并各规则圈子范围；同一圈子只创建一个 `CircleTask`，目标数取来源规则最大值，批次与圈子任务快照记录来源规则；任一所选规则不可用或缺少数量时阻止整次节点触发。
+- [x] 前端只把每周计划卡片原规则 Combobox 改为可搜索多选，保留原网格位置、尺寸和其他控件布局；列表显示每条规则的选中状态，至少保留一条规则，多个选择时摘要显示“已选 N 条规则”。
+- [x] 新增 ADR 0016，并同步 `AGENTS.md`、`CONTEXT.md`、产品设计和技术路线；定时幂等保持“计划节点 + 计划时刻”，请求哈希纳入全部规则 ID 与版本。
+- [x] `.vevn\Scripts\python.exe -m compileall -q src tests`、Ruff、33 项后端 unittest、前端 TypeScript 检查和生产构建（2465 modules）通过；旧版本 `e7a4b9c21d03` 数据库升级到 `a91c4e7d2f10` 的专项验证确认节点引用、历史批次版本、事件及兼容列均保留。
+- [x] 现有 `data/threadsnap.db` 已备份到 `artifacts/runtime/threadsnap-before-schedule-multi-20260817-152457.db` 后完成迁移；后端使用项目 `.vevn` 重启，`/health` 返回 `status=ok`，真实提取计划返回 2 个节点且各自原单规则引用完整。真实页面通过原位置选择器临时选中第二条规则，确认显示“已选 2 条规则”和待保存状态，随后恢复原选择且未提交测试改动。
+**下一步**：继续第一版 Linux 部署门禁；后续若规则数量达到真实性能门槛，再评估多选列表虚拟化，不提前增加分页或第二套计划保存接口。
+**边界**：本次不自动合并不同计划节点，不按数量求和，不改变星期、时刻、启用、删除或保存按钮布局；前端除原规则选择器外不增加新的可见区域。
+**关联**：`docs/adr/0016-merge-multiple-rules-per-schedule-node.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`src/threadsnap/migrations/versions/a91c4e7d2f10_schedule_multi_rules.py`、`src/threadsnap/services.py`、`frontend/src/features/config/config-page.tsx`、`tests/test_backend.py`
+
 ## 2026-08-17 — 规则主从编辑区占满标签剩余高度
 
 **总目标**：移除自动提取规则页由固定视口高度和最小高度造成的默认外层滚动条，让桌面端主从编辑区填满当前标签剩余工作区，并保留窄屏自然流式布局。

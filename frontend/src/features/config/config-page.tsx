@@ -56,7 +56,7 @@ function editableRulesSignature(rules?: ExtractionPlan['rules']) {
 }
 
 function editableNodesSignature(nodes?: ExtractionPlan['nodes']) {
-  return JSON.stringify((nodes ?? []).map(({ id, weekdays: days, time, enabled, rule_id }) => ({ id, weekdays: [...days].sort(), time, enabled, rule_id })))
+  return JSON.stringify((nodes ?? []).map(({ id, weekdays: days, time, enabled, rule_ids }) => ({ id, weekdays: [...days].sort(), time, enabled, rule_ids: [...rule_ids] })))
 }
 
 function editableRuleSignature(rule?: ExtractionPlan['rules'][number]) {
@@ -66,16 +66,17 @@ function editableRuleSignature(rule?: ExtractionPlan['rules'][number]) {
 
 function editableNodeSignature(node?: ExtractionPlan['nodes'][number]) {
   if (!node) return ''
-  return JSON.stringify({ weekdays: [...node.weekdays].sort(), time: node.time, enabled: node.enabled, rule_id: node.rule_id })
+  return JSON.stringify({ weekdays: [...node.weekdays].sort(), time: node.time, enabled: node.enabled, rule_ids: [...node.rule_ids] })
 }
 
-function RuleCombobox({ rules, value, disabled, onChange }: { rules: ExtractionPlan['rules']; value: string; disabled?: boolean; onChange: (ruleId: string) => void }) {
+function RuleMultiCombobox({ rules, values, disabled, onChange }: { rules: ExtractionPlan['rules']; values: string[]; disabled?: boolean; onChange: (ruleIds: string[]) => void }) {
   const [open, setOpen] = useState(false)
-  const selected = rules.find((rule) => rule.id === value)
+  const selected = rules.filter((rule) => values.includes(rule.id))
+  const label = selected.length === 1 ? selected[0].name : selected.length > 1 ? `已选 ${selected.length} 条规则` : '选择规则'
   return <Popover open={open} onOpenChange={setOpen}>
-    <PopoverTrigger asChild><Button type='button' variant='outline' role='combobox' aria-expanded={open} disabled={disabled} className='w-full justify-between font-normal'><span className='truncate'>{selected?.name ?? '选择规则'}</span><ChevronsUpDown className='size-4 shrink-0 text-muted-foreground' /></Button></PopoverTrigger>
+    <PopoverTrigger asChild><Button type='button' variant='outline' role='combobox' aria-expanded={open} aria-label={`选择自动提取规则，当前已选 ${selected.length} 条`} disabled={disabled} className='w-full justify-between font-normal'><span className='truncate'>{label}</span><ChevronsUpDown className='size-4 shrink-0 text-muted-foreground' /></Button></PopoverTrigger>
     <PopoverContent align='start' className='w-[var(--radix-popover-trigger-width)] p-0'>
-      <Command><CommandInput placeholder='搜索规则名称或 ID' /><CommandList><CommandEmpty>没有匹配的规则。</CommandEmpty><CommandGroup>{rules.map((rule) => <CommandItem key={rule.id} value={`${rule.name} ${rule.id}`} onSelect={() => { onChange(rule.id); setOpen(false) }}><Check className={cn('size-4', value === rule.id ? 'opacity-100' : 'opacity-0')} /><div className='min-w-0 flex-1'><div className='truncate'>{rule.name}</div><div className='text-xs text-muted-foreground'>版本 {rule.version} · {rule.circle_ids.length} 个圈子</div></div></CommandItem>)}</CommandGroup></CommandList></Command>
+      <Command><CommandInput placeholder='搜索规则名称或 ID' /><CommandList><CommandEmpty>没有匹配的规则。</CommandEmpty><CommandGroup>{rules.map((rule) => { const checked = values.includes(rule.id); return <CommandItem key={rule.id} value={`${rule.name} ${rule.id}`} onSelect={() => { if (checked && values.length === 1) return; onChange(checked ? values.filter((id) => id !== rule.id) : [...values, rule.id]) }}><Check className={cn('size-4', checked ? 'opacity-100' : 'opacity-0')} /><div className='min-w-0 flex-1'><div className='truncate'>{rule.name}</div><div className='text-xs text-muted-foreground'>版本 {rule.version} · {rule.circle_ids.length} 个圈子</div></div></CommandItem> })}</CommandGroup></CommandList></Command>
     </PopoverContent>
   </Popover>
 }
@@ -134,7 +135,7 @@ function usePlanWorkspace(onReveal: (tab: PlanSection, targetId?: string) => voi
       if (!query.data) throw new Error('提取配置尚未加载完成。')
       const rules = section === 'rules' ? current.rules : query.data.rules
       const nodes = section === 'schedule' ? current.nodes : query.data.nodes
-      return api<ExtractionPlan>('/extraction-plan', { method: 'PUT', body: JSON.stringify({ revision: current.revision, rules: rules.map(({ id, name, platform_quantities, circle_ids }) => ({ id, name, platform_quantities, circle_ids })), nodes: nodes.map(({ id, weekdays: days, time, enabled, rule_id }) => ({ id, weekdays: days, time, enabled, rule_id })) }) })
+      return api<ExtractionPlan>('/extraction-plan', { method: 'PUT', body: JSON.stringify({ revision: current.revision, rules: rules.map(({ id, name, platform_quantities, circle_ids }) => ({ id, name, platform_quantities, circle_ids })), nodes: nodes.map(({ id, weekdays: days, time, enabled, rule_ids }) => ({ id, weekdays: days, time, enabled, rule_ids })) }) })
     },
     onSuccess: (value, { section }) => {
       setDraft((current) => ({ ...structuredClone(value), rules: section === 'schedule' && rulesDirty && current ? current.rules : structuredClone(value.rules), nodes: section === 'rules' && scheduleDirty && current ? current.nodes : structuredClone(value.nodes) }))
@@ -291,7 +292,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
           <CardContent className='min-h-0 flex-1 space-y-1 overflow-y-auto p-2'>
             {filteredRules.length ? filteredRules.map((rule) => {
               const active = rule.id === selectedRuleId
-              const referenceCount = savedNodes.filter((node) => node.rule_id === rule.id).length
+              const referenceCount = savedNodes.filter((node) => node.rule_ids.includes(rule.id)).length
               return <Button key={rule.id} type='button' variant='ghost' aria-current={active ? 'true' : undefined} className={cn('h-auto w-full justify-start rounded-lg px-3 py-2.5 text-left', active && 'bg-primary/10 ring-1 ring-primary/20 hover:bg-primary/12')} onClick={() => setSelectedRuleId(rule.id)}>
                 <span className='min-w-0 flex-1'><span className='flex items-center gap-2'><span className='truncate font-medium'>{rule.name}</span>{changedRuleIds.has(rule.id) && <span className='size-2 shrink-0 rounded-full bg-amber-500' aria-label='有未保存修改' />}</span><span className='mt-1 block truncate text-xs font-normal text-muted-foreground'>版本 {rule.version} · {rule.circle_ids.length} 个圈子 · {referenceCount} 个计划引用</span></span>
               </Button>
@@ -301,7 +302,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
 
         <Card className='min-h-[440px] overflow-hidden border-border/70 bg-card/88 py-0 xl:min-h-0'>
           {selectedRule ? <div className='flex h-full min-h-0 flex-col' id={`rule-editor-${selectedRule.id}`}>
-            <CardHeader className='shrink-0 rounded-t-xl border-b bg-card p-4'><div className='flex items-start gap-3'><div className='min-w-0 flex-1'><Label htmlFor={`rule-${selectedRule.id}`}>规则名称</Label><Input id={`rule-${selectedRule.id}`} className='mt-2' value={selectedRule.name} onChange={(event) => updateRule(selectedRule.id, (item) => ({ ...item, name: event.target.value }))} /></div><Button variant='ghost' size='icon' disabled={savedNodes.some((node) => node.rule_id === selectedRule.id)} onClick={removeSelectedRule} aria-label={savedNodes.some((node) => node.rule_id === selectedRule.id) ? '规则仍被计划节点引用' : '删除规则'}><Trash2 className='size-4' /></Button></div><CardDescription>ID {selectedRule.id.slice(0, 8)} · 当前版本 {selectedRule.version} · 已选 {selectedRule.circle_ids.length} 个圈子{changedRuleIds.has(selectedRule.id) && ' · 尚未保存'}</CardDescription></CardHeader>
+            <CardHeader className='shrink-0 rounded-t-xl border-b bg-card p-4'><div className='flex items-start gap-3'><div className='min-w-0 flex-1'><Label htmlFor={`rule-${selectedRule.id}`}>规则名称</Label><Input id={`rule-${selectedRule.id}`} className='mt-2' value={selectedRule.name} onChange={(event) => updateRule(selectedRule.id, (item) => ({ ...item, name: event.target.value }))} /></div><Button variant='ghost' size='icon' disabled={savedNodes.some((node) => node.rule_ids.includes(selectedRule.id))} onClick={removeSelectedRule} aria-label={savedNodes.some((node) => node.rule_ids.includes(selectedRule.id)) ? '规则仍被计划节点引用' : '删除规则'}><Trash2 className='size-4' /></Button></div><CardDescription>ID {selectedRule.id.slice(0, 8)} · 当前版本 {selectedRule.version} · 已选 {selectedRule.circle_ids.length} 个圈子{changedRuleIds.has(selectedRule.id) && ' · 尚未保存'}</CardDescription></CardHeader>
             <CardContent className='min-h-0 flex-1 space-y-3 overflow-y-auto p-4'>{allPlatforms.map((platform) => {
               const platformCircles = enabledCircles.filter((circle) => circle.platform_code === platform.code)
               const selectedCount = platformCircles.filter((circle) => selectedRule.circle_ids.includes(circle.id)).length
@@ -330,7 +331,7 @@ function SchedulePanel({ workspace }: { workspace: PlanWorkspace }) {
   const updateNodes = (nodes: ExtractionPlan['nodes']) => setDraft({ ...draft, nodes })
   const createNode = () => {
     if (!savedRules.length) return
-    updateNodes([...draft.nodes, { id: crypto.randomUUID(), weekdays: [0, 1, 2, 3, 4], time: '09:00:00', enabled: false, rule_id: savedRules[0].id, updated_at: new Date().toISOString() }])
+    updateNodes([...draft.nodes, { id: crypto.randomUUID(), weekdays: [0, 1, 2, 3, 4], time: '09:00:00', enabled: false, rule_ids: [savedRules[0].id], updated_at: new Date().toISOString() }])
   }
 
   return <div className='space-y-5'>
@@ -342,7 +343,7 @@ function SchedulePanel({ workspace }: { workspace: PlanWorkspace }) {
 
       {!savedRules.length && <Alert className='border-amber-500/30 bg-amber-500/5'><CalendarClock className='size-4' /><AlertTitle>还没有已保存的自动提取规则</AlertTitle><AlertDescription>请先在“自动提取规则”标签创建并保存规则，再新增每周计划节点。</AlertDescription></Alert>}
 
-      <div className='space-y-3'>{draft.nodes.length ? draft.nodes.map((node, index) => <Card id={`schedule-node-${node.id}`} key={node.id} className={cn('border-border/70 bg-card/88', changedNodeIds.has(node.id) && 'ring-1 ring-amber-500/30')}><CardContent className='grid gap-4 p-4 xl:grid-cols-[5rem_auto_1fr_170px_260px_auto] xl:items-center'><Badge variant='secondary' className='w-fit font-normal'>节点 {index + 1}</Badge><Switch checked={node.enabled} onCheckedChange={(enabled) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, enabled } : item))} aria-label='启用计划节点' /><div className='flex flex-wrap gap-1.5'>{weekdays.map((label, dayIndex) => <Button key={label} type='button' variant={node.weekdays.includes(dayIndex) ? 'default' : 'outline'} size='icon' className='size-8 rounded-full' onClick={() => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, weekdays: item.weekdays.includes(dayIndex) ? item.weekdays.filter((day) => day !== dayIndex) : [...item.weekdays, dayIndex].sort() } : item))} aria-label={`星期${label}`}>{label}</Button>)}</div><Input type='time' step={1} value={node.time} onChange={(event) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, time: event.target.value.length === 5 ? `${event.target.value}:00` : event.target.value } : item))} /><RuleCombobox rules={savedRules} value={node.rule_id} disabled={save.isPending} onChange={(rule_id) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, rule_id } : item))} /><Button variant='ghost' size='icon' onClick={() => updateNodes(draft.nodes.filter((item) => item.id !== node.id))} aria-label='删除计划节点'><Trash2 className='size-4' /></Button></CardContent></Card>) : <Card className='border-dashed bg-card/70'><CardContent className='p-10 text-center text-sm text-muted-foreground'><CalendarClock className='mx-auto mb-3 size-8 text-primary/60' />尚未配置每周计划节点。</CardContent></Card>}</div>
+      <div className='space-y-3'>{draft.nodes.length ? draft.nodes.map((node, index) => <Card id={`schedule-node-${node.id}`} key={node.id} className={cn('border-border/70 bg-card/88', changedNodeIds.has(node.id) && 'ring-1 ring-amber-500/30')}><CardContent className='grid gap-4 p-4 xl:grid-cols-[5rem_auto_1fr_170px_260px_auto] xl:items-center'><Badge variant='secondary' className='w-fit font-normal'>节点 {index + 1}</Badge><Switch checked={node.enabled} onCheckedChange={(enabled) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, enabled } : item))} aria-label='启用计划节点' /><div className='flex flex-wrap gap-1.5'>{weekdays.map((label, dayIndex) => <Button key={label} type='button' variant={node.weekdays.includes(dayIndex) ? 'default' : 'outline'} size='icon' className='size-8 rounded-full' onClick={() => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, weekdays: item.weekdays.includes(dayIndex) ? item.weekdays.filter((day) => day !== dayIndex) : [...item.weekdays, dayIndex].sort() } : item))} aria-label={`星期${label}`}>{label}</Button>)}</div><Input type='time' step={1} value={node.time} onChange={(event) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, time: event.target.value.length === 5 ? `${event.target.value}:00` : event.target.value } : item))} /><RuleMultiCombobox rules={savedRules} values={node.rule_ids} disabled={save.isPending} onChange={(rule_ids) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, rule_ids } : item))} /><Button variant='ghost' size='icon' onClick={() => updateNodes(draft.nodes.filter((item) => item.id !== node.id))} aria-label='删除计划节点'><Trash2 className='size-4' /></Button></CardContent></Card>) : <Card className='border-dashed bg-card/70'><CardContent className='p-10 text-center text-sm text-muted-foreground'><CalendarClock className='mx-auto mb-3 size-8 text-primary/60' />尚未配置每周计划节点。</CardContent></Card>}</div>
     </fieldset>
   </div>
 }

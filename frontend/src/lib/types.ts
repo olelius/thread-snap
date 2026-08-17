@@ -25,7 +25,7 @@ export type ScheduleNode = {
   weekdays: number[]
   time: string
   enabled: boolean
-  rule_id: string
+  rule_ids: string[]
   updated_at: string
 }
 
@@ -76,6 +76,7 @@ export type Run = {
   related_run_id?: string
   extraction_rule_id?: string
   extraction_rule_version?: number
+  extraction_rules?: Array<{ id: string; name?: string; version: number }>
   summary_version: number
   created_at: string
   queued_at: string
