@@ -36,7 +36,7 @@ const configRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/config',
   component: lazyRouteComponent(() => import('@/features/config/config-page'), 'ConfigPage'),
-  validateSearch: (search: Record<string, unknown>) => ({ tab: oneOf(search.tab, ['plan', 'platforms', 'circles', 'history', 'templates'] as const) ?? 'plan' }),
+  validateSearch: (search: Record<string, unknown>) => ({ tab: oneOf(search.tab, ['plan', 'rules', 'schedule', 'platforms', 'circles', 'history', 'templates'] as const) ?? 'rules' }),
 })
 
 const routeTree = rootRoute.addChildren([indexRoute, runsRoute, runDetailRoute, configRoute])
