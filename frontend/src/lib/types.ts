@@ -49,6 +49,8 @@ export type Circle = {
   section: string
   validation_status: string
   validation_error?: string
+  first_validated_at?: string
+  validated_at?: string
 }
 
 export type Vehicle = { id: string; name: string; circles: Circle[] }

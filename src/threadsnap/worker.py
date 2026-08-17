@@ -186,11 +186,17 @@ class WorkerService:
                 job.error_message = None
                 job.finished_at = utc_now()
             if circle:
+                completed_at = utc_now()
+                first_validation = circle.first_validated_at is None
                 circle.name = result["name"]
                 circle.url = result["url"]
                 circle.validation_status = "verified"
                 circle.validation_error = None
-                circle.validated_at = utc_now()
+                circle.validated_at = completed_at
+                if first_validation:
+                    circle.first_validated_at = completed_at
+                    if circle.source_kind == "configured":
+                        circle.auto_enabled = True
                 circle.adapter_version = result["adapter_version"]
         self._publish_validation(circle_id, job_id, "success")
         return True
@@ -447,11 +453,14 @@ class WorkerService:
                 db.add(circle)
                 db.flush()
                 task.circle_id = circle.id
+            completed_at = utc_now()
             circle.name = validation["name"]
             circle.url = validation["url"]
             circle.validation_status = "verified"
             circle.validation_error = None
-            circle.validated_at = utc_now()
+            if circle.first_validated_at is None:
+                circle.first_validated_at = completed_at
+            circle.validated_at = completed_at
             circle.adapter_version = validation["adapter_version"]
             circle.last_used_at = utc_now()
             task.circle_name = validation["name"]

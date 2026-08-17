@@ -484,6 +484,7 @@ class ConfigService:
             "auto_enabled": item.auto_enabled,
             "validation_status": item.validation_status,
             "validation_error": item.validation_error,
+            "first_validated_at": item.first_validated_at,
             "validated_at": item.validated_at,
             "last_used_at": item.last_used_at,
         }
@@ -778,13 +779,52 @@ class ConfigService:
             existing = db.scalar(
                 select(ValidationJob).where(
                     ValidationJob.circle_id == circle_id,
-                    ValidationJob.status.in_(["queued", "running"]),
+                    ValidationJob.status.in_(["queued", "running", "waiting_for_auth"]),
                 )
             )
             job = existing or ValidationJob(circle_id=circle_id)
             db.add(job)
             db.flush()
             return validation_job_dict(job)
+
+    def create_unverified_validation_jobs(self) -> dict[str, Any]:
+        """按持久 FIFO 为全部未验证配置圈子创建或复用验证任务。"""
+
+        with self.factory.begin() as db:
+            circles = list(
+                db.scalars(
+                    select(Circle)
+                    .where(
+                        Circle.source_kind == "configured",
+                        Circle.validation_status == "unverified",
+                    )
+                    .order_by(Circle.created_at, Circle.id)
+                )
+            )
+            jobs: list[ValidationJob] = []
+            queued_count = 0
+            reused_count = 0
+            for circle in circles:
+                job = db.scalar(
+                    select(ValidationJob).where(
+                        ValidationJob.circle_id == circle.id,
+                        ValidationJob.status.in_(["queued", "running", "waiting_for_auth"]),
+                    )
+                )
+                if job:
+                    reused_count += 1
+                else:
+                    job = ValidationJob(circle_id=circle.id)
+                    db.add(job)
+                    queued_count += 1
+                jobs.append(job)
+            db.flush()
+            return {
+                "jobs": [validation_job_dict(job) for job in jobs],
+                "queued_count": queued_count,
+                "reused_count": reused_count,
+                "total_count": len(jobs),
+            }
 
 
 def validation_job_dict(job: ValidationJob) -> dict[str, Any]:

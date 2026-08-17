@@ -411,6 +411,62 @@ class ApiAndConfigTests(AppCase):
             )
         self.assertIn("验证通过", raised.exception.details[0]["reason"])
 
+    def test_bulk_first_validation_auto_enables_and_revalidation_preserves_manual_disable(
+        self,
+    ) -> None:
+        created = [
+            self.client.post(
+                "/api/v1/circles",
+                json={
+                    "platform_code": "dongchedi",
+                    "url": f"https://www.dongchedi.com/community/{external_id}",
+                    "vehicle_name": vehicle_name,
+                },
+            ).json()
+            for external_id, vehicle_name in [("24729", "A9"), ("8985", "A9L")]
+        ]
+        self.assertTrue(all(item["first_validated_at"] is None for item in created))
+        self.assertTrue(all(not item["auto_enabled"] for item in created))
+
+        queued = self.client.post("/api/v1/circles/validate-unverified")
+        self.assertEqual(202, queued.status_code)
+        self.assertEqual(2, queued.json()["queued_count"])
+        self.assertEqual(2, queued.json()["total_count"])
+        reused = self.client.post("/api/v1/circles/validate-unverified")
+        self.assertEqual(0, reused.json()["queued_count"])
+        self.assertEqual(2, reused.json()["reused_count"])
+
+        with patch.object(self.container.worker, "_collector", return_value=FakeCollector()):
+            self.assertTrue(self.container.worker.process_once())
+            self.assertTrue(self.container.worker.process_once())
+        verified = {item["id"]: item for item in self.client.get("/api/v1/circles").json()}
+        self.assertTrue(all(item["validation_status"] == "verified" for item in verified.values()))
+        self.assertTrue(all(item["auto_enabled"] for item in verified.values()))
+        self.assertTrue(all(item["first_validated_at"] for item in verified.values()))
+
+        target = verified[created[0]["id"]]
+        first_validated_at = target["first_validated_at"]
+        disabled = self.client.put(
+            f"/api/v1/circles/{target['id']}",
+            json={
+                "platform_code": "dongchedi",
+                "url": target["url"],
+                "vehicle_id": target["vehicle_id"],
+                "auto_enabled": False,
+            },
+        )
+        self.assertEqual(200, disabled.status_code)
+        self.assertFalse(disabled.json()["auto_enabled"])
+
+        retried = self.client.post(f"/api/v1/circles/{target['id']}/validate")
+        self.assertEqual(202, retried.status_code)
+        with patch.object(self.container.worker, "_collector", return_value=FakeCollector()):
+            self.assertTrue(self.container.worker.process_once())
+        revalidated = self.client.get(f"/api/v1/circles/{target['id']}").json()
+        self.assertEqual("verified", revalidated["validation_status"])
+        self.assertEqual(first_validated_at, revalidated["first_validated_at"])
+        self.assertFalse(revalidated["auto_enabled"])
+
     def test_circle_crud_and_explicit_batch_delete(self) -> None:
         created = self.client.post(
             "/api/v1/circles",
