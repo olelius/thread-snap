@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useBlocker, useNavigate, useSearch } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArchiveRestore, CalendarClock, ChevronDown, CirclePlus, Copy, KeyRound, Loader2, Plus, RefreshCw, Save, Trash2, Upload } from 'lucide-react'
+import { ArchiveRestore, CalendarClock, CarFront, ChevronDown, CirclePlus, Copy, KeyRound, Loader2, Plus, RefreshCw, Save, Trash2, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { AuthDialog } from '@/features/auth/auth-dialog'
 import { PageHeader } from '@/components/page-header'
@@ -207,8 +207,14 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
     }
   }
   return <div className='space-y-4'>
-    <div className='sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-border/60 bg-background/95 pb-3 backdrop-blur'>
-      <div><h2 className='text-lg font-semibold'>车型与圈子来源</h2><p className='text-sm text-muted-foreground'>首次验证成功自动开启“自动参与”；以后重新验证保持用户当前开关，不会把手动关闭的圈子再次启用。</p></div>
+    <div className='sticky top-0 z-10 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border/70 bg-card/95 px-4 py-3 shadow-sm backdrop-blur-xl'>
+      <div className='flex min-w-0 items-start gap-3'>
+        <div className='grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/15'><CarFront className='size-4.5' /></div>
+        <div className='min-w-0'>
+          <div className='flex flex-wrap items-center gap-2'><h2 className='text-lg font-semibold'>车型与圈子来源</h2><Badge variant='secondary' className='font-normal'>{rows.length} 个圈子</Badge></div>
+          <p className='mt-0.5 text-sm text-muted-foreground'>首次验证成功自动开启“自动参与”；以后重新验证保持用户当前开关，不会把手动关闭的圈子再次启用。</p>
+        </div>
+      </div>
       <div className='flex flex-wrap gap-2'>
         <Button variant='outline' disabled={dirty || unverifiedCount === 0 || bulkValidation.isPending} onClick={() => bulkValidation.mutate()}>
           {bulkValidation.isPending ? <Loader2 className='size-4 animate-spin' /> : <RefreshCw className='size-4' />}验证全部待验证（{unverifiedCount}）
