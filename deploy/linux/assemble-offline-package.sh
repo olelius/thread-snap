@@ -35,6 +35,18 @@ PY
 if ! dnf download --help >/dev/null 2>&1; then
   dnf install -y dnf-plugins-core
 fi
+if ! command -v createrepo_c >/dev/null 2>&1; then
+  dnf install -y createrepo_c
+fi
+
+# CentOS Stream 10 已移除 Xorg/Xvfb。Weston 位于 EPEL，部分依赖位于 CRB；
+# 只在联网制包阶段启用这些仓库，最终目标机仍使用包内 RPM 纯离线安装。
+if ! rpm -q epel-release >/dev/null 2>&1; then
+  dnf install -y epel-release
+fi
+if ! dnf repolist --enabled | awk '{print $1}' | grep -qx crb; then
+  crb enable
+fi
 
 readarray -t manifest_values < <(
   python3 - "$PACKAGE_ROOT/PACKAGE-MANIFEST.json" <<'PY'
@@ -75,16 +87,18 @@ python3 -m venv "$WORK_ROOT/verify-venv"
 "$WORK_ROOT/verify-venv/bin/python" -m pip check
 
 PLAYWRIGHT_BROWSERS_PATH="$STAGE/browsers" \
-  "$WORK_ROOT/verify-venv/bin/patchright" install chromium
+  "$WORK_ROOT/verify-venv/bin/patchright" install --no-shell chromium
 
 rpm_packages=(
-  python3 python3-pip nginx xorg-x11-server-Xvfb
+  python3 python3-pip nginx weston
   tar gzip curl ca-certificates shadow-utils findutils util-linux procps-ng iproute
   policycoreutils-python-utils
   alsa-lib atk at-spi2-atk cups-libs libdrm libXcomposite libXdamage libXfixes
   libXrandr mesa-libgbm pango nss libxcb libxkbcommon gtk3
 )
 dnf download --resolve --alldeps --destdir "$STAGE/rpms" "${rpm_packages[@]}"
+printf '%s\n' "${rpm_packages[@]}" > "$STAGE/SYSTEM-PACKAGES.txt"
+createrepo_c "$STAGE/rpms"
 
 python3 - "$STAGE/PACKAGE-MANIFEST.json" "$FINAL_NAME" <<'PY'
 import json, os, platform, sys
@@ -121,9 +135,13 @@ tar -czf "$ARCHIVE" -C "$WORK_ROOT" "$FINAL_NAME"
   sha256sum "$(basename "$ARCHIVE")" > "$(basename "$ARCHIVE").sha256"
 )
 
-tar -tzf "$ARCHIVE" | grep -q "/wheelhouse/"
-tar -tzf "$ARCHIVE" | grep -q "/browsers/"
-tar -tzf "$ARCHIVE" | grep -q "/rpms/"
+ARCHIVE_LIST="$WORK_ROOT/archive-list.txt"
+tar -tzf "$ARCHIVE" > "$ARCHIVE_LIST"
+grep -q "/wheelhouse/" "$ARCHIVE_LIST"
+grep -q "/browsers/" "$ARCHIVE_LIST"
+grep -q "/rpms/" "$ARCHIVE_LIST"
+grep -q "/rpms/repodata/" "$ARCHIVE_LIST"
+grep -q "/SYSTEM-PACKAGES.txt$" "$ARCHIVE_LIST"
 
 echo "offline_archive=$ARCHIVE"
 echo "offline_sha256=$ARCHIVE.sha256"

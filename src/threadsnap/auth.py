@@ -18,6 +18,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from fastapi import WebSocket, WebSocketDisconnect
 from patchright.async_api import BrowserContext, CDPSession, Page, Playwright, async_playwright
 
+from .browser_runtime import browser_launch_args
 from .collectors import AuthenticationRequired, CollectorFailure, DongchediCollector
 from .config import Settings
 from .errors import DomainError
@@ -240,6 +241,7 @@ class BrowserAuthManager:
         task.context = await task.playwright.chromium.launch_persistent_context(
             user_data_dir=str(task.profile_dir),
             headless=self.settings.auth_browser_headless,
+            args=browser_launch_args(),
             viewport={"width": 1280, "height": 800},
             locale="zh-CN",
             timezone_id=self.settings.timezone,

@@ -10,6 +10,7 @@ from patchright.sync_api import sync_playwright
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from .browser_runtime import browser_launch_args
 from .collectors import AuthenticationRequired, CollectorFailure, DongchediCollector
 from .models import (
     Circle,
@@ -405,7 +406,8 @@ class WorkerService:
             try:
                 with sync_playwright() as playwright:
                     browser = playwright.chromium.launch(
-                        headless=self.session_store.settings.auth_browser_headless
+                        headless=self.session_store.settings.auth_browser_headless,
+                        args=browser_launch_args(),
                     )
                     context = browser.new_context(
                         storage_state=state,

@@ -1,4 +1,4 @@
-# WORKLOG — 唯一任务账本
+﻿# WORKLOG — 唯一任务账本
 
 <!--
 规则：
@@ -11,9 +11,32 @@
 
 ## ⏳ 待你裁决
 
-- 2026-08-08：Linux 主机的 CPU 型号/核心数仍待最终主机探测；systemd、Xvfb、Nginx 和完整离线包已在 2026-08-17 确认为正式部署方案，内存、磁盘、Python 运行时与 PoC 浏览器健康检查已有历史实测，原始入口见 `docs/research/poc-input-intake-2026-08-08.md` 第 4 节。
+- 2026-08-17：最终服务器存在一块无文件系统、未挂载的 3.6 TiB `/dev/sdb`；格式化并挂载到 `/data` 会清除该设备现有内容，须由用户明确决定后执行。
+- 2026-08-17：服务器 `80/443` 已由 `wenmai-nginx-1` 占用；ThreadSnap 首次安装使用独立 `8088` 可避免影响现有服务，是否接入既有 Docker Nginx 和正式域名仍待用户决定。
 
 ---
+
+## 2026-08-17 — 修正 CentOS Stream 10 显示后端并实装最终服务器
+**总目标**：在最终 CentOS Stream 10 x86_64 服务器完成 ThreadSnap 前后端部署，并修复完整离线包在真实安装中发现的系统依赖、路径、SELinux 和运行依赖缺陷。
+**状态**：✅ 干净提交生成的完整离线包已在最终服务器安装，前端、API、数据库、Wayland Chromium 和专用 Nginx 均通过完整运行验证。
+**干到哪里了**：
+- [x] 最终主机确认 12 核、15 GiB 内存、7.8 GiB Swap、CentOS Stream 10 x86_64、Python 3.12.13；程序使用 `/opt/threadsnap`，配置使用 `/etc/threadsnap`，数据使用 `/var/lib/threadsnap`。未挂载且无文件系统的 3.6 TiB `/dev/sdb` 保持不变。
+- [x] CentOS 10 已由 Xvfb 修正为 Weston 无头 Wayland；`threadsnap-wayland.service` 稳定创建私有 `wayland-99`，Patchright Chromium 149 以 `headless=False` 完成页面渲染冒烟。
+- [x] 真实安装暴露并修复：DNF 强制安装全部递归 RPM 导致系统版本冲突、`/etc/os-release` 覆盖应用版本、暂存 venv 控制台脚本绝对 shebang、缺失 `scrapling[fetchers]` 运行依赖、环境模板 CRLF 污染 HOME、SELinux 将后端误标为静态内容、非标准 HTTP 端口未标记。
+- [x] RPM 目录现生成 `createrepo_c` 本地仓库元数据并用 `SYSTEM-PACKAGES.txt` 只请求顶层组件；Python 依赖补齐 `curl-cffi==0.16.0`、`playwright==1.61.0` 与 `scrapling[fetchers]==0.4.12`。
+- [x] 新增独立 `threadsnap-nginx.service` 与 `/etc/threadsnap/nginx.conf`，使用 `8088` 避开现有 Docker Nginx 的 `80/443`；既有 `wenmai`、Redis 和 PostgreSQL 容器均保持运行。
+- [x] 服务器完整验证通过：三个 ThreadSnap 服务均 `active/enabled`，直连与 Nginx `/health`、SPA、`/internal/v1` 屏蔽、8000 回环绑定、CDP 关闭、Fernet 配置及 Wayland Chromium 全部 PASS。
+- [x] SQLite 已自动初始化为 `threadsnap:threadsnap 0600`，共 20 张表，Alembic 版本 `a91c4e7d2f10`；环境文件为 `root:threadsnap 0640`。
+- [x] 端口 `8088` 的 firewalld 规则只放行当前 SSH 客户端来源；服务器本机完整 HTTP 验证通过，客户端直连仍未形成 Nginx 访问日志，外部链路还需结合云安全组/运营商链路复核。
+- [x] 包内本地 RPM 仓库已在最终服务器实跑，DNF 对全部顶层组件报告无需处理且未触发系统升级；同时修正组装器在 `pipefail` 下以 `tar | grep -q` 校验归档导致 SIGPIPE 假失败的问题。
+- [x] 升级路径改为切换 `current` 后显式依次重启 Wayland、后端和专用 Nginx，避免 `enable --now` 对既有服务不重启而让健康检查误验旧 release。
+- [x] 从干净提交 `1bc2916dae46b7ca6d8dc84316a60887b2c50139` 生成最终包 `/var/tmp/threadsnap-upload-final/threadsnap-0.1.0-centos-stream-10-x86_64-offline.tar.gz`，大小 `590416473` 字节，SHA-256 为 `1e4a948b390b5aeabf35d9dbc4bb43f554c54e8b971f5f89ff650e424894acc6`；manifest 确认 `fully-offline`、可安装、源码未脏且不含凭证，包内含 50 个 wheel、481 个 RPM 和 311 个浏览器文件。
+- [x] 最终 release `/opt/threadsnap/releases/0.1.0-1bc2916dae46` 已通过 `deploy/verify.sh` 全量检查；三个服务均 `active/enabled`，后端仅监听 `127.0.0.1:8000`，专用 Nginx 监听 `0.0.0.0:8088`，现有 `wenmai` Docker 容器及其 `80/443`、Redis、PostgreSQL 端口保持运行。
+- [x] 删除服务器旧制包、旧上传和显示测试缓存后，根卷占用从 22 GiB 降至 18 GiB；只保留最终归档及校验文件，已安装 release、配置和数据库不受影响。
+- [x] 本轮完整测试 48 项通过；Ruff、compileall、pip check、全部 Linux shell `bash -n` 和 `git diff --check` 通过。
+**下一步**：由用户确认云安全组或上游网络是否放行来源 `221.235.64.137/32` 到 TCP `8088`，并决定正式域名/既有反代接入以及 3.6 TiB `/dev/sdb` 的用途；部署链完成后继续执行暂缓的连续三轮 2000 URL 验收。
+**边界**：不格式化 `/dev/sdb`；不停止或改写现有 Docker 服务；不把首次失败包或现场手工补丁记为最终交付包；当前只证明部署与运行链通过，不把暂缓的连续三轮 2000 URL 门禁记为完成。
+**关联**：`docs/adr/0018-use-headless-wayland-on-centos-stream-10.md`、`docs/deployment/linux-v1.md`、`docs/design/technical-route.md`、`docs/chains/first-platform-delivery.md`、`deploy/linux/`、`pyproject.toml`
 
 ## 2026-08-17 — 第一版 Linux 完整离线部署封装
 **总目标**：为全新 CentOS Stream 10 服务器提供前后端完整离线部署包、明确的磁盘与目录选择、systemd/Xvfb/Nginx 配置，以及可复核的安装、验证、备份和回滚流程。

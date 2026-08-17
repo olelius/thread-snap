@@ -26,9 +26,9 @@ check() {
 }
 
 check "threadsnap service active" systemctl is-active --quiet threadsnap.service
-check "Xvfb service active" systemctl is-active --quiet threadsnap-xvfb.service
-check "nginx service active" systemctl is-active --quiet nginx.service
-check "nginx configuration" nginx -t
+check "Wayland service active" systemctl is-active --quiet threadsnap-wayland.service
+check "ThreadSnap Nginx service active" systemctl is-active --quiet threadsnap-nginx.service
+check "ThreadSnap Nginx configuration" nginx -t -c /etc/threadsnap/nginx.conf
 
 health_ready=false
 for _ in $(seq 1 30); do
@@ -66,9 +66,10 @@ check "headed browser mode configured" grep -q '^THREADSNAP_AUTH_BROWSER_HEADLES
 check "Fernet key configured" grep -q '^THREADSNAP_SESSION_FERNET_KEY=.' "$ENV_FILE"
 
 if [[ "$QUICK" == false ]]; then
-  check "headed Chromium launches under Xvfb" runuser -u threadsnap -- env \
-    HOME="$(sed -n 's/^THREADSNAP_DATA_DIR=//p' "$ENV_FILE" | tail -n 1)" \
-    DISPLAY=:99 \
+  check "headed Chromium launches under Wayland" runuser -u threadsnap -- env \
+    HOME="$(sed -n 's/^THREADSNAP_DATA_DIR=//p' "$ENV_FILE" | tail -n 1 | tr -d '\r')" \
+    XDG_RUNTIME_DIR=/run/threadsnap-wayland \
+    WAYLAND_DISPLAY=wayland-99 \
     PLAYWRIGHT_BROWSERS_PATH=/opt/threadsnap/browsers \
     /opt/threadsnap/current/venv/bin/python - <<'PY'
 import asyncio
@@ -76,7 +77,10 @@ from patchright.async_api import async_playwright
 
 async def main():
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=False)
+        browser = await playwright.chromium.launch(
+            headless=False,
+            args=["--ozone-platform=wayland"],
+        )
         page = await browser.new_page()
         await page.set_content("<title>ThreadSnap browser smoke</title><h1>ok</h1>")
         assert await page.title() == "ThreadSnap browser smoke"

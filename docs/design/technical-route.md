@@ -25,13 +25,13 @@
 - 正式版由现有前端调用现有后端，再由现有后端调用提取功能服务。
 - 现有后端负责用户、角色、权限和公网访问；提取功能服务不绑定正式管理框架。
 - 后续客户现有后端继续调用原提取后端的 `/internal/v1`；第一版前端及其 `/api/v1` 入口可以停用，采集、调度、Session、数据库和批次状态不迁移。
-- 当前不考虑 Docker 部署；第一版按 ADR 0017 使用目标特定的完整离线 `tar.gz`、systemd、Xvfb 和 Nginx。
+- 当前不考虑 Docker 部署；第一版按 ADR 0017、ADR 0018 使用目标特定的完整离线 `tar.gz`、systemd、Weston 无头 Wayland 和 Nginx。
 
 第一版远程平台认证仍遵循内部验证边界：第一版前端只在受控内网开放，客户使用普通浏览器通过页面或弹窗操作服务器浏览器，不安装专用客户端。提取后端的 `/api/v1` 负责短期、一次性认证任务票据和画面/输入通道；浏览器进程、Profile、Session 和认证状态机由同一提取后端拥有。原始 CDP、VNC 或等价控制端口只监听回环地址或内部网络，不直接暴露给客户机。该入口不新增应用用户、角色或 MFA，安全边界仍由受控内网和部署权限承担。
 
 第一版认证入口依据 ADR 0014 采用 Patchright 服务器浏览器、进程内 `CDPSession` 与短期 WebSocket 中继：后端用 `Page.startScreencast` 输出 `1280 × 800`、JPEG 质量 85 的连续变化帧，逐帧确认并保持单帧背压；指针移动、按下、释放、拖动和滚轮通过 CDP 输入域发送，文本、组合键和粘贴继续由受控浏览器输入接口完成。前端不取得原始 CDP 地址，完成后仍按既有门禁立即校验并关闭。KasmVNC、noVNC、WebRTC 媒体栈不是第一版依赖。公网部署只作为后续可选增强：届时复用客户现有身份系统和后端权限，增加敏感操作重新认证、HTTPS/WSS 网关、来源校验、连接限额、审计和 WAF 或等价保护；这些能力不进入第一版默认实现与验收。
 - 当前开发环境不是 Linux；日常编码、单元测试、访问冒烟和中等批量预筛以当前开发环境为准。
-- 目标部署环境已确认为 CentOS Stream 10（Coughlan）、x86_64、glibc 2.39；Python 3.11+、浏览器系统依赖、systemd、Xvfb 与 Nginx 已进入离线封装，CPU 型号与核心数仍须在最终主机复核。
+- 目标部署环境已确认为 CentOS Stream 10（Coughlan）、x86_64、glibc 2.39；Python 3.11+、浏览器系统依赖、systemd、Weston 与 Nginx 已进入离线封装，CPU 型号与核心数仍须在最终主机复核。CentOS Stream 10 已移除 Xorg/Xvfb，因此完整 Chromium 通过 Weston 无头 Wayland 运行。
 - 候选方案在开发阶段必须使用同一台开发主机、相同网络出口和相同测试条件进行公平对比。
 - 开发环境中的性能结果只用于预筛和调优，不能代替部署环境验收。阶段 3 的三轮 2000 URL/小时硬门禁必须直接在最终部署的 Linux 主机执行。
 - 第一版后端技术栈已依据 ADR 0011 进入实现；Linux 依赖安装、浏览器运行时、路径行为、进程管理和三轮硬门禁保留为最终部署验收，暂不阻塞本次后端编码。
@@ -140,9 +140,9 @@
 ## 已确认的第一版 Linux 部署基线
 
 - Windows 开发机生成只含 ThreadSnap wheel、前端生产构建、固定配置和部署工具的制包输入包；完整离线包必须在与目标机相同的 CentOS Stream 主版本、x86_64 和 Python 次版本上组装。
-- 完整离线包内置全部 Python wheels、锁定 Patchright 对应的 Linux Chromium，以及 Python、Nginx、Xvfb 和浏览器共享库 RPM。目标机安装固定使用 `pip --no-index` 与 `dnf --disablerepo='*'`，安装阶段不从外部仓库解析或下载组件。
+- 完整离线包内置全部 Python wheels、锁定 Patchright 对应的 Linux Chromium，以及 Python、Nginx、Weston 和浏览器共享库 RPM。RPM 目录带本地仓库元数据和顶层组件清单；目标机安装固定使用 `pip --no-index` 与 `dnf --disablerepo='*'`，只由包内仓库解析缺失依赖，不把全部递归 RPM 强制升级到制包日版本。
 - 程序 release 位于 `/opt/threadsnap/releases/`，配置位于 `/etc/threadsnap`，持久数据默认位于 `/var/lib/threadsnap`。安装前用 `lsblk`、`findmnt`、`df -hT` 与 `df -Pi` 核对挂载点；存在独立数据盘时把 `--data-dir` 指向其挂载点，不把 SQLite、模板、导出或加密 Profile 放入程序 release。
-- systemd 只启动一个 ThreadSnap 应用进程，并由独立 Xvfb 服务提供 `1280 × 800 × 24` 虚拟显示。Nginx 发布 SPA、代理页面 API/SSE/认证 WebSocket并明确屏蔽 `/internal/v1`；Uvicorn 继续只监听 `127.0.0.1:8000`，不开放 CDP 或 Xvfb TCP。
+- systemd 只启动一个 ThreadSnap 应用进程，并由独立 Weston 服务通过 `wayland-99` socket 提供 `1280 × 800` 无头显示。专用 `threadsnap-nginx.service` 使用 `/etc/threadsnap/nginx.conf` 发布 SPA、代理页面 API/SSE/认证 WebSocket并明确屏蔽 `/internal/v1`，不接管宿主机已有的 80/443 Nginx；Uvicorn 继续只监听 `127.0.0.1:8000`，不开放 CDP，Wayland socket 仅对 `threadsnap` 用户可用。
 - 制包、安装、验证、备份和回滚的唯一操作说明为 `docs/deployment/linux-v1.md`，具体脚本位于 `deploy/linux/`。完整离线包的发行版、架构、Python、浏览器和逐文件 SHA-256 必须写入 manifest 与校验清单。
 
 ## 保留的部署与性能验收门禁
@@ -226,7 +226,7 @@ PoC 访问模式遵循“未登录优先”：
 - 第一版只维护一套全局懂车帝 Session；所有懂车帝任务隐式共用，不实现多账号、账号轮换或配置绑定；后续平台各自维护独立 Session 状态；
 - 浏览器进程、Profile 和 Session 始终位于服务器；提取功能服务在服务器启动受控浏览器并打开平台官方登录页面，第一版客户从内网客户机的普通浏览器通过基础测试界面的临时嵌入式通道查看和操作该浏览器，自行完成密码、扫码、短信、验证码或滑块；客户机本地浏览器形成的 Cookie 不作为服务器 Session；
 - 只持久化 Cookie、LocalStorage、浏览器 Profile 或等价 Session 状态及脱敏元数据；状态必须加密保存，密钥与数据库分离，文件和运行进程采用最小访问权限；
-- 懂车帝当前会对无头认证浏览器返回 HTTP 200 零字节文档，因此人工认证入口默认使用 Patchright 随附完整 Chromium 的有头模式；Windows 使用正常桌面会话，目标 Linux 由 Xvfb 提供虚拟显示。后端在开放输入前同时检查 HTTP 状态、`Content-Length` 和可交互 DOM，零字节或空 DOM 进入明确失败状态，不把 WebSocket 已连接误判为页面已加载；
+- 懂车帝当前会对无头认证浏览器返回 HTTP 200 零字节文档，因此人工认证入口默认使用 Patchright 随附完整 Chromium 的有头模式；Windows 使用正常桌面会话，目标 CentOS Stream 10 由 Weston 提供无头 Wayland 显示并通过 `--ozone-platform=wayland` 启动完整 Chromium。后端在开放输入前同时检查 HTTP 状态、`Content-Length` 和可交互 DOM，零字节或空 DOM 进入明确失败状态，不把 WebSocket 已连接误判为页面已加载；
 - 每个认证任务先在服务端独立临时 Profile 中运行。已有正式 Profile 先解密到任务目录，真实圈子样本门禁通过后关闭浏览器、重新加密归档并原子替换正式 Profile，同时更新加密 Session；门禁失败时两者都保持旧版本。任务关闭、过期或服务正常停止时删除临时 Profile，单进程服务启动时清理上次异常退出遗留的任务目录；接口、日志和前端始终不返回 Profile 路径或内容；
 - 查询接口只返回会话状态和最近验证时间；Cookie、LocalStorage、动态码、扫码内容、Profile 路径和其他可复用数据不得进入前端、日志、错误、导出、截图、测试报告或 Git；
 - 采集前用少量真实样本探测 Session。HTTP 采集识别到 `login`、异常空响应或等价身份异常时暂停新请求，保留触发 URL，并对既有 Profile 执行一次有界自动刷新；
@@ -281,6 +281,6 @@ Linux PoC 运行器必须把每个候选放入独立进程组；候选入口退�
 - 后续多平台全部接入后的平台级并发、全局资源预算和是否迁移外部队列；
 - 多进程或多实例部署出现真实需求时的数据库升级方案；
 - 最终 Linux 主机的 CPU 型号、核心数和实际容量余量；
-- 在兼容 CentOS 制包机组装完整离线包，并在最终主机完成 Xvfb 认证、重启、备份恢复和连续三轮 2000 URL 门禁。
+- 在兼容 CentOS 制包机组装完整离线包，并在最终主机完成 Wayland 有头 Chromium 认证、重启、备份恢复和连续三轮 2000 URL 门禁。
 
 当前后端框架和精确依赖版本见 `pyproject.toml`；后续变更仍须与 `product-design.md`、ADR 0011 和实际部署证据保持一致。

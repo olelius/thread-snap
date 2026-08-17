@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     dongchedi_storage_state: Path | None = None
     session_fernet_key: str | None = None
     # 懂车帝当前会对无头浏览器返回 HTTP 200 零字节文档；认证浏览器默认使用
-    # 完整 Chromium 的有头模式，Linux 由 Xvfb 提供虚拟显示。
+    # 完整 Chromium 的有头模式，Linux 由 Weston 提供无头 Wayland 显示。
     auth_browser_headless: bool = False
 
     @property

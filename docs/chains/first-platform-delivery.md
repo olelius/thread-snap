@@ -8,7 +8,7 @@
 - 手动提取一次选择一个平台、多个圈子和一个统一每圈数量；新圈子验证后进入独立手动历史但不自动加入定时。自动重试仍属于原批次，终态手动补提创建关联批次；关联展示不物理合并或改写原快照。
 - XLSX 导出支持多个不可变版本模板，使用 `platform.<platform_code>.circle.<circle_id>.<field>` 稳定英文标签定位数据。一个帖子一行，评论、图片和视频集合在单元格内按顺序编号并换行。
 - 根据 ADR 0011，Python 第一版后端已先行实现；最终三轮吞吐门禁仍须在目标 Linux 主机由项目负责人手动触发，但暂不阻塞本次后端开发。
-- 根据 ADR 0017，第一版正式部署采用完整离线 `tar.gz`：目标包内置 Python wheelhouse、Patchright Chromium 和 CentOS RPM，目标服务器只做本地校验与安装；systemd 管理单进程后端和 Xvfb，Nginx 发布 SPA/API/SSE/WebSocket 并屏蔽 `/internal/v1`。Windows 已能生成制包输入包，最终离线包仍须在兼容 CentOS 制包机组装。
+- 根据 ADR 0017、ADR 0018，第一版正式部署采用完整离线 `tar.gz`：目标包内置 Python wheelhouse、Patchright Chromium 和带本地仓库元数据的 CentOS RPM；systemd 管理单进程后端、Weston 无头 Wayland 与专用 Nginx，发布 SPA/API/SSE/WebSocket 并屏蔽 `/internal/v1`。最终服务器已完成首次安装和完整运行验证，修正版正式离线包仍须从干净提交重建并替换现场手工修正版。
 - 当前优先完成采集框架 PoC：每轮输入 2000 个不同真实帖子 URL，必须在一小时内全部产生帖子 ID 匹配且具有标题或正文存在性证明的访问结果；平台控制造成任一最终未完成即为该轮失败。
 - 甲方已提供懂车帝工作表：2698 行原始 URL 经规范化得到 2694 个不同帖子 URL，这些是真实项目会使用的输入，已满足当前 PoC 数量要求；首轮已用种子 `threadsnap-poc-round-1-20260808-v1` 固定 2000 条，清单 SHA-256 为 `4558a54cbe96259c1a64d6fda02658b3b344b8a269fcd85ea32a793572ea5d70`。
 - 候选 A/B 已完成 Windows 阶段 1 的四层 URL、持久匿名会话、同会话复访、内置 Chromium/正式 Chrome 与直连对照；两者及独立匿名浏览器均在挑战完成后收到服务端 `302 /login-required`。这不是结果分类器或跳转跟随错误，但当前证据也不把它解释为业务固有要求登录；下一步在目标 Linux 的不同网络出口复测同一阶段门。
@@ -93,7 +93,8 @@
 | 2026-08-14 | XLSX 使用不可变模板版本和稳定英文标签 | 支持多个工作表与同表多圈子，避免依赖中文车型名、工作表名或数据库字段，并保证历史导出可复现 |
 | 2026-08-14 | 采用 Python 后端并暂缓 CentOS 三轮 | 圈子分页、固定2000有效样本和 Windows 真实闭环已足够支撑后端实现；Linux 三轮仍保留为最终部署验收，不伪造为已通过 |
 | 2026-08-14 | 平台人工认证采用后端封装的 CDP Screencast | 复用现有 Chromium、Patchright、FastAPI WebSocket 与早期 CDP 证据，去除定时截图固定等待并补齐 hover/拖动；noVNC 会增加桌面服务，WebRTC 会增加媒体与信令栈 |
-| 2026-08-17 | 第一版使用完整离线包、systemd、Xvfb 与 Nginx | 目标服务器部署时不临时下载 Python 包、Chromium 或 RPM；依赖在同版 CentOS 制包机一次收集并由 SHA-256 冻结，程序与持久数据分离，单进程与内部接口边界保持不变 |
+| 2026-08-17 | 第一版使用完整离线包、systemd、Weston 与专用 Nginx | 目标服务器部署时不临时下载 Python 包、Chromium 或 RPM；依赖在同版 CentOS 制包机一次收集并由 SHA-256 冻结，程序与持久数据分离，单进程与内部接口边界保持不变 |
+| 2026-08-17 | CentOS Stream 10 显示后端从 Xvfb 修正为 Weston 无头 Wayland | 目标机仓库与官方发行说明共同确认 Xorg/Xvfb 已移除；完整 Chromium 保持有头模式，通过私有 `wayland-99` socket 运行，不引入 Docker 或外部显示端口 |
 
 ## 未决项
 
@@ -104,7 +105,7 @@
 - [x] Linux 双候选认证吞吐运行器 —— 两个候选均已完成同结构入口、本地合成端到端和源码包构建；真实轮次仍受目标主机环境及固定输入有效性约束。
 - [x] Linux 独立联通门 —— v0.2.14 在目标 Linux 对 A/B 各自3条均取得帖子 ID 与内容证明，汇总 `ready_for_2000=true`；该结果只解锁2000条吞吐，不构成吞吐门禁通过。
 - [x] Python 或 Node.js 正式技术栈 —— ADR 0011 已选择 Python/FastAPI/Scrapling 后端；目标 Linux 三轮从“开发前置”调整为“最终部署验收”并暂缓。
-- [ ] Linux 主机规格 —— 已确认可用内存、Swap、磁盘、Python 3.12.12 和浏览器健康检查；CPU 型号/核心数仍待最终主机探测。语言运行时、浏览器依赖、systemd、Xvfb 与 Nginx 已进入完整离线封装。
+- [ ] Linux 主机规格 —— 已确认最终主机为 12 核、15 GiB 内存、7.8 GiB Swap、CentOS Stream 10 x86_64、Python 3.12.13；系统盘剩余约 55 GiB，另有未挂载的 3.6 TiB 空盘。语言运行时、浏览器依赖、systemd、Weston 与 Nginx 进入完整离线封装，数据盘格式化与挂载仍需明确决定。
 - [x] 双接口错误、幂等和调用追踪业务契约 —— 稳定英文错误码，后端中文详情和 `request_id`；手动创建使用一次性幂等键，定时使用计划时间与规则版本稳定键。具体框架中间件随技术栈落地。
-- [x] 正式项目进程管理方式 —— systemd 管理一个 ThreadSnap 应用进程和一个 Xvfb 服务，Nginx 独立提供静态文件与同源反向代理；应用不增加 Uvicorn worker 或第二实例。
+- [x] 正式项目进程管理方式 —— systemd 管理一个 ThreadSnap 应用进程和一个 Weston 无头 Wayland 服务，Nginx 独立提供静态文件与同源反向代理；应用不增加 Uvicorn worker 或第二实例。
 - [x] 第一版登录与会话续期原则 —— 已实现 Patchright 服务器官方页面、短期 WebSocket 画面/输入中继、加密 Session、有界自动刷新和 `waiting_for_auth` 原批次自动续跑。公网部署为后续可选增强，不得改变不保存密码、入口限时、检查点持久化和控制端口不直连公网的边界。
