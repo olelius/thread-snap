@@ -46,7 +46,7 @@ for path in /opt /var/lib /var/backups /data /srv /mnt; do
 done
 
 section "Runtime and service commands"
-for command_name in python3 systemctl nginx Xvfb curl tar sha256sum ss; do
+for command_name in python3 systemctl nginx weston curl tar sha256sum ss; do
   if command -v "$command_name" >/dev/null 2>&1; then
     printf '%-12s %s\n' "$command_name" "$(command -v "$command_name")"
   else

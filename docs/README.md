@@ -96,7 +96,8 @@
 | `docs/adr/0014-use-controlled-cdp-screencast-for-auth.md` | 第一版平台人工认证使用后端封装的 CDP Screencast 和完整指针输入，不暴露原始 CDP 入口 |
 | `docs/adr/0015-select-explicit-circles-per-extraction-rule.md` | 自动提取规则明确多选平台圈子，新来源不自动扩张旧规则范围 |
 | `docs/adr/0016-merge-multiple-rules-per-schedule-node.md` | 同一计划节点可选择多条规则，触发时合并为一个批次并按圈子取最大目标数 |
-| `docs/adr/0017-package-v1-as-fully-offline-systemd-nginx-release.md` | 第一版采用完整离线包、systemd、Xvfb 与 Nginx 部署 |
+| `docs/adr/0017-package-v1-as-fully-offline-systemd-nginx-release.md` | 第一版采用完整离线包、systemd、显示服务与 Nginx 部署 |
+| `docs/adr/0018-use-headless-wayland-on-centos-stream-10.md` | CentOS Stream 10 使用 Weston 无头 Wayland 运行完整 Chromium |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 

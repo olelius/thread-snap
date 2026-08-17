@@ -1,7 +1,7 @@
 [Unit]
 Description=ThreadSnap extraction service
-Requires=threadsnap-xvfb.service
-After=network-online.target threadsnap-xvfb.service
+Requires=threadsnap-wayland.service
+After=network-online.target threadsnap-wayland.service
 Wants=network-online.target
 
 [Service]

@@ -31,7 +31,7 @@ if sys.version_info < (3, 11):
 print(f"python={sys.version.split()[0]}")
 PY
 
-for command_name in nginx Xvfb curl tar sha256sum systemctl; do
+for command_name in nginx weston curl tar sha256sum systemctl; do
   command -v "$command_name" >/dev/null || {
     echo "ERROR: required command missing after install: $command_name" >&2
     exit 4

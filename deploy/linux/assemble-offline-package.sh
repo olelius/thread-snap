@@ -36,6 +36,15 @@ if ! dnf download --help >/dev/null 2>&1; then
   dnf install -y dnf-plugins-core
 fi
 
+# CentOS Stream 10 已移除 Xorg/Xvfb。Weston 位于 EPEL，部分依赖位于 CRB；
+# 只在联网制包阶段启用这些仓库，最终目标机仍使用包内 RPM 纯离线安装。
+if ! rpm -q epel-release >/dev/null 2>&1; then
+  dnf install -y epel-release
+fi
+if ! dnf repolist --enabled | awk '{print $1}' | grep -qx crb; then
+  crb enable
+fi
+
 readarray -t manifest_values < <(
   python3 - "$PACKAGE_ROOT/PACKAGE-MANIFEST.json" <<'PY'
 import json, sys
@@ -75,10 +84,10 @@ python3 -m venv "$WORK_ROOT/verify-venv"
 "$WORK_ROOT/verify-venv/bin/python" -m pip check
 
 PLAYWRIGHT_BROWSERS_PATH="$STAGE/browsers" \
-  "$WORK_ROOT/verify-venv/bin/patchright" install chromium
+  "$WORK_ROOT/verify-venv/bin/patchright" install --no-shell chromium
 
 rpm_packages=(
-  python3 python3-pip nginx xorg-x11-server-Xvfb
+  python3 python3-pip nginx epel-release weston
   tar gzip curl ca-certificates shadow-utils findutils util-linux procps-ng iproute
   policycoreutils-python-utils
   alsa-lib atk at-spi2-atk cups-libs libdrm libXcomposite libXdamage libXfixes

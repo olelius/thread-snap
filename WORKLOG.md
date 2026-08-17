@@ -11,9 +11,25 @@
 
 ## ⏳ 待你裁决
 
-- 2026-08-08：Linux 主机的 CPU 型号/核心数仍待最终主机探测；systemd、Xvfb、Nginx 和完整离线包已在 2026-08-17 确认为正式部署方案，内存、磁盘、Python 运行时与 PoC 浏览器健康检查已有历史实测，原始入口见 `docs/research/poc-input-intake-2026-08-08.md` 第 4 节。
+- 2026-08-17：最终服务器存在一块无文件系统、未挂载的 3.6 TiB `/dev/sdb`；格式化并挂载到 `/data` 会清除该设备现有内容，须由用户明确决定后执行。
+- 2026-08-17：服务器 `80/443` 已由 `wenmai-nginx-1` 占用；ThreadSnap 首次安装使用独立 `8088` 可避免影响现有服务，是否接入既有 Docker Nginx 和正式域名仍待用户决定。
 
 ---
+
+## 2026-08-17 — 修正 CentOS Stream 10 显示后端并实装最终服务器
+**总目标**：在最终 CentOS Stream 10 x86_64 服务器完成 ThreadSnap 前后端部署，并修复原完整离线包错误依赖已从 EL10 移除的 Xvfb 问题。
+**状态**：🟡 已确认最终主机规格、现有端口与磁盘；Xvfb 根因已由目标仓库和发行说明复核，仓库正改为 Weston 无头 Wayland，待重新制包、实装和真实浏览器验证。
+**干到哪里了**：
+- [x] 通过 SSH 实测最终主机为 CentOS Stream 10 x86_64、12 核、15 GiB 内存、7.8 GiB Swap、Python 3.12.13；系统盘剩余约 55 GiB，`/home` 剩余约 141 GiB，另有无签名且未挂载的 3.6 TiB `/dev/sdb`。
+- [x] 确认 Docker 现有 `wenmai-nginx-1` 占用 `80/443`，ThreadSnap 安装端口先使用 `8088`，不停止或修改现有容器。
+- [x] builder 包已上传到 `/var/tmp/threadsnap-builder` 并通过 SHA-256；首次组装已完成 Python wheelhouse 和 Chromium 下载，但在 `xorg-x11-server-Xvfb` RPM 解析处按预期失败。
+- [x] BaseOS、AppStream、CRB 和 EPEL 均无 Xvfb；官方 CentOS/RHEL 10 发行说明确认 Xorg server 已移除。目标机已实测 Weston 14 的 headless backend 可创建固定 `wayland-99` socket 和 `1280 × 800` 输出。
+- [x] 部署实现改为 `threadsnap-wayland.service`，浏览器在 `WAYLAND_DISPLAY` 环境下增加 `--ozone-platform=wayland`；制包阶段自动启用 CRB/EPEL、收集 Weston RPM 闭包并跳过未使用的 Chromium headless shell。
+- [x] 最终主机上的 `threadsnap-wayland.service` 已以 `threadsnap` 用户稳定创建 `/run/threadsnap-wayland/wayland-99`；Patchright 1.61.2 完整 Chromium 149 以 `headless=False` 和原生 Wayland 参数成功启动、渲染测试页面并输出 `WAYLAND_CHROMIUM_OK`。
+- [x] 新增 ADR 0018、浏览器运行时单元测试和部署静态契约；相关 11 项测试及全部 Linux shell `bash -n` 已通过。
+**下一步**：完成目标机原生 Wayland Chromium 冒烟，执行全量本地验证，从干净提交重建 builder 包；目标机重新组装最终离线包后以 `/var/lib/threadsnap` 和端口 `8088` 首次安装、初始化数据库并运行完整验证。3.6 TiB 数据盘在用户明确确认前保持不变。
+**边界**：不格式化 `/dev/sdb`，不停止或改写现有 Docker 服务，不把制包失败前的临时目录记为最终包；Linux 认证、重启、备份恢复和三轮 2000 URL 门禁仍按真实结果记录。
+**关联**：`docs/adr/0018-use-headless-wayland-on-centos-stream-10.md`、`docs/deployment/linux-v1.md`、`docs/design/technical-route.md`、`docs/chains/first-platform-delivery.md`、`deploy/linux/`、`src/threadsnap/browser_runtime.py`
 
 ## 2026-08-17 — 第一版 Linux 完整离线部署封装
 **总目标**：为全新 CentOS Stream 10 服务器提供前后端完整离线部署包、明确的磁盘与目录选择、systemd/Xvfb/Nginx 配置，以及可复核的安装、验证、备份和回滚流程。

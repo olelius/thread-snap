@@ -1,0 +1,19 @@
+[Unit]
+Description=ThreadSnap headless Wayland display
+After=local-fs.target
+
+[Service]
+Type=simple
+User=threadsnap
+Group=threadsnap
+RuntimeDirectory=threadsnap-wayland
+RuntimeDirectoryMode=0700
+Environment=XDG_RUNTIME_DIR=/run/threadsnap-wayland
+ExecStart=/usr/bin/weston --backend=headless-backend.so --socket=wayland-99 --idle-time=0 --width=1280 --height=800 --use-pixman
+Restart=on-failure
+RestartSec=3
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

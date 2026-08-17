@@ -1,6 +1,7 @@
 ---
 status: accepted
 related: 0011-adopt-python-backend-before-deferred-linux-gate.md
+amended_by: 0018-use-headless-wayland-on-centos-stream-10.md
 ---
 
 # 第一版采用完整离线包、systemd、Xvfb 与 Nginx 部署

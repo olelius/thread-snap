@@ -28,7 +28,7 @@ class LinuxDeploymentPackageTests(unittest.TestCase):
             "deploy/linux/rollback-release.sh",
             "deploy/linux/nginx/threadsnap.conf",
             "deploy/linux/systemd/threadsnap.service",
-            "deploy/linux/systemd/threadsnap-xvfb.service",
+            "deploy/linux/systemd/threadsnap-wayland.service",
             "deploy/linux/templates/threadsnap.env.example",
             "scripts/build-linux-deployment-package.ps1",
         ]
@@ -51,7 +51,11 @@ class LinuxDeploymentPackageTests(unittest.TestCase):
     def test_linux_assembler_collects_all_dependency_classes(self) -> None:
         assembler = self.read("deploy/linux/assemble-offline-package.sh")
         self.assertIn("pip download --only-binary=:all:", assembler)
-        self.assertIn('patchright" install chromium', assembler)
+        self.assertIn('patchright" install --no-shell chromium', assembler)
+        self.assertIn("dnf install -y epel-release", assembler)
+        self.assertIn("crb enable", assembler)
+        self.assertIn("weston", assembler)
+        self.assertNotIn("xorg-x11-server-Xvfb", assembler)
         self.assertIn("dnf download --resolve --alldeps", assembler)
         self.assertIn('dependency_mode="fully-offline"', assembler)
         self.assertIn('package_role="offline-deployment"', assembler)
@@ -69,14 +73,28 @@ class LinuxDeploymentPackageTests(unittest.TestCase):
         self.assertIn("$http_sec_websocket_protocol", nginx)
         self.assertIn("try_files $uri $uri/ /index.html", nginx)
 
-    def test_single_process_and_xvfb_contract(self) -> None:
+    def test_single_process_and_wayland_contract(self) -> None:
         service = self.read("deploy/linux/systemd/threadsnap.service")
-        xvfb = self.read("deploy/linux/systemd/threadsnap-xvfb.service")
-        self.assertIn("Requires=threadsnap-xvfb.service", service)
+        wayland = self.read("deploy/linux/systemd/threadsnap-wayland.service")
+        self.assertIn("Requires=threadsnap-wayland.service", service)
         self.assertIn("--host 127.0.0.1 --port 8000", service)
         self.assertNotIn("--workers", service)
-        self.assertIn("1280x800x24", xvfb)
-        self.assertIn("-nolisten tcp", xvfb)
+        self.assertIn("--backend=headless-backend.so", wayland)
+        self.assertIn("--socket=wayland-99", wayland)
+        self.assertIn("--width=1280 --height=800", wayland)
+        self.assertIn("NoNewPrivileges=true", wayland)
+
+    def test_browser_uses_wayland_when_socket_is_configured(self) -> None:
+        runtime = self.read("src/threadsnap/browser_runtime.py")
+        auth = self.read("src/threadsnap/auth.py")
+        worker = self.read("src/threadsnap/worker.py")
+        environment = self.read("deploy/linux/templates/threadsnap.env.example")
+        self.assertIn('os.environ.get("WAYLAND_DISPLAY")', runtime)
+        self.assertIn('"--ozone-platform=wayland"', runtime)
+        self.assertIn("args=browser_launch_args()", auth)
+        self.assertIn("args=browser_launch_args()", worker)
+        self.assertIn("XDG_RUNTIME_DIR=/run/threadsnap-wayland", environment)
+        self.assertIn("WAYLAND_DISPLAY=wayland-99", environment)
 
     def test_headed_browser_mode_is_consistent(self) -> None:
         for path in [

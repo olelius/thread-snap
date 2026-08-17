@@ -1,5 +1,6 @@
 ---
 status: accepted
+amended_by: 0018-use-headless-wayland-on-centos-stream-10.md
 related: 0007-official-login-and-encrypted-platform-session.md
 ---
 

@@ -206,7 +206,7 @@ else
 fi
 
 grep -q '^THREADSNAP_AUTH_BROWSER_HEADLESS=false$' "$ENV_FILE" || {
-  echo "ERROR: set THREADSNAP_AUTH_BROWSER_HEADLESS=false in $ENV_FILE for the current Linux/Xvfb path" >&2
+  echo "ERROR: set THREADSNAP_AUTH_BROWSER_HEADLESS=false in $ENV_FILE for the current Linux/Wayland path" >&2
   exit 6
 }
 
@@ -226,7 +226,7 @@ mv -Tf "$APP_ROOT/.current.new" "$CURRENT_LINK"
 
 sed "s|@DATA_DIR@|$DATA_DIR|g" \
   "$SCRIPT_DIR/systemd/threadsnap.service" > /etc/systemd/system/threadsnap.service
-cp "$SCRIPT_DIR/systemd/threadsnap-xvfb.service" /etc/systemd/system/threadsnap-xvfb.service
+cp "$SCRIPT_DIR/systemd/threadsnap-wayland.service" /etc/systemd/system/threadsnap-wayland.service
 sed \
   -e "s|@SERVER_NAME@|$SERVER_NAME|g" \
   -e "s|@LISTEN_PORT@|$LISTEN_PORT|g" \
@@ -243,7 +243,7 @@ systemctl daemon-reload
 nginx -t
 
 if [[ "$START_SERVICES" == true ]]; then
-  systemctl enable --now threadsnap-xvfb.service
+  systemctl enable --now threadsnap-wayland.service
   systemctl enable --now threadsnap.service
   systemctl enable --now nginx.service
   if ! bash "$SCRIPT_DIR/verify.sh" --listen-port "$LISTEN_PORT" --server-name "$SERVER_NAME" --quick; then
