@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useBlocker, useNavigate, useSearch } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArchiveRestore, CalendarClock, CarFront, ChevronDown, CirclePlus, Copy, KeyRound, Loader2, Plus, RefreshCw, Save, Trash2, Upload } from 'lucide-react'
+import { ArchiveRestore, CalendarClock, CarFront, ChevronDown, CirclePlus, Copy, KeyRound, Loader2, Plus, RefreshCw, Save, Settings2, Trash2, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { AuthDialog } from '@/features/auth/auth-dialog'
 import { PageHeader } from '@/components/page-header'
@@ -35,6 +35,19 @@ type ValidationJob = { id: string; circle_id: string; status: string; error_mess
 type ValidationBatchResult = { jobs: ValidationJob[]; queued_count: number; reused_count: number; total_count: number }
 
 const validationSettled = (job: ValidationJob) => ['success', 'failed', 'waiting_for_auth'].includes(job.status)
+
+function ConfigSectionToolbar({ icon, title, summary, description, children }: { icon: ReactNode; title: string; summary: string; description: string; children: ReactNode }) {
+  return <div className='sticky top-0 z-10 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border/70 bg-card/95 px-4 py-3 shadow-sm backdrop-blur-xl'>
+    <div className='flex min-w-0 items-start gap-3'>
+      <div className='grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/15'>{icon}</div>
+      <div className='min-w-0'>
+        <div className='flex flex-wrap items-center gap-2'><h2 className='text-lg font-semibold'>{title}</h2><Badge variant='secondary' className='font-normal'>{summary}</Badge></div>
+        <p className='mt-0.5 text-sm text-muted-foreground'>{description}</p>
+      </div>
+    </div>
+    <div className='flex flex-wrap gap-2'>{children}</div>
+  </div>
+}
 
 function vehicleRows(vehicles: Vehicle[]) {
   return vehicles.flatMap((vehicle) => vehicle.circles.map((circle) => ({ ...circle, vehicle_id: vehicle.id, vehicle_name: vehicle.name })))
@@ -128,7 +141,10 @@ function PlanPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void 
     return { ...rule, circle_ids: ids, platform_quantities: quantities }
   })
   return <div className='space-y-5'>
-    <div className='sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 border-b border-border/60 bg-background/95 pb-3 backdrop-blur'><div><h2 className='text-lg font-semibold'>自动提取规则</h2><p className='text-sm text-muted-foreground'>每条规则明确选择平台及其圈子，并为已选平台设置统一的每圈有效结果目标数。</p></div><div className='flex gap-2'><Button variant='outline' onClick={() => update({ ...draft, rules: [...draft.rules, { id: crypto.randomUUID(), name: `新规则 ${draft.rules.length + 1}`, version: 1, platform_quantities: {}, circle_ids: [], archived: false, updated_at: new Date().toISOString() }] })}><Plus className='size-4' />新建规则</Button><Button disabled={save.isPending} onClick={() => save.mutate()}>{save.isPending ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}保存当前标签</Button></div></div>
+    <ConfigSectionToolbar icon={<CalendarClock className='size-4.5' />} title='自动提取规则' summary={`${draft.rules.length} 条规则`} description='每条规则明确选择平台及其圈子，并为已选平台设置统一的每圈有效结果目标数。'>
+      <Button variant='outline' onClick={() => update({ ...draft, rules: [...draft.rules, { id: crypto.randomUUID(), name: `新规则 ${draft.rules.length + 1}`, version: 1, platform_quantities: {}, circle_ids: [], archived: false, updated_at: new Date().toISOString() }] })}><Plus className='size-4' />新建规则</Button>
+      <Button disabled={save.isPending} onClick={() => save.mutate()}>{save.isPending ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}保存当前标签</Button>
+    </ConfigSectionToolbar>
     <div className='grid gap-4 xl:grid-cols-2'>{draft.rules.map((rule) => {
       const referenced = draft.nodes.some((node) => node.rule_id === rule.id)
       return <Card key={rule.id} className='border-border/70 bg-card/88'><CardHeader className='pb-3'><div className='flex items-start gap-3'><div className='min-w-0 flex-1'><Label htmlFor={`rule-${rule.id}`}>规则名称</Label><Input id={`rule-${rule.id}`} className='mt-2' value={rule.name} onChange={(event) => updateRule(rule.id, (item) => ({ ...item, name: event.target.value }))} /></div><Button variant='ghost' size='icon' disabled={referenced} onClick={() => update({ ...draft, rules: draft.rules.filter((item) => item.id !== rule.id) })} aria-label={referenced ? '规则仍被计划节点引用' : '删除规则'}><Trash2 className='size-4' /></Button></div><CardDescription>ID {rule.id.slice(0, 8)} · 当前版本 {rule.version} · 已选 {rule.circle_ids.length} 个圈子</CardDescription></CardHeader><CardContent className='space-y-3'>{allPlatforms.map((platform) => {
@@ -152,7 +168,8 @@ function PlatformPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => v
   const save = useMutation({ mutationFn: async () => Promise.all((draft ?? []).map((item) => api<Platform>(`/platforms/${item.code}`, { method: 'PUT', body: JSON.stringify({ enabled: item.enabled, internal_concurrency: item.internal_concurrency }) }))), onSuccess: (items) => { setDraft(items); setDirty(false); client.setQueryData(['platforms'], items); onDirtyChange(false); toast.success('平台配置已保存') }, onError: (error) => toast.error('保存失败', { description: errorMessage(error) }) })
   if (!draft) return <Card><CardContent className='p-10 text-center text-sm text-muted-foreground'>正在加载平台配置…</CardContent></Card>
   const update = (code: string, values: Partial<Platform>) => { setDraft(draft.map((item) => item.code === code ? { ...item, ...values } : item)); setDirty(true); onDirtyChange(true) }
-  return <div className='space-y-5'><div className='sticky top-0 z-10 flex justify-end border-b border-border/60 bg-background/95 pb-3 backdrop-blur'><Button disabled={save.isPending} onClick={() => save.mutate()}><Save className='size-4' />保存当前标签</Button></div><div className='grid gap-4 xl:grid-cols-3'>{draft.map((platform) => <Card key={platform.code} className='border-border/70 bg-card/88'><CardHeader><div className='flex items-start justify-between'><div><CardTitle>{platform.display_name}</CardTitle><CardDescription className='mt-1'>{platform.adapter_status === 'available' ? `适配器 ${platform.adapter_version ?? '已接入'}` : '后续平台预留'}</CardDescription></div><StatusBadge value={platform.adapter_status === 'available' ? 'success' : 'unknown'} label={platform.adapter_status === 'available' ? '已接入' : '未接入'} /></div></CardHeader><CardContent className='space-y-5'><div className='flex items-center justify-between rounded-lg border p-3'><div><div className='text-sm font-medium'>平台启用</div><div className='text-xs text-muted-foreground'>决定是否允许新任务</div></div><Switch disabled={platform.adapter_status !== 'available'} checked={platform.enabled} onCheckedChange={(enabled) => update(platform.code, { enabled })} /></div><div><Label>平台内部并发</Label><Input className='mt-2' type='number' disabled={platform.adapter_status !== 'available'} min={platform.concurrency_range.min} max={platform.concurrency_range.max} value={platform.internal_concurrency} onChange={(event) => update(platform.code, { internal_concurrency: Number(event.target.value) })} /></div>{platform.adapter_status === 'available' && <SessionCard platform={platform} onAuth={() => setAuth(platform)} />}</CardContent></Card>)}</div><AuthDialog open={Boolean(auth)} onOpenChange={(open) => !open && setAuth(undefined)} platformCode={auth?.code} platformName={auth?.display_name} /></div>
+  const availableCount = draft.filter((platform) => platform.adapter_status === 'available').length
+  return <div className='space-y-5'><ConfigSectionToolbar icon={<Settings2 className='size-4.5' />} title='平台采集配置' summary={`已接入 ${availableCount}/${draft.length}`} description='管理平台接入状态、任务启用、内部并发与 Session。'><Button disabled={save.isPending} onClick={() => save.mutate()}><Save className='size-4' />保存当前标签</Button></ConfigSectionToolbar><div className='grid gap-4 xl:grid-cols-3'>{draft.map((platform) => <Card key={platform.code} className='border-border/70 bg-card/88'><CardHeader><div className='flex items-start justify-between'><div><CardTitle>{platform.display_name}</CardTitle><CardDescription className='mt-1'>{platform.adapter_status === 'available' ? `适配器 ${platform.adapter_version ?? '已接入'}` : '后续平台预留'}</CardDescription></div><StatusBadge value={platform.adapter_status === 'available' ? 'success' : 'unknown'} label={platform.adapter_status === 'available' ? '已接入' : '未接入'} /></div></CardHeader><CardContent className='space-y-5'><div className='flex items-center justify-between rounded-lg border p-3'><div><div className='text-sm font-medium'>平台启用</div><div className='text-xs text-muted-foreground'>决定是否允许新任务</div></div><Switch disabled={platform.adapter_status !== 'available'} checked={platform.enabled} onCheckedChange={(enabled) => update(platform.code, { enabled })} /></div><div><Label>平台内部并发</Label><Input className='mt-2' type='number' disabled={platform.adapter_status !== 'available'} min={platform.concurrency_range.min} max={platform.concurrency_range.max} value={platform.internal_concurrency} onChange={(event) => update(platform.code, { internal_concurrency: Number(event.target.value) })} /></div>{platform.adapter_status === 'available' && <SessionCard platform={platform} onAuth={() => setAuth(platform)} />}</CardContent></Card>)}</div><AuthDialog open={Boolean(auth)} onOpenChange={(open) => !open && setAuth(undefined)} platformCode={auth?.code} platformName={auth?.display_name} /></div>
 }
 
 function SessionCard({ platform, onAuth }: { platform: Platform; onAuth: () => void }) {
@@ -207,22 +224,13 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
     }
   }
   return <div className='space-y-4'>
-    <div className='sticky top-0 z-10 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border/70 bg-card/95 px-4 py-3 shadow-sm backdrop-blur-xl'>
-      <div className='flex min-w-0 items-start gap-3'>
-        <div className='grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/15'><CarFront className='size-4.5' /></div>
-        <div className='min-w-0'>
-          <div className='flex flex-wrap items-center gap-2'><h2 className='text-lg font-semibold'>车型与圈子来源</h2><Badge variant='secondary' className='font-normal'>{rows.length} 个圈子</Badge></div>
-          <p className='mt-0.5 text-sm text-muted-foreground'>首次验证成功自动开启“自动参与”；以后重新验证保持用户当前开关，不会把手动关闭的圈子再次启用。</p>
-        </div>
-      </div>
-      <div className='flex flex-wrap gap-2'>
+    <ConfigSectionToolbar icon={<CarFront className='size-4.5' />} title='车型与圈子来源' summary={`${rows.length} 个圈子`} description='首次验证成功自动开启“自动参与”；以后重新验证保持用户当前开关，不会把手动关闭的圈子再次启用。'>
         <Button variant='outline' disabled={dirty || unverifiedCount === 0 || bulkValidation.isPending} onClick={() => bulkValidation.mutate()}>
           {bulkValidation.isPending ? <Loader2 className='size-4 animate-spin' /> : <RefreshCw className='size-4' />}验证全部待验证（{unverifiedCount}）
         </Button>
         <Button variant='outline' onClick={() => { setRows([...rows, { id: '', platform_code: 'dongchedi', external_id: '', url: '', vehicle_name: '未分组', auto_enabled: false, section: 'dynamic', validation_status: 'unverified' }]); markDirty() }}><Plus className='size-4' />新增圈子</Button>
         <Button disabled={saving} onClick={save}>{saving ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}保存当前标签</Button>
-      </div>
-    </div>
+    </ConfigSectionToolbar>
     {validationJobIds.length > 0 && <Alert>
       <RefreshCw className={completedJobs < validationJobIds.length ? 'size-4 animate-spin' : 'size-4'} />
       <AlertTitle>圈子验证进度 {completedJobs}/{validationJobIds.length}</AlertTitle>
