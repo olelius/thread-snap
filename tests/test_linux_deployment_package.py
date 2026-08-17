@@ -64,6 +64,8 @@ class LinuxDeploymentPackageTests(unittest.TestCase):
         self.assertIn("dnf download --resolve --alldeps", assembler)
         self.assertIn('createrepo_c "$STAGE/rpms"', assembler)
         self.assertIn('"$STAGE/SYSTEM-PACKAGES.txt"', assembler)
+        self.assertIn('tar -tzf "$ARCHIVE" > "$ARCHIVE_LIST"', assembler)
+        self.assertNotIn('tar -tzf "$ARCHIVE" | grep -q', assembler)
         self.assertIn('dependency_mode="fully-offline"', assembler)
         self.assertIn('package_role="offline-deployment"', assembler)
         self.assertIn("installable=True", assembler)

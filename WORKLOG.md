@@ -28,7 +28,8 @@
 - [x] 服务器完整验证通过：三个 ThreadSnap 服务均 `active/enabled`，直连与 Nginx `/health`、SPA、`/internal/v1` 屏蔽、8000 回环绑定、CDP 关闭、Fernet 配置及 Wayland Chromium 全部 PASS。
 - [x] SQLite 已自动初始化为 `threadsnap:threadsnap 0600`，共 20 张表，Alembic 版本 `a91c4e7d2f10`；环境文件为 `root:threadsnap 0640`。
 - [x] 端口 `8088` 的 firewalld 规则只放行当前 SSH 客户端来源；服务器本机完整 HTTP 验证通过，客户端直连仍未形成 Nginx 访问日志，外部链路还需结合云安全组/运营商链路复核。
-- [x] 本轮新增部署静态测试与浏览器测试共 14 项通过；Ruff、compileall、pip check、全部 Linux shell `bash -n` 和 `git diff --check` 通过。
+- [x] 包内本地 RPM 仓库已在最终服务器实跑，DNF 对全部顶层组件报告无需处理且未触发系统升级；同时修正组装器在 `pipefail` 下以 `tar | grep -q` 校验归档导致 SIGPIPE 假失败的问题。
+- [x] 本轮完整测试 48 项通过；Ruff、compileall、pip check、全部 Linux shell `bash -n` 和 `git diff --check` 通过。
 **下一步**：提交当前真实安装修复，从干净提交重建 builder 和带本地 RPM 仓库元数据的最终离线包；在服务器安装为新 release 后再次执行完整验证，再完成 Git PR/合并收尾。3.6 TiB 数据盘和正式域名/现有反代接入继续等待用户明确决定。
 **边界**：不格式化 `/dev/sdb`；不停止或改写现有 Docker 服务；不把首次失败包或现场手工补丁记为最终交付包；当前只证明部署与运行链通过，不把暂缓的连续三轮 2000 URL 门禁记为完成。
 **关联**：`docs/adr/0018-use-headless-wayland-on-centos-stream-10.md`、`docs/deployment/linux-v1.md`、`docs/design/technical-route.md`、`docs/chains/first-platform-delivery.md`、`deploy/linux/`、`pyproject.toml`

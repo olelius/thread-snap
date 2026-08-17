@@ -135,9 +135,13 @@ tar -czf "$ARCHIVE" -C "$WORK_ROOT" "$FINAL_NAME"
   sha256sum "$(basename "$ARCHIVE")" > "$(basename "$ARCHIVE").sha256"
 )
 
-tar -tzf "$ARCHIVE" | grep -q "/wheelhouse/"
-tar -tzf "$ARCHIVE" | grep -q "/browsers/"
-tar -tzf "$ARCHIVE" | grep -q "/rpms/"
+ARCHIVE_LIST="$WORK_ROOT/archive-list.txt"
+tar -tzf "$ARCHIVE" > "$ARCHIVE_LIST"
+grep -q "/wheelhouse/" "$ARCHIVE_LIST"
+grep -q "/browsers/" "$ARCHIVE_LIST"
+grep -q "/rpms/" "$ARCHIVE_LIST"
+grep -q "/rpms/repodata/" "$ARCHIVE_LIST"
+grep -q "/SYSTEM-PACKAGES.txt$" "$ARCHIVE_LIST"
 
 echo "offline_archive=$ARCHIVE"
 echo "offline_sha256=$ARCHIVE.sha256"
