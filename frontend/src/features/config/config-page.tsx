@@ -51,6 +51,10 @@ function ConfigSectionToolbar({ icon, title, summary, description, children }: {
   </div>
 }
 
+function ConfigTabLabel({ children, dirty }: { children: ReactNode; dirty?: boolean }) {
+  return <span className='inline-flex items-center gap-1.5'>{children}{dirty && <><span aria-hidden='true' className='size-1.5 rounded-full bg-amber-500' /><span className='sr-only'>有未保存修改</span></>}</span>
+}
+
 function editableRulesSignature(rules?: ExtractionPlan['rules']) {
   return JSON.stringify((rules ?? []).map(({ id, name, platform_quantities, circle_ids }) => ({ id, name, platform_quantities, circle_ids: [...circle_ids].sort() })))
 }
@@ -189,12 +193,9 @@ export function ConfigPage() {
   const tab = raw.tab === 'plan' ? 'rules' : tabValues.includes(raw.tab as Tab) ? raw.tab as Tab : 'rules'
   return (
     <div className='flex h-full min-h-0 flex-col'>
-      <div className='shrink-0 space-y-4'>
-        <PageHeader title='配置管理' description='每项配置只在唯一归属页面编辑；跨页区域只展示摘要和跳转入口。' />
-        {dirty && <Alert className='border-amber-500/30 bg-amber-500/5'><Save className='size-4' /><AlertTitle>存在尚未保存的修改</AlertTitle><AlertDescription>切换标签会保留暂存内容；离开或刷新页面前会提示。保存按钮只提交当前标签。</AlertDescription></Alert>}
-      </div>
+      <div className='shrink-0'><PageHeader title='配置管理' description='每项配置只在唯一归属页面编辑；跨页区域只展示摘要和跳转入口。' /></div>
       <Tabs className='mt-4 flex min-h-0 flex-1 flex-col' value={tab} onValueChange={(value) => navigate({ to: '/config', search: { tab: value as Tab }, replace: true, resetScroll: false })}>
-        <div className='shrink-0 overflow-x-auto'><TabsList className='h-10 min-w-max bg-muted/65 p-1'><TabsTrigger value='rules'>自动提取规则</TabsTrigger><TabsTrigger value='schedule'>每周计划</TabsTrigger><TabsTrigger value='platforms'>平台配置</TabsTrigger><TabsTrigger value='circles'>车型与圈子</TabsTrigger><TabsTrigger value='history'>手动圈子历史</TabsTrigger><TabsTrigger value='templates'>导出模板</TabsTrigger></TabsList></div>
+        <div className='shrink-0 overflow-x-auto'><TabsList className='h-10 min-w-max bg-muted/65 p-1'><TabsTrigger value='rules'><ConfigTabLabel dirty={plan.rulesDirty}>自动提取规则</ConfigTabLabel></TabsTrigger><TabsTrigger value='schedule'><ConfigTabLabel dirty={plan.scheduleDirty}>每周计划</ConfigTabLabel></TabsTrigger><TabsTrigger value='platforms'><ConfigTabLabel dirty={platformDirty}>平台配置</ConfigTabLabel></TabsTrigger><TabsTrigger value='circles'><ConfigTabLabel dirty={circleDirty}>车型与圈子</ConfigTabLabel></TabsTrigger><TabsTrigger value='history'>手动圈子历史</TabsTrigger><TabsTrigger value='templates'>导出模板</TabsTrigger></TabsList></div>
         <TabsContent forceMount value='rules' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><RulesPanel workspace={plan} /></TabsContent>
         <TabsContent forceMount value='schedule' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><SchedulePanel workspace={plan} /></TabsContent>
         <TabsContent forceMount value='platforms' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><PlatformPanel onDirtyChange={setPlatformDirty} /></TabsContent>
