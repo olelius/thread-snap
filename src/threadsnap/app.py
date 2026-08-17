@@ -204,6 +204,10 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
     def validate_circle(circle_id: str, request: Request) -> dict[str, Any]:
         return _container(request).config.create_validation_job(circle_id)
 
+    @router.post("/circles/validate-unverified", status_code=202)
+    def validate_unverified_circles(request: Request) -> dict[str, Any]:
+        return _container(request).config.create_unverified_validation_jobs()
+
     @router.get("/validation-jobs/{job_id}")
     def validation_job(job_id: str, request: Request) -> dict[str, Any]:
         with _container(request).sessions() as db:

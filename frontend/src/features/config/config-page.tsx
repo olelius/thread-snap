@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useBlocker, useNavigate, useSearch } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArchiveRestore, CalendarClock, CirclePlus, Copy, KeyRound, Loader2, Plus, Save, Trash2, Upload } from 'lucide-react'
+import { ArchiveRestore, CalendarClock, CirclePlus, Copy, KeyRound, Loader2, Plus, RefreshCw, Save, Trash2, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { AuthDialog } from '@/features/auth/auth-dialog'
 import { PageHeader } from '@/components/page-header'
@@ -17,6 +17,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Progress } from '@/components/ui/progress'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Separator } from '@/components/ui/separator'
 import { Switch } from '@/components/ui/switch'
@@ -29,6 +30,10 @@ type Tab = typeof tabValues[number]
 const weekdays = ['一', '二', '三', '四', '五', '六', '日']
 
 type CircleBatchResult = { items: Circle[]; saved_count: number; deleted_count: number }
+type ValidationJob = { id: string; circle_id: string; status: string; error_message?: string }
+type ValidationBatchResult = { jobs: ValidationJob[]; queued_count: number; reused_count: number; total_count: number }
+
+const validationSettled = (job: ValidationJob) => ['success', 'failed', 'waiting_for_auth'].includes(job.status)
 
 function vehicleRows(vehicles: Vehicle[]) {
   return vehicles.flatMap((vehicle) => vehicle.circles.map((circle) => ({ ...circle, vehicle_id: vehicle.id, vehicle_name: vehicle.name })))
@@ -157,14 +162,84 @@ function SessionCard({ platform, onAuth }: { platform: Platform; onAuth: () => v
 }
 
 function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void }) {
-  const client = useQueryClient(); const query = useQuery({ queryKey: ['vehicles'], queryFn: () => api<Vehicle[]>('/vehicles') }); const [rows, setRows] = useState<Circle[]>(); const [deletedIds, setDeletedIds] = useState<string[]>([]); const [dirty, setDirty] = useState(false); const [saving, setSaving] = useState(false)
+  const client = useQueryClient()
+  const query = useQuery({ queryKey: ['vehicles'], queryFn: () => api<Vehicle[]>('/vehicles') })
+  const [rows, setRows] = useState<Circle[]>()
+  const [deletedIds, setDeletedIds] = useState<string[]>([])
+  const [dirty, setDirty] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [validationJobIds, setValidationJobIds] = useState<string[]>([])
+  const validationJobs = useQuery({
+    queryKey: ['circle-validation-jobs', validationJobIds],
+    queryFn: () => Promise.all(validationJobIds.map((id) => api<ValidationJob>(`/validation-jobs/${id}`))),
+    enabled: validationJobIds.length > 0,
+    refetchInterval: (result) => result.state.data?.every(validationSettled) ? false : 1000,
+  })
+  const bulkValidation = useMutation({
+    mutationFn: () => api<ValidationBatchResult>('/circles/validate-unverified', { method: 'POST' }),
+    onSuccess: (result) => {
+      setValidationJobIds(result.jobs.map((job) => job.id))
+      if (result.total_count) toast.success('批量验证已进入队列', { description: `共 ${result.total_count} 个圈子，按顺序验证。` })
+      else toast.success('没有待验证圈子')
+    },
+    onError: (error) => toast.error('批量验证提交失败', { description: errorMessage(error) }),
+  })
   useEffect(() => { if (query.data && !dirty) { setRows(vehicleRows(query.data)); setDeletedIds([]) } }, [query.data, dirty])
   if (!rows) return <Card><CardContent className='p-10 text-center text-sm text-muted-foreground'>正在加载车型与圈子…</CardContent></Card>
   const markDirty = () => { setDirty(true); onDirtyChange(true) }
   const update = (index: number, values: Partial<Circle>) => { setRows(rows.map((item, rowIndex) => rowIndex === index ? { ...item, ...values } : item)); markDirty() }
   const remove = (index: number) => { const row = rows[index]; setRows(rows.filter((_, rowIndex) => rowIndex !== index)); if (row.id) setDeletedIds((items) => items.includes(row.id) ? items : [...items, row.id]); markDirty() }
   const save = async () => { setSaving(true); try { const result = await api<CircleBatchResult>('/circles/batch', { method: 'PUT', body: JSON.stringify({ rows: rows.map((item) => ({ id: item.id || undefined, platform_code: item.platform_code || 'dongchedi', url: item.url, vehicle_id: item.vehicle_id || undefined, vehicle_name: item.vehicle_name || undefined, auto_enabled: item.auto_enabled, section: item.section || 'dynamic' })), deleted_ids: deletedIds }) }); const vehicles = rowsAsVehicles(result.items); client.setQueryData(['vehicles'], vehicles); setRows(vehicleRows(vehicles)); setDeletedIds([]); setDirty(false); onDirtyChange(false); await client.invalidateQueries({ queryKey: ['vehicles'] }); toast.success('车型与圈子已保存', { description: `保存 ${result.saved_count} 条，删除 ${result.deleted_count} 条` }) } catch (error) { toast.error('保存失败', { description: errorMessage(error) }) } finally { setSaving(false) } }
-  return <div className='space-y-4'><div className='flex flex-wrap items-center justify-between gap-3'><div><h2 className='text-lg font-semibold'>车型与圈子来源</h2><p className='text-sm text-muted-foreground'>这里唯一维护圈子来源、验证状态与自动参与资格。</p></div><div className='flex gap-2'><Button variant='outline' onClick={() => { setRows([...rows, { id: '', platform_code: 'dongchedi', external_id: '', url: '', vehicle_name: '未分组', auto_enabled: false, section: 'dynamic', validation_status: 'unverified' }]); markDirty() }}><Plus className='size-4' />新增圈子</Button><Button disabled={saving} onClick={save}>{saving ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}保存当前标签</Button></div></div><div className='overflow-x-auto rounded-xl border bg-card/90'><Table className='min-w-[950px]'><TableHeader><TableRow><TableHead>车型</TableHead><TableHead>圈子 URL</TableHead><TableHead>名称</TableHead><TableHead>验证状态</TableHead><TableHead>自动参与</TableHead><TableHead className='text-right'>操作</TableHead></TableRow></TableHeader><TableBody>{rows.map((row, index) => <TableRow key={row.id || `new-${index}`}><TableCell><Input value={row.vehicle_name ?? ''} onChange={(event) => update(index, { vehicle_name: event.target.value, vehicle_id: undefined })} placeholder='车型名称' /></TableCell><TableCell><Input value={row.url} onChange={(event) => update(index, { url: event.target.value })} placeholder='圈子 URL' /></TableCell><TableCell>{row.name || (row.id ? '等待验证' : '保存后验证')}</TableCell><TableCell><StatusBadge value={row.validation_status === 'verified' ? 'success' : row.validation_status === 'failed' ? 'failed' : 'unknown'} label={{ verified: '已验证', failed: '验证失败', unverified: '未验证' }[row.validation_status] ?? row.validation_status} /></TableCell><TableCell><Switch checked={row.auto_enabled} disabled={row.validation_status !== 'verified'} onCheckedChange={(auto_enabled) => update(index, { auto_enabled })} /></TableCell><TableCell><div className='flex justify-end gap-1'>{row.id && <Button variant='outline' size='sm' onClick={async () => { try { await api(`/circles/${row.id}/validate`, { method: 'POST' }); toast.success('圈子验证已进入队列'); setTimeout(() => client.invalidateQueries({ queryKey: ['vehicles'] }), 1500) } catch (error) { toast.error('验证提交失败', { description: errorMessage(error) }) } }}>验证</Button>}<Button variant='ghost' size='icon' onClick={() => remove(index)} aria-label='删除圈子'><Trash2 className='size-4' /></Button></div></TableCell></TableRow>)}</TableBody></Table></div></div>
+  const unverifiedCount = rows.filter((row) => row.id && row.validation_status === 'unverified').length
+  const jobs = validationJobs.data ?? []
+  const completedJobs = jobs.filter(validationSettled).length
+  const successfulJobs = jobs.filter((job) => job.status === 'success').length
+  const failedJobs = jobs.filter((job) => job.status === 'failed').length
+  const authJobs = jobs.filter((job) => job.status === 'waiting_for_auth').length
+  const progress = validationJobIds.length ? completedJobs / validationJobIds.length * 100 : 0
+  const validate = async (row: Circle) => {
+    try {
+      const job = await api<ValidationJob>(`/circles/${row.id}/validate`, { method: 'POST' })
+      setValidationJobIds([job.id])
+      toast.success(row.first_validated_at ? '重新验证已进入队列' : '首次验证已进入队列')
+    } catch (error) {
+      toast.error('验证提交失败', { description: errorMessage(error) })
+    }
+  }
+  return <div className='space-y-4'>
+    <div className='flex flex-wrap items-center justify-between gap-3'>
+      <div><h2 className='text-lg font-semibold'>车型与圈子来源</h2><p className='text-sm text-muted-foreground'>首次验证成功自动开启“自动参与”；以后重新验证保持用户当前开关，不会把手动关闭的圈子再次启用。</p></div>
+      <div className='flex flex-wrap gap-2'>
+        <Button variant='outline' disabled={dirty || unverifiedCount === 0 || bulkValidation.isPending} onClick={() => bulkValidation.mutate()}>
+          {bulkValidation.isPending ? <Loader2 className='size-4 animate-spin' /> : <RefreshCw className='size-4' />}验证全部待验证（{unverifiedCount}）
+        </Button>
+        <Button variant='outline' onClick={() => { setRows([...rows, { id: '', platform_code: 'dongchedi', external_id: '', url: '', vehicle_name: '未分组', auto_enabled: false, section: 'dynamic', validation_status: 'unverified' }]); markDirty() }}><Plus className='size-4' />新增圈子</Button>
+        <Button disabled={saving} onClick={save}>{saving ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}保存当前标签</Button>
+      </div>
+    </div>
+    {validationJobIds.length > 0 && <Alert>
+      <RefreshCw className={completedJobs < validationJobIds.length ? 'size-4 animate-spin' : 'size-4'} />
+      <AlertTitle>圈子验证进度 {completedJobs}/{validationJobIds.length}</AlertTitle>
+      <AlertDescription className='space-y-2'>
+        <Progress value={progress} />
+        <div>成功 {successfulJobs}，失败 {failedJobs}，等待认证 {authJobs}。首次验证成功会自动参与；重新验证不会改变现有开关。</div>
+      </AlertDescription>
+    </Alert>}
+    {dirty && <Alert><AlertTitle>请先保存当前编辑</AlertTitle><AlertDescription>批量验证只处理数据库中已经保存的圈子。</AlertDescription></Alert>}
+    <div className='overflow-x-auto rounded-xl border bg-card/90'>
+      <Table className='min-w-[1050px]'>
+        <TableHeader><TableRow><TableHead>车型</TableHead><TableHead>圈子 URL</TableHead><TableHead>名称</TableHead><TableHead>验证状态</TableHead><TableHead>自动参与</TableHead><TableHead className='text-right'>操作</TableHead></TableRow></TableHeader>
+        <TableBody>{rows.map((row, index) => <TableRow key={row.id || `new-${index}`}>
+          <TableCell><Input value={row.vehicle_name ?? ''} onChange={(event) => update(index, { vehicle_name: event.target.value, vehicle_id: undefined })} placeholder='车型名称' /></TableCell>
+          <TableCell><Input value={row.url} onChange={(event) => update(index, { url: event.target.value })} placeholder='圈子 URL' /></TableCell>
+          <TableCell>{row.name || (row.id ? '等待验证' : '保存后验证')}</TableCell>
+          <TableCell><div className='space-y-1'><StatusBadge value={row.validation_status === 'verified' ? 'success' : row.validation_status === 'failed' ? 'failed' : 'unknown'} label={{ verified: '已验证', failed: '验证失败', unverified: '未验证' }[row.validation_status] ?? row.validation_status} />{row.id && !row.first_validated_at && row.validation_status !== 'verified' && <div className='text-xs text-muted-foreground'>首次通过后自动参与</div>}</div></TableCell>
+          <TableCell><Switch checked={row.auto_enabled} disabled={row.validation_status !== 'verified'} onCheckedChange={(auto_enabled) => update(index, { auto_enabled })} /></TableCell>
+          <TableCell><div className='flex justify-end gap-1'>{row.id && <Button variant='outline' size='sm' onClick={() => validate(row)}>{row.first_validated_at ? '重新验证' : '验证'}</Button>}<Button variant='ghost' size='icon' onClick={() => remove(index)} aria-label='删除圈子'><Trash2 className='size-4' /></Button></div></TableCell>
+        </TableRow>)}</TableBody>
+      </Table>
+    </div>
+  </div>
 }
 
 function HistoryPanel() {

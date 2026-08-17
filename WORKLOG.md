@@ -15,6 +15,25 @@
 
 ---
 
+## 2026-08-17 — 圈子批量验证与首次自动参与
+
+**总目标**：取消新增圈子逐条手动验证的重复操作，让全部待验证配置圈子按受控队列批量验证；首次验证成功自动开启全局自动参与，但重新验证或重新认证不得覆盖用户后来手动关闭的状态。
+
+**状态**：✅ 首次验证持久语义、批量验证 API 与进度、前端交互、数据库迁移、自动化回归和 12 条真实圈子批量验证完成。
+
+**干到哪里了**：
+- [x] 圈子新增不可回退的 `first_validated_at`；只有该字段为空的配置圈子在验证成功时自动设置 `auto_enabled=true`。首次成功后字段永久保留，重新验证、重新认证或身份变化后的再次验证只刷新验证结果，不覆盖当前自动参与开关；手动圈子历史不自动参与。
+- [x] 新增 `POST /api/v1/circles/validate-unverified`，一次为全部 `unverified` 配置圈子创建或复用验证任务；现有 Worker 继续按持久单任务 FIFO 执行，并避免对排队、运行或等待认证的同一圈子重复建任务。
+- [x] “车型与圈子”新增“验证全部待验证”按钮、总进度及成功/失败/等待认证统计；未首次成功的行明确提示“首次通过后自动参与”，已成功过的行显示“重新验证”。存在未保存编辑时禁止批量验证并提示先保存。
+- [x] 迁移 `e7a4b9c21d03` 已应用到本地 SQLite；既有已验证圈子补记首次验证时间且保持原开关。真实页面将其余 12 条圈子批量提交后 `12/12` 成功、失败 0、等待认证 0；当前 14 条懂车帝圈子全部已验证且自动参与，现有规则仍只选择原风云 A9 圈子。
+- [x] `python -m unittest discover -s tests -v`（29 项）覆盖批量任务复用、首次成功自动开启、手动关闭后重新验证保持关闭；Ruff format/check、`compileall`、`pip check`、前端 `check`、生产构建（2458 modules）与 `git diff --check` 通过。真实页面控制台无 error/warning，截图位于 `artifacts/runtime/bulk-circle-validation-ui.png`；迁移前备份位于 `artifacts/runtime/threadsnap-before-first-validation-20260817-105924.db`。
+
+**下一步**：用户按具体自动提取规则明确勾选需要执行的圈子；自动参与只提供全局执行资格，不自动扩张任何规则范围。
+
+**边界**：批量操作只处理已经保存且状态为 `unverified` 的配置圈子；验证失败和等待认证保留逐条恢复入口，已验证圈子不进入批量任务；验证成功不修改自动提取规则、数量或计划节点。
+
+**关联**：`CONTEXT.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`src/threadsnap/migrations/versions/e7a4b9c21d03_circle_first_validation.py`、`src/threadsnap/models.py`、`src/threadsnap/services.py`、`src/threadsnap/worker.py`、`src/threadsnap/app.py`、`frontend/src/features/config/config-page.tsx`、`frontend/src/lib/types.ts`、`tests/test_backend.py`
+
 ## 2026-08-17 — 精简提取计划标题并补齐懂车帝圈子清单
 
 **总目标**：移除提取计划页对用户无业务价值的“计划版本”徽标，并把甲方清单中的懂车帝车型圈子链接补齐到当前本地数据库，同时保持规则范围不会因新增圈子自动扩大。

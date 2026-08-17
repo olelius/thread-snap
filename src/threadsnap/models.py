@@ -136,6 +136,7 @@ class Circle(Base):
     auto_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     validation_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unverified")
     validation_error: Mapped[str | None] = mapped_column(Text)
+    first_validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     adapter_version: Mapped[str | None] = mapped_column(String(64))
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
