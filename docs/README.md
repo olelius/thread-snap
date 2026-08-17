@@ -25,6 +25,7 @@
 | PoC 样本、阶段、指标和结果格式 | `docs/research/collector-stack-poc-plan.md` |
 | 第一版后端安装、配置、启动和验证 | `docs/deployment/backend-v1.md` |
 | 第一版前端安装、开发、构建和同源发布 | `docs/deployment/frontend-v1.md` |
+| 第一版 Linux 离线制包、目录、安装、验证、备份和回滚 | `docs/deployment/linux-v1.md` |
 | 已接收 PoC 输入的数量、环境摘要和哈希 | `docs/research/poc-input-intake-2026-08-08.md` |
 | 通用技术背景与方案比较 | `docs/research/collection-and-antibot-landscape.md` |
 | 甲方输入模板 | `docs/templates/poc/` |
@@ -94,6 +95,8 @@
 | `docs/adr/0013-separate-schedule-nodes-from-extraction-rules.md` | 每周计划节点只引用可复用自动提取规则，各配置页面保持唯一编辑归属 |
 | `docs/adr/0014-use-controlled-cdp-screencast-for-auth.md` | 第一版平台人工认证使用后端封装的 CDP Screencast 和完整指针输入，不暴露原始 CDP 入口 |
 | `docs/adr/0015-select-explicit-circles-per-extraction-rule.md` | 自动提取规则明确多选平台圈子，新来源不自动扩张旧规则范围 |
+| `docs/adr/0016-merge-multiple-rules-per-schedule-node.md` | 同一计划节点可选择多条规则，触发时合并为一个批次并按圈子取最大目标数 |
+| `docs/adr/0017-package-v1-as-fully-offline-systemd-nginx-release.md` | 第一版采用完整离线包、systemd、Xvfb 与 Nginx 部署 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 

@@ -70,3 +70,9 @@ git diff --check
 ```
 
 目标 CentOS 的连续三轮 2000 条、浏览器系统依赖、服务管理和离线包验证按 ADR 0011 保留为后续部署验收门禁。
+
+## 7. Linux 正式部署
+
+第一版正式 Linux 部署按 ADR 0017 使用完整离线包：Python wheelhouse、Patchright Chromium 和 CentOS RPM 前置组件全部在兼容 Linux 制包机收集，目标服务器安装阶段不访问依赖仓库。systemd 保持单个 ThreadSnap 应用进程并配套一个 Xvfb 服务；Nginx 只发布 `/api/v1`、认证 WebSocket、SSE、健康检查和前端静态文件，显式屏蔽 `/internal/v1`。
+
+完整的磁盘探测、目录规划、制包、安装、验证、备份和回滚命令见 `docs/deployment/linux-v1.md`，实现位于 `deploy/linux/`。目标服务器不得直接使用 Windows `.vevn`、Windows Chromium、开发机 `data/` 或仅含源码的 builder 输入包。

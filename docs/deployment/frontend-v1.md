@@ -39,7 +39,7 @@ npm.cmd run build
 4. WebSocket 转发保留 Upgrade/Connection 头；
 5. `/internal/v1` 不通过前端入口发布。
 
-第一版不固化反向代理产品和 Linux 服务管理命令；这些内容与目标 CentOS 最终部署门禁一起确认。
+第一版 Linux 部署依据 ADR 0017 固定使用 Nginx 和 systemd。前端生产构建直接进入完整离线包，目标服务器运行期不安装 Node.js；Nginx 配置、同源代理、SSE、WebSocket、`/internal/v1` 屏蔽和 SPA 回退模板位于 `deploy/linux/nginx/threadsnap.conf`，完整流程见 `docs/deployment/linux-v1.md`。
 
 ## 4. 验证
 

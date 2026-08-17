@@ -11,9 +11,23 @@
 
 ## ⏳ 待你裁决
 
-- 2026-08-08：Linux 主机的 CPU 型号/核心数和正式项目进程管理方式仍待确认；内存、磁盘、Python 运行时与 PoC 浏览器健康检查已由后续实测补齐，原始入口见 `docs/research/poc-input-intake-2026-08-08.md` 第 4 节。
+- 2026-08-08：Linux 主机的 CPU 型号/核心数仍待最终主机探测；systemd、Xvfb、Nginx 和完整离线包已在 2026-08-17 确认为正式部署方案，内存、磁盘、Python 运行时与 PoC 浏览器健康检查已有历史实测，原始入口见 `docs/research/poc-input-intake-2026-08-08.md` 第 4 节。
 
 ---
+
+## 2026-08-17 — 第一版 Linux 完整离线部署封装
+**总目标**：为全新 CentOS Stream 10 服务器提供前后端完整离线部署包、明确的磁盘与目录选择、systemd/Xvfb/Nginx 配置，以及可复核的安装、验证、备份和回滚流程。
+**状态**：🟡 Windows 侧制包输入、完整离线组装器和目标机纯离线安装链已实现并通过本地构建与静态契约验证；最终 `fully-offline` 包仍须在兼容 CentOS 制包机组装，随后进入目标主机实装与三轮门禁。
+**干到哪里了**：
+- [x] 确认正式目标包内置 Python wheelhouse、锁定 Patchright 对应的 Linux Chromium，以及 Python、Nginx、Xvfb 和浏览器共享库 RPM；目标机固定使用 `pip --no-index` 与 `dnf --disablerepo='*'`，不在安装阶段访问 PyPI、浏览器源或 DNF 仓库。
+- [x] 新增主机只读探测脚本，统一输出发行版、CPU、内存、`lsblk`、`findmnt`、空间、inode、监听端口、SELinux 与防火墙状态；程序固定使用 `/opt/threadsnap/releases`，配置使用 `/etc/threadsnap`，持久数据默认使用 `/var/lib/threadsnap`，发现独立数据盘时可通过 `--data-dir /data/threadsnap` 切换。
+- [x] 新增兼容 Linux 离线组装器、目标机安装器、RPM 本地安装、Fernet 首次生成与升级保留、原子 release/previous 链接、SELinux 处理、systemd 单应用进程、独立 Xvfb、Nginx SPA/API/SSE/WebSocket 与 `/internal/v1` 屏蔽配置。
+- [x] 新增部署验证、停服一致性备份、带校验和路径防护的数据恢复、程序级回滚与失败自动恢复；修正 `.env.example` 的认证浏览器模式为 `false`，与源码默认值及 Linux Xvfb 口径一致。
+- [x] `scripts/build-linux-deployment-package.ps1 -Version 0.1.0 -AllowDirty` 已在隔离前端目录完成 `npm ci`、TypeScript 检查、2465 modules 生产构建和后端 wheel 构建，生成本地 `artifacts/releases/threadsnap-0.1.0-linux-builder.tar.gz`；开发包 manifest 明确 `source_dirty=true`、`installable=false`，没有伪装为最终 Linux 包。
+- [x] 所有 Linux shell 文件通过 Git Bash `bash -n`，PowerShell 制包脚本通过 AST 解析，部署静态契约测试 8/8 通过，覆盖完整离线边界、Chromium/RPM/wheel 收集、Nginx 内部接口与流式代理、单进程/Xvfb、配置一致性和无真实密钥模板。
+**下一步**：提交后从干净 Git 基线重建最终 builder 输入包；在与目标服务器相同的 CentOS Stream 10 x86_64/Python 次版本制包机执行 `deploy/assemble-offline-package.sh`，取得含 `wheelhouse/`、`browsers/`、`rpms/` 和 SHA-256 的正式离线包，再先运行 `inspect-host.sh` 决定 `/var/lib` 或独立数据盘，随后实装并完成 Xvfb 认证、重启、备份恢复和连续三轮 2000 URL 验收。
+**边界**：本条完成的是可复核的部署封装与制包链，不把 Windows 生成的 builder 输入包记为 Linux 可安装包，也不把尚未执行的 CentOS 离线组装、目标机认证或三轮吞吐记为通过；部署包不含 `.env`、数据库、Fernet 密钥、Cookie、storage state、认证 Profile 或原始 PoC 输入。
+**关联**：`docs/adr/0017-package-v1-as-fully-offline-systemd-nginx-release.md`、`docs/deployment/linux-v1.md`、`docs/design/technical-route.md`、`docs/chains/first-platform-delivery.md`、`deploy/linux/`、`scripts/build-linux-deployment-package.ps1`、`tests/test_linux_deployment_package.py`
 
 ## 2026-08-17 — 帖子查看标识改为推入推出
 **总目标**：修复批次结果行的“当前查看/刚刚查看”标签消失时只淡出并瞬间释放布局宽度，导致帖子标题直接跳位的问题。

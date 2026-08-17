@@ -1,0 +1,108 @@
+"""Linux 离线部署封装的静态契约测试。"""
+
+from __future__ import annotations
+
+import re
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+DEPLOY = ROOT / "deploy" / "linux"
+
+
+class LinuxDeploymentPackageTests(unittest.TestCase):
+    """防止正式部署包退回联网安装或暴露内部接口。"""
+
+    def read(self, relative: str) -> str:
+        return (ROOT / relative).read_text(encoding="utf-8-sig")
+
+    def test_required_deployment_files_exist(self) -> None:
+        required = [
+            "deploy/linux/inspect-host.sh",
+            "deploy/linux/assemble-offline-package.sh",
+            "deploy/linux/install-system-deps.sh",
+            "deploy/linux/install.sh",
+            "deploy/linux/verify.sh",
+            "deploy/linux/backup.sh",
+            "deploy/linux/restore-backup.sh",
+            "deploy/linux/rollback-release.sh",
+            "deploy/linux/nginx/threadsnap.conf",
+            "deploy/linux/systemd/threadsnap.service",
+            "deploy/linux/systemd/threadsnap-xvfb.service",
+            "deploy/linux/templates/threadsnap.env.example",
+            "scripts/build-linux-deployment-package.ps1",
+        ]
+        self.assertEqual([], [path for path in required if not (ROOT / path).is_file()])
+
+    def test_target_install_is_fully_offline(self) -> None:
+        install = self.read("deploy/linux/install.sh")
+        system_deps = self.read("deploy/linux/install-system-deps.sh")
+        self.assertIn("--no-index", install)
+        self.assertIn('"$PACKAGE_ROOT/wheelhouse"', install)
+        self.assertIn('"$PACKAGE_ROOT/browsers/."', install)
+        self.assertIn("package-local Chromium executable is missing", install)
+        self.assertNotIn('patchright" install chromium', install)
+        self.assertNotRegex(install, r"https?://")
+        self.assertIn("--disablerepo='*'", system_deps)
+        self.assertNotRegex(system_deps, r"https?://")
+        self.assertIn('"${ID:-}" == "centos"', install)
+        self.assertIn('"$(uname -m)" == "x86_64"', install)
+
+    def test_linux_assembler_collects_all_dependency_classes(self) -> None:
+        assembler = self.read("deploy/linux/assemble-offline-package.sh")
+        self.assertIn("pip download --only-binary=:all:", assembler)
+        self.assertIn('patchright" install chromium', assembler)
+        self.assertIn("dnf download --resolve --alldeps", assembler)
+        self.assertIn('dependency_mode="fully-offline"', assembler)
+        self.assertIn('package_role="offline-deployment"', assembler)
+        self.assertIn("installable=True", assembler)
+        self.assertIn("final offline assembly requires a clean", assembler)
+
+    def test_nginx_preserves_boundaries_and_streaming(self) -> None:
+        nginx = self.read("deploy/linux/nginx/threadsnap.conf")
+        internal = nginx.index("location ^~ /internal/v1")
+        public_api = nginx.index("location ^~ /api/v1/")
+        self.assertLess(internal, public_api)
+        self.assertIn("return 404", nginx[internal:public_api])
+        self.assertIn("proxy_buffering off", nginx)
+        self.assertIn("Sec-WebSocket-Protocol", nginx)
+        self.assertIn("$http_sec_websocket_protocol", nginx)
+        self.assertIn("try_files $uri $uri/ /index.html", nginx)
+
+    def test_single_process_and_xvfb_contract(self) -> None:
+        service = self.read("deploy/linux/systemd/threadsnap.service")
+        xvfb = self.read("deploy/linux/systemd/threadsnap-xvfb.service")
+        self.assertIn("Requires=threadsnap-xvfb.service", service)
+        self.assertIn("--host 127.0.0.1 --port 8000", service)
+        self.assertNotIn("--workers", service)
+        self.assertIn("1280x800x24", xvfb)
+        self.assertIn("-nolisten tcp", xvfb)
+
+    def test_headed_browser_mode_is_consistent(self) -> None:
+        for path in [
+            ".env.example",
+            "deploy/linux/templates/threadsnap.env.example",
+        ]:
+            value = self.read(path)
+            self.assertIn("THREADSNAP_AUTH_BROWSER_HEADLESS=false", value)
+            self.assertNotIn("THREADSNAP_AUTH_BROWSER_HEADLESS=true", value)
+
+    def test_builder_manifest_is_not_installable(self) -> None:
+        builder = self.read("scripts/build-linux-deployment-package.ps1")
+        self.assertIn("package_role = 'offline-builder-input'", builder)
+        self.assertIn("installable = $false", builder)
+        self.assertIn("contains_credentials = $false", builder)
+        self.assertIn("$frontendBuildRoot 'dist\\*'", builder)
+        self.assertIn("pip wheel --no-deps", builder)
+        self.assertIn("[Text.UTF8Encoding]::new($false)", builder)
+
+    def test_templates_have_no_real_secret(self) -> None:
+        template = self.read("deploy/linux/templates/threadsnap.env.example")
+        match = re.search(r"^THREADSNAP_SESSION_FERNET_KEY=(.*)$", template, re.MULTILINE)
+        self.assertIsNotNone(match)
+        self.assertEqual("<FERNET_KEY>", match.group(1))
+        self.assertNotIn("storage-state", template.lower())
+
+
+if __name__ == "__main__":
+    unittest.main()
