@@ -1451,6 +1451,33 @@ class TemplateTests(AppCase):
         self.assertIn("点赞：5赞", output["B2"].value)
         self.assertTrue(output["B2"].alignment.wrap_text)
 
+    def test_template_source_file_can_be_downloaded(self) -> None:
+        self.save_verified_circle()
+        workbook = Workbook()
+        workbook.active["A1"] = "platform.dongchedi.circle.24729.post.title"
+        source = Path(self.temp.name) / "download-source.xlsx"
+        workbook.save(source)
+        version = self.container.templates.upload("客户/模板", source.name, source.read_bytes())
+
+        response = self.client.get(
+            f"/api/v1/templates/{version['template_id']}/versions/"
+            f"{version['version_id']}/download"
+        )
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(source.read_bytes(), response.content)
+        self.assertEqual(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            response.headers["content-type"],
+        )
+        self.assertIn("v1.xlsx", response.headers["content-disposition"])
+
+        missing = self.client.get(
+            f"/api/v1/templates/{version['template_id']}/versions/missing/download"
+        )
+        self.assertEqual(404, missing.status_code)
+        self.assertEqual("TEMPLATE_VERSION_NOT_FOUND", missing.json()["code"])
+
     def test_invalid_template_returns_cell_and_field(self) -> None:
         self._seed_completed_run()
         workbook = Workbook()

@@ -250,6 +250,29 @@ class TemplateService:
                 raise DomainError("TEMPLATE_NOT_FOUND", "指定模板不存在。", status_code=404)
             template.hidden = True
 
+    def template_path(self, template_id: str, version_id: str) -> tuple[Path, str]:
+        """返回指定模板版本的原始文件路径和安全下载文件名。"""
+
+        with self.factory() as db:
+            template = db.get(Template, template_id)
+            version = db.get(TemplateVersion, version_id)
+            if not template or not version or version.template_id != template_id:
+                raise DomainError(
+                    "TEMPLATE_VERSION_NOT_FOUND",
+                    "指定模板版本不存在。",
+                    status_code=404,
+                )
+            path = Path(version.file_path)
+            clean_name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", template.name).strip(". ")
+            filename = f"{clean_name or 'template'}-v{version.version}.xlsx"
+        if not path.is_file():
+            raise DomainError(
+                "TEMPLATE_FILE_MISSING",
+                "模板版本记录存在，但原始文件已经丢失。",
+                status_code=500,
+            )
+        return path, filename
+
     def create_export(self, run_id: str, template_version_id: str) -> dict[str, Any]:
         with self.factory() as db:
             run = db.get(ExtractionRun, run_id)
