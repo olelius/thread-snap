@@ -401,6 +401,18 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
     def list_templates(request: Request) -> list[dict[str, Any]]:
         return _container(request).templates.list_templates()
 
+    @router.get(
+        "/templates/{template_id}/versions/{version_id}/download",
+        response_class=FileResponse,
+    )
+    def download_template(template_id: str, version_id: str, request: Request) -> FileResponse:
+        path, filename = _container(request).templates.template_path(template_id, version_id)
+        return FileResponse(
+            path,
+            filename=filename,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
     @router.delete("/templates/{template_id}")
     def hide_template(template_id: str, request: Request) -> dict[str, str]:
         _container(request).templates.hide_template(template_id)
