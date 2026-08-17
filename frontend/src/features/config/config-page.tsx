@@ -37,12 +37,12 @@ type ValidationBatchResult = { jobs: ValidationJob[]; queued_count: number; reus
 const validationSettled = (job: ValidationJob) => ['success', 'failed', 'waiting_for_auth'].includes(job.status)
 
 function ConfigSectionToolbar({ icon, title, summary, description, children }: { icon: ReactNode; title: string; summary: string; description: string; children: ReactNode }) {
-  return <div className='sticky top-0 z-10 flex flex-wrap items-center justify-between gap-4 rounded-xl border border-border/70 bg-card/95 px-4 py-3 shadow-sm backdrop-blur-xl'>
-    <div className='flex min-w-0 items-start gap-3'>
-      <div className='grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/15'>{icon}</div>
+  return <div className='sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 bg-card/95 px-4 py-2.5 shadow-sm backdrop-blur-xl'>
+    <div className='flex min-w-0 items-center gap-3'>
+      <div className='grid size-8 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/15'>{icon}</div>
       <div className='min-w-0'>
-        <div className='flex flex-wrap items-center gap-2'><h2 className='text-lg font-semibold'>{title}</h2><Badge variant='secondary' className='font-normal'>{summary}</Badge></div>
-        <p className='mt-0.5 text-sm text-muted-foreground'>{description}</p>
+        <div className='flex flex-wrap items-center gap-2'><h2 className='text-base font-semibold'>{title}</h2><Badge variant='secondary' className='font-normal'>{summary}</Badge></div>
+        <p className='mt-0.5 text-xs text-muted-foreground'>{description}</p>
       </div>
     </div>
     <div className='flex flex-wrap gap-2'>{children}</div>
@@ -80,17 +80,17 @@ export function ConfigPage() {
   const tab = tabValues.includes(raw.tab as Tab) ? raw.tab as Tab : 'plan'
   return (
     <div className='flex h-full min-h-0 flex-col'>
-      <div className='shrink-0 space-y-6'>
+      <div className='shrink-0 space-y-4'>
         <PageHeader title='配置管理' description='每项配置只在唯一归属页面编辑；跨页区域只展示摘要和跳转入口。' />
         {dirty && <Alert className='border-amber-500/30 bg-amber-500/5'><Save className='size-4' /><AlertTitle>存在尚未保存的修改</AlertTitle><AlertDescription>切换标签会保留暂存内容；离开或刷新页面前会提示。保存按钮只提交当前标签。</AlertDescription></Alert>}
       </div>
-      <Tabs className='mt-6 flex min-h-0 flex-1 flex-col' value={tab} onValueChange={(value) => navigate({ to: '/config', search: { tab: value as Tab }, replace: true, resetScroll: false })}>
-        <div className='shrink-0 overflow-x-auto'><TabsList className='h-11 min-w-max bg-muted/65 p-1'><TabsTrigger value='plan'>提取计划</TabsTrigger><TabsTrigger value='platforms'>平台配置</TabsTrigger><TabsTrigger value='circles'>车型与圈子</TabsTrigger><TabsTrigger value='history'>手动圈子历史</TabsTrigger><TabsTrigger value='templates'>导出模板</TabsTrigger></TabsList></div>
-        <TabsContent forceMount value='plan' className='mt-5 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><PlanPanel onDirtyChange={setPlanDirty} /></TabsContent>
-        <TabsContent forceMount value='platforms' className='mt-5 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><PlatformPanel onDirtyChange={setPlatformDirty} /></TabsContent>
-        <TabsContent forceMount value='circles' className='mt-5 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><CirclePanel onDirtyChange={setCircleDirty} /></TabsContent>
-        <TabsContent forceMount value='history' className='mt-5 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><HistoryPanel /></TabsContent>
-        <TabsContent forceMount value='templates' className='mt-5 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><TemplatePanel /></TabsContent>
+      <Tabs className='mt-4 flex min-h-0 flex-1 flex-col' value={tab} onValueChange={(value) => navigate({ to: '/config', search: { tab: value as Tab }, replace: true, resetScroll: false })}>
+        <div className='shrink-0 overflow-x-auto'><TabsList className='h-10 min-w-max bg-muted/65 p-1'><TabsTrigger value='plan'>提取计划</TabsTrigger><TabsTrigger value='platforms'>平台配置</TabsTrigger><TabsTrigger value='circles'>车型与圈子</TabsTrigger><TabsTrigger value='history'>手动圈子历史</TabsTrigger><TabsTrigger value='templates'>导出模板</TabsTrigger></TabsList></div>
+        <TabsContent forceMount value='plan' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><PlanPanel onDirtyChange={setPlanDirty} /></TabsContent>
+        <TabsContent forceMount value='platforms' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><PlatformPanel onDirtyChange={setPlatformDirty} /></TabsContent>
+        <TabsContent forceMount value='circles' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><CirclePanel onDirtyChange={setCircleDirty} /></TabsContent>
+        <TabsContent forceMount value='history' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><HistoryPanel /></TabsContent>
+        <TabsContent forceMount value='templates' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><TemplatePanel /></TabsContent>
       </Tabs>
       <AlertDialog open={blocker.status === 'blocked'}>
         <AlertDialogContent>
