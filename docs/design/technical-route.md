@@ -140,9 +140,9 @@
 ## 已确认的第一版 Linux 部署基线
 
 - Windows 开发机生成只含 ThreadSnap wheel、前端生产构建、固定配置和部署工具的制包输入包；完整离线包必须在与目标机相同的 CentOS Stream 主版本、x86_64 和 Python 次版本上组装。
-- 完整离线包内置全部 Python wheels、锁定 Patchright 对应的 Linux Chromium，以及 Python、Nginx、Weston 和浏览器共享库 RPM。目标机安装固定使用 `pip --no-index` 与 `dnf --disablerepo='*'`，安装阶段不从外部仓库解析或下载组件。
+- 完整离线包内置全部 Python wheels、锁定 Patchright 对应的 Linux Chromium，以及 Python、Nginx、Weston 和浏览器共享库 RPM。RPM 目录带本地仓库元数据和顶层组件清单；目标机安装固定使用 `pip --no-index` 与 `dnf --disablerepo='*'`，只由包内仓库解析缺失依赖，不把全部递归 RPM 强制升级到制包日版本。
 - 程序 release 位于 `/opt/threadsnap/releases/`，配置位于 `/etc/threadsnap`，持久数据默认位于 `/var/lib/threadsnap`。安装前用 `lsblk`、`findmnt`、`df -hT` 与 `df -Pi` 核对挂载点；存在独立数据盘时把 `--data-dir` 指向其挂载点，不把 SQLite、模板、导出或加密 Profile 放入程序 release。
-- systemd 只启动一个 ThreadSnap 应用进程，并由独立 Weston 服务通过 `wayland-99` socket 提供 `1280 × 800` 无头显示。Nginx 发布 SPA、代理页面 API/SSE/认证 WebSocket并明确屏蔽 `/internal/v1`；Uvicorn 继续只监听 `127.0.0.1:8000`，不开放 CDP，Wayland socket 仅对 `threadsnap` 用户可用。
+- systemd 只启动一个 ThreadSnap 应用进程，并由独立 Weston 服务通过 `wayland-99` socket 提供 `1280 × 800` 无头显示。专用 `threadsnap-nginx.service` 使用 `/etc/threadsnap/nginx.conf` 发布 SPA、代理页面 API/SSE/认证 WebSocket并明确屏蔽 `/internal/v1`，不接管宿主机已有的 80/443 Nginx；Uvicorn 继续只监听 `127.0.0.1:8000`，不开放 CDP，Wayland socket 仅对 `threadsnap` 用户可用。
 - 制包、安装、验证、备份和回滚的唯一操作说明为 `docs/deployment/linux-v1.md`，具体脚本位于 `deploy/linux/`。完整离线包的发行版、架构、Python、浏览器和逐文件 SHA-256 必须写入 manifest 与校验清单。
 
 ## 保留的部署与性能验收门禁

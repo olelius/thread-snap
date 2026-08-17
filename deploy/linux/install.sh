@@ -78,7 +78,7 @@ fi
   exit 2
 }
 
-for required in PACKAGE-MANIFEST.json SHA256SUMS backend frontend deploy wheelhouse browsers rpms; do
+for required in PACKAGE-MANIFEST.json SHA256SUMS SYSTEM-PACKAGES.txt backend frontend deploy wheelhouse browsers rpms; do
   [[ -e "$PACKAGE_ROOT/$required" ]] || {
     echo "ERROR: deployment package is incomplete: $required" >&2
     exit 3
@@ -114,7 +114,7 @@ print(str(manifest.get("installable", False)).lower())
 print(manifest.get("assembled_on", {}).get("python", ""))
 PY
 )
-VERSION="${manifest_values[0]}"
+APP_VERSION="${manifest_values[0]}"
 SOURCE_COMMIT="${manifest_values[1]}"
 [[ "${manifest_values[2]}" == "true" ]] || {
   echo "ERROR: this is a builder input package, not the assembled offline deployment package" >&2
@@ -131,7 +131,7 @@ CURRENT_PYTHON="$(python3 -c 'import platform; print(platform.python_version())'
   echo "ERROR: package Python baseline is $ASSEMBLED_PYTHON, installed interpreter is $CURRENT_PYTHON" >&2
   exit 3
 }
-RELEASE_ID="${VERSION}-${SOURCE_COMMIT:0:12}"
+RELEASE_ID="${APP_VERSION}-${SOURCE_COMMIT:0:12}"
 APP_ROOT="/opt/threadsnap"
 RELEASES_DIR="$APP_ROOT/releases"
 RELEASE_DIR="$RELEASES_DIR/$RELEASE_ID"
@@ -185,7 +185,7 @@ cp -a "$PACKAGE_ROOT/browsers/." "$BROWSER_DIR/"
 chown -R threadsnap:threadsnap "$BROWSER_DIR"
 
 if [[ ! -f "$ENV_FILE" ]]; then
-  FERNET_KEY="$($STAGING_DIR/venv/bin/python - <<'PY'
+  FERNET_KEY="$("$STAGING_DIR/venv/bin/python" - <<'PY'
 from cryptography.fernet import Fernet
 print(Fernet.generate_key().decode("ascii"))
 PY
@@ -195,7 +195,7 @@ PY
     -e "s|sqlite:////var/lib/threadsnap/threadsnap.db|$DATABASE_URL|" \
     -e "s|THREADSNAP_DATA_DIR=/var/lib/threadsnap|THREADSNAP_DATA_DIR=$DATA_DIR|" \
     -e "s|<FERNET_KEY>|$FERNET_KEY|" \
-    "$SCRIPT_DIR/templates/threadsnap.env.example" > "$ENV_FILE"
+    "$SCRIPT_DIR/templates/threadsnap.env.example" | sed 's/\r$//' > "$ENV_FILE"
   chown root:threadsnap "$ENV_FILE"
   chmod 0640 "$ENV_FILE"
 else
@@ -230,22 +230,28 @@ cp "$SCRIPT_DIR/systemd/threadsnap-wayland.service" /etc/systemd/system/threadsn
 sed \
   -e "s|@SERVER_NAME@|$SERVER_NAME|g" \
   -e "s|@LISTEN_PORT@|$LISTEN_PORT|g" \
-  "$SCRIPT_DIR/nginx/threadsnap.conf" > /etc/nginx/conf.d/threadsnap.conf
+  "$SCRIPT_DIR/nginx/threadsnap.conf" > "$CONFIG_DIR/nginx-site.conf"
+cp "$SCRIPT_DIR/nginx/nginx.conf" "$CONFIG_DIR/nginx.conf"
+cp "$SCRIPT_DIR/systemd/threadsnap-nginx.service" /etc/systemd/system/threadsnap-nginx.service
 
 if command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce)" != "Disabled" ]]; then
-  semanage fcontext -a -t httpd_sys_content_t '/opt/threadsnap/releases(/.*)?' 2>/dev/null || \
-    semanage fcontext -m -t httpd_sys_content_t '/opt/threadsnap/releases(/.*)?'
+  semanage fcontext -a -t usr_t '/opt/threadsnap/releases(/.*)?' 2>/dev/null || \
+    semanage fcontext -m -t usr_t '/opt/threadsnap/releases(/.*)?'
+  semanage fcontext -a -t httpd_sys_content_t '/opt/threadsnap/releases/[^/]+/frontend(/.*)?' 2>/dev/null || \
+    semanage fcontext -m -t httpd_sys_content_t '/opt/threadsnap/releases/[^/]+/frontend(/.*)?'
   restorecon -RF "$RELEASES_DIR"
   setsebool -P httpd_can_network_connect 1
+  semanage port -a -t http_port_t -p tcp "$LISTEN_PORT" 2>/dev/null || \
+    semanage port -m -t http_port_t -p tcp "$LISTEN_PORT"
 fi
 
 systemctl daemon-reload
-nginx -t
+nginx -t -c "$CONFIG_DIR/nginx.conf"
 
 if [[ "$START_SERVICES" == true ]]; then
   systemctl enable --now threadsnap-wayland.service
   systemctl enable --now threadsnap.service
-  systemctl enable --now nginx.service
+  systemctl enable --now threadsnap-nginx.service
   if ! bash "$SCRIPT_DIR/verify.sh" --listen-port "$LISTEN_PORT" --server-name "$SERVER_NAME" --quick; then
     echo "ERROR: new release health verification failed" >&2
     if [[ -n "$old_release" && -d "$old_release" ]]; then

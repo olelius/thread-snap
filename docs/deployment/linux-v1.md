@@ -8,7 +8,8 @@ ThreadSnap 正式目标包为 `fully-offline`：
 - `wheelhouse/`：全部 Python 运行依赖 wheel；
 - `frontend/`：已经完成 Vite 生产构建的静态文件；
 - `browsers/`：与锁定 Patchright 版本匹配的 Linux Chromium；
-- `rpms/`：Python、Nginx、Weston 和 Chromium 系统共享库及其 RPM 依赖；
+- `rpms/`：Python、Nginx、Weston 和 Chromium 系统共享库及其 RPM 依赖，并包含本地仓库元数据；
+- `SYSTEM-PACKAGES.txt`：目标机向本地 RPM 仓库请求的顶层运行组件，避免强制安装全部递归 RPM；
 - `deploy/`：主机检查、安装、systemd、Nginx、验证、备份与回滚脚本；
 - `SHA256SUMS`：包内逐文件校验；压缩包旁另有整体 `.sha256`。
 
@@ -73,9 +74,10 @@ sudo bash deploy/assemble-offline-package.sh "$PWD/output"
 3. 下载并冻结 Python wheelhouse；
 4. 在临时虚拟环境中执行纯离线安装与 `pip check`；
 5. 下载锁定 Patchright 对应的完整 Linux Chromium，并跳过未使用的 headless shell；
-6. 使用 `dnf download --resolve --alldeps` 收集系统 RPM 闭包；
-7. 生成新的逐文件校验清单和压缩包整体校验值；
-8. 输出 `*-centos-stream-10-x86_64-offline.tar.gz`。
+6. 使用 `dnf download --resolve --alldeps` 收集系统 RPM 闭包，并用 `createrepo_c` 生成包内本地仓库元数据；
+7. 记录顶层系统组件清单，让目标 DNF 复用已安装的兼容版本并只补齐缺失依赖；
+8. 生成新的逐文件校验清单和压缩包整体校验值；
+9. 输出 `*-centos-stream-10-x86_64-offline.tar.gz`。
 
 ## 5. 目标服务器纯离线安装
 
@@ -93,13 +95,13 @@ sudo bash deploy/install.sh --data-dir /var/lib/threadsnap --server-name HOST
 
 安装脚本执行以下动作：
 
-- 从包内 RPM 安装 Python、Nginx、Weston 和共享库，禁用所有 DNF 仓库；
+- 从包内本地 RPM 仓库安装 Python、Nginx、Weston 和共享库，禁用所有外部 DNF 仓库；
 - 建立 `threadsnap` 系统账号；
 - 在新 release 中建立虚拟环境并从本地 wheelhouse 安装；
 - 从包内复制 Chromium；
 - 首次生成 Fernet 密钥，升级时保留原密钥；
-- 安装并启动 Weston 无头 Wayland、ThreadSnap 单进程和 Nginx；
-- 设置 SELinux 静态文件与回环代理策略；
+- 安装并启动 Weston 无头 Wayland、ThreadSnap 单进程和独立 `threadsnap-nginx` 服务；
+- 设置 SELinux 程序、静态文件、回环代理和非标准 HTTP 端口策略；
 - 执行健康检查，失败时恢复上一程序版本。
 
 防火墙只向受控内网或 VPN 网段开放 Nginx 端口。FastAPI `8000` 和 CDP 均保持本机访问，Wayland socket 只允许 `threadsnap` 用户访问。
@@ -108,7 +110,7 @@ sudo bash deploy/install.sh --data-dir /var/lib/threadsnap --server-name HOST
 
 ```bash
 sudo bash /opt/threadsnap/current/deploy/verify.sh
-sudo systemctl status threadsnap threadsnap-wayland nginx --no-pager
+sudo systemctl status threadsnap threadsnap-wayland threadsnap-nginx --no-pager
 sudo journalctl -u threadsnap -n 200 --no-pager
 ```
 

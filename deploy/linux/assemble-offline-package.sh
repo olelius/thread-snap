@@ -35,6 +35,9 @@ PY
 if ! dnf download --help >/dev/null 2>&1; then
   dnf install -y dnf-plugins-core
 fi
+if ! command -v createrepo_c >/dev/null 2>&1; then
+  dnf install -y createrepo_c
+fi
 
 # CentOS Stream 10 已移除 Xorg/Xvfb。Weston 位于 EPEL，部分依赖位于 CRB；
 # 只在联网制包阶段启用这些仓库，最终目标机仍使用包内 RPM 纯离线安装。
@@ -87,13 +90,15 @@ PLAYWRIGHT_BROWSERS_PATH="$STAGE/browsers" \
   "$WORK_ROOT/verify-venv/bin/patchright" install --no-shell chromium
 
 rpm_packages=(
-  python3 python3-pip nginx epel-release weston
+  python3 python3-pip nginx weston
   tar gzip curl ca-certificates shadow-utils findutils util-linux procps-ng iproute
   policycoreutils-python-utils
   alsa-lib atk at-spi2-atk cups-libs libdrm libXcomposite libXdamage libXfixes
   libXrandr mesa-libgbm pango nss libxcb libxkbcommon gtk3
 )
 dnf download --resolve --alldeps --destdir "$STAGE/rpms" "${rpm_packages[@]}"
+printf '%s\n' "${rpm_packages[@]}" > "$STAGE/SYSTEM-PACKAGES.txt"
+createrepo_c "$STAGE/rpms"
 
 python3 - "$STAGE/PACKAGE-MANIFEST.json" "$FINAL_NAME" <<'PY'
 import json, os, platform, sys

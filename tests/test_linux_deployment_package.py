@@ -27,8 +27,10 @@ class LinuxDeploymentPackageTests(unittest.TestCase):
             "deploy/linux/restore-backup.sh",
             "deploy/linux/rollback-release.sh",
             "deploy/linux/nginx/threadsnap.conf",
+            "deploy/linux/nginx/nginx.conf",
             "deploy/linux/systemd/threadsnap.service",
             "deploy/linux/systemd/threadsnap-wayland.service",
+            "deploy/linux/systemd/threadsnap-nginx.service",
             "deploy/linux/templates/threadsnap.env.example",
             "scripts/build-linux-deployment-package.ps1",
         ]
@@ -44,6 +46,9 @@ class LinuxDeploymentPackageTests(unittest.TestCase):
         self.assertNotIn('patchright" install chromium', install)
         self.assertNotRegex(install, r"https?://")
         self.assertIn("--disablerepo='*'", system_deps)
+        self.assertIn("--repofrompath=", system_deps)
+        self.assertIn('"${packages[@]}"', system_deps)
+        self.assertNotIn('install -y "${rpms[@]}"', system_deps)
         self.assertNotRegex(system_deps, r"https?://")
         self.assertIn('"${ID:-}" == "centos"', install)
         self.assertIn('"$(uname -m)" == "x86_64"', install)
@@ -57,10 +62,20 @@ class LinuxDeploymentPackageTests(unittest.TestCase):
         self.assertIn("weston", assembler)
         self.assertNotIn("xorg-x11-server-Xvfb", assembler)
         self.assertIn("dnf download --resolve --alldeps", assembler)
+        self.assertIn('createrepo_c "$STAGE/rpms"', assembler)
+        self.assertIn('"$STAGE/SYSTEM-PACKAGES.txt"', assembler)
         self.assertIn('dependency_mode="fully-offline"', assembler)
         self.assertIn('package_role="offline-deployment"', assembler)
         self.assertIn("installable=True", assembler)
         self.assertIn("final offline assembly requires a clean", assembler)
+
+    def test_installer_keeps_app_version_separate_from_os_release(self) -> None:
+        install = self.read("deploy/linux/install.sh")
+        self.assertIn('APP_VERSION="${manifest_values[0]}"', install)
+        self.assertIn('RELEASE_ID="${APP_VERSION}-${SOURCE_COMMIT:0:12}"', install)
+        self.assertNotIn('RELEASE_ID="${VERSION}-${SOURCE_COMMIT:0:12}"', install)
+        self.assertIn('"$STAGING_DIR/venv/bin/python"', install)
+        self.assertIn("sed 's/\\r$//'", install)
 
     def test_nginx_preserves_boundaries_and_streaming(self) -> None:
         nginx = self.read("deploy/linux/nginx/threadsnap.conf")
@@ -73,11 +88,27 @@ class LinuxDeploymentPackageTests(unittest.TestCase):
         self.assertIn("$http_sec_websocket_protocol", nginx)
         self.assertIn("try_files $uri $uri/ /index.html", nginx)
 
+    def test_nginx_uses_dedicated_service_and_nonstandard_port_label(self) -> None:
+        install = self.read("deploy/linux/install.sh")
+        verify = self.read("deploy/linux/verify.sh")
+        service = self.read("deploy/linux/systemd/threadsnap-nginx.service")
+        self.assertIn("threadsnap-nginx.service", install)
+        self.assertIn("threadsnap-nginx.service", verify)
+        self.assertIn("/etc/threadsnap/nginx.conf", service)
+        self.assertIn("semanage port -a -t http_port_t", install)
+        self.assertIn("-t usr_t '/opt/threadsnap/releases(/.*)?'", install)
+        self.assertIn(
+            "-t httpd_sys_content_t '/opt/threadsnap/releases/[^/]+/frontend(/.*)?'", install
+        )
+        self.assertNotIn("systemctl enable --now nginx.service", install)
+
     def test_single_process_and_wayland_contract(self) -> None:
         service = self.read("deploy/linux/systemd/threadsnap.service")
         wayland = self.read("deploy/linux/systemd/threadsnap-wayland.service")
         self.assertIn("Requires=threadsnap-wayland.service", service)
-        self.assertIn("--host 127.0.0.1 --port 8000", service)
+        self.assertIn(
+            "venv/bin/python -m threadsnap.cli serve --host 127.0.0.1 --port 8000", service
+        )
         self.assertNotIn("--workers", service)
         self.assertIn("--backend=headless-backend.so", wayland)
         self.assertIn("--socket=wayland-99", wayland)
@@ -113,6 +144,12 @@ class LinuxDeploymentPackageTests(unittest.TestCase):
         self.assertIn("$frontendBuildRoot 'dist\\*'", builder)
         self.assertIn("pip wheel --no-deps", builder)
         self.assertIn("[Text.UTF8Encoding]::new($false)", builder)
+
+    def test_collector_runtime_dependency_is_declared(self) -> None:
+        pyproject = self.read("pyproject.toml")
+        self.assertIn('"curl-cffi==0.16.0"', pyproject)
+        self.assertIn('"playwright==1.61.0"', pyproject)
+        self.assertIn('"scrapling[fetchers]==0.4.12"', pyproject)
 
     def test_templates_have_no_real_secret(self) -> None:
         template = self.read("deploy/linux/templates/threadsnap.env.example")

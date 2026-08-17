@@ -1,0 +1,17 @@
+[Unit]
+Description=ThreadSnap dedicated Nginx reverse proxy
+Requires=threadsnap.service
+After=network-online.target threadsnap.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/sbin/nginx -t -c /etc/threadsnap/nginx.conf
+ExecStart=/usr/sbin/nginx -c /etc/threadsnap/nginx.conf -g "daemon off;"
+ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGQUIT
+TimeoutStopSec=10
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

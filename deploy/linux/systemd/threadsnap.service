@@ -12,7 +12,7 @@ WorkingDirectory=/opt/threadsnap/current
 EnvironmentFile=/etc/threadsnap/threadsnap.env
 Environment=HOME=@DATA_DIR@
 UMask=0077
-ExecStart=/opt/threadsnap/current/venv/bin/threadsnap serve --host 127.0.0.1 --port 8000
+ExecStart=/opt/threadsnap/current/venv/bin/python -m threadsnap.cli serve --host 127.0.0.1 --port 8000
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=45

@@ -27,8 +27,8 @@ check() {
 
 check "threadsnap service active" systemctl is-active --quiet threadsnap.service
 check "Wayland service active" systemctl is-active --quiet threadsnap-wayland.service
-check "nginx service active" systemctl is-active --quiet nginx.service
-check "nginx configuration" nginx -t
+check "ThreadSnap Nginx service active" systemctl is-active --quiet threadsnap-nginx.service
+check "ThreadSnap Nginx configuration" nginx -t -c /etc/threadsnap/nginx.conf
 
 health_ready=false
 for _ in $(seq 1 30); do
@@ -67,7 +67,7 @@ check "Fernet key configured" grep -q '^THREADSNAP_SESSION_FERNET_KEY=.' "$ENV_F
 
 if [[ "$QUICK" == false ]]; then
   check "headed Chromium launches under Wayland" runuser -u threadsnap -- env \
-    HOME="$(sed -n 's/^THREADSNAP_DATA_DIR=//p' "$ENV_FILE" | tail -n 1)" \
+    HOME="$(sed -n 's/^THREADSNAP_DATA_DIR=//p' "$ENV_FILE" | tail -n 1 | tr -d '\r')" \
     XDG_RUNTIME_DIR=/run/threadsnap-wayland \
     WAYLAND_DISPLAY=wayland-99 \
     PLAYWRIGHT_BROWSERS_PATH=/opt/threadsnap/browsers \
