@@ -72,13 +72,14 @@ export function RunsPage() {
   }
 
   const columns = useMemo(() => [
+    column.display({ id: 'index', header: () => <span className='block text-center'>序号</span>, cell: ({ row }) => <span className='block text-center tabular-nums text-muted-foreground'>{offset + row.index + 1}</span> }),
     column.accessor('number', { header: '批次编号', cell: (info) => <div><div className='font-medium'>{info.getValue()}</div><div className='mt-1 text-xs text-muted-foreground'>{info.row.original.trigger_type_name}</div></div> }),
     column.display({ id: 'scope', header: '提取范围', cell: ({ row }) => <div className='max-w-64'><div className='truncate text-sm'>{row.original.circle_names?.join('、') || `${row.original.circle_count} 个任务`}</div><div className='mt-1 text-xs text-muted-foreground'>{row.original.platform_codes?.map(platformName).join('、') || `${row.original.platform_count} 个平台`}</div></div> }),
     column.accessor('status', { header: '状态', cell: ({ row }) => <StatusBadge value={row.original.status} label={row.original.status_name} /> }),
     column.display({ id: 'progress', header: '进度', cell: ({ row }) => { const run = row.original; const percent = run.planned_count ? Math.min(100, Math.round(((run.completed_count + run.failed_count) / run.planned_count) * 100)) : 0; return <div className='w-40 space-y-1.5'><div className='flex justify-between text-xs'><span>{run.completed_count} / {run.planned_count}</span><span className='text-muted-foreground'>{percent}%</span></div><Progress value={percent} className='h-1.5' />{run.failed_count > 0 && <div className='text-[11px] text-red-600 dark:text-red-300'>{run.failed_count} 项失败</div>}</div> } }),
     column.display({ id: 'time', header: '时间', cell: ({ row }) => <div className='whitespace-nowrap text-sm'><div>{formatDate(row.original.created_at)}</div><div className='mt-1 text-xs text-muted-foreground'>{row.original.finished_at ? `完成 ${formatDate(row.original.finished_at)}` : row.original.queue_position ? `队列第 ${row.original.queue_position} 位` : '进行中'}</div></div> }),
     column.display({ id: 'action', header: () => <span className='sr-only'>操作</span>, cell: ({ row }) => <div className='flex justify-end gap-1'>{row.original.status === 'waiting_for_auth' && <Button variant='outline' size='sm' onClick={(event) => { event.stopPropagation(); setAuthRun(row.original) }}><KeyRound className='size-4' />去认证</Button>}<Button variant='ghost' size='sm' onClick={(event) => { event.stopPropagation(); navigate({ to: '/runs/$runId', params: { runId: row.original.id }, search: emptyDetailSearch }) }}>查看</Button></div> }),
-  ], [navigate])
+  ], [navigate, offset])
   const table = useReactTable({ data: query.data?.items ?? [], columns, getCoreRowModel: getCoreRowModel() })
   const totalPages = Math.max(1, Math.ceil((query.data?.total ?? 0) / (search.pageSize ?? 50)))
 
