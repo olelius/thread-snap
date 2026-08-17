@@ -246,7 +246,7 @@ function PlanPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void 
   }
 
   return <div className='space-y-5'>
-    <fieldset disabled={save.isPending} className='contents'>
+    <fieldset disabled={save.isPending} className='m-0 min-w-0 space-y-5 border-0 p-0'>
       <ConfigSectionToolbar icon={<CalendarClock className='size-4.5' />} title='自动提取规则' summary={`${draft.rules.length} 条规则${dirty ? ` · ${changeCount} 项未保存` : ''}`} description='左侧定位规则，右侧只编辑当前规则；保存时仍与每周计划节点统一校验并原子提交。'>
         <Button variant='outline' onClick={createRule}><Plus className='size-4' />新建规则</Button>
         <Button disabled={!dirty || save.isPending} onClick={() => save.mutate(draft)}>{save.isPending ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}{save.isPending ? '正在保存' : `保存全部更改${dirty ? ` (${changeCount})` : ''}`}</Button>
