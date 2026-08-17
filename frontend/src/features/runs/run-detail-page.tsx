@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { motion, useReducedMotion } from 'motion/react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { ArrowLeft, CircleAlert, CircleCheckBig, CircleStop, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, Gauge, KeyRound, Layers3, ListTree, LoaderCircle, RefreshCw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AuthDialog } from '@/features/auth/auth-dialog'
@@ -185,6 +185,7 @@ export function RunDetailPage() {
   const canDelete = ['success', 'partial_success', 'failed'].includes(run.data?.status ?? '')
   const inputModeName = run.data?.input_mode === 'url_list' ? 'URL 清单' : '圈子发现'
   const selectionTransition = reduceMotion ? { duration: 0 } : { type: 'spring' as const, stiffness: 430, damping: 34, mass: 0.55 }
+  const viewLabelTransition = reduceMotion ? { duration: 0 } : { duration: 0.18, ease: [0.2, 0, 0, 1] as const }
 
   return (
     <div className='flex h-full min-h-0 flex-col gap-4 overflow-y-auto xl:overflow-hidden'>
@@ -225,10 +226,31 @@ export function RunDetailPage() {
                 return <TableRow key={post.id} id={`post-row-${post.id}`} aria-current={isCurrentPost ? 'true' : undefined} className={cn('transition-[background-color,box-shadow] duration-200', isHighlightedPost && 'post-row-active', isLastViewedPost && 'post-row-dismissed')}>
                   <TableCell className='w-16 text-center tabular-nums text-muted-foreground'>{((search.page ?? 1) - 1) * (search.pageSize ?? 50) + index + 1}</TableCell><TableCell className='relative max-w-80'>
                     {isHighlightedPost && <motion.span layoutId='post-row-selection-trail' aria-hidden className='post-row-selection-trail absolute inset-y-1 left-0 w-1 rounded-full' transition={selectionTransition} />}
-                    <a href={post.url} target='_blank' rel='noreferrer' className={cn('relative flex min-w-0 items-center gap-1.5 font-medium hover:text-primary hover:underline', isHighlightedPost && 'pl-3 text-primary')}>
-                      {isCurrentPost ? <span className='shrink-0 rounded-full border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium leading-none text-primary'>当前查看</span> : isLastViewedPost ? <span className='post-row-last-viewed-label shrink-0 rounded-full border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium leading-none text-primary'>刚刚查看</span> : null}
-                      <span className='min-w-0 truncate'>{post.title || '无标题'}</span><ExternalLink className='size-3 shrink-0' />
-                    </a>
+                    <motion.a
+                      href={post.url}
+                      target='_blank'
+                      rel='noreferrer'
+                      className={cn('relative flex min-w-0 items-center font-medium hover:text-primary hover:underline', isHighlightedPost && 'text-primary')}
+                      animate={{ paddingLeft: isHighlightedPost ? 12 : 0 }}
+                      transition={viewLabelTransition}
+                    >
+                      <AnimatePresence initial={false}>
+                        {isHighlightedPost && <motion.span
+                          key='post-view-state'
+                          className='inline-flex shrink-0 overflow-hidden'
+                          initial={reduceMotion ? false : { width: 0, marginRight: 0, x: -6, opacity: 0.35 }}
+                          animate={{ width: 'auto', marginRight: 6, x: 0, opacity: 1 }}
+                          exit={reduceMotion ? { width: 0, marginRight: 0 } : { width: 0, marginRight: 0, x: -6, opacity: 0.35 }}
+                          transition={viewLabelTransition}
+                          data-post-view-label={isCurrentPost ? 'current' : 'recent'}
+                        >
+                          <span className='whitespace-nowrap rounded-full border border-primary/20 bg-primary/10 px-1.5 py-0.5 text-[11px] font-medium leading-none text-primary'>
+                            {isCurrentPost ? '当前查看' : '刚刚查看'}
+                          </span>
+                        </motion.span>}
+                      </AnimatePresence>
+                      <span className='min-w-0 truncate'>{post.title || '无标题'}</span><ExternalLink className='ml-1.5 size-3 shrink-0' />
+                    </motion.a>
                   </TableCell><TableCell>{post.circle_name || '—'}</TableCell><TableCell>{post.author || '—'}</TableCell><TableCell className='whitespace-nowrap'>{formatDate(post.published_at)}</TableCell><TableCell><StatusBadge value={post.visibility} label={{ visible: '可见', hidden: '不可见', unknown: '未知' }[post.visibility]} /></TableCell><TableCell className='text-right tabular-nums'>{post.reply_count ?? '—'}</TableCell><TableCell className='text-right tabular-nums'>{post.like_count ?? '—'}</TableCell><TableCell><div className='flex justify-end gap-1'><Button variant='ghost' size='sm' data-post-detail-trigger='true' onClick={(event) => openPost(post.id, event.currentTarget)}>查看</Button><Button variant='ghost' size='icon' onClick={() => copyText(post.url)} aria-label='复制帖子链接'><Copy className='size-4' /></Button></div></TableCell>
                 </TableRow>
               }) : <TableRow><TableCell colSpan={9} className='h-52 text-center text-muted-foreground'>当前筛选条件下没有帖子结果。</TableCell></TableRow>}
