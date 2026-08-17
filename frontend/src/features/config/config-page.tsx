@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useBlocker, useNavigate, useSearch } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArchiveRestore, CalendarClock, CirclePlus, Copy, KeyRound, Loader2, Plus, RefreshCw, Save, Trash2, Upload } from 'lucide-react'
+import { ArchiveRestore, CalendarClock, ChevronDown, CirclePlus, Copy, KeyRound, Loader2, Plus, RefreshCw, Save, Trash2, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { AuthDialog } from '@/features/auth/auth-dialog'
 import { PageHeader } from '@/components/page-header'
@@ -14,6 +14,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -105,6 +106,7 @@ function PlanPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void 
   if (!draft) return <Card><CardContent className='p-10 text-center text-sm text-muted-foreground'>正在加载提取计划…</CardContent></Card>
   const allPlatforms = platforms.data ?? []
   const allCircles = vehicleRows(vehicles.data ?? [])
+  const enabledCircles = allCircles.filter((circle) => circle.auto_enabled)
   const defaultQuantity = (platform: Platform) => Math.max(platform.quantity_range.min, Math.min(30, platform.quantity_range.max))
   const updateRule = (ruleId: string, transform: (rule: ExtractionPlan['rules'][number]) => ExtractionPlan['rules'][number]) => update({ ...draft, rules: draft.rules.map((item) => item.id === ruleId ? transform(item) : item) })
   const toggleCircle = (ruleId: string, circle: Circle, checked: boolean) => updateRule(ruleId, (rule) => {
@@ -116,11 +118,11 @@ function PlanPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void 
     return { ...rule, circle_ids: ids, platform_quantities: quantities }
   })
   const togglePlatform = (ruleId: string, platform: Platform, checked: boolean) => updateRule(ruleId, (rule) => {
-    const platformIds = allCircles.filter((circle) => circle.platform_code === platform.code).map((circle) => circle.id)
+    const platformIds = enabledCircles.filter((circle) => circle.platform_code === platform.code).map((circle) => circle.id)
     const ids = checked ? [...new Set([...rule.circle_ids, ...platformIds])] : rule.circle_ids.filter((id) => !platformIds.includes(id))
     const quantities = { ...rule.platform_quantities }
     if (checked && platformIds.length && quantities[platform.code] === undefined) quantities[platform.code] = defaultQuantity(platform)
-    if (!checked) delete quantities[platform.code]
+    if (!ids.some((id) => allCircles.find((circle) => circle.id === id)?.platform_code === platform.code)) delete quantities[platform.code]
     return { ...rule, circle_ids: ids, platform_quantities: quantities }
   })
   return <div className='space-y-5'>
@@ -128,15 +130,11 @@ function PlanPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void 
     <div className='grid gap-4 xl:grid-cols-2'>{draft.rules.map((rule) => {
       const referenced = draft.nodes.some((node) => node.rule_id === rule.id)
       return <Card key={rule.id} className='border-border/70 bg-card/88'><CardHeader className='pb-3'><div className='flex items-start gap-3'><div className='min-w-0 flex-1'><Label htmlFor={`rule-${rule.id}`}>规则名称</Label><Input id={`rule-${rule.id}`} className='mt-2' value={rule.name} onChange={(event) => updateRule(rule.id, (item) => ({ ...item, name: event.target.value }))} /></div><Button variant='ghost' size='icon' disabled={referenced} onClick={() => update({ ...draft, rules: draft.rules.filter((item) => item.id !== rule.id) })} aria-label={referenced ? '规则仍被计划节点引用' : '删除规则'}><Trash2 className='size-4' /></Button></div><CardDescription>ID {rule.id.slice(0, 8)} · 当前版本 {rule.version} · 已选 {rule.circle_ids.length} 个圈子</CardDescription></CardHeader><CardContent className='space-y-3'>{allPlatforms.map((platform) => {
-        const platformCircles = allCircles.filter((circle) => circle.platform_code === platform.code)
+        const platformCircles = enabledCircles.filter((circle) => circle.platform_code === platform.code)
         const selectedCount = platformCircles.filter((circle) => rule.circle_ids.includes(circle.id)).length
         const platformChecked = selectedCount === 0 ? false : selectedCount === platformCircles.length ? true : 'indeterminate'
         const integrated = platform.adapter_status === 'available'
-        return <div key={platform.code} className='rounded-xl border bg-background/55'><div className='flex flex-wrap items-center gap-3 border-b p-3'><Checkbox checked={platformChecked} disabled={!integrated || !platformCircles.length} onCheckedChange={(checked) => togglePlatform(rule.id, platform, checked === true)} aria-label={`选择${platform.display_name}全部圈子`} /><div className='min-w-0 flex-1'><div className='flex items-center gap-2'><span className='text-sm font-medium'>{platform.display_name}</span><Badge variant='outline'>{integrated ? `${selectedCount}/${platformCircles.length} 个圈子` : '暂未接入'}</Badge></div><div className='text-xs text-muted-foreground'>平台勾选用于批量选择，保存时冻结明确圈子 ID。</div></div><div className='w-40'><Label className='sr-only' htmlFor={`quantity-${rule.id}-${platform.code}`}>{platform.display_name}每圈目标数</Label><Input id={`quantity-${rule.id}-${platform.code}`} type='number' disabled={!integrated || selectedCount === 0} min={platform.quantity_range.min} max={platform.quantity_range.max} value={selectedCount ? rule.platform_quantities[platform.code] ?? '' : ''} onChange={(event) => updateRule(rule.id, (item) => ({ ...item, platform_quantities: { ...item.platform_quantities, [platform.code]: Number(event.target.value) } }))} placeholder='每圈目标数' /></div></div><div className='space-y-3 p-3'>{platformCircles.length ? (vehicles.data ?? []).map((vehicle) => {
-          const vehicleCircles = vehicle.circles.filter((circle) => circle.platform_code === platform.code)
-          if (!vehicleCircles.length) return null
-          return <div key={`${platform.code}-${vehicle.id}`}><div className='mb-2 text-xs font-medium text-muted-foreground'>{vehicle.name}</div><div className='grid gap-2 sm:grid-cols-2'>{vehicleCircles.map((circle) => <label key={circle.id} className='flex cursor-pointer items-start gap-2 rounded-lg border px-3 py-2.5 hover:bg-muted/40'><Checkbox className='mt-0.5' checked={rule.circle_ids.includes(circle.id)} disabled={!integrated} onCheckedChange={(checked) => toggleCircle(rule.id, circle, checked === true)} /><span className='min-w-0'><span className='block truncate text-sm font-medium'>{circle.name || circle.external_id}</span><span className='block text-xs text-muted-foreground'>{circle.validation_status === 'verified' ? (circle.auto_enabled ? '已验证 · 全局启用' : '已验证 · 全局停用') : '尚未验证，触发时不会执行'}</span></span></label>)}</div></div>
-        }) : <div className='rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground'>请先在“车型与圈子”中保存该平台圈子。</div>}</div></div>
+        return <Collapsible key={platform.code} defaultOpen={selectedCount > 0} className='rounded-xl border bg-background/55'><div className='grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3 p-3 sm:grid-cols-[auto_minmax(0,1fr)_10rem]'><Checkbox checked={platformChecked} disabled={!integrated || !platformCircles.length} onCheckedChange={(checked) => togglePlatform(rule.id, platform, checked === true)} aria-label={`选择${platform.display_name}全部圈子`} /><CollapsibleTrigger asChild><Button type='button' variant='ghost' className='group min-w-0 justify-between gap-3 px-0 hover:bg-transparent' aria-label={`展开或收起${platform.display_name}圈子`}><span className='flex min-w-0 items-center gap-2'><span className='truncate text-sm font-medium'>{platform.display_name}</span><Badge variant='outline'>{integrated ? `${selectedCount}/${platformCircles.length} 个圈子` : '暂未接入'}</Badge></span><ChevronDown className='size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180' /></Button></CollapsibleTrigger><div className='col-start-2 w-full sm:col-start-auto'><Label className='sr-only' htmlFor={`quantity-${rule.id}-${platform.code}`}>{platform.display_name}每圈目标数</Label><Input id={`quantity-${rule.id}-${platform.code}`} type='number' disabled={!integrated || selectedCount === 0} min={platform.quantity_range.min} max={platform.quantity_range.max} value={selectedCount ? rule.platform_quantities[platform.code] ?? '' : ''} onChange={(event) => updateRule(rule.id, (item) => ({ ...item, platform_quantities: { ...item.platform_quantities, [platform.code]: Number(event.target.value) } }))} placeholder='每圈目标数' /></div></div><CollapsibleContent><div className='grid gap-2 border-t p-3 sm:grid-cols-2'>{platformCircles.length ? platformCircles.map((circle) => <label key={circle.id} className='flex w-full cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 hover:bg-muted/40'><Checkbox checked={rule.circle_ids.includes(circle.id)} disabled={!integrated} onCheckedChange={(checked) => toggleCircle(rule.id, circle, checked === true)} /><span className='min-w-0 truncate text-sm font-medium'>{circle.name || circle.external_id}</span></label>) : <div className='rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground sm:col-span-2'>该平台暂无全局启用圈子，请前往“车型与圈子”启用。</div>}</div></CollapsibleContent></Collapsible>
       })}</CardContent></Card>
     })}</div>
     <Separator />
