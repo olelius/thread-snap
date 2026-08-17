@@ -15,6 +15,24 @@
 
 ---
 
+## 2026-08-17 — 精简提取计划标题并补齐懂车帝圈子清单
+
+**总目标**：移除提取计划页对用户无业务价值的“计划版本”徽标，并把甲方清单中的懂车帝车型圈子链接补齐到当前本地数据库，同时保持规则范围不会因新增圈子自动扩大。
+
+**状态**：✅ 页面精简、14 条目标圈子入库核验、规则范围回归、自动化检查和真实页面验证完成。
+
+**干到哪里了**：
+- [x] 提取计划标题区已移除“计划版本 N”徽标；后端与保存载荷中的 `revision` 保留，用于乐观并发控制，不改变规则版本语义。
+- [x] 甲方清单 14 条懂车帝圈子全部存在于本地 SQLite：保留已存在且已验证启用的风云 A9/24729，新增 A9L、QQ3 EV、T9L、T11、T9、艾瑞泽8、艾瑞泽8PRO、瑞虎8、瑞虎8PLUS、瑞虎8PRO、瑞虎9、瑞虎7L、风云T7 共 13 条；写入回执位于 `artifacts/runtime/dongchedi-circle-seed-result.json`。
+- [x] 13 条新增圈子统一保持 `unverified`、`auto_enabled=false`，现有规则仍只引用原风云 A9 圈子；API 与真实页面均确认懂车帝显示 `1/14 个圈子`，未把新圈子静默加入既有规则。
+- [x] `python -m unittest discover -s tests -v`（28 项）、Ruff format/check、`compileall`、`pip check`、前端 `check`、生产构建（2458 modules）与 `git diff --check` 通过；真实页面 DOM 确认不存在“计划版本”，控制台无 error/warning，截图位于 `artifacts/runtime/plan-circle-seed-ui.png`。
+
+**下一步**：逐条验证新增圈子后，才允许在“车型与圈子”启用自动参与，并由用户在具体提取规则中明确勾选；未验证圈子不会进入定时执行。
+
+**边界**：本次只移除可见徽标并写入用户提供的圈子链接；不把截图链接视作平台可访问性验证，不修改现有规则选择、目标数、计划节点、采集器或 Session。
+
+**关联**：`frontend/src/features/config/config-page.tsx`、`data/threadsnap.db`（本地运行数据，不提交 Git）、`artifacts/runtime/dongchedi-circle-seed-result.json`
+
 ## 2026-08-17 — 自动提取规则支持多平台圈子范围
 
 **总目标**：让每条自动提取规则明确勾选需要执行的平台圈子，并为实际选中圈子的各平台设置统一每圈目标数；后续平台和圈子接入时不自动扩张既有规则范围。
