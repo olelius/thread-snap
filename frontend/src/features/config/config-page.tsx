@@ -39,7 +39,7 @@ type ValidationBatchResult = { jobs: ValidationJob[]; queued_count: number; reus
 const validationSettled = (job: ValidationJob) => ['success', 'failed', 'waiting_for_auth'].includes(job.status)
 
 function ConfigSectionToolbar({ icon, title, summary, description, children }: { icon: ReactNode; title: string; summary: string; description: string; children: ReactNode }) {
-  return <div className='sticky top-0 z-10 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 bg-card/95 px-4 py-2.5 shadow-sm backdrop-blur-xl'>
+  return <div className='sticky top-0 z-10 flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-xl border border-border/70 bg-card/95 px-4 py-2.5 shadow-sm backdrop-blur-xl'>
     <div className='flex min-w-0 items-center gap-3'>
       <div className='grid size-8 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/15'>{icon}</div>
       <div className='min-w-0'>
@@ -278,15 +278,15 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
     updateRules(remaining)
   }
 
-  return <div className='space-y-5'>
-    <fieldset disabled={save.isPending} className='m-0 min-w-0 space-y-5 border-0 p-0'>
+  return <div className='space-y-5 xl:h-full xl:min-h-0'>
+    <fieldset disabled={save.isPending} className='m-0 min-w-0 space-y-5 border-0 p-0 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:gap-5 xl:space-y-0'>
       <ConfigSectionToolbar icon={<CalendarClock className='size-4.5' />} title='自动提取规则' summary={`${draft.rules.length} 条规则${rulesDirty ? ` · ${changeCount} 项未保存` : ''}`} description='定义提取范围和每圈目标数；保存时与服务器现有每周计划统一校验。'>
         <Button variant='outline' onClick={createRule}><Plus className='size-4' />新建规则</Button>
         <Button disabled={!rulesDirty || save.isPending} onClick={() => save.mutate({ section: 'rules', current: draft })}>{save.isPending ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}{save.isPending ? '正在保存' : `保存当前标签${rulesDirty ? ` (${changeCount})` : ''}`}</Button>
       </ConfigSectionToolbar>
 
-      <div className='grid gap-4 xl:h-[min(65svh,620px)] xl:min-h-[500px] xl:grid-cols-[320px_minmax(0,1fr)]'>
-        <Card className='flex min-h-[260px] max-h-[360px] flex-col overflow-hidden border-border/70 bg-card/88 py-0 xl:max-h-none'>
+      <div className='grid gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-[320px_minmax(0,1fr)]'>
+        <Card className='flex min-h-[260px] max-h-[360px] flex-col overflow-hidden border-border/70 bg-card/88 py-0 xl:min-h-0 xl:max-h-none'>
           <CardHeader className='shrink-0 border-b p-3'><Label htmlFor='rule-search' className='sr-only'>搜索规则</Label><Input id='rule-search' value={ruleSearch} onChange={(event) => setRuleSearch(event.target.value)} placeholder='搜索规则名称、ID 或圈子' /></CardHeader>
           <CardContent className='min-h-0 flex-1 space-y-1 overflow-y-auto p-2'>
             {filteredRules.length ? filteredRules.map((rule) => {
@@ -299,7 +299,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
           </CardContent>
         </Card>
 
-        <Card className='min-h-[440px] overflow-hidden border-border/70 bg-card/88 py-0'>
+        <Card className='min-h-[440px] overflow-hidden border-border/70 bg-card/88 py-0 xl:min-h-0'>
           {selectedRule ? <div className='flex h-full min-h-0 flex-col' id={`rule-editor-${selectedRule.id}`}>
             <CardHeader className='shrink-0 rounded-t-xl border-b bg-card p-4'><div className='flex items-start gap-3'><div className='min-w-0 flex-1'><Label htmlFor={`rule-${selectedRule.id}`}>规则名称</Label><Input id={`rule-${selectedRule.id}`} className='mt-2' value={selectedRule.name} onChange={(event) => updateRule(selectedRule.id, (item) => ({ ...item, name: event.target.value }))} /></div><Button variant='ghost' size='icon' disabled={savedNodes.some((node) => node.rule_id === selectedRule.id)} onClick={removeSelectedRule} aria-label={savedNodes.some((node) => node.rule_id === selectedRule.id) ? '规则仍被计划节点引用' : '删除规则'}><Trash2 className='size-4' /></Button></div><CardDescription>ID {selectedRule.id.slice(0, 8)} · 当前版本 {selectedRule.version} · 已选 {selectedRule.circle_ids.length} 个圈子{changedRuleIds.has(selectedRule.id) && ' · 尚未保存'}</CardDescription></CardHeader>
             <CardContent className='min-h-0 flex-1 space-y-3 overflow-y-auto p-4'>{allPlatforms.map((platform) => {
