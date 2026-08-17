@@ -74,7 +74,7 @@ function editableNodeSignature(node?: ExtractionPlan['nodes'][number]) {
 }
 
 const dirtyFieldClass = 'border-amber-500/70 ring-2 ring-amber-500/15 focus-visible:border-amber-500 focus-visible:ring-amber-500/25'
-const dirtyControlClass = 'outline outline-2 outline-amber-500/70 outline-offset-2'
+const dirtyControlClass = 'outline-2 outline-solid outline-amber-500/80 outline-offset-2'
 
 function editablePlatformsSignature(platforms?: Platform[]) {
   return JSON.stringify((platforms ?? []).map(({ code, enabled, internal_concurrency }) => ({ code, enabled, internal_concurrency })))
@@ -481,7 +481,6 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
         <div>成功 {successfulJobs}，失败 {failedJobs}，等待认证 {authJobs}。首次验证成功会自动参与；重新验证不会改变现有开关。</div>
       </AlertDescription>
     </Alert>}
-    {dirty && <Alert><AlertTitle>请先保存当前编辑</AlertTitle><AlertDescription>批量验证只处理数据库中已经保存的圈子。</AlertDescription></Alert>}
     <div className='max-h-[min(65svh,680px)] overflow-auto rounded-xl border bg-card/90' data-list-viewport='circles'>
       <Table className='min-w-[1050px]'>
         <TableHeader><TableRow><TableHead className='w-16 text-center'>序号</TableHead><TableHead>车型</TableHead><TableHead>圈子 URL</TableHead><TableHead>名称</TableHead><TableHead>验证状态</TableHead><TableHead>自动参与</TableHead><TableHead className='text-right'>操作</TableHead></TableRow></TableHeader>
