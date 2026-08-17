@@ -97,8 +97,8 @@ export function RunsPage() {
           </CardContent>
         </Card>
       </div>
-      <div className='min-h-0 flex-1 overflow-y-auto rounded-xl border border-border/70 bg-card/90 shadow-sm backdrop-blur'>
-        <div className='overflow-x-auto'>
+      <div className='flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/70 bg-card/90 shadow-sm backdrop-blur'>
+        <div className='min-h-0 flex-1 overflow-auto' data-list-viewport='runs'>
           <Table className='min-w-[1050px]'>
             <TableHeader>{table.getHeaderGroups().map((group) => <TableRow key={group.id} className='bg-muted/35'>{group.headers.map((header) => <TableHead key={header.id}>{flexRender(header.column.columnDef.header, header.getContext())}</TableHead>)}</TableRow>)}</TableHeader>
             <TableBody>
@@ -106,7 +106,7 @@ export function RunsPage() {
             </TableBody>
           </Table>
         </div>
-        <div className='flex flex-col gap-3 border-t p-4 sm:flex-row sm:items-center sm:justify-between'>
+        <div className='flex shrink-0 flex-col gap-3 border-t bg-card/95 p-4 sm:flex-row sm:items-center sm:justify-between' data-list-footer='runs'>
           <div className='text-sm text-muted-foreground'>共 {query.data?.total ?? 0} 个批次，第 {search.page} / {totalPages} 页</div>
           <div className='flex items-center gap-2'><Select value={String(search.pageSize)} onValueChange={(value) => patch({ pageSize: Number(value) as 20 | 50 | 100, page: 1 })}><SelectTrigger className='w-28'><SelectValue /></SelectTrigger><SelectContent><SelectItem value='20'>每页 20</SelectItem><SelectItem value='50'>每页 50</SelectItem><SelectItem value='100'>每页 100</SelectItem></SelectContent></Select><Button variant='outline' size='icon' disabled={(search.page ?? 1) <= 1} onClick={() => patch({ page: (search.page ?? 1) - 1 })} aria-label='上一页'><ChevronLeft className='size-4' /></Button><Button variant='outline' size='icon' disabled={(search.page ?? 1) >= totalPages} onClick={() => patch({ page: (search.page ?? 1) + 1 })} aria-label='下一页'><ChevronRight className='size-4' /></Button></div>
         </div>
