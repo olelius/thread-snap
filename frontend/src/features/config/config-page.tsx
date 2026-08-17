@@ -73,12 +73,23 @@ function editableNodeSignature(node?: ExtractionPlan['nodes'][number]) {
   return JSON.stringify({ weekdays: [...node.weekdays].sort(), time: node.time, enabled: node.enabled, rule_ids: [...node.rule_ids] })
 }
 
-function RuleMultiCombobox({ rules, values, disabled, onChange }: { rules: ExtractionPlan['rules']; values: string[]; disabled?: boolean; onChange: (ruleIds: string[]) => void }) {
+const dirtyFieldClass = 'border-amber-500/70 ring-2 ring-amber-500/15 focus-visible:border-amber-500 focus-visible:ring-amber-500/25'
+const dirtyControlClass = 'outline outline-2 outline-amber-500/70 outline-offset-2'
+
+function editablePlatformsSignature(platforms?: Platform[]) {
+  return JSON.stringify((platforms ?? []).map(({ code, enabled, internal_concurrency }) => ({ code, enabled, internal_concurrency })))
+}
+
+function editableCircleRowsSignature(rows?: Circle[]) {
+  return JSON.stringify((rows ?? []).map(({ id, platform_code, url, vehicle_id, vehicle_name, auto_enabled, section }) => ({ id, platform_code, url, vehicle_id, vehicle_name, auto_enabled, section })))
+}
+
+function RuleMultiCombobox({ rules, values, disabled, dirty, onChange }: { rules: ExtractionPlan['rules']; values: string[]; disabled?: boolean; dirty?: boolean; onChange: (ruleIds: string[]) => void }) {
   const [open, setOpen] = useState(false)
   const selected = rules.filter((rule) => values.includes(rule.id))
   const label = selected.length === 1 ? selected[0].name : selected.length > 1 ? `已选 ${selected.length} 条规则` : '选择规则'
   return <Popover open={open} onOpenChange={setOpen}>
-    <PopoverTrigger asChild><Button type='button' variant='outline' role='combobox' aria-expanded={open} aria-label={`选择自动提取规则，当前已选 ${selected.length} 条`} disabled={disabled} className='w-full justify-between font-normal'><span className='truncate'>{label}</span><ChevronsUpDown className='size-4 shrink-0 text-muted-foreground' /></Button></PopoverTrigger>
+    <PopoverTrigger asChild><Button type='button' variant='outline' role='combobox' aria-expanded={open} aria-label={`选择自动提取规则，当前已选 ${selected.length} 条`} disabled={disabled} data-dirty={dirty || undefined} className={cn('w-full justify-between font-normal', dirty && dirtyFieldClass)}><span className='truncate'>{label}</span><ChevronsUpDown className='size-4 shrink-0 text-muted-foreground' /></Button></PopoverTrigger>
     <PopoverContent align='start' className='w-[var(--radix-popover-trigger-width)] p-0'>
       <Command><CommandInput placeholder='搜索规则名称或 ID' /><CommandList><CommandEmpty>没有匹配的规则。</CommandEmpty><CommandGroup>{rules.map((rule) => { const checked = values.includes(rule.id); return <CommandItem key={rule.id} value={`${rule.name} ${rule.id}`} onSelect={() => { if (checked && values.length === 1) return; onChange(checked ? values.filter((id) => id !== rule.id) : [...values, rule.id]) }}><Check className={cn('size-4', checked ? 'opacity-100' : 'opacity-0')} /><div className='min-w-0 flex-1'><div className='truncate'>{rule.name}</div><div className='text-xs text-muted-foreground'>版本 {rule.version} · {rule.circle_ids.length} 个圈子</div></div></CommandItem> })}</CommandGroup></CommandList></Command>
     </PopoverContent>
@@ -262,6 +273,8 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
   const changeCount = changedRuleIds.size + removedRules
   const savedNodes = query.data?.nodes ?? []
   const selectedRule = draft.rules.find((rule) => rule.id === selectedRuleId)
+  const baselineSelectedRule = selectedRule ? baselineRules.get(selectedRule.id) : undefined
+  const ruleNameDirty = Boolean(selectedRule) && selectedRule?.name !== (baselineSelectedRule?.name ?? '')
   const search = ruleSearch.trim().toLocaleLowerCase('zh-CN')
   const filteredRules = draft.rules.filter((rule) => !search || `${rule.name} ${rule.id} ${rule.circle_ids.map((id) => allCircles.find((circle) => circle.id === id)?.name ?? '').join(' ')}`.toLocaleLowerCase('zh-CN').includes(search))
 
@@ -303,13 +316,15 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
 
         <Card className='min-h-[440px] overflow-hidden border-border/70 bg-card/88 py-0 xl:min-h-0'>
           {selectedRule ? <div className='flex h-full min-h-0 flex-col' id={`rule-editor-${selectedRule.id}`}>
-            <CardHeader className='shrink-0 rounded-t-xl border-b bg-card p-4'><div className='flex items-start gap-3'><div className='min-w-0 flex-1'><Label htmlFor={`rule-${selectedRule.id}`}>规则名称</Label><Input id={`rule-${selectedRule.id}`} className='mt-2' value={selectedRule.name} onChange={(event) => updateRule(selectedRule.id, (item) => ({ ...item, name: event.target.value }))} /></div><Button variant='ghost' size='icon' disabled={savedNodes.some((node) => node.rule_ids.includes(selectedRule.id))} onClick={removeSelectedRule} aria-label={savedNodes.some((node) => node.rule_ids.includes(selectedRule.id)) ? '规则仍被计划节点引用' : '删除规则'}><Trash2 className='size-4' /></Button></div><CardDescription>ID {selectedRule.id.slice(0, 8)} · 当前版本 {selectedRule.version} · 已选 {selectedRule.circle_ids.length} 个圈子{changedRuleIds.has(selectedRule.id) && ' · 尚未保存'}</CardDescription></CardHeader>
+            <CardHeader className='shrink-0 rounded-t-xl border-b bg-card p-4'><div className='flex items-start gap-3'><div className='min-w-0 flex-1'><Label htmlFor={`rule-${selectedRule.id}`}>规则名称</Label><Input id={`rule-${selectedRule.id}`} data-dirty={ruleNameDirty || undefined} className={cn('mt-2', ruleNameDirty && dirtyFieldClass)} value={selectedRule.name} onChange={(event) => updateRule(selectedRule.id, (item) => ({ ...item, name: event.target.value }))} /></div><Button variant='ghost' size='icon' disabled={savedNodes.some((node) => node.rule_ids.includes(selectedRule.id))} onClick={removeSelectedRule} aria-label={savedNodes.some((node) => node.rule_ids.includes(selectedRule.id)) ? '规则仍被计划节点引用' : '删除规则'}><Trash2 className='size-4' /></Button></div><CardDescription>ID {selectedRule.id.slice(0, 8)} · 当前版本 {selectedRule.version} · 已选 {selectedRule.circle_ids.length} 个圈子{changedRuleIds.has(selectedRule.id) && ' · 尚未保存'}</CardDescription></CardHeader>
             <CardContent className='min-h-0 flex-1 space-y-3 overflow-y-auto p-4'>{allPlatforms.map((platform) => {
               const platformCircles = enabledCircles.filter((circle) => circle.platform_code === platform.code)
               const selectedCount = platformCircles.filter((circle) => selectedRule.circle_ids.includes(circle.id)).length
               const platformChecked = selectedCount === 0 ? false : selectedCount === platformCircles.length ? true : 'indeterminate'
               const integrated = platform.adapter_status === 'available'
-              return <Collapsible key={platform.code} defaultOpen={false} className='rounded-xl border bg-background/55'><div className='grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3 p-3 sm:grid-cols-[auto_minmax(0,1fr)_10rem]'><Checkbox checked={platformChecked} disabled={!integrated || !platformCircles.length} onCheckedChange={(checked) => togglePlatform(selectedRule.id, platform, checked === true)} aria-label={`选择${platform.display_name}全部圈子`} /><CollapsibleTrigger asChild><Button type='button' variant='ghost' className='group min-w-0 justify-between gap-3 px-0 hover:bg-transparent' aria-label={`展开或收起${platform.display_name}圈子`}><span className='flex min-w-0 items-center gap-2'><span className='truncate text-sm font-medium'>{platform.display_name}</span><Badge variant='outline'>{integrated ? `${selectedCount}/${platformCircles.length} 个圈子` : '暂未接入'}</Badge></span><ChevronDown className='size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180' /></Button></CollapsibleTrigger><div className='col-start-2 w-full sm:col-start-auto'><Label className='sr-only' htmlFor={`quantity-${selectedRule.id}-${platform.code}`}>{platform.display_name}每圈目标数</Label><Input id={`quantity-${selectedRule.id}-${platform.code}`} type='number' disabled={!integrated || selectedCount === 0} min={platform.quantity_range.min} max={platform.quantity_range.max} value={selectedCount ? selectedRule.platform_quantities[platform.code] ?? '' : ''} onChange={(event) => updateRule(selectedRule.id, (item) => ({ ...item, platform_quantities: { ...item.platform_quantities, [platform.code]: Number(event.target.value) } }))} placeholder='每圈目标数' /></div></div><CollapsibleContent><div className='grid gap-2 border-t p-3 sm:grid-cols-2'>{platformCircles.length ? platformCircles.map((circle) => <label key={circle.id} className='flex w-full cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 hover:bg-muted/40'><Checkbox checked={selectedRule.circle_ids.includes(circle.id)} disabled={!integrated} onCheckedChange={(checked) => toggleCircle(selectedRule.id, circle, checked === true)} /><span className='min-w-0 truncate text-sm font-medium'>{circle.name || circle.external_id}</span></label>) : <div className='rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground sm:col-span-2'>该平台暂无全局启用圈子，请前往“车型与圈子”启用。</div>}</div></CollapsibleContent></Collapsible>
+              const platformSelectionDirty = platformCircles.some((circle) => selectedRule.circle_ids.includes(circle.id) !== (baselineSelectedRule?.circle_ids.includes(circle.id) ?? false))
+              const quantityDirty = (selectedRule.platform_quantities[platform.code] ?? null) !== (baselineSelectedRule?.platform_quantities[platform.code] ?? null)
+              return <Collapsible key={platform.code} defaultOpen={false} className='rounded-xl border bg-background/55'><div className='grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3 p-3 sm:grid-cols-[auto_minmax(0,1fr)_10rem]'><Checkbox checked={platformChecked} disabled={!integrated || !platformCircles.length} data-dirty={platformSelectionDirty || undefined} className={cn(platformSelectionDirty && dirtyControlClass)} onCheckedChange={(checked) => togglePlatform(selectedRule.id, platform, checked === true)} aria-label={`选择${platform.display_name}全部圈子`} /><CollapsibleTrigger asChild><Button type='button' variant='ghost' className='group min-w-0 justify-between gap-3 px-0 hover:bg-transparent' aria-label={`展开或收起${platform.display_name}圈子`}><span className='flex min-w-0 items-center gap-2'><span className='truncate text-sm font-medium'>{platform.display_name}</span><Badge variant='outline'>{integrated ? `${selectedCount}/${platformCircles.length} 个圈子` : '暂未接入'}</Badge></span><ChevronDown className='size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180' /></Button></CollapsibleTrigger><div className='col-start-2 w-full sm:col-start-auto'><Label className='sr-only' htmlFor={`quantity-${selectedRule.id}-${platform.code}`}>{platform.display_name}每圈目标数</Label><Input id={`quantity-${selectedRule.id}-${platform.code}`} type='number' disabled={!integrated || selectedCount === 0} data-dirty={quantityDirty || undefined} className={cn(quantityDirty && dirtyFieldClass)} min={platform.quantity_range.min} max={platform.quantity_range.max} value={selectedCount ? selectedRule.platform_quantities[platform.code] ?? '' : ''} onChange={(event) => updateRule(selectedRule.id, (item) => ({ ...item, platform_quantities: { ...item.platform_quantities, [platform.code]: Number(event.target.value) } }))} placeholder='每圈目标数' /></div></div><CollapsibleContent><div className='grid gap-2 border-t p-3 sm:grid-cols-2'>{platformCircles.length ? platformCircles.map((circle) => { const checked = selectedRule.circle_ids.includes(circle.id); const circleDirty = checked !== (baselineSelectedRule?.circle_ids.includes(circle.id) ?? false); return <label key={circle.id} className='flex w-full cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 hover:bg-muted/40'><Checkbox checked={checked} disabled={!integrated} data-dirty={circleDirty || undefined} className={cn(circleDirty && dirtyControlClass)} onCheckedChange={(nextChecked) => toggleCircle(selectedRule.id, circle, nextChecked === true)} /><span className='min-w-0 truncate text-sm font-medium'>{circle.name || circle.external_id}</span></label> }) : <div className='rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground sm:col-span-2'>该平台暂无全局启用圈子，请前往“车型与圈子”启用。</div>}</div></CollapsibleContent></Collapsible>
             })}</CardContent>
           </div> : <CardContent className='grid h-full min-h-[440px] place-items-center p-10 text-center text-sm text-muted-foreground'>从左侧选择规则，或新建第一条规则。</CardContent>}
         </Card>
@@ -344,7 +359,14 @@ function SchedulePanel({ workspace }: { workspace: PlanWorkspace }) {
 
       {!savedRules.length && <Alert className='border-amber-500/30 bg-amber-500/5'><CalendarClock className='size-4' /><AlertTitle>还没有已保存的自动提取规则</AlertTitle><AlertDescription>请先在“自动提取规则”标签创建并保存规则，再新增每周计划节点。</AlertDescription></Alert>}
 
-      <div className='space-y-3'>{draft.nodes.length ? draft.nodes.map((node, index) => <Card id={`schedule-node-${node.id}`} key={node.id} className={cn('border-border/70 bg-card/88', changedNodeIds.has(node.id) && 'ring-1 ring-amber-500/30')}><CardContent className='grid gap-4 p-4 xl:grid-cols-[5rem_auto_1fr_170px_260px_auto] xl:items-center'><Badge variant='secondary' className='w-fit font-normal'>节点 {index + 1}</Badge><Switch checked={node.enabled} onCheckedChange={(enabled) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, enabled } : item))} aria-label='启用计划节点' /><div className='flex flex-wrap gap-1.5'>{weekdays.map((label, dayIndex) => <Button key={label} type='button' variant={node.weekdays.includes(dayIndex) ? 'default' : 'outline'} size='icon' className='size-8 rounded-full' onClick={() => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, weekdays: item.weekdays.includes(dayIndex) ? item.weekdays.filter((day) => day !== dayIndex) : [...item.weekdays, dayIndex].sort() } : item))} aria-label={`星期${label}`}>{label}</Button>)}</div><Input type='time' step={1} value={node.time} onChange={(event) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, time: event.target.value.length === 5 ? `${event.target.value}:00` : event.target.value } : item))} /><RuleMultiCombobox rules={savedRules} values={node.rule_ids} disabled={save.isPending} onChange={(rule_ids) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, rule_ids } : item))} /><Button variant='ghost' size='icon' onClick={() => updateNodes(draft.nodes.filter((item) => item.id !== node.id))} aria-label='删除计划节点'><Trash2 className='size-4' /></Button></CardContent></Card>) : <Card className='border-dashed bg-card/70'><CardContent className='p-10 text-center text-sm text-muted-foreground'><CalendarClock className='mx-auto mb-3 size-8 text-primary/60' />尚未配置每周计划节点。</CardContent></Card>}</div>
+      <div className='space-y-3'>{draft.nodes.length ? draft.nodes.map((node, index) => {
+        const baselineNode = baselineNodes.get(node.id)
+        const isNew = !baselineNode
+        const enabledDirty = Boolean(baselineNode) && node.enabled !== baselineNode?.enabled
+        const timeDirty = Boolean(baselineNode) && node.time !== baselineNode?.time
+        const ruleIdsDirty = Boolean(baselineNode) && JSON.stringify(node.rule_ids) !== JSON.stringify(baselineNode?.rule_ids)
+        return <Card id={`schedule-node-${node.id}`} key={node.id} className='border-border/70 bg-card/88'><CardContent className='grid gap-4 p-4 xl:grid-cols-[5rem_auto_1fr_170px_260px_auto] xl:items-center'><Badge variant='secondary' className='w-fit gap-1.5 font-normal'>节点 {index + 1}{isNew && <span className='size-1.5 rounded-full bg-amber-500' aria-label='新增节点' />}</Badge><Switch checked={node.enabled} data-dirty={enabledDirty || undefined} className={cn(enabledDirty && dirtyControlClass)} onCheckedChange={(enabled) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, enabled } : item))} aria-label='启用计划节点' /><div className='flex flex-wrap gap-1.5'>{weekdays.map((label, dayIndex) => { const dayDirty = Boolean(baselineNode) && node.weekdays.includes(dayIndex) !== (baselineNode?.weekdays.includes(dayIndex) ?? false); return <Button key={label} type='button' variant={node.weekdays.includes(dayIndex) ? 'default' : 'outline'} size='icon' data-dirty={dayDirty || undefined} className={cn('size-8 rounded-full', dayDirty && dirtyControlClass)} onClick={() => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, weekdays: item.weekdays.includes(dayIndex) ? item.weekdays.filter((day) => day !== dayIndex) : [...item.weekdays, dayIndex].sort() } : item))} aria-label={`星期${label}`}>{label}</Button> })}</div><Input type='time' step={1} value={node.time} data-dirty={timeDirty || undefined} className={cn(timeDirty && dirtyFieldClass)} onChange={(event) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, time: event.target.value.length === 5 ? `${event.target.value}:00` : event.target.value } : item))} /><RuleMultiCombobox rules={savedRules} values={node.rule_ids} disabled={save.isPending} dirty={ruleIdsDirty} onChange={(rule_ids) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, rule_ids } : item))} /><Button variant='ghost' size='icon' onClick={() => updateNodes(draft.nodes.filter((item) => item.id !== node.id))} aria-label='删除计划节点'><Trash2 className='size-4' /></Button></CardContent></Card>
+      }) : <Card className='border-dashed bg-card/70'><CardContent className='p-10 text-center text-sm text-muted-foreground'><CalendarClock className='mx-auto mb-3 size-8 text-primary/60' />尚未配置每周计划节点。</CardContent></Card>}</div>
     </fieldset>
   </div>
 }
@@ -354,9 +376,25 @@ function PlatformPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => v
   useEffect(() => { if (query.data && !dirty) setDraft(structuredClone(query.data)) }, [query.data, dirty])
   const save = useMutation({ mutationFn: async () => Promise.all((draft ?? []).map((item) => api<Platform>(`/platforms/${item.code}`, { method: 'PUT', body: JSON.stringify({ enabled: item.enabled, internal_concurrency: item.internal_concurrency }) }))), onSuccess: (items) => { setDraft(items); setDirty(false); client.setQueryData(['platforms'], items); onDirtyChange(false); toast.success('平台配置已保存') }, onError: (error) => toast.error('保存失败', { description: errorMessage(error) }) })
   if (!draft) return <Card><CardContent className='p-10 text-center text-sm text-muted-foreground'>正在加载平台配置…</CardContent></Card>
-  const update = (code: string, values: Partial<Platform>) => { setDraft(draft.map((item) => item.code === code ? { ...item, ...values } : item)); setDirty(true); onDirtyChange(true) }
+  const baselinePlatforms = new Map((query.data ?? []).map((platform) => [platform.code, platform]))
+  const changedPlatformCodes = new Set(draft.filter((platform) => {
+    const baseline = baselinePlatforms.get(platform.code)
+    return platform.enabled !== baseline?.enabled || platform.internal_concurrency !== baseline?.internal_concurrency
+  }).map((platform) => platform.code))
+  const update = (code: string, values: Partial<Platform>) => {
+    const next = draft.map((item) => item.code === code ? { ...item, ...values } : item)
+    const nextDirty = editablePlatformsSignature(next) !== editablePlatformsSignature(query.data)
+    setDraft(next)
+    setDirty(nextDirty)
+    onDirtyChange(nextDirty)
+  }
   const availableCount = draft.filter((platform) => platform.adapter_status === 'available').length
-  return <div className='space-y-5'><ConfigSectionToolbar icon={<Settings2 className='size-4.5' />} title='平台采集配置' summary={`已接入 ${availableCount}/${draft.length}`} description='管理平台接入状态、任务启用、内部并发与 Session。'><Button disabled={save.isPending} onClick={() => save.mutate()}><Save className='size-4' />保存当前标签</Button></ConfigSectionToolbar><div className='grid gap-4 xl:grid-cols-3'>{draft.map((platform) => <Card key={platform.code} className='border-border/70 bg-card/88'><CardHeader><div className='flex items-start justify-between'><div><CardTitle>{platform.display_name}</CardTitle><CardDescription className='mt-1'>{platform.adapter_status === 'available' ? `适配器 ${platform.adapter_version ?? '已接入'}` : '后续平台预留'}</CardDescription></div><StatusBadge value={platform.adapter_status === 'available' ? 'success' : 'unknown'} label={platform.adapter_status === 'available' ? '已接入' : '未接入'} /></div></CardHeader><CardContent className='space-y-5'><div className='flex items-center justify-between rounded-lg border p-3'><div><div className='text-sm font-medium'>平台启用</div><div className='text-xs text-muted-foreground'>决定是否允许新任务</div></div><Switch disabled={platform.adapter_status !== 'available'} checked={platform.enabled} onCheckedChange={(enabled) => update(platform.code, { enabled })} /></div><div><Label>平台内部并发</Label><Input className='mt-2' type='number' disabled={platform.adapter_status !== 'available'} min={platform.concurrency_range.min} max={platform.concurrency_range.max} value={platform.internal_concurrency} onChange={(event) => update(platform.code, { internal_concurrency: Number(event.target.value) })} /></div>{platform.adapter_status === 'available' && <SessionCard platform={platform} onAuth={() => setAuth(platform)} />}</CardContent></Card>)}</div><AuthDialog open={Boolean(auth)} onOpenChange={(open) => !open && setAuth(undefined)} platformCode={auth?.code} platformName={auth?.display_name} /></div>
+  return <div className='space-y-5'><ConfigSectionToolbar icon={<Settings2 className='size-4.5' />} title='平台采集配置' summary={`已接入 ${availableCount}/${draft.length}${dirty ? ` · ${changedPlatformCodes.size} 项未保存` : ''}`} description='管理平台接入状态、任务启用、内部并发与 Session。'><Button disabled={!dirty || save.isPending} onClick={() => save.mutate()}><Save className='size-4' />保存当前标签{dirty ? ` (${changedPlatformCodes.size})` : ''}</Button></ConfigSectionToolbar><div className='grid gap-4 xl:grid-cols-3'>{draft.map((platform) => {
+    const baseline = baselinePlatforms.get(platform.code)
+    const enabledDirty = platform.enabled !== baseline?.enabled
+    const concurrencyDirty = platform.internal_concurrency !== baseline?.internal_concurrency
+    return <Card key={platform.code} className='border-border/70 bg-card/88'><CardHeader><div className='flex items-start justify-between'><div><CardTitle>{platform.display_name}</CardTitle><CardDescription className='mt-1'>{platform.adapter_status === 'available' ? `适配器 ${platform.adapter_version ?? '已接入'}` : '后续平台预留'}</CardDescription></div><StatusBadge value={platform.adapter_status === 'available' ? 'success' : 'unknown'} label={platform.adapter_status === 'available' ? '已接入' : '未接入'} /></div></CardHeader><CardContent className='space-y-5'><div className='flex items-center justify-between rounded-lg border p-3'><div><div className='text-sm font-medium'>平台启用</div><div className='text-xs text-muted-foreground'>决定是否允许新任务</div></div><Switch disabled={platform.adapter_status !== 'available'} checked={platform.enabled} data-dirty={enabledDirty || undefined} className={cn(enabledDirty && dirtyControlClass)} onCheckedChange={(enabled) => update(platform.code, { enabled })} /></div><div><Label>平台内部并发</Label><Input className={cn('mt-2', concurrencyDirty && dirtyFieldClass)} data-dirty={concurrencyDirty || undefined} type='number' disabled={platform.adapter_status !== 'available'} min={platform.concurrency_range.min} max={platform.concurrency_range.max} value={platform.internal_concurrency} onChange={(event) => update(platform.code, { internal_concurrency: Number(event.target.value) })} /></div>{platform.adapter_status === 'available' && <SessionCard platform={platform} onAuth={() => setAuth(platform)} />}</CardContent></Card>
+  })}</div><AuthDialog open={Boolean(auth)} onOpenChange={(open) => !open && setAuth(undefined)} platformCode={auth?.code} platformName={auth?.display_name} /></div>
 }
 
 function SessionCard({ platform, onAuth }: { platform: Platform; onAuth: () => void }) {
@@ -390,11 +428,28 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
   })
   useEffect(() => { if (query.data && !dirty) { setRows(vehicleRows(query.data)); setDeletedIds([]) } }, [query.data, dirty])
   if (!rows) return <Card><CardContent className='p-10 text-center text-sm text-muted-foreground'>正在加载车型与圈子…</CardContent></Card>
-  const markDirty = () => { setDirty(true); onDirtyChange(true) }
-  const update = (index: number, values: Partial<Circle>) => { setRows(rows.map((item, rowIndex) => rowIndex === index ? { ...item, ...values } : item)); markDirty() }
-  const remove = (index: number) => { const row = rows[index]; setRows(rows.filter((_, rowIndex) => rowIndex !== index)); if (row.id) setDeletedIds((items) => items.includes(row.id) ? items : [...items, row.id]); markDirty() }
+  const baselineRows = vehicleRows(query.data ?? [])
+  const baselineById = new Map(baselineRows.map((row) => [row.id, row]))
+  const commitRows = (nextRows: Circle[], nextDeletedIds = deletedIds) => {
+    const nextDirty = nextDeletedIds.length > 0 || editableCircleRowsSignature(nextRows) !== editableCircleRowsSignature(baselineRows)
+    setRows(nextRows)
+    setDeletedIds(nextDeletedIds)
+    setDirty(nextDirty)
+    onDirtyChange(nextDirty)
+  }
+  const update = (index: number, values: Partial<Circle>) => commitRows(rows.map((item, rowIndex) => rowIndex === index ? { ...item, ...values } : item))
+  const remove = (index: number) => {
+    const row = rows[index]
+    const nextDeletedIds = row.id && !deletedIds.includes(row.id) ? [...deletedIds, row.id] : deletedIds
+    commitRows(rows.filter((_, rowIndex) => rowIndex !== index), nextDeletedIds)
+  }
   const save = async () => { setSaving(true); try { const result = await api<CircleBatchResult>('/circles/batch', { method: 'PUT', body: JSON.stringify({ rows: rows.map((item) => ({ id: item.id || undefined, platform_code: item.platform_code || 'dongchedi', url: item.url, vehicle_id: item.vehicle_id || undefined, vehicle_name: item.vehicle_name || undefined, auto_enabled: item.auto_enabled, section: item.section || 'dynamic' })), deleted_ids: deletedIds }) }); const vehicles = rowsAsVehicles(result.items); client.setQueryData(['vehicles'], vehicles); setRows(vehicleRows(vehicles)); setDeletedIds([]); setDirty(false); onDirtyChange(false); await client.invalidateQueries({ queryKey: ['vehicles'] }); toast.success('车型与圈子已保存', { description: `保存 ${result.saved_count} 条，删除 ${result.deleted_count} 条` }) } catch (error) { toast.error('保存失败', { description: errorMessage(error) }) } finally { setSaving(false) } }
   const unverifiedCount = rows.filter((row) => row.id && row.validation_status === 'unverified').length
+  const changedRows = rows.filter((row) => {
+    const baseline = baselineById.get(row.id)
+    return !baseline || row.vehicle_name !== baseline.vehicle_name || row.vehicle_id !== baseline.vehicle_id || row.url !== baseline.url || row.auto_enabled !== baseline.auto_enabled
+  }).length
+  const changeCount = changedRows + deletedIds.length
   const jobs = validationJobs.data ?? []
   const completedJobs = jobs.filter(validationSettled).length
   const successfulJobs = jobs.filter((job) => job.status === 'success').length
@@ -411,12 +466,12 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
     }
   }
   return <div className='space-y-4'>
-    <ConfigSectionToolbar icon={<CarFront className='size-4.5' />} title='车型与圈子来源' summary={`${rows.length} 个圈子`} description='首次验证成功自动开启“自动参与”；以后重新验证保持用户当前开关，不会把手动关闭的圈子再次启用。'>
+    <ConfigSectionToolbar icon={<CarFront className='size-4.5' />} title='车型与圈子来源' summary={`${rows.length} 个圈子${dirty ? ` · ${changeCount} 项未保存` : ''}`} description='首次验证成功自动开启“自动参与”；以后重新验证保持用户当前开关，不会把手动关闭的圈子再次启用。'>
         <Button variant='outline' disabled={dirty || unverifiedCount === 0 || bulkValidation.isPending} onClick={() => bulkValidation.mutate()}>
           {bulkValidation.isPending ? <Loader2 className='size-4 animate-spin' /> : <RefreshCw className='size-4' />}验证全部待验证（{unverifiedCount}）
         </Button>
-        <Button variant='outline' onClick={() => { setRows([...rows, { id: '', platform_code: 'dongchedi', external_id: '', url: '', vehicle_name: '未分组', auto_enabled: false, section: 'dynamic', validation_status: 'unverified' }]); markDirty() }}><Plus className='size-4' />新增圈子</Button>
-        <Button disabled={saving} onClick={save}>{saving ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}保存当前标签</Button>
+        <Button variant='outline' onClick={() => commitRows([...rows, { id: '', platform_code: 'dongchedi', external_id: '', url: '', vehicle_name: '未分组', auto_enabled: false, section: 'dynamic', validation_status: 'unverified' }])}><Plus className='size-4' />新增圈子</Button>
+        <Button disabled={!dirty || saving} onClick={save}>{saving ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}保存当前标签{dirty ? ` (${changeCount})` : ''}</Button>
     </ConfigSectionToolbar>
     {validationJobIds.length > 0 && <Alert>
       <RefreshCw className={completedJobs < validationJobIds.length ? 'size-4 animate-spin' : 'size-4'} />
@@ -430,14 +485,14 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
     <div className='max-h-[min(65svh,680px)] overflow-auto rounded-xl border bg-card/90' data-list-viewport='circles'>
       <Table className='min-w-[1050px]'>
         <TableHeader><TableRow><TableHead className='w-16 text-center'>序号</TableHead><TableHead>车型</TableHead><TableHead>圈子 URL</TableHead><TableHead>名称</TableHead><TableHead>验证状态</TableHead><TableHead>自动参与</TableHead><TableHead className='text-right'>操作</TableHead></TableRow></TableHeader>
-        <TableBody>{rows.map((row, index) => <TableRow key={row.id || `new-${index}`}>
-          <TableCell className='w-16 text-center tabular-nums text-muted-foreground'>{index + 1}</TableCell><TableCell><Input value={row.vehicle_name ?? ''} onChange={(event) => update(index, { vehicle_name: event.target.value, vehicle_id: undefined })} placeholder='车型名称' /></TableCell>
-          <TableCell><Input value={row.url} onChange={(event) => update(index, { url: event.target.value })} placeholder='圈子 URL' /></TableCell>
+        <TableBody>{rows.map((row, index) => { const baseline = baselineById.get(row.id); const isNew = !baseline; const vehicleDirty = isNew || row.vehicle_name !== baseline.vehicle_name || row.vehicle_id !== baseline.vehicle_id; const urlDirty = isNew || row.url !== baseline.url; const autoDirty = Boolean(baseline) && row.auto_enabled !== baseline?.auto_enabled; return <TableRow key={row.id || `new-${index}`}>
+          <TableCell className='w-16 text-center tabular-nums text-muted-foreground'><span className='inline-flex items-center gap-1.5'>{index + 1}{isNew && <span className='size-1.5 rounded-full bg-amber-500' aria-label='新增圈子' />}</span></TableCell><TableCell><Input value={row.vehicle_name ?? ''} data-dirty={vehicleDirty || undefined} className={cn(vehicleDirty && dirtyFieldClass)} onChange={(event) => update(index, { vehicle_name: event.target.value, vehicle_id: undefined })} placeholder='车型名称' /></TableCell>
+          <TableCell><Input value={row.url} data-dirty={urlDirty || undefined} className={cn(urlDirty && dirtyFieldClass)} onChange={(event) => update(index, { url: event.target.value })} placeholder='圈子 URL' /></TableCell>
           <TableCell>{row.name || (row.id ? '等待验证' : '保存后验证')}</TableCell>
           <TableCell><div className='space-y-1'><StatusBadge value={row.validation_status === 'verified' ? 'success' : row.validation_status === 'failed' ? 'failed' : 'unknown'} label={{ verified: '已验证', failed: '验证失败', unverified: '未验证' }[row.validation_status] ?? row.validation_status} />{row.id && !row.first_validated_at && row.validation_status !== 'verified' && <div className='text-xs text-muted-foreground'>首次通过后自动参与</div>}</div></TableCell>
-          <TableCell><Switch checked={row.auto_enabled} disabled={row.validation_status !== 'verified'} onCheckedChange={(auto_enabled) => update(index, { auto_enabled })} /></TableCell>
+          <TableCell><Switch checked={row.auto_enabled} disabled={row.validation_status !== 'verified'} data-dirty={autoDirty || undefined} className={cn(autoDirty && dirtyControlClass)} onCheckedChange={(auto_enabled) => update(index, { auto_enabled })} /></TableCell>
           <TableCell><div className='flex justify-end gap-1'>{row.id && <Button variant='outline' size='sm' onClick={() => validate(row)}>{row.first_validated_at ? '重新验证' : '验证'}</Button>}<Button variant='ghost' size='icon' onClick={() => remove(index)} aria-label='删除圈子'><Trash2 className='size-4' /></Button></div></TableCell>
-        </TableRow>)}</TableBody>
+        </TableRow> })}</TableBody>
       </Table>
     </div>
   </div>
