@@ -67,6 +67,7 @@ export function RunsPage() {
       to: '/runs',
       search: (previous) => ({ ...previous, ...values }),
       replace: true,
+      resetScroll: false,
     })
   }
 
@@ -82,19 +83,21 @@ export function RunsPage() {
   const totalPages = Math.max(1, Math.ceil((query.data?.total ?? 0) / (search.pageSize ?? 50)))
 
   return (
-    <div className='space-y-6'>
-      <PageHeader title='提取列表' description='查看手动与定时提取批次，状态变化由 SSE 通知并回查权威接口。' actions={<NewExtractionSheet />} />
-      <Card className='border-border/70 bg-card/88 shadow-sm backdrop-blur'>
-        <CardContent className='grid gap-3 p-4 lg:grid-cols-[minmax(220px,1fr)_180px_160px_150px_150px_auto]'>
-          <Input value={search.number ?? ''} onChange={(event) => patch({ number: event.target.value || undefined, page: 1 })} placeholder='搜索批次编号' aria-label='搜索批次编号' />
-          <Select value={search.status ?? 'all'} onValueChange={(value) => patch({ status: value === 'all' ? undefined : value as SearchState['status'], page: 1 })}><SelectTrigger><SelectValue placeholder='全部状态' /></SelectTrigger><SelectContent><SelectItem value='all'>全部状态</SelectItem><SelectItem value='queued'>排队中</SelectItem><SelectItem value='running'>提取中</SelectItem><SelectItem value='waiting_for_auth'>等待平台认证</SelectItem><SelectItem value='success'>成功</SelectItem><SelectItem value='partial_success'>部分成功</SelectItem><SelectItem value='failed'>失败</SelectItem></SelectContent></Select>
-          <Select value={search.trigger ?? 'all'} onValueChange={(value) => patch({ trigger: value === 'all' ? undefined : value as SearchState['trigger'], page: 1 })}><SelectTrigger><SelectValue placeholder='全部触发方式' /></SelectTrigger><SelectContent><SelectItem value='all'>全部触发方式</SelectItem><SelectItem value='manual'>手动触发</SelectItem><SelectItem value='scheduled'>定时提取</SelectItem></SelectContent></Select>
-          <Input type='date' value={search.from ?? ''} onChange={(event) => patch({ from: event.target.value || undefined, page: 1 })} aria-label='开始日期' />
-          <Input type='date' value={search.to ?? ''} onChange={(event) => patch({ to: event.target.value || undefined, page: 1 })} aria-label='结束日期' />
-          <div className='flex gap-1'><Button variant='outline' size='icon' onClick={() => query.refetch()} aria-label='刷新列表'><RefreshCw className={`size-4 ${query.isFetching ? 'animate-spin' : ''}`} /></Button><Button variant='ghost' size='icon' onClick={() => navigate({ to: '/runs', search: emptyRunsSearch, replace: true })} aria-label='重置筛选'><FilterX className='size-4' /></Button></div>
-        </CardContent>
-      </Card>
-      <div className='overflow-hidden rounded-xl border border-border/70 bg-card/90 shadow-sm backdrop-blur'>
+    <div className='flex h-full min-h-0 flex-col gap-6'>
+      <div className='shrink-0 space-y-6'>
+        <PageHeader title='提取列表' description='查看手动与定时提取批次，状态变化由 SSE 通知并回查权威接口。' actions={<NewExtractionSheet />} />
+        <Card className='border-border/70 bg-card/88 shadow-sm backdrop-blur'>
+          <CardContent className='grid gap-3 p-4 lg:grid-cols-[minmax(220px,1fr)_180px_160px_150px_150px_auto]'>
+            <Input value={search.number ?? ''} onChange={(event) => patch({ number: event.target.value || undefined, page: 1 })} placeholder='搜索批次编号' aria-label='搜索批次编号' />
+            <Select value={search.status ?? 'all'} onValueChange={(value) => patch({ status: value === 'all' ? undefined : value as SearchState['status'], page: 1 })}><SelectTrigger><SelectValue placeholder='全部状态' /></SelectTrigger><SelectContent><SelectItem value='all'>全部状态</SelectItem><SelectItem value='queued'>排队中</SelectItem><SelectItem value='running'>提取中</SelectItem><SelectItem value='waiting_for_auth'>等待平台认证</SelectItem><SelectItem value='success'>成功</SelectItem><SelectItem value='partial_success'>部分成功</SelectItem><SelectItem value='failed'>失败</SelectItem></SelectContent></Select>
+            <Select value={search.trigger ?? 'all'} onValueChange={(value) => patch({ trigger: value === 'all' ? undefined : value as SearchState['trigger'], page: 1 })}><SelectTrigger><SelectValue placeholder='全部触发方式' /></SelectTrigger><SelectContent><SelectItem value='all'>全部触发方式</SelectItem><SelectItem value='manual'>手动触发</SelectItem><SelectItem value='scheduled'>定时提取</SelectItem></SelectContent></Select>
+            <Input type='date' value={search.from ?? ''} onChange={(event) => patch({ from: event.target.value || undefined, page: 1 })} aria-label='开始日期' />
+            <Input type='date' value={search.to ?? ''} onChange={(event) => patch({ to: event.target.value || undefined, page: 1 })} aria-label='结束日期' />
+            <div className='flex gap-1'><Button variant='outline' size='icon' onClick={() => query.refetch()} aria-label='刷新列表'><RefreshCw className={`size-4 ${query.isFetching ? 'animate-spin' : ''}`} /></Button><Button variant='ghost' size='icon' onClick={() => navigate({ to: '/runs', search: emptyRunsSearch, replace: true, resetScroll: false })} aria-label='重置筛选'><FilterX className='size-4' /></Button></div>
+          </CardContent>
+        </Card>
+      </div>
+      <div className='min-h-0 flex-1 overflow-y-auto rounded-xl border border-border/70 bg-card/90 shadow-sm backdrop-blur'>
         <div className='overflow-x-auto'>
           <Table className='min-w-[1050px]'>
             <TableHeader>{table.getHeaderGroups().map((group) => <TableRow key={group.id} className='bg-muted/35'>{group.headers.map((header) => <TableHead key={header.id}>{flexRender(header.column.columnDef.header, header.getContext())}</TableHead>)}</TableRow>)}</TableHeader>
