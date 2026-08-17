@@ -16,7 +16,7 @@ from curl_cffi.requests import Cookies
 from lxml import html
 from scrapling.fetchers import DynamicSession
 
-ADAPTER_VERSION = "dongchedi-dynamic-v1"
+ADAPTER_VERSION = "dongchedi-dynamic-v2"
 BASE_URL = "https://www.dongchedi.com"
 DETAIL_ROOT = f"{BASE_URL}/motor/pc/ugc/detail"
 COMMON_PARAMS = {"aid": "1839", "app_name": "auto_web_pc"}
@@ -28,6 +28,15 @@ POST_RE = re.compile(
 )
 SORT_LABEL_RE = re.compile(r"(?:\d{4}-\d{2}-\d{2}|\d+(?:分钟|小时|天|个月|年)前)(?:回复)?")
 VISIBLE_OPERATION_STATUSES = frozenset({0, 2})
+RICH_TEXT_TAG_RE = re.compile(
+    r"<(?:article|blockquote|br|div|h[1-6]|img|li|ol|p|section|ul)\b",
+    re.IGNORECASE,
+)
+BLOCK_END_TAG_RE = re.compile(
+    r"</(?:article|blockquote|div|h[1-6]|li|ol|p|section|ul)>",
+    re.IGNORECASE,
+)
+BREAK_TAG_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
 
 
 class AuthenticationRequired(RuntimeError):
@@ -128,6 +137,40 @@ def _first_sentence(text: str) -> str | None:
         if value.strip():
             return value.strip()
     return None
+
+
+def _plain_text(value: object) -> str:
+    """把平台富文本正文转换为保留段落顺序的纯文本。"""
+
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if not RICH_TEXT_TAG_RE.search(raw):
+        return "\n".join(
+            line
+            for line in (
+                re.sub(r"[\t\f\v ]+", " ", item).strip()
+                for item in raw.replace("\xa0", " ").splitlines()
+            )
+            if line
+        )
+    prepared = BREAK_TAG_RE.sub("\n", raw)
+    prepared = BLOCK_END_TAG_RE.sub(lambda match: f"{match.group(0)}\n", prepared)
+    try:
+        document = html.fromstring(f"<div>{prepared}</div>")
+        for element in document.xpath(".//script|.//style"):
+            element.drop_tree()
+        text = document.text_content()
+    except (TypeError, ValueError):
+        text = re.sub(r"<[^>]+>", " ", prepared)
+    return "\n".join(
+        line
+        for line in (
+            re.sub(r"[\t\f\v ]+", " ", item).strip()
+            for item in text.replace("\xa0", " ").splitlines()
+        )
+        if line
+    )
 
 
 class DongchediCollector:
@@ -376,7 +419,10 @@ class DongchediCollector:
         car_info = (
             data.get("motor_car_info") if isinstance(data.get("motor_car_info"), dict) else {}
         )
-        content = str(data.get("content") or data.get("motor_title") or "").strip()
+        content = _plain_text(data.get("content"))
+        platform_title = _plain_text(data.get("thread_title")) or _plain_text(
+            data.get("motor_title")
+        )
         image_items = data.get("image_urls") if isinstance(data.get("image_urls"), list) else []
         images = _unique_urls(
             item.get("url") if isinstance(item, dict) else item for item in image_items
@@ -388,7 +434,7 @@ class DongchediCollector:
         return {
             "platform_post_id": post_id,
             "url": normalized_url,
-            "title": str(data.get("thread_title") or "").strip() or _first_sentence(content),
+            "title": platform_title or _first_sentence(content),
             "author": str(profile.get("name") or "").strip() or None,
             "published_at": _iso_time(data.get("content_publish_time") or data.get("created_time")),
             "content": content or None,

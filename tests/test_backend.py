@@ -17,7 +17,11 @@ from sqlalchemy import select
 
 from threadsnap.app import create_app, require_internal_loopback
 from threadsnap.auth import AuthPageLoadError, AuthTask
-from threadsnap.collectors.dongchedi import AuthenticationRequired, DongchediCollector
+from threadsnap.collectors.dongchedi import (
+    ADAPTER_VERSION,
+    AuthenticationRequired,
+    DongchediCollector,
+)
 from threadsnap.config import Settings
 from threadsnap.errors import DomainError
 from threadsnap.models import (
@@ -36,6 +40,7 @@ from threadsnap.schemas import (
     CircleRow,
     ManualRunCreate,
 )
+from threadsnap.services import bootstrap_database
 
 
 def sample_record(post_id: str) -> dict:
@@ -295,6 +300,20 @@ class AppCase(unittest.TestCase):
 
 
 class ApiAndConfigTests(AppCase):
+    def test_bootstrap_refreshes_available_adapter_version(self) -> None:
+        with self.container.sessions.begin() as db:
+            platform = db.get(PlatformConfig, "dongchedi")
+            assert platform is not None
+            platform.adapter_version = "dongchedi-dynamic-v1"
+
+        with self.container.sessions.begin() as db:
+            bootstrap_database(db)
+
+        with self.container.sessions() as db:
+            platform = db.get(PlatformConfig, "dongchedi")
+            assert platform is not None
+            self.assertEqual(ADAPTER_VERSION, platform.adapter_version)
+
     def test_internal_api_rejects_non_loopback_client(self) -> None:
         request = SimpleNamespace(client=SimpleNamespace(host="10.20.30.40"))
         with self.assertRaises(DomainError) as raised:
@@ -1138,6 +1157,64 @@ class QueueAndRetryTests(AppCase):
 
 
 class CollectorTests(unittest.TestCase):
+    def test_rich_text_post_uses_motor_title_and_plain_content(self) -> None:
+        collector = DongchediCollector(None)
+        collector._json_api = lambda _endpoint, **_params: (  # type: ignore[method-assign]
+            {
+                "status": 0,
+                "data": {
+                    "group_id_str": "7674619924202979865",
+                    "thread_title": "",
+                    "motor_title": "我和qq3的故事～",
+                    "content": (
+                        "<p>这个夏天最惊喜的双重浪漫✨</p>"
+                        "<p>8月15日，既是我的生日，也是提车的日子。</p>"
+                        '<div class="syl-image-wrapper"><img src="https://example.test/a.jpg"></div>'
+                    ),
+                    "image_urls": [{"url": "https://example.test/a.jpg"}],
+                    "motor_profile_info": {"name": "作者甲"},
+                    "motor_car_info": {"source_desc": "QQ3 EV车友圈"},
+                    "operation_status": 0,
+                    "comment_count": 0,
+                },
+            },
+            200,
+        )
+
+        record = collector.fetch_post("https://www.dongchedi.com/ugc/article/7674619924202979865")
+
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual("我和qq3的故事～", record["title"])
+        self.assertEqual(
+            "这个夏天最惊喜的双重浪漫✨\n8月15日，既是我的生日，也是提车的日子。",
+            record["content"],
+        )
+        self.assertNotIn("<p>", record["content"])
+        self.assertEqual(["https://example.test/a.jpg"], record["image_urls"])
+
+    def test_rich_text_post_without_platform_title_uses_plain_first_sentence(self) -> None:
+        collector = DongchediCollector(None)
+        collector._json_api = lambda _endpoint, **_params: (  # type: ignore[method-assign]
+            {
+                "status": 0,
+                "data": {
+                    "group_id_str": "1001",
+                    "content": "<p>第一句话。</p><p>第二段内容。</p>",
+                    "operation_status": 0,
+                    "comment_count": 0,
+                },
+            },
+            200,
+        )
+
+        record = collector.fetch_post("https://www.dongchedi.com/ugc/article/1001")
+
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual("第一句话。", record["title"])
+        self.assertEqual("第一句话。\n第二段内容。", record["content"])
+
     def test_collection_continues_to_later_pages_until_valid_target(self) -> None:
         collector = DongchediCollector(None)
         pages = {

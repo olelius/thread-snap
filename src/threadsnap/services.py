@@ -119,8 +119,11 @@ def bootstrap_database(db: Session) -> None:
         ),
     ]
     for item in defaults:
-        if not db.get(PlatformConfig, item.code):
+        existing = db.get(PlatformConfig, item.code)
+        if not existing:
             db.add(item)
+        elif item.code == "dongchedi":
+            existing.adapter_version = ADAPTER_VERSION
     if not db.get(ScheduleConfig, 1):
         db.add(ScheduleConfig(id=1, timezone_name="Asia/Shanghai", revision=1))
 
