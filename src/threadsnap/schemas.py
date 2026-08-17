@@ -15,6 +15,7 @@ class ExtractionRuleDraft(StrictModel):
     id: str = Field(min_length=8, max_length=36)
     name: str = Field(min_length=1, max_length=120)
     platform_quantities: dict[str, int] = Field(default_factory=dict)
+    circle_ids: list[str] = Field(default_factory=list)
 
 
 class ScheduleNodeDraft(StrictModel):

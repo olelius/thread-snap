@@ -15,6 +15,7 @@ export type ExtractionRule = {
   name: string
   version: number
   platform_quantities: Record<string, number>
+  circle_ids: string[]
   archived: boolean
   updated_at: string
 }

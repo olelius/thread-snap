@@ -93,6 +93,7 @@
 | `docs/adr/0012-reuse-vite-shadcn-admin-ui-baseline.md` | 第一版采用 Vite React 技术栈并选择性复用 shadcn-admin UI 基线 |
 | `docs/adr/0013-separate-schedule-nodes-from-extraction-rules.md` | 每周计划节点只引用可复用自动提取规则，各配置页面保持唯一编辑归属 |
 | `docs/adr/0014-use-controlled-cdp-screencast-for-auth.md` | 第一版平台人工认证使用后端封装的 CDP Screencast 和完整指针输入，不暴露原始 CDP 入口 |
+| `docs/adr/0015-select-explicit-circles-per-extraction-rule.md` | 自动提取规则明确多选平台圈子，新来源不自动扩张旧规则范围 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 

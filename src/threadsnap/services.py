@@ -165,36 +165,6 @@ class ConfigService:
                     f"{item.display_name}暂未接入，当前不允许启用。",
                     status_code=409,
                 )
-            if value.enabled and not item.enabled:
-                missing_rules: list[dict[str, Any]] = []
-                nodes = list(db.scalars(select(ScheduleNode).where(ScheduleNode.enabled.is_(True))))
-                for node in nodes:
-                    rule = db.get(ExtractionRule, node.rule_id)
-                    version = (
-                        db.scalar(
-                            select(ExtractionRuleVersion).where(
-                                ExtractionRuleVersion.rule_id == node.rule_id,
-                                ExtractionRuleVersion.version == rule.current_version,
-                            )
-                        )
-                        if rule
-                        else None
-                    )
-                    if not version or int(version.platform_quantities.get(code, 0)) < 1:
-                        missing_rules.append(
-                            {
-                                "node_id": node.id,
-                                "rule_id": node.rule_id,
-                                "rule_name": rule.name if rule else "未知规则",
-                            }
-                        )
-                if missing_rules:
-                    raise DomainError(
-                        "PLATFORM_RULE_QUANTITY_MISSING",
-                        "启用平台前，请先在提取计划中补齐所有启用节点引用规则的平台数量。",
-                        status_code=409,
-                        details=missing_rules,
-                    )
             actual_concurrency = min(
                 max(value.internal_concurrency, item.min_concurrency),
                 item.max_concurrency,
@@ -227,6 +197,7 @@ class ConfigService:
                     "name": rule.name,
                     "version": rule.current_version,
                     "platform_quantities": version.platform_quantities,
+                    "circle_ids": version.selected_circle_ids,
                     "archived": rule.archived,
                     "updated_at": rule.updated_at,
                 }
@@ -301,15 +272,49 @@ class ConfigService:
             integrated = {
                 item.code: item for item in platforms if item.adapter_status == "available"
             }
-            enabled_codes = {item.code for item in platforms if item.enabled}
+            configured_circles = {
+                item.id: item
+                for item in db.scalars(select(Circle).where(Circle.source_kind == "configured"))
+            }
             rule_quantities: dict[str, dict[str, int]] = {}
+            rule_circle_ids: dict[str, list[str]] = {}
             for draft in value.rules:
-                unknown = sorted(set(draft.platform_quantities) - set(integrated))
-                if unknown:
+                circle_ids = sorted(set(draft.circle_ids))
+                missing_circles = sorted(set(circle_ids) - set(configured_circles))
+                if missing_circles:
+                    raise DomainError(
+                        "EXTRACTION_RULE_CIRCLE_INVALID",
+                        "规则包含不存在或不属于配置来源的圈子。",
+                        details=[
+                            {"circle_id": item, "rule_id": draft.id} for item in missing_circles
+                        ],
+                    )
+                selected_platforms = {
+                    configured_circles[circle_id].platform_code for circle_id in circle_ids
+                }
+                unavailable = sorted(selected_platforms - set(integrated))
+                if unavailable:
                     raise DomainError(
                         "EXTRACTION_RULE_PLATFORM_INVALID",
-                        "规则包含尚未接入的平台数量。",
-                        details=[{"platform_code": code, "rule_id": draft.id} for code in unknown],
+                        "规则选择了尚未接入的平台圈子。",
+                        details=[
+                            {"platform_code": code, "rule_id": draft.id} for code in unavailable
+                        ],
+                    )
+                quantity_platforms = set(draft.platform_quantities)
+                if quantity_platforms != selected_platforms:
+                    raise DomainError(
+                        "EXTRACTION_RULE_SCOPE_QUANTITY_MISMATCH",
+                        "规则必须为每个已选平台设置且只设置一个每圈目标数。",
+                        details=[
+                            {
+                                "rule_id": draft.id,
+                                "missing_platforms": sorted(
+                                    selected_platforms - quantity_platforms
+                                ),
+                                "extra_platforms": sorted(quantity_platforms - selected_platforms),
+                            }
+                        ],
                     )
                 quantities: dict[str, int] = {}
                 for code, quantity in draft.platform_quantities.items():
@@ -329,19 +334,19 @@ class ConfigService:
                         )
                     quantities[code] = quantity
                 rule_quantities[draft.id] = quantities
+                rule_circle_ids[draft.id] = circle_ids
             invalid_nodes = [
                 {
                     "node_id": node.id,
                     "rule_id": node.rule_id,
-                    "missing_platforms": sorted(enabled_codes - set(rule_quantities[node.rule_id])),
                 }
                 for node in value.nodes
-                if node.enabled and enabled_codes - set(rule_quantities[node.rule_id])
+                if node.enabled and not rule_circle_ids[node.rule_id]
             ]
             if invalid_nodes:
                 raise DomainError(
-                    "SCHEDULE_NODE_RULE_INCOMPLETE",
-                    "启用节点引用的规则缺少已启用平台数量。",
+                    "SCHEDULE_NODE_RULE_SCOPE_EMPTY",
+                    "启用节点引用的规则至少需要选择一个平台圈子。",
                     details=invalid_nodes,
                 )
 
@@ -349,6 +354,7 @@ class ConfigService:
             for draft in value.rules:
                 rule = existing_rules.get(draft.id)
                 quantities = rule_quantities[draft.id]
+                circle_ids = rule_circle_ids[draft.id]
                 if rule and rule.archived:
                     raise DomainError(
                         "EXTRACTION_RULE_ARCHIVED",
@@ -361,7 +367,10 @@ class ConfigService:
                     db.add(rule)
                     db.add(
                         ExtractionRuleVersion(
-                            rule_id=draft.id, version=1, platform_quantities=quantities
+                            rule_id=draft.id,
+                            version=1,
+                            platform_quantities=quantities,
+                            selected_circle_ids=circle_ids,
                         )
                     )
                 else:
@@ -372,7 +381,9 @@ class ConfigService:
                         )
                     )
                     changed = rule.name != draft.name.strip() or (
-                        current is None or current.platform_quantities != quantities
+                        current is None
+                        or current.platform_quantities != quantities
+                        or current.selected_circle_ids != circle_ids
                     )
                     rule.name = draft.name.strip()
                     if changed:
@@ -382,6 +393,7 @@ class ConfigService:
                                 rule_id=rule.id,
                                 version=rule.current_version,
                                 platform_quantities=quantities,
+                                selected_circle_ids=circle_ids,
                             )
                         )
 
@@ -484,6 +496,19 @@ class ConfigService:
             platforms = {x.code: x for x in read_db.scalars(select(PlatformConfig))}
             existing_ids = {x.id: x for x in read_db.scalars(select(Circle))}
             vehicle_ids = set(read_db.scalars(select(Vehicle.id)))
+            active_rule_versions = list(
+                read_db.execute(
+                    select(ExtractionRule, ExtractionRuleVersion)
+                    .join(
+                        ExtractionRuleVersion,
+                        ExtractionRuleVersion.rule_id == ExtractionRule.id,
+                    )
+                    .where(
+                        ExtractionRule.archived.is_(False),
+                        ExtractionRuleVersion.version == ExtractionRule.current_version,
+                    )
+                )
+            )
         deleted_ids = list(dict.fromkeys(value.deleted_ids))
         for circle_id in deleted_ids:
             circle = existing_ids.get(circle_id)
@@ -492,6 +517,22 @@ class ConfigService:
                     {
                         "field": "deleted_ids",
                         "reason": f"要删除的圈子不存在：{circle_id}",
+                    }
+                )
+                continue
+            referenced_by = [
+                rule.name
+                for rule, version in active_rule_versions
+                if circle_id in version.selected_circle_ids
+            ]
+            if referenced_by:
+                errors.append(
+                    {
+                        "field": "deleted_ids",
+                        "reason": (
+                            f"圈子仍被自动提取规则引用：{'、'.join(sorted(referenced_by))}；"
+                            "请先从规则范围中移除。"
+                        ),
                     }
                 )
         deleted_id_set = set(deleted_ids)
@@ -697,13 +738,13 @@ class ConfigService:
     def delete_circle(self, circle_id: str) -> dict[str, Any]:
         """删除配置圈子，并保留历史批次内已冻结的圈子信息。"""
 
-        with self.factory.begin() as db:
+        with self.factory() as db:
             circle = db.get(Circle, circle_id)
             if not circle or circle.source_kind != "configured":
                 raise DomainError("CIRCLE_NOT_FOUND", "指定圈子不存在。", status_code=404)
             result = self.circle_dict(circle)
-            db.delete(circle)
-            return result
+        self.save_circle_batch(CircleBatchUpdate(rows=[], deleted_ids=[circle_id]))
+        return result
 
     def list_manual_history(self) -> list[dict[str, Any]]:
         with self.factory() as db:
@@ -1016,18 +1057,25 @@ class RunService:
                     )
                 )
             }
-            circles = list(
-                db.scalars(
-                    select(Circle)
-                    .where(
-                        Circle.auto_enabled.is_(True),
-                        Circle.validation_status == "verified",
+            selected_circle_ids = list(dict.fromkeys(rule_version.selected_circle_ids))
+            circles = (
+                list(
+                    db.scalars(
+                        select(Circle)
+                        .where(
+                            Circle.id.in_(selected_circle_ids),
+                            Circle.auto_enabled.is_(True),
+                            Circle.validation_status == "verified",
+                        )
+                        .order_by(Circle.platform_code, Circle.created_at)
                     )
-                    .order_by(Circle.platform_code, Circle.created_at)
                 )
+                if selected_circle_ids
+                else []
             )
             circles = [item for item in circles if item.platform_code in platforms]
-            missing = sorted(set(platforms) - set(rule_version.platform_quantities))
+            selected_platforms = {item.platform_code for item in circles}
+            missing = sorted(selected_platforms - set(rule_version.platform_quantities))
             if missing:
                 db.add(
                     ScheduleEvent(
@@ -1037,7 +1085,7 @@ class RunService:
                         extraction_rule_id=rule.id,
                         extraction_rule_version=rule.current_version,
                         status="blocked",
-                        message="提取规则缺少已启用平台数量，整次节点触发已阻止。",
+                        message="提取规则缺少已选平台数量，整次节点触发已阻止。",
                     )
                 )
                 return None
@@ -1050,7 +1098,7 @@ class RunService:
                         extraction_rule_id=rule.id,
                         extraction_rule_version=rule.current_version,
                         status="skipped",
-                        message="当前没有可执行的已验证自动提取圈子。",
+                        message="规则当前没有可执行的已验证且全局启用圈子。",
                     )
                 )
                 return None
@@ -1072,6 +1120,7 @@ class RunService:
                     "extraction_rule_id": rule.id,
                     "extraction_rule_version": rule.current_version,
                     "platform_quantities": rule_version.platform_quantities,
+                    "circle_ids": selected_circle_ids,
                 },
             )
             db.add(run)

@@ -303,6 +303,7 @@ class ApiAndConfigTests(AppCase):
         self.assertIn("本机", raised.exception.message)
 
     def test_platform_clamping_plan_and_chinese_validation(self) -> None:
+        circle = self.save_verified_circle()
         response = self.client.put(
             "/api/v1/platforms/dongchedi",
             json={"enabled": True, "internal_concurrency": 99},
@@ -327,6 +328,7 @@ class ApiAndConfigTests(AppCase):
                         "id": "rule-0001",
                         "name": "工作日规则",
                         "platform_quantities": {"dongchedi": 30},
+                        "circle_ids": [circle.id],
                     }
                 ],
                 "nodes": [
@@ -343,6 +345,7 @@ class ApiAndConfigTests(AppCase):
         self.assertEqual(200, plan.status_code)
         self.assertEqual([0, 4], plan.json()["nodes"][0]["weekdays"])
         self.assertEqual("17:00:05", plan.json()["nodes"][0]["time"])
+        self.assertEqual([circle.id], plan.json()["rules"][0]["circle_ids"])
         invalid = self.client.put(
             "/api/v1/extraction-plan",
             json={
@@ -477,6 +480,108 @@ class ApiAndConfigTests(AppCase):
         deleted = self.client.delete(f"/api/v1/circles/{second.json()['id']}")
         self.assertEqual(200, deleted.status_code)
         self.assertEqual([], self.client.get("/api/v1/circles").json())
+
+    def test_active_rule_scope_blocks_circle_delete_until_new_version_removes_it(self) -> None:
+        circle = self.save_verified_circle()
+        plan = self.client.put(
+            "/api/v1/extraction-plan",
+            json={
+                "revision": 1,
+                "rules": [
+                    {
+                        "id": "rule-scope-0001",
+                        "name": "指定圈子规则",
+                        "platform_quantities": {"dongchedi": 30},
+                        "circle_ids": [circle.id],
+                    }
+                ],
+                "nodes": [],
+            },
+        )
+        self.assertEqual(200, plan.status_code)
+
+        blocked = self.client.delete(f"/api/v1/circles/{circle.id}")
+        self.assertEqual(400, blocked.status_code)
+        self.assertIn("指定圈子规则", blocked.json()["details"][0]["reason"])
+
+        cleared = self.client.put(
+            "/api/v1/extraction-plan",
+            json={
+                "revision": plan.json()["revision"],
+                "rules": [
+                    {
+                        "id": "rule-scope-0001",
+                        "name": "指定圈子规则",
+                        "platform_quantities": {},
+                        "circle_ids": [],
+                    }
+                ],
+                "nodes": [],
+            },
+        )
+        self.assertEqual(200, cleared.status_code)
+        self.assertEqual(2, cleared.json()["rules"][0]["version"])
+        self.assertEqual(200, self.client.delete(f"/api/v1/circles/{circle.id}").status_code)
+
+    def test_rule_scope_can_select_circles_from_multiple_integrated_platforms(self) -> None:
+        dongchedi_circle = self.save_verified_circle()
+        with self.container.sessions.begin() as db:
+            stored = db.get(Circle, dongchedi_circle.id)
+            stored.auto_enabled = True
+            autohome = db.get(PlatformConfig, "autohome")
+            autohome.adapter_status = "available"
+            autohome.enabled = True
+            vehicle = Vehicle(name="多平台车型")
+            db.add(vehicle)
+            db.flush()
+            autohome_circle = Circle(
+                platform_code="autohome",
+                external_id="88001",
+                name="汽车之家测试圈",
+                url="https://example.test/forum/88001",
+                vehicle_id=vehicle.id,
+                source_kind="configured",
+                auto_enabled=True,
+                validation_status="verified",
+            )
+            db.add(autohome_circle)
+            db.flush()
+
+        plan = self.client.put(
+            "/api/v1/extraction-plan",
+            json={
+                "revision": 1,
+                "rules": [
+                    {
+                        "id": "rule-multi-0001",
+                        "name": "多平台规则",
+                        "platform_quantities": {"dongchedi": 10, "autohome": 20},
+                        "circle_ids": [dongchedi_circle.id, autohome_circle.id],
+                    }
+                ],
+                "nodes": [
+                    {
+                        "id": "node-multi-0001",
+                        "weekdays": [0],
+                        "time": "09:30:00",
+                        "enabled": True,
+                        "rule_id": "rule-multi-0001",
+                    }
+                ],
+            },
+        )
+        self.assertEqual(200, plan.status_code)
+        run = self.container.runs.create_scheduled(
+            datetime(2026, 8, 17, 1, 30, tzinfo=timezone.utc),
+            "node-multi-0001",
+            plan.json()["revision"],
+        )
+        self.assertIsNotNone(run)
+        detail = self.container.runs.get_run(run["id"])
+        self.assertEqual(
+            {"autohome": 20, "dongchedi": 10},
+            {task["platform_code"]: task["target_count"] for task in detail["tasks"]},
+        )
 
     def test_manual_idempotency_and_dual_api_contract(self) -> None:
         payload = {
@@ -851,9 +956,12 @@ class QueueAndRetryTests(AppCase):
 
     def test_weekly_scheduler_deduplicates_same_second(self) -> None:
         circle = self.save_verified_circle()
+        other_circle = self.save_verified_circle(name="B9", external_id="24730")
         with self.container.sessions.begin() as db:
             stored = db.get(Circle, circle.id)
             stored.auto_enabled = True
+            other = db.get(Circle, other_circle.id)
+            other.auto_enabled = True
         updated = self.client.put(
             "/api/v1/extraction-plan",
             json={
@@ -863,6 +971,7 @@ class QueueAndRetryTests(AppCase):
                         "id": "rule-0001",
                         "name": "定时规则",
                         "platform_quantities": {"dongchedi": 1},
+                        "circle_ids": [circle.id],
                     }
                 ],
                 "nodes": [
@@ -886,6 +995,8 @@ class QueueAndRetryTests(AppCase):
             self.assertEqual(1, len(events))
             self.assertEqual(updated["revision"], events[0].schedule_revision)
             self.assertEqual("node-0001", events[0].schedule_node_id)
+            tasks = list(db.scalars(select(CircleTask)))
+            self.assertEqual([circle.id], [task.circle_id for task in tasks])
 
     def test_automatic_auth_refresh_retries_inside_same_run(self) -> None:
         circle = self.save_verified_circle()
