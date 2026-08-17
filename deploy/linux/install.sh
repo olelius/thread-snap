@@ -249,9 +249,10 @@ systemctl daemon-reload
 nginx -t -c "$CONFIG_DIR/nginx.conf"
 
 if [[ "$START_SERVICES" == true ]]; then
-  systemctl enable --now threadsnap-wayland.service
-  systemctl enable --now threadsnap.service
-  systemctl enable --now threadsnap-nginx.service
+  systemctl enable threadsnap-wayland.service threadsnap.service threadsnap-nginx.service
+  systemctl restart threadsnap-wayland.service
+  systemctl restart threadsnap.service
+  systemctl restart threadsnap-nginx.service
   if ! bash "$SCRIPT_DIR/verify.sh" --listen-port "$LISTEN_PORT" --server-name "$SERVER_NAME" --quick; then
     echo "ERROR: new release health verification failed" >&2
     if [[ -n "$old_release" && -d "$old_release" ]]; then

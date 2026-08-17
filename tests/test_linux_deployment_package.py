@@ -103,6 +103,10 @@ class LinuxDeploymentPackageTests(unittest.TestCase):
             "-t httpd_sys_content_t '/opt/threadsnap/releases/[^/]+/frontend(/.*)?'", install
         )
         self.assertNotIn("systemctl enable --now nginx.service", install)
+        self.assertIn("systemctl restart threadsnap-wayland.service", install)
+        self.assertIn("systemctl restart threadsnap.service", install)
+        self.assertIn("systemctl restart threadsnap-nginx.service", install)
+        self.assertNotIn("systemctl enable --now threadsnap.service", install)
 
     def test_single_process_and_wayland_contract(self) -> None:
         service = self.read("deploy/linux/systemd/threadsnap.service")
