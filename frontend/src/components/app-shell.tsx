@@ -86,8 +86,8 @@ export function AppShell() {
           </SidebarFooter>
           <SidebarRail />
         </Sidebar>
-        <SidebarInset className='min-w-0 overflow-hidden bg-transparent'>
-          <header className='sticky top-0 z-30 flex h-14 items-center gap-3 border-b border-border/65 bg-background/82 px-4 backdrop-blur-xl sm:px-6'>
+        <SidebarInset className='h-svh min-h-0 min-w-0 overflow-hidden bg-transparent'>
+          <header className='z-30 flex h-14 shrink-0 items-center gap-3 border-b border-border/65 bg-background/82 px-4 backdrop-blur-xl sm:px-6'>
             <SidebarTrigger className='-ml-1 transition-transform duration-200 hover:scale-105' />
             <Separator orientation='vertical' className='h-5' />
             <div className='min-w-0 flex-1 truncate text-sm font-medium text-muted-foreground'>
@@ -107,7 +107,7 @@ export function AppShell() {
             initial={reduceMotion ? false : { opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.2, ease: 'easeOut' }}
-            className='min-w-0 flex-1 p-4 sm:p-6 lg:p-8'
+            className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-4 sm:p-6 lg:p-8'
           >
             <Outlet />
           </motion.main>
