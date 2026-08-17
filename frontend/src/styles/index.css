@@ -117,8 +117,7 @@
   animation: post-row-dismissed 1.8s ease-out forwards;
 }
 
-.post-row-dismissed .post-row-selection-trail,
-.post-row-dismissed .post-row-last-viewed-label {
+.post-row-dismissed .post-row-selection-trail {
   animation: post-row-dismissed-detail 1.8s ease-out forwards;
 }
 
@@ -128,8 +127,7 @@
   .post-row-selection-trail { transition: none !important; }
   .post-row-dismissed,
   .post-row-dismissed:hover,
-  .post-row-dismissed .post-row-selection-trail,
-  .post-row-dismissed .post-row-last-viewed-label { animation: none; }
+  .post-row-dismissed .post-row-selection-trail { animation: none; }
 }
 
 @utility container {
