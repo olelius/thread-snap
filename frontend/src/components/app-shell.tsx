@@ -107,7 +107,7 @@ export function AppShell() {
             initial={reduceMotion ? false : { opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.2, ease: 'easeOut' }}
-            className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-4 sm:p-6 lg:p-8'
+            className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-4 sm:p-5 lg:p-6'
           >
             <Outlet />
           </motion.main>

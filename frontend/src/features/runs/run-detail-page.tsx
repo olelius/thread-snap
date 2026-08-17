@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { motion, useReducedMotion } from 'motion/react'
-import { ArrowLeft, CircleStop, ChevronDown, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, KeyRound, LoaderCircle, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowLeft, CircleStop, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, KeyRound, ListTree, LoaderCircle, RefreshCw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AuthDialog } from '@/features/auth/auth-dialog'
 import { useDebouncedValue } from '@/hooks/use-debounced-value'
@@ -14,7 +14,6 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -40,6 +39,7 @@ export function RunDetailPage() {
     direction: rawSearch.direction ?? 'asc',
   }
   const [authOpen, setAuthOpen] = useState(false)
+  const [tasksOpen, setTasksOpen] = useState(false)
   const [manualCopy, setManualCopy] = useState<string>()
   const [postSwitch, setPostSwitch] = useState<PostSwitch>()
   const [selectionRevealPostId, setSelectionRevealPostId] = useState<string>()
@@ -185,21 +185,30 @@ export function RunDetailPage() {
   const selectionTransition = reduceMotion ? { duration: 0 } : { type: 'spring' as const, stiffness: 430, damping: 34, mass: 0.55 }
 
   return (
-    <div className='flex h-full min-h-0 flex-col gap-6 overflow-y-auto xl:overflow-hidden'>
-      <div className='shrink-0 space-y-6'>
-        <Button variant='ghost' className='-ml-2' onClick={() => navigate({ to: '/runs', search: emptyRunsSearch })}><ArrowLeft className='size-4' />返回提取列表</Button>
-      <PageHeader title={run.data ? `批次 ${run.data.number}` : '批次链接详情'} description='结果按原始来源位置稳定合并；搜索、筛选、排序和分页均由后端对完整结果集执行。' actions={<><Button variant='outline' onClick={() => { run.refetch(); posts.refetch() }}><RefreshCw className={`size-4 ${run.isFetching || posts.isFetching ? 'animate-spin' : ''}`} />刷新</Button>{run.data?.status === 'waiting_for_auth' && <><Button variant='outline' onClick={() => setAuthOpen(true)}><KeyRound className='size-4' />去认证</Button><AlertDialog><AlertDialogTrigger asChild><Button variant='outline'><CircleStop className='size-4' />结束本次提取</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>结束本次提取？</AlertDialogTitle><AlertDialogDescription>已有结果将保留，批次按实际结果结束并释放平台队列；之后仍可重新提取失败项。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => endAuthWait.mutate()}>确认结束</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></>}{canRetry && <AlertDialog><AlertDialogTrigger asChild><Button variant='outline'>重新提取失败项</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>重新提取失败项？</AlertDialogTitle><AlertDialogDescription>系统会保留原批次快照，只把失败 URL 创建为关联补提批次。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => retry.mutate()}>确认重新提取</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}{canDelete && <AlertDialog><AlertDialogTrigger asChild><Button variant='ghost' className='text-destructive hover:text-destructive'><Trash2 className='size-4' />永久删除</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>永久删除该批次？</AlertDialogTitle><AlertDialogDescription>批次、帖子快照、一级评论和已生成导出记录都会一并删除，此操作不可撤回。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => deleteRun.mutate()}>确认永久删除</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}</>} />
-      {run.isLoading ? <Skeleton className='h-36 rounded-xl' /> : run.data && <div className='grid gap-3 sm:grid-cols-2 xl:grid-cols-5'>{[
+    <div className='flex h-full min-h-0 flex-col gap-4 overflow-y-auto xl:overflow-hidden'>
+      <div className='shrink-0 space-y-4'>
+        <PageHeader
+          eyebrow={<Button variant='ghost' size='sm' className='-ml-2 h-7 px-2 text-xs' onClick={() => navigate({ to: '/runs', search: emptyRunsSearch })}><ArrowLeft className='size-3.5' />返回提取列表</Button>}
+          title={run.data ? `批次 ${run.data.number}` : '批次链接详情'}
+          description='结果按原始来源位置稳定合并；搜索、筛选、排序和分页均由后端对完整结果集执行。'
+          actions={<>
+            <Button variant='outline' size='sm' onClick={() => { run.refetch(); posts.refetch() }}><RefreshCw className={`size-4 ${run.isFetching || posts.isFetching ? 'animate-spin' : ''}`} />刷新</Button>
+            {run.data?.tasks?.length ? <Button variant='outline' size='sm' onClick={() => setTasksOpen(true)}><ListTree className='size-4' />圈子任务 <span className='text-xs text-muted-foreground'>{run.data.tasks.length}</span></Button> : null}
+            {run.data?.status === 'waiting_for_auth' && <><Button variant='outline' size='sm' onClick={() => setAuthOpen(true)}><KeyRound className='size-4' />去认证</Button><AlertDialog><AlertDialogTrigger asChild><Button variant='outline' size='sm'><CircleStop className='size-4' />结束本次提取</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>结束本次提取？</AlertDialogTitle><AlertDialogDescription>已有结果将保留，批次按实际结果结束并释放平台队列；之后仍可重新提取失败项。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => endAuthWait.mutate()}>确认结束</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></>}
+            {canRetry && <AlertDialog><AlertDialogTrigger asChild><Button variant='outline' size='sm'>重新提取失败项</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>重新提取失败项？</AlertDialogTitle><AlertDialogDescription>系统会保留原批次快照，只把失败 URL 创建为关联补提批次。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => retry.mutate()}>确认重新提取</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
+            {canDelete && <AlertDialog><AlertDialogTrigger asChild><Button variant='ghost' size='sm' className='text-destructive hover:text-destructive'><Trash2 className='size-4' />永久删除</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>永久删除该批次？</AlertDialogTitle><AlertDialogDescription>批次、帖子快照、一级评论和已生成导出记录都会一并删除，此操作不可撤回。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => deleteRun.mutate()}>确认永久删除</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
+          </>}
+        />
+      {run.isLoading ? <Skeleton className='h-20 rounded-xl' /> : run.data && <div className='grid gap-2 sm:grid-cols-2 xl:grid-cols-5'>{[
         ['状态', <StatusBadge key='status' value={run.data.status} label={run.data.status_name} />],
         ['触发方式', `${run.data.trigger_type_name} · ${inputModeName}`],
         ['结果进度', `${run.data.completed_count} / ${run.data.planned_count}`],
         ['失败项', String(run.data.failed_count)],
         ['创建时间', formatDate(run.data.created_at)],
-      ].map(([label, value]) => <Card key={String(label)} className='border-border/70 bg-card/88'><CardContent className='p-4'><div className='text-xs text-muted-foreground'>{label}</div><div className='mt-2 text-sm font-semibold'>{value}</div></CardContent></Card>)}</div>}
+      ].map(([label, value]) => <Card key={String(label)} className='border-border/70 bg-card/88 py-0'><CardContent className='p-3'><div className='text-xs text-muted-foreground'>{label}</div><div className='mt-1 text-sm font-semibold'>{value}</div></CardContent></Card>)}</div>}
       {run.data?.waiting_reason && <Alert><KeyRound className='size-4' /><AlertTitle>等待平台认证</AlertTitle><AlertDescription>{run.data.waiting_reason}</AlertDescription></Alert>}
       {run.data?.error_message && <Alert variant='destructive'><AlertTitle>批次错误</AlertTitle><AlertDescription>{run.data.error_message}</AlertDescription></Alert>}
-        {run.data?.tasks?.length ? <Collapsible defaultOpen={false} className='rounded-xl border border-border/70 bg-card/88'><CollapsibleTrigger asChild><Button type='button' variant='ghost' className='group h-auto w-full justify-between rounded-xl px-5 py-4 text-left hover:bg-muted/30' aria-label='展开或收起圈子任务'><span><span className='block font-semibold'>圈子任务 · {run.data.tasks.length}</span><span className='mt-1 block text-sm font-normal text-muted-foreground'>按需查看每个平台圈子的独立进度、状态与后端错误。</span></span><ChevronDown className='size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180' /></Button></CollapsibleTrigger><CollapsibleContent><div className='overflow-x-auto border-t'><Table className='min-w-[820px]'><TableHeader><TableRow><TableHead>平台</TableHead><TableHead>圈子</TableHead><TableHead>状态</TableHead><TableHead>进度</TableHead><TableHead>错误详情</TableHead></TableRow></TableHeader><TableBody>{run.data.tasks.map((task) => <TableRow key={task.id}><TableCell>{platformName(task.platform_code)}</TableCell><TableCell><div className='font-medium'>{task.circle_name || task.external_id}</div><div className='max-w-72 truncate text-xs text-muted-foreground'>{task.circle_url}</div></TableCell><TableCell><StatusBadge value={task.status} label={task.status_name} /></TableCell><TableCell className='tabular-nums'>{task.completed_count} / {task.target_count}{task.failed_count ? ` · ${task.failed_count} 项失败` : ''}</TableCell><TableCell className='max-w-80 text-sm text-muted-foreground'>{task.error_message || task.stop_reason || '—'}</TableCell></TableRow>)}</TableBody></Table></div></CollapsibleContent></Collapsible> : null}
-        <Card className='border-border/70 bg-card/88'><CardContent className='grid gap-3 p-4 lg:grid-cols-[1fr_220px_170px_180px_140px_auto]'><Input placeholder='搜索帖子标题' aria-label='搜索帖子标题' value={search.title ?? ''} onChange={(event) => patch({ title: event.target.value || undefined, page: 1 })} /><Input placeholder='搜索圈子' aria-label='搜索圈子' value={search.circle ?? ''} onChange={(event) => patch({ circle: event.target.value || undefined, page: 1 })} /><Select value={search.visibility ?? 'all'} onValueChange={(value) => patch({ visibility: value === 'all' ? undefined : value as SearchState['visibility'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部可见状态</SelectItem><SelectItem value='visible'>可见</SelectItem><SelectItem value='hidden'>不可见</SelectItem><SelectItem value='unknown'>未知</SelectItem></SelectContent></Select><Select value={search.sort} onValueChange={(value) => patch({ sort: value as SearchState['sort'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='source'>来源顺序</SelectItem><SelectItem value='published_at'>发布时间</SelectItem><SelectItem value='reply_count'>评论数</SelectItem><SelectItem value='like_count'>点赞数</SelectItem></SelectContent></Select><Select value={search.direction} onValueChange={(value) => patch({ direction: value as SearchState['direction'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='asc'>正序</SelectItem><SelectItem value='desc'>倒序</SelectItem></SelectContent></Select><Button variant='outline' onClick={copyAll}><Copy className='size-4' />复制全部</Button></CardContent></Card>
+        <Card className='border-border/70 bg-card/88 py-0'><CardContent className='grid gap-3 p-3 lg:grid-cols-[1fr_220px_170px_180px_140px_auto]'><Input placeholder='搜索帖子标题' aria-label='搜索帖子标题' value={search.title ?? ''} onChange={(event) => patch({ title: event.target.value || undefined, page: 1 })} /><Input placeholder='搜索圈子' aria-label='搜索圈子' value={search.circle ?? ''} onChange={(event) => patch({ circle: event.target.value || undefined, page: 1 })} /><Select value={search.visibility ?? 'all'} onValueChange={(value) => patch({ visibility: value === 'all' ? undefined : value as SearchState['visibility'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部可见状态</SelectItem><SelectItem value='visible'>可见</SelectItem><SelectItem value='hidden'>不可见</SelectItem><SelectItem value='unknown'>未知</SelectItem></SelectContent></Select><Select value={search.sort} onValueChange={(value) => patch({ sort: value as SearchState['sort'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='source'>来源顺序</SelectItem><SelectItem value='published_at'>发布时间</SelectItem><SelectItem value='reply_count'>评论数</SelectItem><SelectItem value='like_count'>点赞数</SelectItem></SelectContent></Select><Select value={search.direction} onValueChange={(value) => patch({ direction: value as SearchState['direction'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='asc'>正序</SelectItem><SelectItem value='desc'>倒序</SelectItem></SelectContent></Select><Button variant='outline' onClick={copyAll}><Copy className='size-4' />复制全部</Button></CardContent></Card>
       </div>
       <div className='space-y-6 xl:min-h-0 xl:flex-1 xl:overflow-y-auto'>
         <div className='overflow-hidden rounded-xl border border-border/70 bg-card/90'>
@@ -228,6 +237,20 @@ export function RunDetailPage() {
       </div>
         <div className='flex justify-end'><Select onValueChange={(value) => exportRun.mutate(value)} disabled={!templates.data?.length || exportRun.isPending}><SelectTrigger className='w-56'><Download className='size-4' /><SelectValue placeholder={templates.data?.length ? '导出 Excel' : '暂无导出模板'} /></SelectTrigger><SelectContent>{templates.data?.map((item) => item.versions[0] && <SelectItem key={item.versions[0].version_id} value={item.versions[0].version_id}>{item.name}</SelectItem>)}</SelectContent></Select></div>
       </div>
+      <Dialog open={tasksOpen} onOpenChange={setTasksOpen}>
+        <DialogContent className='max-h-[80svh] gap-0 overflow-hidden p-0 sm:max-w-4xl'>
+          <DialogHeader className='border-b px-5 py-4'>
+            <DialogTitle>圈子任务 · {run.data?.tasks?.length ?? 0}</DialogTitle>
+            <DialogDescription>查看每个平台圈子的独立进度、状态与后端错误。</DialogDescription>
+          </DialogHeader>
+          <div className='max-h-[calc(80svh-5rem)] overflow-auto'>
+            <Table className='min-w-[820px]'>
+              <TableHeader><TableRow><TableHead>平台</TableHead><TableHead>圈子</TableHead><TableHead>状态</TableHead><TableHead>进度</TableHead><TableHead>错误详情</TableHead></TableRow></TableHeader>
+              <TableBody>{run.data?.tasks?.map((task) => <TableRow key={task.id}><TableCell>{platformName(task.platform_code)}</TableCell><TableCell><div className='font-medium'>{task.circle_name || task.external_id}</div><div className='max-w-72 truncate text-xs text-muted-foreground'>{task.circle_url}</div></TableCell><TableCell><StatusBadge value={task.status} label={task.status_name} /></TableCell><TableCell className='tabular-nums'>{task.completed_count} / {task.target_count}{task.failed_count ? ` · ${task.failed_count} 项失败` : ''}</TableCell><TableCell className='max-w-80 text-sm text-muted-foreground'>{task.error_message || task.stop_reason || '—'}</TableCell></TableRow>)}</TableBody>
+            </Table>
+          </div>
+        </DialogContent>
+      </Dialog>
       <Sheet open={Boolean(search.post)} onOpenChange={(open) => { if (!open) closePostDetail() }}>
         <SheetContent className='w-full overflow-y-auto p-0 sm:max-w-[58vw]' onOpenAutoFocus={handleDetailOpenAutoFocus} onCloseAutoFocus={handleDetailCloseAutoFocus}>
           <SheetHeader className='sticky top-0 z-10 border-b bg-background/90 p-6 backdrop-blur'>
