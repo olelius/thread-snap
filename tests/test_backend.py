@@ -29,10 +29,12 @@ from threadsnap.models import (
     CircleTask,
     CommentSnapshot,
     ExtractionRun,
+    ExtractionRunRule,
     PlatformConfig,
     PlatformSession,
     PostSnapshot,
     ScheduleEvent,
+    ScheduleNodeRule,
     Vehicle,
 )
 from threadsnap.schemas import (
@@ -356,7 +358,7 @@ class ApiAndConfigTests(AppCase):
                         "weekdays": [4, 0, 0],
                         "time": "17:00:05",
                         "enabled": True,
-                        "rule_id": "rule-0001",
+                        "rule_ids": ["rule-0001"],
                     }
                 ],
             },
@@ -640,7 +642,7 @@ class ApiAndConfigTests(AppCase):
                         "weekdays": [0],
                         "time": "09:30:00",
                         "enabled": True,
-                        "rule_id": "rule-multi-0001",
+                        "rule_ids": ["rule-multi-0001"],
                     }
                 ],
             },
@@ -657,6 +659,103 @@ class ApiAndConfigTests(AppCase):
             {"autohome": 20, "dongchedi": 10},
             {task["platform_code"]: task["target_count"] for task in detail["tasks"]},
         )
+
+    def test_schedule_node_merges_multiple_rules_and_uses_maximum_circle_target(self) -> None:
+        circle = self.save_verified_circle()
+        with self.container.sessions.begin() as db:
+            stored = db.get(Circle, circle.id)
+            assert stored is not None
+            stored.auto_enabled = True
+
+        plan = self.client.put(
+            "/api/v1/extraction-plan",
+            json={
+                "revision": 1,
+                "rules": [
+                    {
+                        "id": "rule-merge-a",
+                        "name": "合并规则 A",
+                        "platform_quantities": {"dongchedi": 10},
+                        "circle_ids": [circle.id],
+                    },
+                    {
+                        "id": "rule-merge-b",
+                        "name": "合并规则 B",
+                        "platform_quantities": {"dongchedi": 30},
+                        "circle_ids": [circle.id],
+                    },
+                ],
+                "nodes": [
+                    {
+                        "id": "node-merge-0001",
+                        "weekdays": [0],
+                        "time": "09:45:00",
+                        "enabled": True,
+                        "rule_ids": ["rule-merge-a", "rule-merge-b"],
+                    }
+                ],
+            },
+        )
+        self.assertEqual(200, plan.status_code)
+        self.assertEqual(
+            ["rule-merge-a", "rule-merge-b"], plan.json()["nodes"][0]["rule_ids"]
+        )
+
+        run = self.container.runs.create_scheduled(
+            datetime(2026, 8, 17, 1, 45, tzinfo=timezone.utc),
+            "node-merge-0001",
+            plan.json()["revision"],
+        )
+        assert run is not None
+        repeated = self.container.runs.create_scheduled(
+            datetime(2026, 8, 17, 1, 45, tzinfo=timezone.utc),
+            "node-merge-0001",
+            plan.json()["revision"],
+        )
+        assert repeated is not None
+        self.assertEqual(run["id"], repeated["id"])
+        detail = self.container.runs.get_run(run["id"])
+        self.assertEqual(1, len(detail["tasks"]))
+        self.assertEqual(30, detail["tasks"][0]["target_count"])
+        self.assertEqual(30, detail["planned_count"])
+        self.assertEqual(
+            ["rule-merge-a", "rule-merge-b"],
+            [item["id"] for item in detail["extraction_rules"]],
+        )
+        with self.container.sessions() as db:
+            stored_run = db.get(ExtractionRun, run["id"])
+            assert stored_run is not None
+            self.assertIsNone(stored_run.extraction_rule_id)
+            self.assertEqual(2, len(stored_run.config_snapshot["rules"]))
+            self.assertEqual(
+                ["rule-merge-a", "rule-merge-b"],
+                [
+                    item.rule_id
+                    for item in db.scalars(
+                        select(ExtractionRunRule)
+                        .where(ExtractionRunRule.run_id == run["id"])
+                        .order_by(ExtractionRunRule.position)
+                    )
+                ],
+            )
+            self.assertEqual(
+                ["rule-merge-a", "rule-merge-b"],
+                [
+                    item.rule_id
+                    for item in db.scalars(
+                        select(ScheduleNodeRule)
+                        .where(ScheduleNodeRule.schedule_node_id == "node-merge-0001")
+                        .order_by(ScheduleNodeRule.position)
+                    )
+                ],
+            )
+            event = db.scalar(
+                select(ScheduleEvent).where(
+                    ScheduleEvent.schedule_node_id == "node-merge-0001"
+                )
+            )
+            assert event is not None
+            self.assertEqual(2, len(event.rule_snapshots))
 
     def test_manual_idempotency_and_dual_api_contract(self) -> None:
         payload = {
@@ -1055,7 +1154,7 @@ class QueueAndRetryTests(AppCase):
                         "weekdays": [4],
                         "time": "10:00:00",
                         "enabled": True,
-                        "rule_id": "rule-0001",
+                        "rule_ids": ["rule-0001"],
                     }
                 ],
             },

@@ -98,13 +98,29 @@ class ScheduleNode(Base):
     weekdays: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
     time_of_day: Mapped[str] = mapped_column(String(8), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    rule_id: Mapped[str] = mapped_column(
+    legacy_rule_id: Mapped[str] = mapped_column(
+        "rule_id",
         ForeignKey("extraction_rules.id", ondelete="RESTRICT"), nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
+
+
+class ScheduleNodeRule(Base):
+    __tablename__ = "schedule_node_rules"
+    __table_args__ = (
+        UniqueConstraint("schedule_node_id", "position", name="uq_schedule_node_rule_position"),
+    )
+
+    schedule_node_id: Mapped[str] = mapped_column(
+        ForeignKey("schedule_nodes.id", ondelete="CASCADE"), primary_key=True
+    )
+    rule_id: Mapped[str] = mapped_column(
+        ForeignKey("extraction_rules.id", ondelete="RESTRICT"), primary_key=True
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class Vehicle(Base):
@@ -202,6 +218,22 @@ class ExtractionRun(Base):
     tasks: Mapped[list["CircleTask"]] = relationship(
         cascade="all, delete-orphan", passive_deletes=True
     )
+
+
+class ExtractionRunRule(Base):
+    __tablename__ = "extraction_run_rules"
+    __table_args__ = (
+        UniqueConstraint("run_id", "position", name="uq_extraction_run_rule_position"),
+    )
+
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("extraction_runs.id", ondelete="CASCADE"), primary_key=True
+    )
+    rule_id: Mapped[str] = mapped_column(
+        ForeignKey("extraction_rules.id", ondelete="RESTRICT"), primary_key=True
+    )
+    rule_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
 class CircleTask(Base):
@@ -367,6 +399,7 @@ class ScheduleEvent(Base):
         ForeignKey("extraction_rules.id", ondelete="SET NULL")
     )
     extraction_rule_version: Mapped[int | None] = mapped_column(Integer)
+    rule_snapshots: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     message: Mapped[str] = mapped_column(Text, nullable=False)
     run_id: Mapped[str | None] = mapped_column(

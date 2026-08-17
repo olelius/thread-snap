@@ -23,7 +23,7 @@ class ScheduleNodeDraft(StrictModel):
     weekdays: list[int] = Field(min_length=1)
     time: str
     enabled: bool = True
-    rule_id: str = Field(min_length=8, max_length=36)
+    rule_ids: list[str] = Field(min_length=1)
 
     @field_validator("weekdays")
     @classmethod
@@ -31,6 +31,13 @@ class ScheduleNodeDraft(StrictModel):
         if any(value < 0 or value > 6 for value in values):
             raise ValueError("星期必须使用 0 到 6，其中 0 表示星期一")
         return sorted(set(values))
+
+    @field_validator("rule_ids")
+    @classmethod
+    def validate_rule_ids(cls, values: list[str]) -> list[str]:
+        if any(len(value) < 8 or len(value) > 36 for value in values):
+            raise ValueError("规则 ID 长度必须在 8 到 36 个字符之间")
+        return list(dict.fromkeys(values))
 
     @field_validator("time")
     @classmethod

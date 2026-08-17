@@ -27,11 +27,13 @@ from .models import (
     ExtractionRule,
     ExtractionRuleVersion,
     ExtractionRun,
+    ExtractionRunRule,
     PlatformConfig,
     PostSnapshot,
     ScheduleConfig,
     ScheduleEvent,
     ScheduleNode,
+    ScheduleNodeRule,
     ValidationJob,
     Vehicle,
     utc_now,
@@ -192,6 +194,13 @@ class ConfigService:
                 for item in db.scalars(select(ExtractionRuleVersion))
             }
             nodes = list(db.scalars(select(ScheduleNode).order_by(ScheduleNode.created_at)))
+            node_rules: dict[str, list[str]] = {}
+            for item in db.scalars(
+                select(ScheduleNodeRule).order_by(
+                    ScheduleNodeRule.schedule_node_id, ScheduleNodeRule.position
+                )
+            ):
+                node_rules.setdefault(item.schedule_node_id, []).append(item.rule_id)
 
             def rule_dict(rule: ExtractionRule) -> dict[str, Any]:
                 version = versions[(rule.id, rule.current_version)]
@@ -216,7 +225,7 @@ class ConfigService:
                         "weekdays": item.weekdays,
                         "time": item.time_of_day,
                         "enabled": item.enabled,
-                        "rule_id": item.rule_id,
+                        "rule_ids": node_rules.get(item.id, [item.legacy_rule_id]),
                         "updated_at": item.updated_at,
                     }
                     for item in nodes
@@ -247,12 +256,19 @@ class ConfigService:
                 names[key] = draft.id
             rule_ids = {item.id for item in value.rules}
             node_ids = {item.id for item in value.nodes}
-            missing_refs = [item.id for item in value.nodes if item.rule_id not in rule_ids]
+            missing_refs = [
+                {
+                    "node_id": item.id,
+                    "rule_ids": [rule_id for rule_id in item.rule_ids if rule_id not in rule_ids],
+                }
+                for item in value.nodes
+                if any(rule_id not in rule_ids for rule_id in item.rule_ids)
+            ]
             if missing_refs:
                 raise DomainError(
                     "SCHEDULE_NODE_RULE_MISSING",
                     "计划节点引用了当前计划中不存在的规则。",
-                    details=[{"node_id": item} for item in missing_refs],
+                    details=missing_refs,
                 )
             conflicts: dict[tuple[int, str], list[str]] = {}
             for node in value.nodes:
@@ -339,12 +355,10 @@ class ConfigService:
                 rule_quantities[draft.id] = quantities
                 rule_circle_ids[draft.id] = circle_ids
             invalid_nodes = [
-                {
-                    "node_id": node.id,
-                    "rule_id": node.rule_id,
-                }
+                {"node_id": node.id, "rule_id": rule_id}
                 for node in value.nodes
-                if node.enabled and not rule_circle_ids[node.rule_id]
+                for rule_id in node.rule_ids
+                if node.enabled and not rule_circle_ids[rule_id]
             ]
             if invalid_nodes:
                 raise DomainError(
@@ -413,7 +427,22 @@ class ConfigService:
                 node.weekdays = draft.weekdays
                 node.time_of_day = draft.time
                 node.enabled = draft.enabled
-                node.rule_id = draft.rule_id
+                node.legacy_rule_id = draft.rule_ids[0]
+            db.flush()
+            for draft in value.nodes:
+                db.execute(
+                    delete(ScheduleNodeRule).where(
+                        ScheduleNodeRule.schedule_node_id == draft.id
+                    )
+                )
+                for position, rule_id in enumerate(draft.rule_ids):
+                    db.add(
+                        ScheduleNodeRule(
+                            schedule_node_id=draft.id,
+                            rule_id=rule_id,
+                            position=position,
+                        )
+                    )
             db.flush()
 
             for rule in existing_rules.values():
@@ -421,8 +450,8 @@ class ConfigService:
                     continue
                 referenced = db.scalar(
                     select(func.count())
-                    .select_from(ScheduleNode)
-                    .where(ScheduleNode.rule_id == rule.id)
+                    .select_from(ScheduleNodeRule)
+                    .where(ScheduleNodeRule.rule_id == rule.id)
                 )
                 if referenced:
                     raise DomainError(
@@ -433,8 +462,8 @@ class ConfigService:
                     )
                 used = db.scalar(
                     select(func.count())
-                    .select_from(ExtractionRun)
-                    .where(ExtractionRun.extraction_rule_id == rule.id)
+                    .select_from(ExtractionRunRule)
+                    .where(ExtractionRunRule.rule_id == rule.id)
                 )
                 if used:
                     rule.archived = True
@@ -1058,34 +1087,75 @@ class RunService:
             node = db.get(ScheduleNode, schedule_node_id)
             if not node or not node.enabled:
                 return None
-            rule = db.get(ExtractionRule, node.rule_id)
-            if not rule or rule.archived:
+            rule_refs = list(
+                db.scalars(
+                    select(ScheduleNodeRule)
+                    .where(ScheduleNodeRule.schedule_node_id == schedule_node_id)
+                    .order_by(ScheduleNodeRule.position)
+                )
+            )
+            rules_by_id = {
+                item.id: item
+                for item in db.scalars(
+                    select(ExtractionRule).where(
+                        ExtractionRule.id.in_([item.rule_id for item in rule_refs])
+                    )
+                )
+            }
+            unavailable_rule_ids = [
+                item.rule_id
+                for item in rule_refs
+                if item.rule_id not in rules_by_id or rules_by_id[item.rule_id].archived
+            ]
+            if not rule_refs or unavailable_rule_ids:
                 db.add(
                     ScheduleEvent(
                         planned_at=planned_at,
                         schedule_node_id=schedule_node_id,
                         schedule_revision=schedule_revision,
-                        extraction_rule_id=node.rule_id,
+                        extraction_rule_id=rule_refs[0].rule_id if len(rule_refs) == 1 else None,
+                        rule_snapshots=[{"id": item.rule_id} for item in rule_refs],
                         status="blocked",
-                        message="计划节点引用的提取规则当前不可用。",
+                        message="计划节点引用的部分提取规则当前不可用，整次触发已阻止。",
                     )
                 )
                 return None
-            rule_version = db.scalar(
-                select(ExtractionRuleVersion).where(
-                    ExtractionRuleVersion.rule_id == rule.id,
-                    ExtractionRuleVersion.version == rule.current_version,
+            ordered_rules = [rules_by_id[item.rule_id] for item in rule_refs]
+            current_versions = {
+                (item.rule_id, item.version): item
+                for item in db.scalars(
+                    select(ExtractionRuleVersion).where(
+                        ExtractionRuleVersion.rule_id.in_([item.id for item in ordered_rules])
+                    )
                 )
-            )
-            if not rule_version:
+            }
+            if any((rule.id, rule.current_version) not in current_versions for rule in ordered_rules):
                 return None
+            rule_snapshots = [
+                {
+                    "id": rule.id,
+                    "name": rule.name,
+                    "version": rule.current_version,
+                    "platform_quantities": current_versions[
+                        (rule.id, rule.current_version)
+                    ].platform_quantities,
+                    "circle_ids": list(
+                        dict.fromkeys(
+                            current_versions[(rule.id, rule.current_version)].selected_circle_ids
+                        )
+                    ),
+                }
+                for rule in ordered_rules
+            ]
             request_hash = canonical_hash(
                 {
                     "planned_at": planned_at.isoformat(),
                     "schedule_node_id": schedule_node_id,
                     "schedule_revision": schedule_revision,
-                    "rule_id": rule.id,
-                    "rule_version": rule.current_version,
+                    "rules": [
+                        {"id": item["id"], "version": item["version"]}
+                        for item in rule_snapshots
+                    ],
                 }
             )
             existing = self._idempotent_existing(db, "scheduler", key, request_hash)
@@ -1100,7 +1170,13 @@ class RunService:
                     )
                 )
             }
-            selected_circle_ids = list(dict.fromkeys(rule_version.selected_circle_ids))
+            selected_circle_ids = list(
+                dict.fromkeys(
+                    circle_id
+                    for snapshot in rule_snapshots
+                    for circle_id in snapshot["circle_ids"]
+                )
+            )
             circles = (
                 list(
                     db.scalars(
@@ -1117,34 +1193,65 @@ class RunService:
                 else []
             )
             circles = [item for item in circles if item.platform_code in platforms]
-            selected_platforms = {item.platform_code for item in circles}
-            missing = sorted(selected_platforms - set(rule_version.platform_quantities))
+            circles_by_id = {item.id: item for item in circles}
+            contributions: dict[str, list[dict[str, Any]]] = {}
+            missing: list[dict[str, Any]] = []
+            for snapshot in rule_snapshots:
+                quantities = snapshot["platform_quantities"]
+                for circle_id in snapshot["circle_ids"]:
+                    circle = circles_by_id.get(circle_id)
+                    if not circle:
+                        continue
+                    if circle.platform_code not in quantities:
+                        missing.append(
+                            {"rule_id": snapshot["id"], "platform_code": circle.platform_code}
+                        )
+                        continue
+                    contributions.setdefault(circle_id, []).append(
+                        {
+                            "rule_id": snapshot["id"],
+                            "rule_version": snapshot["version"],
+                            "quantity": int(quantities[circle.platform_code]),
+                        }
+                    )
             if missing:
                 db.add(
                     ScheduleEvent(
                         planned_at=planned_at,
                         schedule_node_id=schedule_node_id,
                         schedule_revision=schedule_revision,
-                        extraction_rule_id=rule.id,
-                        extraction_rule_version=rule.current_version,
+                        extraction_rule_id=(
+                            rule_snapshots[0]["id"] if len(rule_snapshots) == 1 else None
+                        ),
+                        extraction_rule_version=(
+                            rule_snapshots[0]["version"] if len(rule_snapshots) == 1 else None
+                        ),
+                        rule_snapshots=rule_snapshots,
                         status="blocked",
-                        message="提取规则缺少已选平台数量，整次节点触发已阻止。",
+                        message="所选规则缺少已选平台数量，整次节点触发已阻止。",
                     )
                 )
                 return None
-            if not circles:
+            resolved_circles = [item for item in circles if contributions.get(item.id)]
+            if not resolved_circles:
                 db.add(
                     ScheduleEvent(
                         planned_at=planned_at,
                         schedule_node_id=schedule_node_id,
                         schedule_revision=schedule_revision,
-                        extraction_rule_id=rule.id,
-                        extraction_rule_version=rule.current_version,
+                        extraction_rule_id=(
+                            rule_snapshots[0]["id"] if len(rule_snapshots) == 1 else None
+                        ),
+                        extraction_rule_version=(
+                            rule_snapshots[0]["version"] if len(rule_snapshots) == 1 else None
+                        ),
+                        rule_snapshots=rule_snapshots,
                         status="skipped",
-                        message="规则当前没有可执行的已验证且全局启用圈子。",
+                        message="所选规则当前没有可执行的已验证且全局启用圈子。",
                     )
                 )
                 return None
+            legacy_rule = rule_snapshots[0] if len(rule_snapshots) == 1 else None
             run = ExtractionRun(
                 number=self._number(db),
                 trigger_type="scheduled",
@@ -1154,24 +1261,41 @@ class RunService:
                 idempotency_key=key,
                 request_hash=request_hash,
                 schedule_node_id=schedule_node_id,
-                extraction_rule_id=rule.id,
-                extraction_rule_version=rule.current_version,
+                extraction_rule_id=legacy_rule["id"] if legacy_rule else None,
+                extraction_rule_version=legacy_rule["version"] if legacy_rule else None,
                 config_snapshot={
                     "planned_at": planned_at.isoformat(),
                     "schedule_node_id": schedule_node_id,
                     "schedule_revision": schedule_revision,
-                    "extraction_rule_id": rule.id,
-                    "extraction_rule_version": rule.current_version,
-                    "platform_quantities": rule_version.platform_quantities,
-                    "circle_ids": selected_circle_ids,
+                    "rules": rule_snapshots,
+                    "resolved_circles": [
+                        {
+                            "circle_id": circle.id,
+                            "target_count": max(
+                                item["quantity"] for item in contributions[circle.id]
+                            ),
+                            "source_rules": contributions[circle.id],
+                        }
+                        for circle in resolved_circles
+                    ],
                 },
             )
             db.add(run)
             db.flush()
+            for position, snapshot in enumerate(rule_snapshots):
+                db.add(
+                    ExtractionRunRule(
+                        run_id=run.id,
+                        rule_id=snapshot["id"],
+                        rule_version=snapshot["version"],
+                        position=position,
+                    )
+                )
             sequence = self._next_queue_sequence(db)
-            for source_position, circle in enumerate(circles):
+            for source_position, circle in enumerate(resolved_circles):
                 platform = platforms[circle.platform_code]
-                quantity = int(rule_version.platform_quantities[circle.platform_code])
+                source_rules = contributions[circle.id]
+                quantity = max(item["quantity"] for item in source_rules)
                 db.add(
                     CircleTask(
                         run_id=run.id,
@@ -1187,6 +1311,7 @@ class RunService:
                             "quantity": quantity,
                             "internal_concurrency": platform.internal_concurrency,
                             "vehicle_name": circle.vehicle.name if circle.vehicle else None,
+                            "source_rules": source_rules,
                         },
                     )
                 )
@@ -1197,10 +1322,11 @@ class RunService:
                     planned_at=planned_at,
                     schedule_node_id=schedule_node_id,
                     schedule_revision=schedule_revision,
-                    extraction_rule_id=rule.id,
-                    extraction_rule_version=rule.current_version,
+                    extraction_rule_id=legacy_rule["id"] if legacy_rule else None,
+                    extraction_rule_version=legacy_rule["version"] if legacy_rule else None,
+                    rule_snapshots=rule_snapshots,
                     status="created",
-                    message="定时提取批次已创建。",
+                    message=f"定时提取批次已按 {len(rule_snapshots)} 条规则合并创建。",
                     run_id=run.id,
                 )
             )
@@ -1652,6 +1778,11 @@ def run_dict_from_tasks(
             for item in (queued_tasks or [])
             if item.platform_code == tasks[0].platform_code and item.queue_sequence < earliest
         )
+    extraction_rules = run.config_snapshot.get("rules", [])
+    if not extraction_rules and run.extraction_rule_id and run.extraction_rule_version:
+        extraction_rules = [
+            {"id": run.extraction_rule_id, "version": run.extraction_rule_version}
+        ]
     return {
         "id": run.id,
         "number": run.number,
@@ -1674,6 +1805,15 @@ def run_dict_from_tasks(
         "schedule_node_id": run.schedule_node_id,
         "extraction_rule_id": run.extraction_rule_id,
         "extraction_rule_version": run.extraction_rule_version,
+        "extraction_rules": [
+            {
+                "id": item.get("id"),
+                "name": item.get("name"),
+                "version": item.get("version"),
+            }
+            for item in extraction_rules
+            if isinstance(item, dict)
+        ],
         "summary_version": run.summary_version,
         "created_at": run.created_at,
         "queued_at": run.queued_at,
