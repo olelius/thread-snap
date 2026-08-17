@@ -15,6 +15,23 @@
 
 ---
 
+## 2026-08-17 — 消除应用外壳的根级滚动条
+
+**总目标**：移除多个页面最右侧重复出现的根级纵向滚动条，只保留页面明确划分的数据滚动区。
+
+**状态**：✅ 桌面 inset 高度冲突已定位并修复，应用根高度链、内部滚动区和技术口径已同步。
+
+**干到哪里了**：
+- [x] 根因确认不是业务页面缺少 `height: 100%`：上游 `SidebarInset` 在桌面断点自带上下各 `0.5rem` 外边距，应用此前又给它设置 `h-svh`，导致其 margin box 总高为 `100svh + 1rem`，把 `SidebarProvider`、`#root`、`body` 和 `html` 撑出视口并形成所有路由共享的根级滚动条。
+- [x] 视口高度改由 `SidebarProvider` 唯一持有；`SidebarInset` 移除重复的 `h-svh`，由 Flex 在桌面 inset 边距内拉伸到剩余高度；`html`、`body` 和 `#root` 固定满高并隐藏根级溢出，业务滚动继续只由各页面已有的数据区承担。
+- [x] `npm.cmd --prefix frontend run check`、`npm.cmd --prefix frontend run build`（2460 modules）和 `git diff --check` 通过；真实配置页与批次详情页均确认 `html/body/#root` 的 `clientHeight = scrollHeight = 848` 且 `overflow-y: hidden`，详情页内部工作区仍保留按断点定义的滚动能力。
+
+**下一步**：继续第一版目标 Linux 部署门禁；新增页面只复用应用根高度链和页面内滚动区，不在带外边距的子面板重复声明视口高度。
+
+**边界**：本次只修复应用外壳高度所有权与根级溢出，不修改页面信息结构、响应式断点、表格分页、查询或业务数据。
+
+**关联**：`docs/design/technical-route.md`、`frontend/src/components/app-shell.tsx`、`frontend/src/styles/index.css`
+
 ## 2026-08-17 — 固定页面工作区并修复搜索置顶
 
 **总目标**：让配置页、提取列表和批次详情的页面上下文与筛选操作保持可见，只滚动数据内容；同时把提取规则平台与批次圈子任务设为默认收起，并消除搜索导致页面回到顶部的问题。
