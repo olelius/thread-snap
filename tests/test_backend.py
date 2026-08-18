@@ -1554,6 +1554,7 @@ class CollectorTests(unittest.TestCase):
 
     def test_collection_continues_to_later_pages_until_valid_target(self) -> None:
         collector = DongchediCollector(None)
+        requested_sources: list[str] = []
         pages = {
             1: {
                 "total_count": 60,
@@ -1566,13 +1567,48 @@ class CollectorTests(unittest.TestCase):
                 "rows": [{"post_id": str(x), "url": f"u{x}"} for x in range(4, 7)],
             },
         }
-        collector._fetch_circle_page = lambda _circle, page, _expected: pages[page]  # type: ignore[method-assign]
+
+        def fetch_circle_page(source_url: str, page: int, _expected: int | None) -> dict:
+            requested_sources.append(source_url)
+            return pages[page]
+
+        collector._fetch_circle_page = fetch_circle_page  # type: ignore[method-assign]
         collector.fetch_post = lambda url: (
             None if url in {"u1", "u2", "u3"} else sample_record(url[1:])
         )  # type: ignore[method-assign]
         result = collector.collect_circle("https://www.dongchedi.com/community/24729", 3)
         self.assertEqual(["4", "5", "6"], [item["platform_post_id"] for item in result["records"]])
         self.assertEqual(3, len(result["failures"]))
+        self.assertEqual(
+            ["https://www.dongchedi.com/community/24729"] * 2,
+            requested_sources,
+        )
+
+    def test_collection_keeps_latest_publish_source_url(self) -> None:
+        collector = DongchediCollector(None)
+        requested_sources: list[str] = []
+
+        def fetch_circle_page(source_url: str, _page: int, _expected: int | None) -> dict:
+            requested_sources.append(source_url)
+            return {
+                "total_count": 1,
+                "page_count": 1,
+                "rows": [{"post_id": "1001", "url": "u1001"}],
+            }
+
+        collector._fetch_circle_page = fetch_circle_page  # type: ignore[method-assign]
+        collector.fetch_post = lambda _url: sample_record("1001")  # type: ignore[method-assign]
+
+        result = collector.collect_circle(
+            "https://www.dongchedi.com/community/24729/dongtai-release",
+            1,
+        )
+
+        self.assertEqual(["1001"], [item["platform_post_id"] for item in result["records"]])
+        self.assertEqual(
+            ["https://www.dongchedi.com/community/24729/dongtai-release"],
+            requested_sources,
+        )
 
     def test_first_page_underfill_triggers_browser_fallback(self) -> None:
         collector = DongchediCollector(None)
