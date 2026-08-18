@@ -1,8 +1,10 @@
 ---
-status: accepted
+status: superseded
 ---
 
 # XLSX 模板使用可逆短来源键
+
+> 本决策已由 ADR 0021 替代；这里保留 22 位可逆来源键方案的历史依据。
 
 ## Context
 

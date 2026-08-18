@@ -20,7 +20,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
-from .ids import uuid7
+from .ids import source_key, uuid7
 
 
 def utc_now() -> datetime:
@@ -148,6 +148,9 @@ class Circle(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    export_key: Mapped[str] = mapped_column(
+        String(10), nullable=False, unique=True, default=source_key
+    )
     platform_code: Mapped[str] = mapped_column(ForeignKey("platform_configs.code"), nullable=False)
     external_id: Mapped[str] = mapped_column(String(80), nullable=False)
     name: Mapped[str | None] = mapped_column(String(200))
