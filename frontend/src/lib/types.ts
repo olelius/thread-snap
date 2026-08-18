@@ -47,6 +47,7 @@ export type Circle = {
   vehicle_name?: string
   auto_enabled: boolean
   section: string
+  list_order: 'latest_reply' | 'latest_publish'
   validation_status: string
   validation_error?: string
   first_validated_at?: string
@@ -68,6 +69,7 @@ export type Run = {
   platform_codes?: string[]
   circle_count: number
   circle_names?: string[]
+  source_names?: string[]
   planned_count: number
   completed_count: number
   failed_count: number
@@ -91,7 +93,10 @@ export type RunTask = {
   circle_id?: string
   external_id: string
   circle_name?: string
+  source_name?: string
   circle_url: string
+  list_order: 'latest_reply' | 'latest_publish'
+  list_order_name?: string
   status: string
   status_name: string
   target_count: number
@@ -110,6 +115,7 @@ export type Post = {
   platform_code?: string
   circle_id?: string
   circle_name?: string
+  source_name?: string
   platform_post_id: string
   url: string
   title?: string

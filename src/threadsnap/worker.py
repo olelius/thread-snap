@@ -191,6 +191,7 @@ class WorkerService:
                 first_validation = circle.first_validated_at is None
                 circle.name = result["name"]
                 circle.url = result["url"]
+                circle.list_order = result["sort"]
                 circle.validation_status = "verified"
                 circle.validation_error = None
                 circle.validated_at = completed_at
@@ -443,6 +444,8 @@ class WorkerService:
                     select(Circle).where(
                         Circle.platform_code == task.platform_code,
                         Circle.external_id == task.external_id,
+                        Circle.section == task.section,
+                        Circle.list_order == task.list_order,
                     )
                 )
             if not circle:
@@ -450,6 +453,8 @@ class WorkerService:
                     platform_code=task.platform_code,
                     external_id=task.external_id,
                     url=validation["url"],
+                    section=task.section,
+                    list_order=task.list_order,
                     source_kind="manual_history",
                 )
                 db.add(circle)
@@ -458,6 +463,7 @@ class WorkerService:
             completed_at = utc_now()
             circle.name = validation["name"]
             circle.url = validation["url"]
+            circle.list_order = validation["sort"]
             circle.validation_status = "verified"
             circle.validation_error = None
             if circle.first_validated_at is None:
@@ -467,6 +473,7 @@ class WorkerService:
             circle.last_used_at = utc_now()
             task.circle_name = validation["name"]
             task.circle_url = validation["url"]
+            task.list_order = validation["sort"]
         records = result.get("records") or []
         existing = set(
             db.scalars(

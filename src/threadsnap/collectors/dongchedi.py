@@ -7,6 +7,7 @@ import math
 import re
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable
 from urllib.parse import urlencode, urljoin, urlsplit
@@ -16,12 +17,14 @@ from curl_cffi.requests import Cookies
 from lxml import html
 from scrapling.fetchers import DynamicSession
 
-ADAPTER_VERSION = "dongchedi-dynamic-v3"
+ADAPTER_VERSION = "dongchedi-dynamic-v4"
 BASE_URL = "https://www.dongchedi.com"
 DETAIL_ROOT = f"{BASE_URL}/motor/pc/ugc/detail"
 COMMON_PARAMS = {"aid": "1839", "app_name": "auto_web_pc"}
 CIRCLE_RE = re.compile(
-    r"^https?://(?:www\.)?dongchedi\.com/community/(?P<id>\d+)(?:/\d+)?/?(?:\?.*)?$"
+    r"^https?://(?:www\.)?dongchedi\.com/community/(?P<id>\d+)"
+    r"(?:/(?:(?P<feed>dongtai-release)(?:/(?P<feed_page>\d+))?|(?P<page>\d+)))?"
+    r"/?(?:\?.*)?$"
 )
 POST_RE = re.compile(
     r"^https?://(?:www\.)?dongchedi\.com/(?:ugc/)?article/(?P<id>\d+)(?:[/?#].*)?$"
@@ -66,14 +69,34 @@ class CollectorFailure(RuntimeError):
         self.message = message
 
 
-def normalize_circle_url(url: str) -> tuple[str, str]:
+@dataclass(frozen=True)
+class CircleSource:
+    """从用户链接解析出的稳定圈子来源身份。"""
+
+    external_id: str
+    url: str
+    list_order: str
+
+
+def parse_circle_url(url: str) -> CircleSource:
+    """识别最新回复或最新发布入口，并移除页码和查询参数。"""
+
     match = CIRCLE_RE.match(url.strip())
     if not match:
         raise CollectorFailure(
-            "CIRCLE_URL_INVALID", "圈子链接格式无效，必须是懂车帝 community 圈子链接。"
+            "CIRCLE_URL_INVALID",
+            "圈子链接格式无效，必须是懂车帝 community 的最新回复或最新发布链接。",
         )
     circle_id = match.group("id")
-    return circle_id, f"{BASE_URL}/community/{circle_id}"
+    latest_publish = match.group("feed") == "dongtai-release"
+    list_order = "latest_publish" if latest_publish else "latest_reply"
+    suffix = "/dongtai-release" if latest_publish else ""
+    return CircleSource(circle_id, f"{BASE_URL}/community/{circle_id}{suffix}", list_order)
+
+
+def normalize_circle_url(url: str) -> tuple[str, str]:
+    source = parse_circle_url(url)
+    return source.external_id, source.url
 
 
 def normalize_post_url(url: str) -> tuple[str, str]:
@@ -287,9 +310,10 @@ class DongchediCollector:
         return rows
 
     def _fetch_circle_page(
-        self, circle_id: str, page: int, expected_count: int | None
+        self, circle_url: str, page: int, expected_count: int | None
     ) -> dict[str, Any]:
-        url = f"{BASE_URL}/community/{circle_id}" + ("" if page == 1 else f"/{page}")
+        source = parse_circle_url(circle_url)
+        url = source.url + ("" if page == 1 else f"/{page}")
         response = self._get(url)
         self._detect_auth(response)
         if response.status_code != 200:
@@ -333,8 +357,8 @@ class DongchediCollector:
         }
 
     def validate_circle(self, circle_url: str) -> dict[str, Any]:
-        circle_id, normalized = normalize_circle_url(circle_url)
-        page = self._fetch_circle_page(circle_id, 1, expected_count=None)
+        source = parse_circle_url(circle_url)
+        page = self._fetch_circle_page(source.url, 1, expected_count=None)
         if not page["circle_name"] or not page["rows"]:
             raise CollectorFailure("CIRCLE_VALIDATION_FAILED", "圈子页面未返回可识别的动态帖子。")
         record = self.fetch_post(page["rows"][0]["url"])
@@ -342,11 +366,11 @@ class DongchediCollector:
             raise CollectorFailure("CIRCLE_VALIDATION_FAILED", "圈子首条帖子未返回有效详情。")
         return {
             "platform_code": self.code,
-            "external_id": circle_id,
+            "external_id": source.external_id,
             "name": page["circle_name"],
-            "url": normalized,
+            "url": source.url,
             "section": "dynamic",
-            "sort": "latest_reply",
+            "sort": source.list_order,
             "sample_post_id": record["platform_post_id"],
             "adapter_version": self.adapter_version,
         }
@@ -354,7 +378,7 @@ class DongchediCollector:
     def discover_posts(
         self, circle_url: str, target_count: int, start_page: int = 1
     ) -> tuple[list[dict[str, Any]], str]:
-        circle_id, _ = normalize_circle_url(circle_url)
+        source = parse_circle_url(circle_url)
         rows: list[dict[str, Any]] = []
         seen: set[str] = set()
         page_number = max(1, start_page)
@@ -364,7 +388,7 @@ class DongchediCollector:
             expected = None
             if page_count is not None:
                 expected = min(30, max(0, (total_count or 0) - (page_number - 1) * 30))
-            page = self._fetch_circle_page(circle_id, page_number, expected)
+            page = self._fetch_circle_page(source.url, page_number, expected)
             if page_number == 1:
                 total_count = page["total_count"]
                 page_count = (

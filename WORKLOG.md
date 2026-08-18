@@ -16,6 +16,20 @@
 
 ---
 
+## 2026-08-18 — 区分同圈最新回复与最新发布来源
+**总目标**：允许同一平台圈子分别保存“最新回复”和“最新发布”来源，使用用户填写的来源名称区分批次范围，补齐来源级导出字段，并修复他人保存配置后清洁本地草稿被误标为未保存的问题。
+**状态**：✅ 来源复合校验、真实列表验证、来源展示、XLSX 来源字段和服务器基线同步均已完成。
+**干到哪里了**：
+- [x] 懂车帝来源解析同时支持 `/community/<id>` 与 `/community/<id>/dongtai-release` 及各自分页；来源唯一性改为“平台 + 圈子 ID + 版块 + 列表顺序”，既有数据和历史任务迁移为 `latest_reply`。
+- [x] 使用当前加密 Session 对圈子 `24729` 执行只读验证：两个入口均返回 30 条，前五个帖子顺序不同，分别识别为 `latest_reply` 和 `latest_publish`；证据位于被忽略的 `artifacts/runtime/circle-feed-sources/real-feed-verification.json`。
+- [x] 配置页将“车型”改为“来源名称”，单独显示列表顺序和平台圈子名称；规则、批次列表、批次详情和帖子详情优先展示任务创建时冻结的来源名称，不再用重复的平台圈子名称充当提取范围。
+- [x] 新 XLSX 标签使用稳定来源配置 ID，并新增 `source.id`、`source.name`、`source.list_order`、`source.list_order_name`；旧 `circle.<external_id>` 标签继续兼容读取。
+- [x] 提取计划 SSE 刷新改为相对旧服务器基线判断本地编辑；双页面实测确认无本地编辑时自动采用远端版本且保存按钮禁用，有本地草稿时保留草稿，放弃后采用最新服务器版本。测试用规则名称已恢复。
+- [x] 真实数据库已在备份后升级到 `b73a1d6c42ef`；备份 SHA-256 为 `A84B0135BB0832B592B501F30B4BCD9B868B3358A2A16EF051A84B9066C4C13D`。55 项后端测试、Ruff、前端类型检查与生产构建、`compileall`、`pip check`、`git diff --check` 全部通过。
+**下一步**：后续新增来源时分别填写可辨识的来源名称和对应列表 URL；若模板需要区分同圈两类来源，使用新的 `source.<source_id>` 标签和 `source.*` 字段，不再新建旧式圈子 ID 标签。
+**边界**：不改写历史批次快照，不把两类来源归并为同一来源；本次不新增批次分组开关或另一套采集流程，既有自动规则、调度和手动提交流程保持不变。
+**关联**：`docs/adr/0019-distinguish-circle-feed-sources-and-live-baselines.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`src/threadsnap/collectors/dongchedi.py`、`src/threadsnap/templates.py`、`frontend/src/features/config/config-page.tsx`
+
 ## 2026-08-18 — 恢复懂车帝普通动态正文提取
 **总目标**：修复富文本标准化后普通动态把整段 `motor_title` 误存为标题、正文为空的回归，同时保留富文本标题与 HTML 正文分离能力。
 **状态**：✅ 字段存在性分流、适配器版本、解析测试、快照持久化测试和真实样本复核均已完成。

@@ -21,6 +21,7 @@ from threadsnap.collectors.dongchedi import (
     ADAPTER_VERSION,
     AuthenticationRequired,
     DongchediCollector,
+    parse_circle_url,
 )
 from threadsnap.config import Settings
 from threadsnap.errors import DomainError
@@ -431,6 +432,85 @@ class ApiAndConfigTests(AppCase):
                 )
             )
         self.assertIn("验证通过", raised.exception.details[0]["reason"])
+
+    def test_same_circle_can_save_latest_reply_and_latest_publish_sources(self) -> None:
+        response = self.client.put(
+            "/api/v1/circles/batch",
+            json={
+                "rows": [
+                    {
+                        "platform_code": "dongchedi",
+                        "url": "https://www.dongchedi.com/community/24729",
+                        "vehicle_name": "风云A9最新回复",
+                    },
+                    {
+                        "platform_code": "dongchedi",
+                        "url": "https://www.dongchedi.com/community/24729/dongtai-release",
+                        "vehicle_name": "风云A9最新发布",
+                    },
+                ],
+                "deleted_ids": [],
+            },
+        )
+
+        self.assertEqual(200, response.status_code)
+        items = response.json()["items"]
+        self.assertEqual(2, len(items))
+        self.assertEqual({"latest_reply", "latest_publish"}, {item["list_order"] for item in items})
+        self.assertEqual(
+            {
+                "https://www.dongchedi.com/community/24729",
+                "https://www.dongchedi.com/community/24729/dongtai-release",
+            },
+            {item["url"] for item in items},
+        )
+
+        plan = self.client.get("/api/v1/extraction-plan").json()
+        saved_plan = self.client.put(
+            "/api/v1/extraction-plan",
+            json={
+                "revision": plan["revision"],
+                "rules": [
+                    {
+                        "id": "same-circle-two-feeds",
+                        "name": "风云A9统一规则",
+                        "platform_quantities": {"dongchedi": 1},
+                        "circle_ids": [item["id"] for item in items],
+                    }
+                ],
+                "nodes": [],
+            },
+        )
+        self.assertEqual(200, saved_plan.status_code)
+        self.assertEqual(
+            {item["id"] for item in items},
+            set(saved_plan.json()["rules"][0]["circle_ids"]),
+        )
+
+        self.client.put(
+            "/api/v1/platforms/dongchedi",
+            json={"enabled": True, "internal_concurrency": 1},
+        )
+        manual_runs = []
+        for index, item in enumerate(items):
+            response = self.client.post(
+                "/api/v1/runs/manual",
+                headers={"Idempotency-Key": f"one-feed-source-{index}"},
+                json={
+                    "platform_code": "dongchedi",
+                    "circle_ids": [item["id"]],
+                    "circle_urls": [],
+                    "known_post_urls": [],
+                    "quantity": 1,
+                    "idempotency_key": f"one-feed-source-{index}",
+                },
+            )
+            self.assertEqual(202, response.status_code)
+            manual_runs.append(response.json())
+        self.assertEqual(
+            {"风云A9最新回复", "风云A9最新发布"},
+            {run["source_names"][0] for run in manual_runs},
+        )
 
     def test_bulk_first_validation_auto_enables_and_revalidation_preserves_manual_disable(
         self,
@@ -1308,6 +1388,20 @@ class QueueAndRetryTests(AppCase):
 
 
 class CollectorTests(unittest.TestCase):
+    def test_circle_url_parses_two_independent_list_orders(self) -> None:
+        latest_reply = parse_circle_url("https://www.dongchedi.com/community/24729/2?x=1")
+        latest_publish = parse_circle_url(
+            "https://www.dongchedi.com/community/24729/dongtai-release/2"
+        )
+
+        self.assertEqual("latest_reply", latest_reply.list_order)
+        self.assertEqual("https://www.dongchedi.com/community/24729", latest_reply.url)
+        self.assertEqual("latest_publish", latest_publish.list_order)
+        self.assertEqual(
+            "https://www.dongchedi.com/community/24729/dongtai-release",
+            latest_publish.url,
+        )
+
     def test_plain_dynamic_uses_motor_title_as_body_when_content_is_empty(self) -> None:
         collector = DongchediCollector(None)
         collector._json_api = lambda _endpoint, **_params: (  # type: ignore[method-assign]
@@ -1481,7 +1575,7 @@ class CollectorTests(unittest.TestCase):
             for x in range(30)
         ]
         collector._browser_page_rows = lambda _url: browser_rows  # type: ignore[method-assign]
-        page = collector._fetch_circle_page("24729", 1, None)
+        page = collector._fetch_circle_page("https://www.dongchedi.com/community/24729", 1, None)
         self.assertEqual(30, len(page["rows"]))
         self.assertEqual(60, page["total_count"])
 
@@ -1521,7 +1615,7 @@ class TemplateTests(AppCase):
                 queue_sequence=1,
                 target_count=2,
                 completed_count=2,
-                config_snapshot={"vehicle_name": "风云A9"},
+                config_snapshot={"vehicle_name": "风云A9最新回复", "source_name": "风云A9最新回复"},
             )
             db.add(task)
             db.flush()
@@ -1577,6 +1671,37 @@ class TemplateTests(AppCase):
         self.assertIn("时间：2026-08-14 10:35:00", output["B2"].value)
         self.assertIn("点赞：5赞", output["B2"].value)
         self.assertTrue(output["B2"].alignment.wrap_text)
+
+    def test_source_id_template_tag_targets_one_circle_feed_source(self) -> None:
+        run, circle = self._seed_completed_run()
+        tags = self.container.templates.field_tags("dongchedi", source_id=circle.id)
+        title_tag = next(item["tag"] for item in tags if item["field"] == "post.title")
+        self.assertEqual(
+            f"platform.dongchedi.source.{circle.id}.post.title",
+            title_tag,
+        )
+        fields = {item["field"] for item in tags}
+        self.assertTrue(
+            {"source.id", "source.name", "source.list_order", "source.list_order_name"}
+            <= fields
+        )
+
+        workbook = Workbook()
+        workbook.active["A1"] = title_tag
+        workbook.active["B1"] = f"platform.dongchedi.source.{circle.id}.source.name"
+        workbook.active["C1"] = (
+            f"platform.dongchedi.source.{circle.id}.source.list_order_name"
+        )
+        source = Path(self.temp.name) / "source-id.xlsx"
+        workbook.save(source)
+
+        version = self.container.templates.upload("来源模板", source.name, source.read_bytes())
+        exported = self.container.templates.create_export(run.id, version["version_id"])
+        output = load_workbook(self.container.templates.export_path(exported["id"])).active
+        self.assertEqual("标题3001", output["A1"].value)
+        self.assertEqual("标题3002", output["A2"].value)
+        self.assertEqual("风云A9最新回复", output["B1"].value)
+        self.assertEqual("最新回复", output["C1"].value)
 
     def test_template_source_file_can_be_downloaded(self) -> None:
         self.save_verified_circle()

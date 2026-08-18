@@ -13,6 +13,7 @@ import type { PageResult, Post, PostNavigation, Run, RunTask, Template } from '@
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -196,7 +197,7 @@ export function RunDetailPage() {
           description='结果按原始来源位置稳定合并；搜索、筛选、排序和分页均由后端对完整结果集执行。'
           actions={<>
             <Button variant='outline' size='sm' onClick={() => { run.refetch(); posts.refetch() }}><RefreshCw className={`size-4 ${run.isFetching || posts.isFetching ? 'animate-spin' : ''}`} />刷新</Button>
-            {run.data?.tasks?.length ? <Button variant='outline' size='sm' onClick={() => setTasksOpen(true)}><ListTree className='size-4' />圈子任务 <span className='text-xs text-muted-foreground'>{run.data.tasks.length}</span></Button> : null}
+            {run.data?.tasks?.length ? <Button variant='outline' size='sm' onClick={() => setTasksOpen(true)}><ListTree className='size-4' />来源任务 <span className='text-xs text-muted-foreground'>{run.data.tasks.length}</span></Button> : null}
             {run.data?.status === 'waiting_for_auth' && <><Button variant='outline' size='sm' onClick={() => setAuthOpen(true)}><KeyRound className='size-4' />去认证</Button><AlertDialog><AlertDialogTrigger asChild><Button variant='outline' size='sm'><CircleStop className='size-4' />结束本次提取</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>结束本次提取？</AlertDialogTitle><AlertDialogDescription>已有结果将保留，批次按实际结果结束并释放平台队列；之后仍可重新提取失败项。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => endAuthWait.mutate()}>确认结束</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></>}
             {canRetry && <AlertDialog><AlertDialogTrigger asChild><Button variant='outline' size='sm'>重新提取失败项</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>重新提取失败项？</AlertDialogTitle><AlertDialogDescription>系统会保留原批次快照，只把失败 URL 创建为关联补提批次。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => retry.mutate()}>确认重新提取</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
             {canDelete && <AlertDialog><AlertDialogTrigger asChild><Button variant='ghost' size='sm' className='text-destructive hover:text-destructive'><Trash2 className='size-4' />永久删除</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>永久删除该批次？</AlertDialogTitle><AlertDialogDescription>批次、帖子快照、一级评论和已生成导出记录都会一并删除，此操作不可撤回。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => deleteRun.mutate()}>确认永久删除</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
@@ -251,7 +252,7 @@ export function RunDetailPage() {
                       </AnimatePresence>
                       <span className='min-w-0 truncate'>{post.title || '无标题'}</span><ExternalLink className='ml-1.5 size-3 shrink-0' />
                     </motion.a>
-                  </TableCell><TableCell>{post.circle_name || '—'}</TableCell><TableCell>{post.author || '—'}</TableCell><TableCell className='whitespace-nowrap'>{formatDate(post.published_at)}</TableCell><TableCell><StatusBadge value={post.visibility} label={{ visible: '可见', hidden: '不可见', unknown: '未知' }[post.visibility]} /></TableCell><TableCell className='text-right tabular-nums'>{post.reply_count ?? '—'}</TableCell><TableCell className='text-right tabular-nums'>{post.like_count ?? '—'}</TableCell><TableCell><div className='flex justify-end gap-1'><Button variant='ghost' size='sm' data-post-detail-trigger='true' onClick={(event) => openPost(post.id, event.currentTarget)}>查看</Button><Button variant='ghost' size='icon' onClick={() => copyText(post.url)} aria-label='复制帖子链接'><Copy className='size-4' /></Button></div></TableCell>
+                  </TableCell><TableCell>{post.source_name || post.circle_name || '—'}</TableCell><TableCell>{post.author || '—'}</TableCell><TableCell className='whitespace-nowrap'>{formatDate(post.published_at)}</TableCell><TableCell><StatusBadge value={post.visibility} label={{ visible: '可见', hidden: '不可见', unknown: '未知' }[post.visibility]} /></TableCell><TableCell className='text-right tabular-nums'>{post.reply_count ?? '—'}</TableCell><TableCell className='text-right tabular-nums'>{post.like_count ?? '—'}</TableCell><TableCell><div className='flex justify-end gap-1'><Button variant='ghost' size='sm' data-post-detail-trigger='true' onClick={(event) => openPost(post.id, event.currentTarget)}>查看</Button><Button variant='ghost' size='icon' onClick={() => copyText(post.url)} aria-label='复制帖子链接'><Copy className='size-4' /></Button></div></TableCell>
                 </TableRow>
               }) : <TableRow><TableCell colSpan={9} className='h-52 text-center text-muted-foreground'>当前筛选条件下没有帖子结果。</TableCell></TableRow>}
             </TableBody>
@@ -297,7 +298,7 @@ export function RunDetailPage() {
               </div>
             </div>
           </SheetHeader>
-          {detail.isLoading ? <div className='space-y-4 p-6'><Skeleton className='h-10 w-2/3' /><Skeleton className='h-72 w-full' /></div> : detail.data && <div className='space-y-6 p-6'><div className='grid gap-3 rounded-xl border bg-muted/20 p-4 sm:grid-cols-2'><Meta label='圈子' value={detail.data.circle_name} /><Meta label='作者' value={detail.data.author} /><Meta label='发布时间' value={formatDate(detail.data.published_at)} /><Meta label='平台帖子 ID' value={detail.data.platform_post_id} /></div><div><h3 className='mb-2 text-sm font-semibold'>正文快照</h3><div className='whitespace-pre-wrap rounded-xl border bg-background p-4 text-sm leading-7'>{detail.data.content || '正文为空'}</div></div><div><h3 className='mb-2 text-sm font-semibold'>一级评论（{detail.data.comments.length}）</h3><div className='space-y-2'>{detail.data.comments.length ? detail.data.comments.map((comment, index) => <div key={comment.platform_comment_id || index} className='rounded-xl border p-4'><div className='flex justify-between text-xs text-muted-foreground'><span>{comment.author || '匿名用户'}</span><span>{formatDate(comment.published_at)}</span></div><p className='mt-2 whitespace-pre-wrap text-sm'>{comment.content || '—'}</p></div>) : <div className='rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground'>没有已保存的一级评论。</div>}</div></div></div>}
+          {detail.isLoading ? <div className='space-y-4 p-6'><Skeleton className='h-10 w-2/3' /><Skeleton className='h-72 w-full' /></div> : detail.data && <div className='space-y-6 p-6'><div className='grid gap-3 rounded-xl border bg-muted/20 p-4 sm:grid-cols-2'><Meta label='来源' value={detail.data.source_name || detail.data.circle_name} /><Meta label='作者' value={detail.data.author} /><Meta label='发布时间' value={formatDate(detail.data.published_at)} /><Meta label='平台帖子 ID' value={detail.data.platform_post_id} /></div><div><h3 className='mb-2 text-sm font-semibold'>正文快照</h3><div className='whitespace-pre-wrap rounded-xl border bg-background p-4 text-sm leading-7'>{detail.data.content || '正文为空'}</div></div><div><h3 className='mb-2 text-sm font-semibold'>一级评论（{detail.data.comments.length}）</h3><div className='space-y-2'>{detail.data.comments.length ? detail.data.comments.map((comment, index) => <div key={comment.platform_comment_id || index} className='rounded-xl border p-4'><div className='flex justify-between text-xs text-muted-foreground'><span>{comment.author || '匿名用户'}</span><span>{formatDate(comment.published_at)}</span></div><p className='mt-2 whitespace-pre-wrap text-sm'>{comment.content || '—'}</p></div>) : <div className='rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground'>没有已保存的一级评论。</div>}</div></div></div>}
         </SheetContent>
       </Sheet>
       <Dialog open={manualCopy !== undefined} onOpenChange={(open) => !open && setManualCopy(undefined)}><DialogContent><DialogHeader><DialogTitle>手动复制</DialogTitle><DialogDescription>当前浏览器上下文未开放剪贴板写入，文本已全选。</DialogDescription></DialogHeader><Textarea readOnly rows={12} value={manualCopy ?? ''} onFocus={(event) => event.currentTarget.select()} autoFocus /></DialogContent></Dialog>
@@ -330,8 +331,8 @@ function TaskDialog({ open, onOpenChange, tasks }: { open: boolean; onOpenChange
               <ListTree className='size-5' />
             </div>
             <div className='min-w-0 space-y-1'>
-              <DialogTitle className='text-xl'>圈子任务</DialogTitle>
-              <DialogDescription>按平台查看每个圈子的提取状态与结果进度。</DialogDescription>
+              <DialogTitle className='text-xl'>来源任务</DialogTitle>
+              <DialogDescription>按平台查看每个来源的提取状态与结果进度。</DialogDescription>
             </div>
           </div>
 
@@ -364,7 +365,7 @@ function TaskDialog({ open, onOpenChange, tasks }: { open: boolean; onOpenChange
                       </div>
                       <div>
                         <h3 className='text-sm font-semibold'>{platformName(platformCode)}</h3>
-                        <p className='text-xs text-muted-foreground'>{items.length} 个圈子任务</p>
+                        <p className='text-xs text-muted-foreground'>{items.length} 个来源任务</p>
                       </div>
                     </div>
                     <div className='flex min-w-48 items-center gap-3'>
@@ -404,8 +405,9 @@ function TaskRow({ task }: { task: RunTask }) {
     <div className='grid gap-3 px-4 py-3.5 transition-colors hover:bg-muted/20 sm:grid-cols-[minmax(0,1fr)_120px_160px] sm:items-center'>
       <div className='min-w-0'>
         <div className='flex min-w-0 items-center gap-2'>
-          <span className='truncate text-sm font-semibold'>{task.circle_name || task.external_id}</span>
-          {task.circle_url && <a href={task.circle_url} target='_blank' rel='noreferrer' className='shrink-0 text-muted-foreground transition-colors hover:text-primary' aria-label={`打开${task.circle_name || task.external_id}`}><ExternalLink className='size-3.5' /></a>}
+          <span className='truncate text-sm font-semibold'>{task.source_name || task.circle_name || task.external_id}</span>
+          <Badge variant='outline' className='shrink-0 font-normal'>{task.list_order_name || (task.list_order === 'latest_publish' ? '最新发布' : '最新回复')}</Badge>
+          {task.circle_url && <a href={task.circle_url} target='_blank' rel='noreferrer' className='shrink-0 text-muted-foreground transition-colors hover:text-primary' aria-label={`打开${task.source_name || task.circle_name || task.external_id}`}><ExternalLink className='size-3.5' /></a>}
         </div>
         <div className={cn('mt-1 flex items-start gap-1.5 text-xs leading-5 text-muted-foreground', hasIssue && 'text-destructive')}>
           {hasIssue ? <CircleAlert className='mt-0.5 size-3.5 shrink-0' /> : <CircleCheckBig className='mt-0.5 size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400' />}
