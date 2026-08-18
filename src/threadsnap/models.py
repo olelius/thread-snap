@@ -138,7 +138,13 @@ class Vehicle(Base):
 class Circle(Base):
     __tablename__ = "circles"
     __table_args__ = (
-        UniqueConstraint("platform_code", "external_id", name="uq_circle_platform_external"),
+        UniqueConstraint(
+            "platform_code",
+            "external_id",
+            "section",
+            "list_order",
+            name="uq_circle_platform_source",
+        ),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
@@ -147,6 +153,9 @@ class Circle(Base):
     name: Mapped[str | None] = mapped_column(String(200))
     url: Mapped[str] = mapped_column(Text, nullable=False)
     section: Mapped[str] = mapped_column(String(32), nullable=False, default="dynamic")
+    list_order: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="latest_reply"
+    )
     vehicle_id: Mapped[str | None] = mapped_column(ForeignKey("vehicles.id", ondelete="SET NULL"))
     source_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="configured")
     auto_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -257,6 +266,9 @@ class CircleTask(Base):
     circle_name: Mapped[str | None] = mapped_column(String(200))
     circle_url: Mapped[str] = mapped_column(Text, nullable=False)
     section: Mapped[str] = mapped_column(String(32), nullable=False, default="dynamic")
+    list_order: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="latest_reply"
+    )
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
     queue_sequence: Mapped[int] = mapped_column(Integer, nullable=False)
     source_position: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

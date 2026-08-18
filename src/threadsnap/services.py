@@ -15,8 +15,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from .collectors.dongchedi import (
     ADAPTER_VERSION,
     CollectorFailure,
-    normalize_circle_url,
     normalize_post_url,
+    parse_circle_url,
 )
 from .errors import DomainError
 from .models import (
@@ -511,6 +511,7 @@ class ConfigService:
             "name": item.name,
             "url": item.url,
             "section": item.section,
+            "list_order": item.list_order,
             "vehicle_id": item.vehicle_id,
             "source_kind": item.source_kind,
             "auto_enabled": item.auto_enabled,
@@ -524,7 +525,7 @@ class ConfigService:
     def save_circle_batch(self, value: CircleBatchUpdate) -> dict[str, Any]:
         errors: list[dict[str, Any]] = []
         normalized: list[dict[str, Any]] = []
-        seen: set[tuple[str, str]] = set()
+        seen: set[tuple[str, str, str, str]] = set()
         with self.factory() as read_db:
             platforms = {x.code: x for x in read_db.scalars(select(PlatformConfig))}
             existing_ids = {x.id: x for x in read_db.scalars(select(Circle))}
@@ -570,7 +571,7 @@ class ConfigService:
                 )
         deleted_id_set = set(deleted_ids)
         existing_keys = {
-            (x.platform_code, x.external_id): x.id
+            (x.platform_code, x.external_id, x.section, x.list_order): x.id
             for x in existing_ids.values()
             if x.id not in deleted_id_set
         }
@@ -588,29 +589,34 @@ class ConfigService:
                     }
                 )
             if row.vehicle_id and row.vehicle_id not in vehicle_ids:
-                errors.append({"row": index + 1, "field": "vehicle_id", "reason": "车型不存在"})
+                errors.append({"row": index + 1, "field": "vehicle_id", "reason": "来源名称不存在"})
             if not row.vehicle_id and not (row.vehicle_name or "").strip():
                 errors.append(
                     {
                         "row": index + 1,
                         "field": "vehicle_name",
-                        "reason": "必须选择车型或填写新车型名称",
+                        "reason": "必须选择或填写来源名称",
                     }
                 )
             try:
                 if row.platform_code == "dongchedi":
-                    external_id, url = normalize_circle_url(row.url)
+                    source = parse_circle_url(row.url)
+                    external_id, url, list_order = (
+                        source.external_id,
+                        source.url,
+                        source.list_order,
+                    )
                 else:
                     match = re.search(r"(\d+)", row.url)
                     if not match:
                         raise CollectorFailure("CIRCLE_URL_INVALID", "圈子链接中缺少圈子 ID。")
-                    external_id, url = match.group(1), row.url.strip()
+                    external_id, url, list_order = match.group(1), row.url.strip(), "latest_reply"
             except CollectorFailure as exc:
                 errors.append({"row": index + 1, "field": "url", "reason": exc.message})
                 continue
-            key = (row.platform_code, external_id)
+            key = (row.platform_code, external_id, row.section, list_order)
             if key in seen:
-                errors.append({"row": index + 1, "field": "url", "reason": "本次提交中圈子重复"})
+                errors.append({"row": index + 1, "field": "url", "reason": "本次提交中圈子来源重复"})
             seen.add(key)
             if row.id and row.id not in existing_ids:
                 errors.append({"row": index + 1, "field": "id", "reason": "要修改的圈子不存在"})
@@ -628,7 +634,7 @@ class ConfigService:
                     {
                         "row": index + 1,
                         "field": "url",
-                        "reason": "该平台圈子已存在，请修改原配置",
+                        "reason": "该平台圈子与列表顺序的来源已存在，请修改原配置",
                     }
                 )
             if row.auto_enabled and platform.adapter_status != "available":
@@ -639,7 +645,14 @@ class ConfigService:
                         "reason": f"{platform.display_name}暂未接入，不能启用自动提取",
                     }
                 )
-            normalized.append({"row": row, "external_id": external_id, "url": url})
+            normalized.append(
+                {
+                    "row": row,
+                    "external_id": external_id,
+                    "url": url,
+                    "list_order": list_order,
+                }
+            )
         if errors:
             raise DomainError(
                 "CIRCLE_BATCH_INVALID",
@@ -669,13 +682,20 @@ class ConfigService:
                 circle = db.get(Circle, row.id) if row.id else None
                 changed_identity = bool(
                     circle
-                    and (circle.url != item["url"] or circle.platform_code != row.platform_code)
+                    and (
+                        circle.url != item["url"]
+                        or circle.platform_code != row.platform_code
+                        or circle.section != row.section
+                        or circle.list_order != item["list_order"]
+                    )
                 )
                 if not circle:
                     circle = db.scalar(
                         select(Circle).where(
                             Circle.platform_code == row.platform_code,
                             Circle.external_id == item["external_id"],
+                            Circle.section == row.section,
+                            Circle.list_order == item["list_order"],
                         )
                     )
                 if not circle:
@@ -687,6 +707,7 @@ class ConfigService:
                     db.add(circle)
                 circle.url = item["url"]
                 circle.external_id = item["external_id"]
+                circle.list_order = item["list_order"]
                 circle.vehicle_id = vehicle_id
                 circle.source_kind = "configured"
                 circle.section = "dynamic"
@@ -952,7 +973,7 @@ class RunService:
                 )
             quantity = min(max(value.quantity, platform.min_quantity), platform.max_quantity)
             circles: list[dict[str, Any]] = []
-            seen: set[str] = set()
+            seen: set[tuple[str, str]] = set()
             for circle_id in value.circle_ids:
                 circle = db.get(Circle, circle_id)
                 if not circle or circle.platform_code != value.platform_code:
@@ -961,34 +982,43 @@ class RunService:
                         "手动提取包含不存在或平台不匹配的圈子。",
                         details=[{"circle_id": circle_id}],
                     )
-                if circle.external_id in seen:
+                source_key = (circle.external_id, circle.list_order)
+                if source_key in seen:
                     continue
-                seen.add(circle.external_id)
+                seen.add(source_key)
                 circles.append(
                     {
                         "circle": circle,
                         "external_id": circle.external_id,
                         "url": circle.url,
                         "name": circle.name,
+                        "list_order": circle.list_order,
                         "transient": False,
                     }
                 )
             for raw_url in value.circle_urls:
                 try:
-                    external_id, url = (
-                        normalize_circle_url(raw_url)
-                        if value.platform_code == "dongchedi"
-                        else (raw_url, raw_url)
-                    )
+                    if value.platform_code == "dongchedi":
+                        source = parse_circle_url(raw_url)
+                        external_id, url, list_order = (
+                            source.external_id,
+                            source.url,
+                            source.list_order,
+                        )
+                    else:
+                        external_id, url, list_order = raw_url, raw_url, "latest_reply"
                 except CollectorFailure as exc:
                     raise DomainError(exc.code, exc.message) from exc
-                if external_id in seen:
+                source_key = (external_id, list_order)
+                if source_key in seen:
                     continue
-                seen.add(external_id)
+                seen.add(source_key)
                 stored = db.scalar(
                     select(Circle).where(
                         Circle.platform_code == value.platform_code,
                         Circle.external_id == external_id,
+                        Circle.section == "dynamic",
+                        Circle.list_order == list_order,
                     )
                 )
                 circles.append(
@@ -997,6 +1027,7 @@ class RunService:
                         "external_id": external_id,
                         "url": url,
                         "name": stored.name if stored else None,
+                        "list_order": list_order,
                         "transient": stored is None,
                     }
                 )
@@ -1040,6 +1071,7 @@ class RunService:
                     external_id=item["external_id"],
                     circle_name=item["name"],
                     circle_url=item["url"],
+                    list_order=item["list_order"],
                     target_count=quantity,
                     queue_sequence=sequence,
                     source_position=source_position,
@@ -1047,6 +1079,7 @@ class RunService:
                         "quantity": quantity,
                         "internal_concurrency": platform.internal_concurrency,
                         "vehicle_name": vehicle_name,
+                        "source_name": vehicle_name,
                         "transient": item["transient"],
                     },
                 )
@@ -1304,6 +1337,8 @@ class RunService:
                         external_id=circle.external_id,
                         circle_name=circle.name,
                         circle_url=circle.url,
+                        section=circle.section,
+                        list_order=circle.list_order,
                         target_count=quantity,
                         queue_sequence=sequence,
                         source_position=source_position,
@@ -1311,6 +1346,7 @@ class RunService:
                             "quantity": quantity,
                             "internal_concurrency": platform.internal_concurrency,
                             "vehicle_name": circle.vehicle.name if circle.vehicle else None,
+                            "source_name": circle.vehicle.name if circle.vehicle else None,
                             "source_rules": source_rules,
                         },
                     )
@@ -1376,6 +1412,7 @@ class RunService:
                             "external_id": task.external_id,
                             "url": task.circle_url,
                             "name": task.circle_name,
+                            "list_order": task.list_order,
                             "target_count": len(failed_urls),
                             "source_position": task.source_position,
                             "config_snapshot": {
@@ -1428,6 +1465,7 @@ class RunService:
                     external_id=item["external_id"],
                     circle_name=item["name"],
                     circle_url=item["url"],
+                    list_order=item["list_order"],
                     target_count=item["target_count"],
                     queue_sequence=sequence,
                     source_position=item["source_position"],
@@ -1796,6 +1834,7 @@ def run_dict_from_tasks(
         "platform_codes": sorted({task.platform_code for task in tasks}),
         "circle_count": len(tasks),
         "circle_names": [task.circle_name or task.external_id for task in tasks[:3]],
+        "source_names": [task_source_name(task) for task in tasks[:3]],
         "planned_count": run.planned_count,
         "completed_count": run.completed_count,
         "failed_count": run.failed_count,
@@ -1860,7 +1899,10 @@ def task_dict(item: CircleTask) -> dict[str, Any]:
         "circle_id": item.circle_id,
         "external_id": item.external_id,
         "circle_name": item.circle_name,
+        "source_name": task_source_name(item),
         "circle_url": item.circle_url,
+        "list_order": item.list_order,
+        "list_order_name": "最新发布" if item.list_order == "latest_publish" else "最新回复",
         "status": item.status,
         "status_name": RUN_STATUS_ZH.get(item.status, item.status),
         "target_count": item.target_count,
@@ -1887,6 +1929,7 @@ def post_dict(
         "platform_code": task.platform_code if task else None,
         "circle_id": task.circle_id if task else None,
         "circle_name": (task.circle_name or task.external_id) if task else None,
+        "source_name": task_source_name(task) if task else None,
         "platform_post_id": item.platform_post_id,
         "url": item.url,
         "title": item.title,
@@ -1903,6 +1946,18 @@ def post_dict(
         "order_index": item.order_index,
         "comments": comments,
     }
+
+
+def task_source_name(task: CircleTask) -> str:
+    """返回批次创建时冻结的用户来源名称，旧任务使用可辨识回退。"""
+
+    snapshot = task.config_snapshot or {}
+    configured = snapshot.get("source_name") or snapshot.get("vehicle_name")
+    if isinstance(configured, str) and configured.strip():
+        return configured.strip()
+    base = task.circle_name or task.external_id
+    order = "最新发布" if task.list_order == "latest_publish" else "最新回复"
+    return f"{base} · {order}"
 
 
 def comment_dict(item: CommentSnapshot) -> dict[str, Any]:

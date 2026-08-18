@@ -32,10 +32,19 @@ from .models import (
 from .services import related_run_ids
 
 TAG_RE = re.compile(
-    r"^platform\.(?P<platform>[a-z0-9_]+)\.circle\.(?P<circle>[A-Za-z0-9_-]+)\.(?P<field>[a-z0-9_.]+)$"
+    r"^platform\.(?P<platform>[a-z0-9_]+)\."
+    r"(?:(?:source\.(?P<source>[A-Za-z0-9_-]+))|(?:circle\.(?P<circle>[A-Za-z0-9_-]+)))\."
+    r"(?P<field>[a-z0-9_.]+)$"
 )
 FIELD_REGISTRY: dict[str, dict[str, str]] = {
-    "vehicle.name": {"type": "text", "description": "批次快照中的车型名称"},
+    "vehicle.name": {"type": "text", "description": "批次快照中的来源名称（兼容字段）"},
+    "source.id": {"type": "text", "description": "稳定的圈子来源 ID"},
+    "source.name": {"type": "text", "description": "用户填写的来源名称"},
+    "source.list_order": {
+        "type": "text",
+        "description": "来源列表类型：latest_reply 或 latest_publish",
+    },
+    "source.list_order_name": {"type": "text", "description": "来源列表类型中文名称"},
     "circle.id": {"type": "text", "description": "平台圈子 ID"},
     "circle.name": {"type": "text", "description": "批次快照中的圈子名称"},
     "circle.url": {"type": "text", "description": "批次快照中的规范化圈子链接"},
@@ -71,13 +80,17 @@ class TemplateService:
         self.zone = ZoneInfo(settings.timezone)
 
     def field_tags(
-        self, platform_code: str | None = None, circle_id: str | None = None
+        self,
+        platform_code: str | None = None,
+        circle_id: str | None = None,
+        source_id: str | None = None,
     ) -> list[dict[str, str]]:
-        if not platform_code or not circle_id:
+        if not platform_code or not (source_id or circle_id):
             return [{"field": key, **value} for key, value in FIELD_REGISTRY.items()]
+        selector = f"source.{source_id}" if source_id else f"circle.{circle_id}"
         return [
             {
-                "tag": f"platform.{platform_code}.circle.{circle_id}.{field}",
+                "tag": f"platform.{platform_code}.{selector}.{field}",
                 "field": field,
                 **meta,
             }
@@ -95,6 +108,7 @@ class TemplateService:
         bindings: list[dict[str, Any]] = []
         with self.factory() as db:
             known = {(x.platform_code, x.external_id) for x in db.scalars(select(Circle))}
+            known_sources = {(x.platform_code, x.id) for x in db.scalars(select(Circle))}
         for sheet in workbook.worksheets:
             merged = list(sheet.merged_cells.ranges)
             for row in sheet.iter_rows():
@@ -123,7 +137,14 @@ class TemplateService:
                                 "reason": "字段未注册",
                             }
                         )
-                    if (match.group("platform"), match.group("circle")) not in known:
+                    source_id = match.group("source")
+                    circle_id = match.group("circle")
+                    known_key = (match.group("platform"), source_id or circle_id)
+                    if (
+                        source_id and known_key not in known_sources
+                    ) or (
+                        circle_id and known_key not in known
+                    ):
                         errors.append(
                             {
                                 "sheet": sheet.title,
@@ -149,7 +170,8 @@ class TemplateService:
                             "sheet": sheet.title,
                             "cell": cell.coordinate,
                             "platform_code": match.group("platform"),
-                            "circle_id": match.group("circle"),
+                            "source_id": source_id,
+                            "circle_id": circle_id,
                             "field": field,
                             "tag": value.strip(),
                         }
@@ -342,16 +364,18 @@ class TemplateService:
                     .order_by(CircleTask.created_at, CircleTask.queue_sequence)
                 )
             )
-            selected_tasks: dict[tuple[str, str], list[CircleTask]] = {}
+            selected_sources: dict[tuple[str, str], list[CircleTask]] = {}
+            selected_circles: dict[tuple[str, str], list[CircleTask]] = {}
             for task in tasks:
-                key = (task.platform_code, task.external_id)
                 if task.completed_count:
-                    selected_tasks.setdefault(key, []).append(task)
-            post_map: dict[
-                tuple[str, str],
-                list[tuple[PostSnapshot, list[CommentSnapshot], CircleTask]],
-            ] = {}
-            for key, task_group in selected_tasks.items():
+                    if task.circle_id:
+                        selected_sources.setdefault((task.platform_code, task.circle_id), []).append(task)
+                    selected_circles.setdefault(
+                        (task.platform_code, task.external_id), []
+                    ).append(task)
+            def collect(task_group: list[CircleTask]) -> list[
+                tuple[PostSnapshot, list[CommentSnapshot], CircleTask]
+            ]:
                 values = []
                 seen_post_ids: set[str] = set()
                 for task in task_group:
@@ -374,12 +398,22 @@ class TemplateService:
                             )
                         )
                         values.append((post, comments, task))
-                post_map[key] = values
+                return values
+
+            source_post_map = {key: collect(group) for key, group in selected_sources.items()}
+            circle_post_map = {key: collect(group) for key, group in selected_circles.items()}
         errors: list[dict[str, Any]] = []
         for binding in version.bindings:
             sheet = workbook[binding["sheet"]]
             origin = sheet[binding["cell"]]
-            posts = post_map.get((binding["platform_code"], binding["circle_id"]), [])
+            if binding.get("source_id"):
+                posts = source_post_map.get(
+                    (binding["platform_code"], binding["source_id"]), []
+                )
+            else:
+                posts = circle_post_map.get(
+                    (binding["platform_code"], binding["circle_id"]), []
+                )
             for offset, item in enumerate(posts):
                 target = sheet.cell(row=origin.row + offset, column=origin.column)
                 if offset and target.value not in (None, ""):
@@ -428,6 +462,16 @@ class TemplateService:
     ) -> Any:
         if field == "vehicle.name":
             return task.config_snapshot.get("vehicle_name")
+        if field == "source.id":
+            return task.circle_id
+        if field == "source.name":
+            return task.config_snapshot.get("source_name") or task.config_snapshot.get(
+                "vehicle_name"
+            )
+        if field == "source.list_order":
+            return task.list_order
+        if field == "source.list_order_name":
+            return "最新发布" if task.list_order == "latest_publish" else "最新回复"
         if field == "circle.id":
             return task.external_id
         if field == "circle.name":
