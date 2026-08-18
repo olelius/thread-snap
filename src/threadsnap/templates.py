@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
 from copy import copy
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 from openpyxl import load_workbook
 from openpyxl.cell import Cell
+from openpyxl.utils import get_column_letter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -76,6 +78,8 @@ SHORT_FIELD_NAMES = {
     "source.list_order_name": "list_order_name",
 }
 SHORT_FIELD_ALIASES = {short: field for field, short in SHORT_FIELD_NAMES.items()}
+MIN_AUTO_COLUMN_WIDTH = 8
+MAX_AUTO_COLUMN_WIDTH = 60
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -401,10 +405,18 @@ class TemplateService:
 
             source_post_map = {key: collect(group) for key, group in selected_sources.items()}
         errors: list[dict[str, Any]] = []
+        column_widths: dict[tuple[str, int], int] = {}
+        output_rows: dict[str, set[int]] = {}
         for binding in version.bindings:
             sheet = workbook[binding["sheet"]]
             origin = sheet[binding["cell"]]
             posts = source_post_map.get(binding["source_id"], [])
+            width_key = (sheet.title, origin.column)
+            if origin.row > 1:
+                column_widths[width_key] = max(
+                    column_widths.get(width_key, 0),
+                    self._display_width(sheet.cell(row=origin.row - 1, column=origin.column).value),
+                )
             for offset, item in enumerate(posts):
                 target = sheet.cell(row=origin.row + offset, column=origin.column)
                 if offset and target.value not in (None, ""):
@@ -425,14 +437,27 @@ class TemplateService:
                     and target.value is not None
                 ):
                     target.number_format = "yyyy-mm-dd hh:mm:ss"
-                if FIELD_REGISTRY[binding["field"]]["type"] == "collection":
-                    alignment = copy(target.alignment)
-                    alignment.wrap_text = True
-                    target.alignment = alignment
+                alignment = copy(target.alignment)
+                alignment.wrap_text = True
+                target.alignment = alignment
+                column_widths[width_key] = max(
+                    column_widths.get(width_key, 0), self._display_width(target.value)
+                )
+                output_rows.setdefault(sheet.title, set()).add(target.row)
             if not posts:
                 origin.value = None
         if errors:
             raise DomainError("EXPORT_RANGE_CONFLICT", "模板预计写入范围存在冲突。", details=errors)
+        for (sheet_name, column), content_width in column_widths.items():
+            dimension = workbook[sheet_name].column_dimensions[get_column_letter(column)]
+            dimension.width = min(
+                MAX_AUTO_COLUMN_WIDTH,
+                max(MIN_AUTO_COLUMN_WIDTH, content_width + 2),
+            )
+            dimension.bestFit = True
+        for sheet_name, rows in output_rows.items():
+            for row in rows:
+                workbook[sheet_name].row_dimensions[row].height = None
         workbook.save(output_path)
 
     @staticmethod
@@ -490,6 +515,25 @@ class TemplateService:
         if value.tzinfo is None:
             value = value.replace(tzinfo=ZoneInfo("UTC"))
         return value.astimezone(self.zone).replace(tzinfo=None)
+
+    @staticmethod
+    def _display_width(value: object) -> int:
+        """估算 Excel 列宽；中文按双宽，换行文本取最长一行。"""
+
+        if value is None:
+            return 0
+        lines = str(value).splitlines() or [""]
+        return max(
+            sum(
+                0
+                if unicodedata.combining(character)
+                else 2
+                if unicodedata.east_asian_width(character) in {"W", "F"}
+                else 1
+                for character in line
+            )
+            for line in lines
+        )
 
     @staticmethod
     def _numbered(values: list[str]) -> str:
