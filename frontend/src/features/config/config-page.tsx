@@ -231,7 +231,7 @@ export function ConfigPage() {
         <TabsContent forceMount value='rules' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><RulesPanel workspace={plan} /></TabsContent>
         <TabsContent forceMount value='schedule' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><SchedulePanel workspace={plan} /></TabsContent>
         <TabsContent forceMount value='platforms' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><PlatformPanel onDirtyChange={setPlatformDirty} /></TabsContent>
-        <TabsContent forceMount value='circles' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><CirclePanel onDirtyChange={setCircleDirty} /></TabsContent>
+        <TabsContent forceMount value='circles' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden xl:overflow-hidden'><CirclePanel onDirtyChange={setCircleDirty} /></TabsContent>
         <TabsContent forceMount value='history' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><HistoryPanel /></TabsContent>
         <TabsContent forceMount value='templates' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><TemplatePanel /></TabsContent>
       </Tabs>
@@ -502,7 +502,7 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
       toast.error('验证提交失败', { description: errorMessage(error) })
     }
   }
-  return <div className='space-y-4'>
+  return <div className='space-y-4 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:gap-4 xl:space-y-0'>
     <ConfigSectionToolbar icon={<CarFront className='size-4.5' />} title='来源与圈子' summary={`${rows.length} 个来源${dirty ? ` · ${changeCount} 项未保存` : ''}`} description='来源名称用于区分批次范围；同一圈子的最新回复和最新发布是两个独立来源。'>
         <Button variant='outline' disabled={dirty || unverifiedCount === 0 || bulkValidation.isPending} onClick={() => bulkValidation.mutate()}>
           {bulkValidation.isPending ? <Loader2 className='size-4 animate-spin' /> : <RefreshCw className='size-4' />}验证全部待验证（{unverifiedCount}）
@@ -519,7 +519,7 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
         <div>成功 {successfulJobs}，失败 {failedJobs}，等待认证 {authJobs}。首次验证成功会自动参与；重新验证不会改变现有开关。</div>
       </AlertDescription>
     </Alert>}
-    <div className='max-h-[min(65svh,680px)] overflow-auto rounded-xl border bg-card/90' data-list-viewport='circles'>
+    <div className='max-h-[min(65svh,680px)] overflow-auto rounded-xl border bg-card/90 xl:min-h-0 xl:max-h-none xl:flex-1' data-list-viewport='circles'>
       <Table className='min-w-[1180px]'>
         <TableHeader><TableRow><TableHead className='w-16 text-center'>序号</TableHead><TableHead>来源名称</TableHead><TableHead>圈子 URL</TableHead><TableHead>列表顺序</TableHead><TableHead>平台圈子名称</TableHead><TableHead>验证状态</TableHead><TableHead>自动参与</TableHead><TableHead className='text-right'>操作</TableHead></TableRow></TableHeader>
         <TableBody>{rows.map((row, index) => { const baseline = baselineById.get(row.id); const isNew = !baseline; const vehicleDirty = isNew || row.vehicle_name !== baseline.vehicle_name || row.vehicle_id !== baseline.vehicle_id; const urlDirty = isNew || row.url !== baseline.url; const autoDirty = Boolean(baseline) && row.auto_enabled !== baseline?.auto_enabled; const rowDirty = isNew || vehicleDirty || urlDirty || autoDirty; return <TableRow key={row.id || `new-${index}`} data-dirty={rowDirty || undefined} className={cn(rowDirty && 'bg-amber-500/[0.035]')}>
