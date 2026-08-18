@@ -10,6 +10,7 @@ import uuid
 _lock = threading.Lock()
 _last_ms = 0
 _sequence = 0
+SOURCE_KEY_ALPHABET = "23456789abcdefghjkmnpqrstuvwxyz"
 
 
 def uuid7() -> str:
@@ -30,3 +31,9 @@ def uuid7() -> str:
         value |= 0x2 << 62
         value |= rand_b
         return str(uuid.UUID(int=value))
+
+
+def source_key() -> str:
+    """生成便于人工复制的 10 位来源模板键。"""
+
+    return "".join(secrets.choice(SOURCE_KEY_ALPHABET) for _ in range(10))

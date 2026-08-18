@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import re
-import uuid
 from copy import copy
 from datetime import datetime
 from pathlib import Path
@@ -34,7 +32,7 @@ from .models import (
 from .services import related_run_ids
 
 TAG_RE = re.compile(
-    r"^source\.(?P<source_key>[A-Za-z0-9_-]{22})\."
+    r"^s\.(?P<source_key>[23456789abcdefghjkmnpqrstuvwxyz]{10})\."
     r"(?P<field>[a-z0-9_.]+)$"
 )
 FIELD_REGISTRY: dict[str, dict[str, str]] = {
@@ -84,22 +82,6 @@ def sha256_bytes(value: bytes) -> str:
     return hashlib.sha256(value).hexdigest()
 
 
-def source_tag_key(source_id: str) -> str:
-    """把 UUID 来源 ID 转为无填充的 URL-safe Base64 短键。"""
-
-    return base64.urlsafe_b64encode(uuid.UUID(source_id).bytes).decode("ascii").rstrip("=")
-
-
-def source_id_from_tag_key(source_key: str) -> str:
-    """把短键还原为 UUID，并拒绝非规范编码。"""
-
-    raw = base64.urlsafe_b64decode(source_key + "==")
-    source_id = str(uuid.UUID(bytes=raw))
-    if source_tag_key(source_id) != source_key:
-        raise ValueError("来源键不是规范编码")
-    return source_id
-
-
 class TemplateService:
     def __init__(self, factory: sessionmaker[Session], settings: Settings):
         self.factory = factory
@@ -109,7 +91,11 @@ class TemplateService:
     def field_tags(self, source_id: str | None = None) -> list[dict[str, str]]:
         if not source_id:
             return [{"field": field, **FIELD_REGISTRY[field]} for field in PUBLIC_FIELDS]
-        prefix = f"source.{source_tag_key(source_id)}"
+        with self.factory() as db:
+            source = db.get(Circle, source_id)
+        if not source:
+            raise DomainError("SOURCE_NOT_FOUND", "指定来源不存在。", status_code=404)
+        prefix = f"s.{source.export_key}"
         return [
             {
                 "tag": f"{prefix}.{SHORT_FIELD_NAMES.get(field, field)}",
@@ -129,13 +115,15 @@ class TemplateService:
         errors: list[dict[str, Any]] = []
         bindings: list[dict[str, Any]] = []
         with self.factory() as db:
-            known_source_ids = set(db.scalars(select(Circle.id)))
+            known_sources = {source.export_key: source.id for source in db.scalars(select(Circle))}
         for sheet in workbook.worksheets:
             merged = list(sheet.merged_cells.ranges)
             for row in sheet.iter_rows():
                 for cell in row:
                     value = cell.value
-                    if not isinstance(value, str) or not value.startswith(("source.", "platform.")):
+                    if not isinstance(value, str) or not value.startswith(
+                        ("s.", "source.", "platform.")
+                    ):
                         continue
                     tag = value.strip()
                     match = TAG_RE.match(tag)
@@ -160,11 +148,8 @@ class TemplateService:
                                 "reason": "字段未注册",
                             }
                         )
-                    try:
-                        source_id = source_id_from_tag_key(match.group("source_key"))
-                    except (ValueError, TypeError):
-                        source_id = None
-                    if source_id not in known_source_ids:
+                    source_id = known_sources.get(match.group("source_key"))
+                    if source_id is None:
                         errors.append(
                             {
                                 "sheet": sheet.title,

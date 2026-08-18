@@ -44,7 +44,6 @@ from threadsnap.schemas import (
     ManualRunCreate,
 )
 from threadsnap.services import bootstrap_database
-from threadsnap.templates import source_id_from_tag_key, source_tag_key
 
 
 def sample_record(post_id: str) -> dict:
@@ -1652,7 +1651,7 @@ class TemplateTests(AppCase):
 
     def test_template_validation_and_one_post_per_row_export(self) -> None:
         run, circle = self._seed_completed_run()
-        source_prefix = f"source.{source_tag_key(circle.id)}"
+        source_prefix = f"s.{circle.export_key}"
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "A9"
@@ -1674,20 +1673,19 @@ class TemplateTests(AppCase):
         self.assertIn("点赞：5赞", output["B2"].value)
         self.assertTrue(output["B2"].alignment.wrap_text)
 
-    def test_source_id_template_tag_targets_one_circle_feed_source(self) -> None:
+    def test_short_source_key_template_tag_targets_one_circle_feed_source(self) -> None:
         run, circle = self._seed_completed_run()
         tags = self.container.templates.field_tags(circle.id)
         title_tag = next(item["tag"] for item in tags if item["field"] == "post.title")
-        source_key = source_tag_key(circle.id)
-        source_prefix = f"source.{source_key}"
-        self.assertEqual(22, len(source_key))
-        self.assertEqual(circle.id, source_id_from_tag_key(source_key))
+        source_prefix = f"s.{circle.export_key}"
+        self.assertEqual(10, len(circle.export_key))
+        self.assertRegex(circle.export_key, r"^[23456789abcdefghjkmnpqrstuvwxyz]{10}$")
         self.assertEqual(
             f"{source_prefix}.post.title",
             title_tag,
         )
         self.assertNotIn(circle.id, title_tag)
-        self.assertLess(len(title_tag), len(f"platform.dongchedi.source.{circle.id}.post.title"))
+        self.assertLess(len(title_tag), len("source.AaANnBC7ft2mv5vpUUolPQ.post.title"))
         fields = {item["field"] for item in tags}
         self.assertTrue(
             {"source.id", "source.name", "source.list_order", "source.list_order_name"} <= fields
@@ -1709,10 +1707,41 @@ class TemplateTests(AppCase):
         self.assertEqual("风云A9最新回复", output["B1"].value)
         self.assertEqual("最新回复", output["C1"].value)
 
+    def test_template_field_rules_are_identical_across_platforms(self) -> None:
+        dongchedi = self.save_verified_circle()
+        with self.container.sessions.begin() as db:
+            autohome = Circle(
+                platform_code="autohome",
+                external_id="series-1001",
+                name="汽车之家测试来源",
+                url="https://example.test/autohome/series-1001",
+                source_kind="configured",
+                validation_status="verified",
+            )
+            db.add(autohome)
+            db.flush()
+
+        dongchedi_tags = self.container.templates.field_tags(dongchedi.id)
+        autohome_tags = self.container.templates.field_tags(autohome.id)
+
+        self.assertNotEqual(dongchedi.export_key, autohome.export_key)
+        self.assertEqual(
+            [item["field"] for item in dongchedi_tags],
+            [item["field"] for item in autohome_tags],
+        )
+        self.assertTrue(
+            all(item["tag"].startswith(f"s.{dongchedi.export_key}.") for item in dongchedi_tags)
+        )
+        self.assertTrue(
+            all(item["tag"].startswith(f"s.{autohome.export_key}.") for item in autohome_tags)
+        )
+        self.assertTrue(all("dongchedi" not in item["tag"] for item in dongchedi_tags))
+        self.assertTrue(all("autohome" not in item["tag"] for item in autohome_tags))
+
     def test_template_source_file_can_be_downloaded(self) -> None:
         circle = self.save_verified_circle()
         workbook = Workbook()
-        workbook.active["A1"] = f"source.{source_tag_key(circle.id)}.post.title"
+        workbook.active["A1"] = f"s.{circle.export_key}.post.title"
         source = Path(self.temp.name) / "download-source.xlsx"
         workbook.save(source)
         version = self.container.templates.upload("客户/模板", source.name, source.read_bytes())
@@ -1738,7 +1767,7 @@ class TemplateTests(AppCase):
     def test_invalid_template_returns_cell_and_field(self) -> None:
         _, circle = self._seed_completed_run()
         workbook = Workbook()
-        workbook.active["A1"] = f"source.{source_tag_key(circle.id)}.post.unknown"
+        workbook.active["A1"] = f"s.{circle.export_key}.post.unknown"
         source = Path(self.temp.name) / "invalid.xlsx"
         workbook.save(source)
         with self.assertRaises(DomainError) as raised:
@@ -1750,7 +1779,8 @@ class TemplateTests(AppCase):
     def test_legacy_long_template_tag_is_not_accepted(self) -> None:
         _, circle = self._seed_completed_run()
         workbook = Workbook()
-        workbook.active["A1"] = f"platform.dongchedi.source.{circle.id}.post.title"
+        workbook.active["A1"] = "source.AaANnBC7ft2mv5vpUUolPQ.post.title"
+        workbook.active["B1"] = f"platform.dongchedi.source.{circle.id}.post.title"
         source = Path(self.temp.name) / "legacy.xlsx"
         workbook.save(source)
 
@@ -1759,6 +1789,8 @@ class TemplateTests(AppCase):
 
         self.assertEqual("A1", raised.exception.details[0]["cell"])
         self.assertEqual("标签格式无效", raised.exception.details[0]["reason"])
+        self.assertEqual("B1", raised.exception.details[1]["cell"])
+        self.assertEqual("标签格式无效", raised.exception.details[1]["reason"])
 
 
 if __name__ == "__main__":

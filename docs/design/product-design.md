@@ -346,12 +346,12 @@ Sheet 内采用单页渐进式表单，不使用多步骤向导。顶部为输�
 模板字段标签必须是稳定英文标识：
 
 ```text
-source.<source_key>.<field>
+s.<source_key>.<field>
 ```
 
-`source_key` 是来源配置 UUID 的 22 位 URL-safe Base64 可逆短键，可以无碰撞地定位来源并区分同一个平台圈子的最新回复与最新发布，因此标签不再重复平台代码和 36 位 UUID。来源自身字段省略重复的 `source.` 层，例如来源名称为 `source.<source_key>.name`；帖子与圈子字段仍使用 `post.title`、`circle.id` 等清晰后缀。标签不使用中文来源名称、工作表名称或数据库物理字段名。前端提供可用标签、数据类型、说明和复制入口，并允许标签文本自然换行。上传时只解析该短标签格式；无效标签拒绝保存，并一次返回中文的工作表、单元格、字段和原因。
+`source_key` 是来源创建时生成并持久化的 10 位导出键，在所有平台来源之间全局唯一，可以定位来源并区分同一个平台圈子的最新回复与最新发布。标签不包含平台代码或来源 UUID；例如来源名称为 `s.<source_key>.name`，帖子与圈子字段使用 `post.title`、`circle.id` 等清晰后缀。标签不使用中文来源名称、工作表名称或数据库物理字段名。前端提供可用标签、数据类型、说明和复制入口，并允许标签文本自然换行。上传时只解析该短标签格式；无效标签拒绝保存，并一次返回中文的工作表、单元格、字段和原因。
 
-第一版正式数据会在交付前清理，不保留 `platform.<platform_code>.source.<source_id>.<field>`、`platform.<platform_code>.circle.<circle_id>.<field>` 或 `vehicle.name` 的模板兼容分支。字段后缀注册表如下；前端按当前已保存来源生成模板标签，例如 `source.<source_key>.post.title`，每个标签单元格只能绑定一个注册字段。
+第一版正式数据会在交付前清理，不保留 `source.<22位来源键>.<field>`、`platform.<platform_code>.source.<source_id>.<field>`、`platform.<platform_code>.circle.<circle_id>.<field>` 或 `vehicle.name` 的模板兼容分支。所有平台共用下列字段后缀注册表；平台暂时缺少的字段按既有字段契约留空，不另建平台专属标签规则。前端按当前已保存来源生成模板标签，例如 `s.<source_key>.post.title`，每个标签单元格只能绑定一个注册字段。
 
 | 字段后缀 | 类型 | 导出内容 |
 |---|---|---|
