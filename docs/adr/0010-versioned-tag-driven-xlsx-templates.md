@@ -4,7 +4,7 @@ status: accepted
 
 # 使用不可变版本和稳定标签驱动 XLSX 模板
 
-> ADR 0019 扩展了来源身份：新模板使用 `platform.<platform_code>.source.<source_id>.<field>` 区分同圈不同列表顺序；本 ADR 的 `circle.<circle_id>` 标签继续作为历史模板兼容格式。
+> ADR 0020 已替代本 ADR 的标签格式：第一版正式数据在交付前清理，现只接受 `source.<source_key>.<field>`，不保留本 ADR 的圈子标签兼容分支。
 
 用户可以保存多个命名 XLSX 模板。模板中的数据位置由稳定英文标签 `platform.<platform_code>.circle.<circle_id>.<field>` 指定，而不是由工作表名称、车型中文名或数据库物理字段名推断。同名重新上传创建不可变新版本；导出时选择模板版本。
 

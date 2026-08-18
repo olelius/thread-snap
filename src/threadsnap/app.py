@@ -385,11 +385,9 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
     @router.get("/template-fields")
     def template_fields(
         request: Request,
-        platform_code: str | None = None,
-        circle_id: str | None = None,
         source_id: str | None = None,
     ) -> list[dict[str, str]]:
-        return _container(request).templates.field_tags(platform_code, circle_id, source_id)
+        return _container(request).templates.field_tags(source_id)
 
     @router.post("/templates")
     async def upload_template(

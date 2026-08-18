@@ -99,6 +99,7 @@
 | `docs/adr/0017-package-v1-as-fully-offline-systemd-nginx-release.md` | 第一版采用完整离线包、systemd、显示服务与 Nginx 部署 |
 | `docs/adr/0018-use-headless-wayland-on-centos-stream-10.md` | CentOS Stream 10 使用 Weston 无头 Wayland 运行完整 Chromium |
 | `docs/adr/0019-distinguish-circle-feed-sources-and-live-baselines.md` | 同圈最新回复/最新发布作为独立来源，清洁配置草稿跟随服务器版本 |
+| `docs/adr/0020-use-short-source-keys-in-xlsx-tags.md` | XLSX 模板只使用可逆短来源键，不保留旧标签兼容分支 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 

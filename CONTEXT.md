@@ -105,7 +105,7 @@ _Avoid_: 独立定时任务、独立提取批次
 _Avoid_: 自动重试、覆盖原批次、物理合并快照
 
 **导出模板标签**：
-XLSX 模板中寻址导出数据的稳定英文标识，格式为 `platform.<platform_code>.circle.<circle_id>.<field>`；标签不使用中文名称或数据库物理字段名。
+XLSX 模板中寻址导出数据的稳定英文标识，格式为 `source.<source_key>.<field>`；`source_key` 是来源 UUID 的 22 位可逆短键。标签不使用中文名称、平台代码、36 位 UUID 或数据库物理字段名。
 _Avoid_: 工作表名称推断、数据库列名、中文字段标签
 
 **Linux PoC 测试包**：

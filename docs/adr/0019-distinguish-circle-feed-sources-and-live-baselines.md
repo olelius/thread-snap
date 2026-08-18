@@ -1,5 +1,7 @@
 # 区分同圈列表来源并以服务器版本更新清洁草稿
 
+> ADR 0020 已替代本 ADR 的模板标签格式：第一版正式数据在交付前清理，现只接受 `source.<source_key>.<field>`，不保留来源 UUID 长标签兼容分支。
+
 Status: accepted
 
 ## Context

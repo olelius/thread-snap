@@ -44,6 +44,7 @@ from threadsnap.schemas import (
     ManualRunCreate,
 )
 from threadsnap.services import bootstrap_database
+from threadsnap.templates import source_id_from_tag_key, source_tag_key
 
 
 def sample_record(post_id: str) -> dict:
@@ -1651,13 +1652,14 @@ class TemplateTests(AppCase):
 
     def test_template_validation_and_one_post_per_row_export(self) -> None:
         run, circle = self._seed_completed_run()
+        source_prefix = f"source.{source_tag_key(circle.id)}"
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "A9"
         sheet["A1"] = "帖子标题"
         sheet["B1"] = "评论"
-        sheet["A2"] = f"platform.dongchedi.circle.{circle.external_id}.post.title"
-        sheet["B2"] = f"platform.dongchedi.circle.{circle.external_id}.comments.content_with_likes"
+        sheet["A2"] = f"{source_prefix}.post.title"
+        sheet["B2"] = f"{source_prefix}.comments.content_with_likes"
         source = Path(self.temp.name) / "source.xlsx"
         workbook.save(source)
         version = self.container.templates.upload("客户模板", source.name, source.read_bytes())
@@ -1674,24 +1676,28 @@ class TemplateTests(AppCase):
 
     def test_source_id_template_tag_targets_one_circle_feed_source(self) -> None:
         run, circle = self._seed_completed_run()
-        tags = self.container.templates.field_tags("dongchedi", source_id=circle.id)
+        tags = self.container.templates.field_tags(circle.id)
         title_tag = next(item["tag"] for item in tags if item["field"] == "post.title")
+        source_key = source_tag_key(circle.id)
+        source_prefix = f"source.{source_key}"
+        self.assertEqual(22, len(source_key))
+        self.assertEqual(circle.id, source_id_from_tag_key(source_key))
         self.assertEqual(
-            f"platform.dongchedi.source.{circle.id}.post.title",
+            f"{source_prefix}.post.title",
             title_tag,
         )
+        self.assertNotIn(circle.id, title_tag)
+        self.assertLess(len(title_tag), len(f"platform.dongchedi.source.{circle.id}.post.title"))
         fields = {item["field"] for item in tags}
         self.assertTrue(
-            {"source.id", "source.name", "source.list_order", "source.list_order_name"}
-            <= fields
+            {"source.id", "source.name", "source.list_order", "source.list_order_name"} <= fields
         )
+        self.assertNotIn("vehicle.name", fields)
 
         workbook = Workbook()
         workbook.active["A1"] = title_tag
-        workbook.active["B1"] = f"platform.dongchedi.source.{circle.id}.source.name"
-        workbook.active["C1"] = (
-            f"platform.dongchedi.source.{circle.id}.source.list_order_name"
-        )
+        workbook.active["B1"] = f"{source_prefix}.name"
+        workbook.active["C1"] = f"{source_prefix}.list_order_name"
         source = Path(self.temp.name) / "source-id.xlsx"
         workbook.save(source)
 
@@ -1704,9 +1710,9 @@ class TemplateTests(AppCase):
         self.assertEqual("最新回复", output["C1"].value)
 
     def test_template_source_file_can_be_downloaded(self) -> None:
-        self.save_verified_circle()
+        circle = self.save_verified_circle()
         workbook = Workbook()
-        workbook.active["A1"] = "platform.dongchedi.circle.24729.post.title"
+        workbook.active["A1"] = f"source.{source_tag_key(circle.id)}.post.title"
         source = Path(self.temp.name) / "download-source.xlsx"
         workbook.save(source)
         version = self.container.templates.upload("客户/模板", source.name, source.read_bytes())
@@ -1730,9 +1736,9 @@ class TemplateTests(AppCase):
         self.assertEqual("TEMPLATE_VERSION_NOT_FOUND", missing.json()["code"])
 
     def test_invalid_template_returns_cell_and_field(self) -> None:
-        self._seed_completed_run()
+        _, circle = self._seed_completed_run()
         workbook = Workbook()
-        workbook.active["A1"] = "platform.dongchedi.circle.24729.post.unknown"
+        workbook.active["A1"] = f"source.{source_tag_key(circle.id)}.post.unknown"
         source = Path(self.temp.name) / "invalid.xlsx"
         workbook.save(source)
         with self.assertRaises(DomainError) as raised:
@@ -1740,6 +1746,19 @@ class TemplateTests(AppCase):
         self.assertEqual("A1", raised.exception.details[0]["cell"])
         self.assertEqual("post.unknown", raised.exception.details[0]["field"])
         self.assertEqual("字段未注册", raised.exception.details[0]["reason"])
+
+    def test_legacy_long_template_tag_is_not_accepted(self) -> None:
+        _, circle = self._seed_completed_run()
+        workbook = Workbook()
+        workbook.active["A1"] = f"platform.dongchedi.source.{circle.id}.post.title"
+        source = Path(self.temp.name) / "legacy.xlsx"
+        workbook.save(source)
+
+        with self.assertRaises(DomainError) as raised:
+            self.container.templates.upload("旧标签模板", source.name, source.read_bytes())
+
+        self.assertEqual("A1", raised.exception.details[0]["cell"])
+        self.assertEqual("标签格式无效", raised.exception.details[0]["reason"])
 
 
 if __name__ == "__main__":
