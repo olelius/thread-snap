@@ -346,16 +346,15 @@ Sheet 内采用单页渐进式表单，不使用多步骤向导。顶部为输�
 模板字段标签必须是稳定英文标识：
 
 ```text
-platform.<platform_code>.source.<source_id>.<field>
+source.<source_key>.<field>
 ```
 
-`source_id` 是系统保存的圈子来源配置 ID，可以区分同一个平台圈子的最新回复与最新发布。标签不使用中文来源名称、工作表名称或数据库物理字段名。前端提供可用标签、数据类型、说明和复制入口。上传时校验全部标签；无效标签拒绝保存，并一次返回中文的工作表、单元格、字段和原因。旧模板的 `platform.<platform_code>.circle.<circle_id>.<field>` 标签继续读取；新模板统一生成来源 ID 标签，避免同圈多列表顺序发生歧义。
+`source_key` 是来源配置 UUID 的 22 位 URL-safe Base64 可逆短键，可以无碰撞地定位来源并区分同一个平台圈子的最新回复与最新发布，因此标签不再重复平台代码和 36 位 UUID。来源自身字段省略重复的 `source.` 层，例如来源名称为 `source.<source_key>.name`；帖子与圈子字段仍使用 `post.title`、`circle.id` 等清晰后缀。标签不使用中文来源名称、工作表名称或数据库物理字段名。前端提供可用标签、数据类型、说明和复制入口，并允许标签文本自然换行。上传时只解析该短标签格式；无效标签拒绝保存，并一次返回中文的工作表、单元格、字段和原因。
 
-第一版字段后缀注册表如下。前端按当前已保存来源生成完整标签，例如 `platform.dongchedi.source.<source_id>.post.title`；每个标签单元格只能绑定一个注册字段。
+第一版正式数据会在交付前清理，不保留 `platform.<platform_code>.source.<source_id>.<field>`、`platform.<platform_code>.circle.<circle_id>.<field>` 或 `vehicle.name` 的模板兼容分支。字段后缀注册表如下；前端按当前已保存来源生成模板标签，例如 `source.<source_key>.post.title`，每个标签单元格只能绑定一个注册字段。
 
 | 字段后缀 | 类型 | 导出内容 |
 |---|---|---|
-| `vehicle.name` | 文本 | 批次快照中的来源名称（兼容字段） |
 | `source.id` | 文本 | 稳定的圈子来源配置 ID |
 | `source.name` | 文本 | 批次创建时冻结的用户来源名称 |
 | `source.list_order` | 文本 | `latest_reply` 或 `latest_publish` |

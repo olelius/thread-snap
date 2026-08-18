@@ -16,6 +16,19 @@
 
 ---
 
+## 2026-08-18 — 导出模板改用纯短来源标签
+**总目标**：移除导出模板页过时的 `vehicle.name` 字段和包含平台代码、36 位来源 UUID 的冗长标签，改为可读且稳定的短来源标签。
+**状态**：✅ 新模板只生成并解析 `source.<22位来源键>.<字段>`，不保留旧字段或旧标签兼容分支。
+**干到哪里了**：
+- [x] 来源 UUID 完整转换为 22 位 URL-safe Base64 短键，可逆还原且不采用可能碰撞的截断摘要；来源名称标签由 `platform.dongchedi.source.<uuid>.source.name` 缩短为 `source.<source_key>.name`。
+- [x] 删除 `vehicle.name` 注册字段、旧 `platform.*.source.*` 与 `platform.*.circle.*` 解析分支；按用户确认的“正式数据会清除”边界，同步简化模板绑定与导出，只按全局唯一来源 ID 寻址。
+- [x] 可用字段列表优先展示来源名称和列表顺序中文名称，表头改为“模板标签”，标签支持自然换行；前端请求只提交来源 ID，不再携带标签寻址不需要的平台代码。
+- [x] 56 项后端测试、Ruff、`compileall`、`pip check`、前端 TypeScript 检查与生产构建通过；模板测试额外确认短键可逆、短标签导出成功、旧长标签被拒绝。
+- [x] 隔离后端与真实浏览器页面确认共 22 个字段，首项为 `source.<source_key>.name`，页面不含 `vehicle.name` 或 `platform.` 前缀；最长标签 57 字符，892px 表格视口无横向溢出。
+**下一步**：数据清理后重新创建导出模板，统一从页面复制当前短标签，不复用清理前模板文件。
+**边界**：不在本次任务中直接清理当前开发数据库或模板文件；不新增来源别名列，不以可修改的来源名称充当寻址键。
+**关联**：`docs/adr/0020-use-short-source-keys-in-xlsx-tags.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/first-platform-delivery.md`、`src/threadsnap/templates.py`、`frontend/src/features/config/config-page.tsx`
+
 ## 2026-08-18 — 规则来源按列表顺序二级折叠
 **总目标**：把自动提取规则中同一平台的最新回复与最新发布来源从混排列表改为可辨识、可批量操作的二级分组。
 **状态**：✅ 平台、列表顺序和来源三级层次已落地，分类全选与原有草稿语义保持一致。
