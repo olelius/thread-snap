@@ -8,7 +8,6 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
-    DateTime,
     ForeignKey,
     Index,
     Integer,
@@ -19,7 +18,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from .db import Base
+from .db import Base, UTCDateTime
 from .ids import source_key, uuid7
 
 
@@ -44,9 +43,7 @@ class PlatformConfig(Base):
     min_concurrency: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     max_concurrency: Mapped[int] = mapped_column(Integer, nullable=False, default=8)
     adapter_version: Mapped[str | None] = mapped_column(String(64))
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now
-    )
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
 
 
 class ScheduleConfig(Base):
@@ -55,9 +52,7 @@ class ScheduleConfig(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     timezone_name: Mapped[str] = mapped_column(String(64), nullable=False, default="Asia/Shanghai")
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now
-    )
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
 
 
 class ExtractionRule(Base):
@@ -67,10 +62,8 @@ class ExtractionRule(Base):
     name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
     current_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now
-    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
     versions: Mapped[list["ExtractionRuleVersion"]] = relationship(
         cascade="all, delete-orphan", passive_deletes=True
     )
@@ -87,7 +80,7 @@ class ExtractionRuleVersion(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     platform_quantities: Mapped[dict[str, int]] = mapped_column(JSON, nullable=False, default=dict)
     selected_circle_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
 
 
 class ScheduleNode(Base):
@@ -102,10 +95,8 @@ class ScheduleNode(Base):
         "rule_id",
         ForeignKey("extraction_rules.id", ondelete="RESTRICT"), nullable=False
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now
-    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
 
 
 class ScheduleNodeRule(Base):
@@ -128,10 +119,8 @@ class Vehicle(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
     name: Mapped[str] = mapped_column(String(120), unique=True, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now
-    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
     circles: Mapped[list["Circle"]] = relationship(back_populates="vehicle", passive_deletes=True)
 
 
@@ -164,14 +153,12 @@ class Circle(Base):
     auto_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     validation_status: Mapped[str] = mapped_column(String(32), nullable=False, default="unverified")
     validation_error: Mapped[str | None] = mapped_column(Text)
-    first_validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    first_validated_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    validated_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     adapter_version: Mapped[str | None] = mapped_column(String(64))
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now
-    )
+    last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
     vehicle: Mapped[Vehicle | None] = relationship(back_populates="circles")
 
 
@@ -186,9 +173,9 @@ class ValidationJob(Base):
     error_code: Mapped[str | None] = mapped_column(String(64))
     error_message: Mapped[str | None] = mapped_column(Text)
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 class ExtractionRun(Base):
@@ -223,10 +210,10 @@ class ExtractionRun(Base):
     waiting_reason: Mapped[str | None] = mapped_column(Text)
     error_message: Mapped[str | None] = mapped_column(Text)
     summary_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
-    queued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    queued_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     tasks: Mapped[list["CircleTask"]] = relationship(
         cascade="all, delete-orphan", passive_deletes=True
     )
@@ -283,9 +270,9 @@ class CircleTask(Base):
     error_code: Mapped[str | None] = mapped_column(String(64))
     error_message: Mapped[str | None] = mapped_column(Text)
     stop_reason: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 class PostSnapshot(Base):
@@ -303,7 +290,7 @@ class PostSnapshot(Base):
     url: Mapped[str] = mapped_column(Text, nullable=False)
     title: Mapped[str | None] = mapped_column(Text)
     author: Mapped[str | None] = mapped_column(String(240))
-    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     content: Mapped[str | None] = mapped_column(Text)
     image_urls: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     video_urls: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
@@ -313,7 +300,7 @@ class PostSnapshot(Base):
     visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
     raw_status: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     order_index: Mapped[int] = mapped_column(Integer, nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     comments: Mapped[list["CommentSnapshot"]] = relationship(
         cascade="all, delete-orphan", passive_deletes=True
     )
@@ -329,7 +316,7 @@ class CommentSnapshot(Base):
     platform_comment_id: Mapped[str | None] = mapped_column(String(80))
     author: Mapped[str | None] = mapped_column(String(240))
     content: Mapped[str | None] = mapped_column(Text)
-    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     like_count: Mapped[int | None] = mapped_column(Integer)
     order_index: Mapped[int] = mapped_column(Integer, nullable=False)
 
@@ -340,7 +327,7 @@ class Template(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
     name: Mapped[str] = mapped_column(String(160), unique=True, nullable=False)
     hidden: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     versions: Mapped[list["TemplateVersion"]] = relationship(
         cascade="all, delete-orphan", passive_deletes=True
     )
@@ -358,7 +345,7 @@ class TemplateVersion(Base):
     file_path: Mapped[str] = mapped_column(Text, nullable=False)
     file_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     bindings: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
 
 
 class ExportRecord(Base):
@@ -381,8 +368,8 @@ class ExportRecord(Base):
     file_path: Mapped[str | None] = mapped_column(Text)
     file_sha256: Mapped[str | None] = mapped_column(String(64))
     error_message: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
-    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 class PlatformSession(Base):
@@ -391,11 +378,9 @@ class PlatformSession(Base):
     platform_code: Mapped[str] = mapped_column(String(32), primary_key=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="missing")
     encrypted_state: Mapped[bytes | None] = mapped_column(LargeBinary)
-    last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_verified_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     error_message: Mapped[str | None] = mapped_column(Text)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now
-    )
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
 
 
 class ScheduleEvent(Base):
@@ -405,7 +390,7 @@ class ScheduleEvent(Base):
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
-    planned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    planned_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
     schedule_node_id: Mapped[str | None] = mapped_column(
         ForeignKey("schedule_nodes.id", ondelete="SET NULL")
     )
@@ -420,4 +405,4 @@ class ScheduleEvent(Base):
     run_id: Mapped[str | None] = mapped_column(
         ForeignKey("extraction_runs.id", ondelete="SET NULL")
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)

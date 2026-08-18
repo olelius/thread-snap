@@ -3,16 +3,47 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import DateTime, Engine, create_engine, event
+from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.types import TypeDecorator
 
 
 class Base(DeclarativeBase):
     """所有持久化模型的基类。"""
+
+
+class UTCDateTime(TypeDecorator[datetime]):
+    """统一持久化 UTC，并为 SQLite 读出的无时区时间恢复 UTC 标识。"""
+
+    impl = DateTime
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect: Dialect) -> Any:
+        return dialect.type_descriptor(DateTime(timezone=True))
+
+    def process_bind_param(self, value: datetime | None, dialect: Dialect) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        value = value.astimezone(timezone.utc)
+        if dialect.name == "sqlite":
+            return value.replace(tzinfo=None)
+        return value
+
+    def process_result_value(self, value: datetime | None, _dialect: Dialect) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
 
 
 def migrate_database(database_url: str) -> None:
