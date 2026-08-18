@@ -558,7 +558,7 @@ class DongchediCollector:
     def collect_circle(
         self, circle_url: str, target_count: int, skip_post_ids: set[str] | None = None
     ) -> dict[str, Any]:
-        circle_id, _ = normalize_circle_url(circle_url)
+        source = parse_circle_url(circle_url)
         records: list[dict[str, Any]] = []
         failures: list[dict[str, Any]] = []
         seen: set[str] = set(skip_post_ids or set())
@@ -573,7 +573,7 @@ class DongchediCollector:
                 if total_count is None
                 else min(30, max(0, total_count - (page_number - 1) * 30))
             )
-            page = self._fetch_circle_page(circle_id, page_number, expected)
+            page = self._fetch_circle_page(source.url, page_number, expected)
             if page_number == 1:
                 total_count = page["total_count"]
                 page_count = (
