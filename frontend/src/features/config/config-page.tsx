@@ -86,6 +86,10 @@ function editableCircleRowsSignature(rows?: Circle[]) {
 
 const listOrderName = (value?: string) => value === 'latest_publish' ? '最新发布' : '最新回复'
 const sourceName = (circle: Circle) => circle.vehicle_name?.trim() || circle.name || circle.external_id
+const listOrderGroups: { value: Circle['list_order']; label: string }[] = [
+  { value: 'latest_reply', label: '最新回复' },
+  { value: 'latest_publish', label: '最新发布' },
+]
 
 function RuleMultiCombobox({ rules, values, disabled, dirty, onChange }: { rules: ExtractionPlan['rules']; values: string[]; disabled?: boolean; dirty?: boolean; onChange: (ruleIds: string[]) => void }) {
   const [open, setOpen] = useState(false)
@@ -287,6 +291,14 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
     if (!ids.some((id) => allCircles.find((circle) => circle.id === id)?.platform_code === platform.code)) delete quantities[platform.code]
     return { ...rule, circle_ids: ids, platform_quantities: quantities }
   })
+  const toggleListOrder = (ruleId: string, platform: Platform, listOrder: Circle['list_order'], checked: boolean) => updateRule(ruleId, (rule) => {
+    const sourceIds = enabledCircles.filter((circle) => circle.platform_code === platform.code && circle.list_order === listOrder).map((circle) => circle.id)
+    const ids = checked ? [...new Set([...rule.circle_ids, ...sourceIds])] : rule.circle_ids.filter((id) => !sourceIds.includes(id))
+    const quantities = { ...rule.platform_quantities }
+    if (checked && sourceIds.length && quantities[platform.code] === undefined) quantities[platform.code] = defaultQuantity(platform)
+    if (!ids.some((id) => allCircles.find((circle) => circle.id === id)?.platform_code === platform.code)) delete quantities[platform.code]
+    return { ...rule, circle_ids: ids, platform_quantities: quantities }
+  })
 
   const baselineRules = new Map((query.data?.rules ?? []).map((rule) => [rule.id, rule]))
   const changedRuleIds = new Set(draft.rules.filter((rule) => editableRuleSignature(rule) !== editableRuleSignature(baselineRules.get(rule.id))).map((rule) => rule.id))
@@ -346,7 +358,31 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
               const integrated = platform.adapter_status === 'available'
               const platformSelectionDirty = platformCircles.some((circle) => selectedRule.circle_ids.includes(circle.id) !== (baselineSelectedRule?.circle_ids.includes(circle.id) ?? false))
               const quantityDirty = (selectedRule.platform_quantities[platform.code] ?? null) !== (baselineSelectedRule?.platform_quantities[platform.code] ?? null)
-              return <Collapsible key={platform.code} defaultOpen={false} className='rounded-xl border bg-background/55'><div className='grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3 p-3 sm:grid-cols-[auto_minmax(0,1fr)_10rem]'><Checkbox checked={platformChecked} disabled={!integrated || !platformCircles.length} data-dirty={platformSelectionDirty || undefined} className={cn(platformSelectionDirty && dirtyControlClass)} onCheckedChange={(checked) => togglePlatform(selectedRule.id, platform, checked === true)} aria-label={`选择${platform.display_name}全部来源`} /><CollapsibleTrigger asChild><Button type='button' variant='ghost' className='group min-w-0 justify-between gap-3 px-0 hover:bg-transparent' aria-label={`展开或收起${platform.display_name}来源`}><span className='flex min-w-0 items-center gap-2'><span className='truncate text-sm font-medium'>{platform.display_name}</span><Badge variant='outline'>{integrated ? `${selectedCount}/${platformCircles.length} 个来源` : '暂未接入'}</Badge></span><ChevronDown className='size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180' /></Button></CollapsibleTrigger><div className='col-start-2 w-full sm:col-start-auto'><Label className='sr-only' htmlFor={`quantity-${selectedRule.id}-${platform.code}`}>{platform.display_name}每来源目标数</Label><Input id={`quantity-${selectedRule.id}-${platform.code}`} type='number' disabled={!integrated || selectedCount === 0} data-dirty={quantityDirty || undefined} className={cn(quantityDirty && dirtyFieldClass)} min={platform.quantity_range.min} max={platform.quantity_range.max} value={selectedCount ? selectedRule.platform_quantities[platform.code] ?? '' : ''} onChange={(event) => updateRule(selectedRule.id, (item) => ({ ...item, platform_quantities: { ...item.platform_quantities, [platform.code]: Number(event.target.value) } }))} placeholder='每来源目标数' /></div></div><CollapsibleContent><div className='grid gap-2 border-t p-3 sm:grid-cols-2'>{platformCircles.length ? platformCircles.map((circle) => { const checked = selectedRule.circle_ids.includes(circle.id); const circleDirty = checked !== (baselineSelectedRule?.circle_ids.includes(circle.id) ?? false); return <label key={circle.id} className='flex w-full cursor-pointer items-center gap-2 rounded-lg border px-3 py-2 hover:bg-muted/40'><Checkbox checked={checked} disabled={!integrated} data-dirty={circleDirty || undefined} className={cn(circleDirty && dirtyControlClass)} onCheckedChange={(nextChecked) => toggleCircle(selectedRule.id, circle, nextChecked === true)} /><span className='min-w-0 flex-1 truncate text-sm font-medium'>{sourceName(circle)}</span><Badge variant='outline' className='shrink-0 font-normal'>{listOrderName(circle.list_order)}</Badge></label> }) : <div className='rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground sm:col-span-2'>该平台暂无全局启用来源，请前往“来源与圈子”启用。</div>}</div></CollapsibleContent></Collapsible>
+              return <Collapsible key={platform.code} defaultOpen={false} className='rounded-xl border bg-background/55'>
+                <div className='grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3 p-3 sm:grid-cols-[auto_minmax(0,1fr)_10rem]'>
+                  <Checkbox checked={platformChecked} disabled={!integrated || !platformCircles.length} data-dirty={platformSelectionDirty || undefined} className={cn(platformSelectionDirty && dirtyControlClass)} onCheckedChange={(checked) => togglePlatform(selectedRule.id, platform, checked === true)} aria-label={`选择${platform.display_name}全部来源`} />
+                  <CollapsibleTrigger asChild><Button type='button' variant='ghost' className='group min-w-0 justify-between gap-3 px-0 hover:bg-transparent' aria-label={`展开或收起${platform.display_name}来源`}><span className='flex min-w-0 items-center gap-2'><span className='truncate text-sm font-medium'>{platform.display_name}</span><Badge variant='outline'>{integrated ? `${selectedCount}/${platformCircles.length} 个来源` : '暂未接入'}</Badge></span><ChevronDown className='size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180' /></Button></CollapsibleTrigger>
+                  <div className='col-start-2 w-full sm:col-start-auto'><Label className='sr-only' htmlFor={`quantity-${selectedRule.id}-${platform.code}`}>{platform.display_name}每来源目标数</Label><Input id={`quantity-${selectedRule.id}-${platform.code}`} type='number' disabled={!integrated || selectedCount === 0} data-dirty={quantityDirty || undefined} className={cn(quantityDirty && dirtyFieldClass)} min={platform.quantity_range.min} max={platform.quantity_range.max} value={selectedCount ? selectedRule.platform_quantities[platform.code] ?? '' : ''} onChange={(event) => updateRule(selectedRule.id, (item) => ({ ...item, platform_quantities: { ...item.platform_quantities, [platform.code]: Number(event.target.value) } }))} placeholder='每来源目标数' /></div>
+                </div>
+                <CollapsibleContent>
+                  <div className='space-y-2 border-t p-3'>
+                    {platformCircles.length ? listOrderGroups.map((group) => {
+                      const groupSources = platformCircles.filter((circle) => circle.list_order === group.value)
+                      if (!groupSources.length) return null
+                      const groupSelectedCount = groupSources.filter((circle) => selectedRule.circle_ids.includes(circle.id)).length
+                      const groupChecked = groupSelectedCount === 0 ? false : groupSelectedCount === groupSources.length ? true : 'indeterminate'
+                      const groupDirty = groupSources.some((circle) => selectedRule.circle_ids.includes(circle.id) !== (baselineSelectedRule?.circle_ids.includes(circle.id) ?? false))
+                      return <Collapsible key={group.value} defaultOpen={groupSelectedCount > 0} className='overflow-hidden rounded-lg border bg-card/70'>
+                        <div className='grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-3 py-2'>
+                          <Checkbox checked={groupChecked} disabled={!integrated} data-dirty={groupDirty || undefined} className={cn(groupDirty && dirtyControlClass)} onCheckedChange={(checked) => toggleListOrder(selectedRule.id, platform, group.value, checked === true)} aria-label={`选择${platform.display_name}${group.label}全部来源`} />
+                          <CollapsibleTrigger asChild><Button type='button' variant='ghost' className='group h-8 min-w-0 justify-between px-1 hover:bg-transparent' aria-label={`展开或收起${platform.display_name}${group.label}来源`}><span className='flex min-w-0 items-center gap-2'><span className='truncate text-sm font-medium'>{group.label}</span><Badge variant='secondary' className='font-normal'>{groupSelectedCount}/{groupSources.length}</Badge></span><ChevronDown className='size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180' /></Button></CollapsibleTrigger>
+                        </div>
+                        <CollapsibleContent><div className='grid gap-2 border-t p-2 sm:grid-cols-2'>{groupSources.map((circle) => { const checked = selectedRule.circle_ids.includes(circle.id); const circleDirty = checked !== (baselineSelectedRule?.circle_ids.includes(circle.id) ?? false); return <label key={circle.id} className='flex w-full cursor-pointer items-center gap-2 rounded-md border px-3 py-2 hover:bg-muted/40'><Checkbox checked={checked} disabled={!integrated} data-dirty={circleDirty || undefined} className={cn(circleDirty && dirtyControlClass)} onCheckedChange={(nextChecked) => toggleCircle(selectedRule.id, circle, nextChecked === true)} /><span className='min-w-0 flex-1 truncate text-sm font-medium'>{sourceName(circle)}</span></label> })}</div></CollapsibleContent>
+                      </Collapsible>
+                    }) : <div className='rounded-lg border border-dashed p-4 text-center text-xs text-muted-foreground'>该平台暂无全局启用来源，请前往“来源与圈子”启用。</div>}
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
             })}</CardContent>
           </div> : <CardContent className='grid h-full min-h-[440px] place-items-center p-10 text-center text-sm text-muted-foreground'>从左侧选择规则，或新建第一条规则。</CardContent>}
         </Card>
