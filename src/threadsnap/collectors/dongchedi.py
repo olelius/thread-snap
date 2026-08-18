@@ -584,8 +584,17 @@ class DongchediCollector:
                 page_count = (
                     math.ceil(total_count / 30) if total_count is not None else page["page_count"]
                 )
-            candidates = [item for item in page["rows"] if item["post_id"] not in seen]
+            page_rows = page["rows"]
+            if not page_rows:
+                exhausted = True
+                break
+            candidates = [item for item in page_rows if item["post_id"] not in seen]
             if not candidates:
+                # 认证续跑会从第一页重新发现候选；若本页内容已全部存在于检查点，
+                # 这只表示本页已经处理完，不表示后续分页没有新内容。
+                if page_count is not None and page_number < page_count:
+                    page_number += 1
+                    continue
                 exhausted = True
                 break
             for candidate in candidates:

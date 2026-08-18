@@ -1797,6 +1797,39 @@ class CollectorTests(unittest.TestCase):
             requested_sources,
         )
 
+    def test_collection_resume_skips_completed_page_and_continues(self) -> None:
+        collector = DongchediCollector(None)
+        requested_pages: list[int] = []
+        pages = {
+            1: {
+                "total_count": 60,
+                "page_count": 2,
+                "rows": [{"post_id": str(x), "url": f"u{x}"} for x in range(1, 4)],
+            },
+            2: {
+                "total_count": 60,
+                "page_count": 2,
+                "rows": [{"post_id": str(x), "url": f"u{x}"} for x in range(4, 7)],
+            },
+        }
+
+        def fetch_circle_page(_source_url: str, page: int, _expected: int | None) -> dict:
+            requested_pages.append(page)
+            return pages[page]
+
+        collector._fetch_circle_page = fetch_circle_page  # type: ignore[method-assign]
+        collector.fetch_post = lambda url: sample_record(url[1:])  # type: ignore[method-assign]
+
+        result = collector.collect_circle(
+            "https://www.dongchedi.com/community/24729",
+            3,
+            skip_post_ids={"1", "2", "3"},
+        )
+
+        self.assertEqual([1, 2], requested_pages)
+        self.assertEqual(["4", "5", "6"], [item["platform_post_id"] for item in result["records"]])
+        self.assertEqual("已经取得配置数量的有效帖子。", result["stop_reason"])
+
     def test_collection_keeps_latest_publish_source_url(self) -> None:
         collector = DongchediCollector(None)
         requested_sources: list[str] = []
