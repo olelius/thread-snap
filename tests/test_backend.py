@@ -1058,9 +1058,27 @@ class AuthComponentTests(AppCase):
             "sensitive-profile-state",
             (restored / "Default" / "profile-marker.txt").read_text(encoding="utf-8"),
         )
+        fresh = profiles.prepare("dongchedi", "task-fresh", inherit_current=False)
+        self.assertFalse((fresh / "Default" / "profile-marker.txt").exists())
+        self.assertTrue(encrypted.is_file())
+        profiles.discard(fresh)
         type(profiles)(profiles.root, self.container.session_store.fernet)
         self.assertFalse(restored.exists())
         self.assertTrue(encrypted.is_file())
+
+    def test_fresh_auth_task_replaces_active_task(self) -> None:
+        first = self.client.post("/api/v1/platforms/dongchedi/auth/tasks").json()
+        reused = self.client.post("/api/v1/platforms/dongchedi/auth/tasks").json()
+        fresh = self.client.post(
+            "/api/v1/platforms/dongchedi/auth/tasks?fresh=true"
+        ).json()
+
+        self.assertEqual(first["id"], reused["id"])
+        self.assertNotEqual(first["id"], fresh["id"])
+        self.assertFalse(first["fresh_profile"])
+        self.assertTrue(fresh["fresh_profile"])
+        self.assertEqual("cancelled", self.container.auth.tasks[first["id"]].status)
+        self.assertEqual("created", self.container.auth.tasks[fresh["id"]].status)
 
     def test_successful_validation_promotes_profile_and_resumes_platform(self) -> None:
         task = AuthTask(

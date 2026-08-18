@@ -456,8 +456,10 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
             return {"message": "平台会话已加密保存，等待任务将自动续跑。"}
 
     @router.post("/platforms/{code}/auth/tasks", status_code=202)
-    async def create_auth_task(code: str, request: Request) -> dict[str, Any]:
-        return await _container(request).auth.create(code)
+    async def create_auth_task(
+        code: str, request: Request, fresh: bool = False
+    ) -> dict[str, Any]:
+        return await _container(request).auth.create(code, fresh=fresh)
 
     @router.get("/auth/tasks/{task_id}")
     def auth_task(task_id: str, request: Request) -> dict[str, Any]:

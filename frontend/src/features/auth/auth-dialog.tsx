@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, Expand, Loader2, LogOut, RefreshCw, ShieldCheck, Wifi, WifiOff } from 'lucide-react'
+import { AlertCircle, Expand, Loader2, LogIn, LogOut, RefreshCw, ShieldCheck, Wifi, WifiOff } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, errorMessage } from '@/lib/api'
 import type { AuthTask } from '@/lib/types'
@@ -59,15 +59,17 @@ export function AuthDialog({
   const [connection, setConnection] = useState<'connecting' | 'online' | 'offline'>('offline')
   const [pageStatus, setPageStatus] = useState<PageStatus>('idle')
   const [pageError, setPageError] = useState<{ code?: string; message: string; httpStatus?: number }>()
+  const [validationFailed, setValidationFailed] = useState(false)
   const [remaining, setRemaining] = useState(0)
   const [browserSize, setBrowserSize] = useState({ width: 1280, height: 800 })
 
-  const createTask = useCallback(async () => {
+  const createTask = useCallback(async (fresh = false) => {
     setConnection('connecting')
     setPageStatus('starting')
     setPageError(undefined)
+    setValidationFailed(false)
     setFrame(undefined)
-    const next = await api<AuthTask>(`/platforms/${platformCode}/auth/tasks`, { method: 'POST' })
+    const next = await api<AuthTask>(`/platforms/${platformCode}/auth/tasks${fresh ? '?fresh=true' : ''}`, { method: 'POST' })
     setTask(next)
     return next
   }, [platformCode])
@@ -110,6 +112,7 @@ export function AuthDialog({
         onOpenChange(false)
       } else if (message.type === 'validation_failed') {
         setPageStatus('ready')
+        setValidationFailed(true)
         toast.error('认证状态校验未通过', { description: message.message })
       } else if (message.type === 'page_failed' || message.type === 'error') {
         setPageStatus('failed')
@@ -119,8 +122,8 @@ export function AuthDialog({
     }
   }, [onOpenChange, queryClient])
 
-  const start = useCallback(() => {
-    createTask().then(connect).catch((error) => {
+  const start = useCallback((fresh = false) => {
+    createTask(fresh).then(connect).catch((error) => {
       setConnection('offline')
       setPageStatus('failed')
       setPageError({ message: errorMessage(error) })
@@ -149,6 +152,7 @@ export function AuthDialog({
       setTask(null)
       setPageStatus('idle')
       setPageError(undefined)
+      setValidationFailed(false)
     }
   }, [open, start])
 
@@ -215,6 +219,7 @@ export function AuthDialog({
             <div className='grid size-10 place-items-center rounded-xl bg-primary/10 text-primary'><ShieldCheck className='size-5' /></div>
             <div className='min-w-0 flex-1'><DialogTitle>{platformName}平台认证</DialogTitle><DialogDescription className='mt-1 truncate'>{pageUrl || '正在连接服务器浏览器…'}</DialogDescription></div>
             <StatusBadge value={pageStatus} label={pageStatusNames[pageStatus]} />
+            {task?.fresh_profile && <span className='rounded-full border border-primary/25 bg-primary/5 px-2 py-1 text-xs text-primary'>全新登录环境</span>}
             <div className='flex items-center gap-1.5 text-xs text-muted-foreground'>{connection === 'online' ? <Wifi className='size-4 text-emerald-500' /> : <WifiOff className='size-4 text-red-500' />}中继{connection === 'online' ? '已连接' : connection === 'connecting' ? '连接中' : '已断开'}</div>
             <div className='font-mono text-xs text-muted-foreground'>剩余 {String(Math.floor(remaining / 60)).padStart(2, '0')}:{String(remaining % 60).padStart(2, '0')}</div>
           </div>
@@ -281,8 +286,9 @@ export function AuthDialog({
           <div className='pointer-events-none absolute right-4 bottom-4 flex items-center gap-2 rounded-full bg-black/55 px-3 py-1.5 text-[11px] text-slate-300 backdrop-blur'><Expand className='size-3.5' />1280 × 800 交互画布</div>
         </div>
         <div className='flex flex-wrap items-center justify-between gap-3 border-t bg-background px-5 py-3'>
-          <div className='text-xs text-muted-foreground'>画面支持悬停、点击、拖动、滚动和键盘输入；剪贴板文本会发送到当前页面焦点。</div>
+          <div className={`text-xs ${validationFailed ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-muted-foreground'}`}>{validationFailed ? '当前旧登录状态未通过采集校验，可使用全新登录环境重新登录。' : '画面支持悬停、点击、拖动、滚动和键盘输入；剪贴板文本会发送到当前页面焦点。'}</div>
           <div className='flex items-center gap-2'>
+            {!task?.fresh_profile && <Button variant={validationFailed ? 'default' : 'outline'} disabled={pageStatus === 'starting' || pageStatus === 'loading' || pageStatus === 'validating'} onClick={() => start(true)}><LogIn className='size-4' />使用全新登录环境</Button>}
             <Button variant='outline' onClick={() => pageStatus === 'failed' || !task?.ticket ? start() : connect(task)}><RefreshCw className='size-4' />{pageStatus === 'failed' ? '重新创建认证浏览器' : '重新连接'}</Button>
             <Button variant='outline' onClick={() => onOpenChange(false)}>关闭窗口</Button>
             {runId && <AlertDialog><AlertDialogTrigger asChild><Button variant='destructive' disabled={endRun.isPending}><LogOut className='size-4' />结束本次提取</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>结束本次提取？</AlertDialogTitle><AlertDialogDescription>已有结果将保留，批次按实际结果结束并释放平台队列。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => endRun.mutate()}>确认结束</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}

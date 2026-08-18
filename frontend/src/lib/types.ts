@@ -167,6 +167,7 @@ export type AuthTask = {
   error_code?: string
   error_message?: string
   http_status?: number
+  fresh_profile: boolean
   ticket?: string
   websocket_path: string
 }

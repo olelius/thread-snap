@@ -63,13 +63,15 @@ class AuthProfileStore:
             for pending in platform_root.glob(".*.profile.enc.tmp"):
                 pending.unlink(missing_ok=True)
 
-    def prepare(self, platform_code: str, task_id: str) -> Path:
+    def prepare(
+        self, platform_code: str, task_id: str, *, inherit_current: bool = True
+    ) -> Path:
         profile = self.root / platform_code / "tasks" / task_id
         if profile.exists():
             shutil.rmtree(profile)
         profile.mkdir(parents=True, mode=0o700)
         encrypted = self.current(platform_code)
-        if encrypted.is_file():
+        if inherit_current and encrypted.is_file():
             try:
                 payload = self.fernet.decrypt(encrypted.read_bytes())
                 with zipfile.ZipFile(io.BytesIO(payload)) as archive:
@@ -146,6 +148,7 @@ class AuthTask:
     error_code: str | None = None
     error_message: str | None = None
     http_status: int | None = None
+    fresh_profile: bool = False
     playwright: Playwright | None = None
     context: BrowserContext | None = None
     page: Page | None = None
@@ -175,7 +178,7 @@ class BrowserAuthManager:
         self.profiles = AuthProfileStore(settings.auth_profile_dir, session_store.fernet)
         self.tasks: dict[str, AuthTask] = {}
 
-    async def create(self, platform_code: str) -> dict[str, Any]:
+    async def create(self, platform_code: str, *, fresh: bool = False) -> dict[str, Any]:
         if platform_code != "dongchedi":
             raise DomainError(
                 "PLATFORM_NOT_INTEGRATED", "该平台暂未接入认证流程。", status_code=409
@@ -191,11 +194,17 @@ class BrowserAuthManager:
             ),
             None,
         )
+        if fresh and active:
+            active.status = "cancelled"
+            active.page_status = "cancelled"
+            await self._close(active)
+            active = None
         task = active or AuthTask(
             id=uuid7(),
             platform_code=platform_code,
             ticket=secrets.token_urlsafe(32),
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            fresh_profile=fresh,
         )
         self.tasks[task.id] = task
         return self.task_dict(task)
@@ -228,6 +237,7 @@ class BrowserAuthManager:
             "error_code": task.error_code,
             "error_message": task.error_message,
             "http_status": task.http_status,
+            "fresh_profile": task.fresh_profile,
             "ticket": task.ticket if task.status in {"created", "active"} else None,
             "websocket_path": f"/api/v1/auth/tasks/{task.id}/stream",
         }
@@ -236,7 +246,11 @@ class BrowserAuthManager:
         if task.page and not task.page.is_closed() and task.page_status == "ready":
             return task.page
         task.page_status = "starting"
-        task.profile_dir = self.profiles.prepare(task.platform_code, task.id)
+        task.profile_dir = self.profiles.prepare(
+            task.platform_code,
+            task.id,
+            inherit_current=not task.fresh_profile,
+        )
         task.playwright = await async_playwright().start()
         task.context = await task.playwright.chromium.launch_persistent_context(
             user_data_dir=str(task.profile_dir),
