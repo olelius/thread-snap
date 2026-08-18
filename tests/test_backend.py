@@ -861,6 +861,23 @@ class ApiAndConfigTests(AppCase):
         )
         self.assertEqual(202, internal.status_code)
 
+    def test_api_datetimes_keep_their_utc_offset_after_sqlite_round_trip(self) -> None:
+        created = self.client.post(
+            "/api/v1/runs/manual",
+            json={
+                "platform_code": "dongchedi",
+                "circle_urls": ["https://www.dongchedi.com/community/24729"],
+                "quantity": 1,
+                "idempotency_key": "utc-timezone-0001",
+            },
+        )
+        self.assertEqual(202, created.status_code)
+
+        response = self.client.get(f"/api/v1/runs/{created.json()['id']}")
+        self.assertEqual(200, response.status_code)
+        for field in ("created_at", "queued_at"):
+            self.assertRegex(response.json()[field], r"(?:Z|\+00:00)$")
+
     def test_session_is_encrypted_and_never_returned(self) -> None:
         state = {
             "cookies": [
