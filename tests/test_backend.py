@@ -95,7 +95,13 @@ class FakeCollector:
             "adapter_version": "fake-v1",
         }
 
-    def collect_circle(self, _url: str, target: int, skip_post_ids: set[str] | None = None) -> dict:
+    def collect_circle(
+        self,
+        _url: str,
+        target: int,
+        skip_post_ids: set[str] | None = None,
+        on_progress=None,
+    ) -> dict:
         if self.auth:
             raise AuthenticationRequired("平台会话需要刷新。", trigger_url=_url)
         skip = skip_post_ids or set()
@@ -106,15 +112,21 @@ class FakeCollector:
             candidate += 1
             if post_id in skip:
                 continue
-            records.append(sample_record(post_id))
+            record = sample_record(post_id)
+            records.append(record)
+            if on_progress:
+                on_progress(record, None)
         return {
             "records": records,
             "failures": [],
             "stop_reason": "已经取得配置数量的有效帖子。",
         }
 
-    def collect_urls(self, urls: list[str]) -> dict:
+    def collect_urls(self, urls: list[str], on_progress=None) -> dict:
         records = [sample_record(url.rstrip("/").split("/")[-1]) for url in urls]
+        if on_progress:
+            for record in records:
+                on_progress(record, None)
         return {
             "records": records,
             "failures": [],
@@ -1225,6 +1237,91 @@ class QueueAndRetryTests(AppCase):
         self.assertTrue(self.container.worker.process_once())
         self.assertEqual("success", self.container.runs.get_run(two["id"])["status"])
 
+    def test_worker_persists_and_publishes_progress_before_task_finishes(self) -> None:
+        """小批量任务应逐条形成权威进度，而不是结束时才一次跳满。"""
+
+        observed_counts: list[int] = []
+        circle = self.save_verified_circle()
+        run = self.container.runs.create_manual(
+            ManualRunCreate(platform_code="dongchedi", circle_ids=[circle.id], quantity=3),
+            scope="api",
+            header_key="live-progress-0001",
+        )
+        container = self.container
+
+        class ProgressCollector(FakeCollector):
+            def collect_circle(
+                self,
+                _url: str,
+                target: int,
+                skip_post_ids: set[str] | None = None,
+                on_progress=None,
+            ) -> dict:
+                records = []
+                for index in range(target):
+                    record = sample_record(str(3001 + index))
+                    records.append(record)
+                    assert on_progress is not None
+                    on_progress(record, None)
+                    observed_counts.append(container.runs.get_run(run["id"])["completed_count"])
+                return {
+                    "records": records,
+                    "failures": [],
+                    "stop_reason": "已经取得配置数量的有效帖子。",
+                }
+
+        self.container.worker._collector = lambda *_args: ProgressCollector()  # type: ignore[method-assign]
+
+        self.assertTrue(self.container.worker.process_once())
+
+        self.assertEqual([1, 2, 3], observed_counts)
+        self.assertEqual("success", self.container.runs.get_run(run["id"])["status"])
+        events = [
+            event
+            for event in self.container.events.wait_after(0, timeout=0)
+            if event["type"] == "run.changed" and event["resource_id"] == run["id"]
+        ]
+        self.assertEqual("running", events[0]["summary"]["status"])
+        self.assertEqual([1, 2, 3], [event["summary"]["completed_count"] for event in events[1:4]])
+        self.assertEqual("success", events[-1]["summary"]["status"])
+
+    def test_auth_resume_publishes_queued_progress_event(self) -> None:
+        """认证恢复提交为排队状态后应立即通知列表，不只依赖 Session 事件。"""
+
+        circle = self.save_verified_circle()
+        run = self.container.runs.create_manual(
+            ManualRunCreate(platform_code="dongchedi", circle_ids=[circle.id], quantity=2),
+            scope="api",
+            header_key="resume-progress-0001",
+        )
+        with self.container.sessions.begin() as db:
+            stored_run = db.get(ExtractionRun, run["id"])
+            task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            assert stored_run is not None and task is not None
+            stored_run.status = "waiting_for_auth"
+            stored_run.completed_count = 1
+            task.status = "waiting_for_auth"
+            task.completed_count = 1
+            db.add(
+                PostSnapshot(
+                    run_id=stored_run.id,
+                    circle_task_id=task.id,
+                    platform_post_id="4001",
+                    url="https://www.dongchedi.com/ugc/article/4001",
+                    order_index=0,
+                )
+            )
+
+        self.container.worker.resume_platform("dongchedi")
+
+        resumed = self.container.runs.get_run(run["id"])
+        self.assertEqual("queued", resumed["status"])
+        event = self.container.events.wait_after(0, timeout=0)[-1]
+        self.assertEqual("run.changed", event["type"])
+        self.assertEqual(run["id"], event["resource_id"])
+        self.assertEqual("queued", event["summary"]["status"])
+        self.assertEqual(1, event["summary"]["completed_count"])
+
     def test_plain_dynamic_body_mapping_is_persisted_to_snapshot(self) -> None:
         """普通动态的 motor_title 正文必须经 Worker 原样进入不可变快照。"""
 
@@ -1253,11 +1350,14 @@ class QueueAndRetryTests(AppCase):
                 _url: str,
                 _target: int,
                 skip_post_ids: set[str] | None = None,
+                on_progress=None,
             ) -> dict:
                 record = self.fetch_post(
                     "https://www.dongchedi.com/ugc/article/7674878578118377534"
                 )
                 assert record is not None
+                if on_progress:
+                    on_progress(record, None)
                 return {
                     "records": [record],
                     "failures": [],

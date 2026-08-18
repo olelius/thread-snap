@@ -9,7 +9,7 @@ import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from urllib.parse import urlencode, urljoin, urlsplit
 
 from curl_cffi import requests
@@ -31,6 +31,7 @@ POST_RE = re.compile(
 )
 SORT_LABEL_RE = re.compile(r"(?:\d{4}-\d{2}-\d{2}|\d+(?:分钟|小时|天|个月|年)前)(?:回复)?")
 VISIBLE_OPERATION_STATUSES = frozenset({0, 2})
+ProgressCallback = Callable[[dict[str, Any] | None, dict[str, Any] | None], None]
 RICH_TEXT_TAG_RE = re.compile(
     r"<(?:article|blockquote|br|div|h[1-6]|img|li|ol|p|section|ul)\b",
     re.IGNORECASE,
@@ -556,7 +557,11 @@ class DongchediCollector:
         return comments
 
     def collect_circle(
-        self, circle_url: str, target_count: int, skip_post_ids: set[str] | None = None
+        self,
+        circle_url: str,
+        target_count: int,
+        skip_post_ids: set[str] | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         source = parse_circle_url(circle_url)
         records: list[dict[str, Any]] = []
@@ -597,27 +602,31 @@ class DongchediCollector:
                         failures=failures,
                     ) from exc
                 except CollectorFailure as exc:
-                    failures.append(
-                        {
-                            "url": candidate["url"],
-                            "code": exc.code,
-                            "message": exc.message,
-                            "source_index": source_index,
-                        }
-                    )
+                    failure = {
+                        "url": candidate["url"],
+                        "code": exc.code,
+                        "message": exc.message,
+                        "source_index": source_index,
+                    }
+                    failures.append(failure)
+                    if on_progress:
+                        on_progress(None, failure)
                     continue
                 if record is None:
-                    failures.append(
-                        {
-                            "url": candidate["url"],
-                            "code": "POST_NOT_FOUND",
-                            "message": "帖子详情当前不可用。",
-                            "source_index": source_index,
-                        }
-                    )
+                    failure = {
+                        "url": candidate["url"],
+                        "code": "POST_NOT_FOUND",
+                        "message": "帖子详情当前不可用。",
+                        "source_index": source_index,
+                    }
+                    failures.append(failure)
+                    if on_progress:
+                        on_progress(None, failure)
                     continue
                 record["order_index"] = source_index
                 records.append(record)
+                if on_progress:
+                    on_progress(record, None)
                 if len(records) >= target_count:
                     break
             if len(records) >= target_count:
@@ -634,7 +643,9 @@ class DongchediCollector:
             stop_reason = "候选帖子存在错误，未能取得配置数量的有效结果。"
         return {"records": records, "failures": failures, "stop_reason": stop_reason}
 
-    def collect_urls(self, urls: list[str]) -> dict[str, Any]:
+    def collect_urls(
+        self, urls: list[str], on_progress: ProgressCallback | None = None
+    ) -> dict[str, Any]:
         records: list[dict[str, Any]] = []
         failures: list[dict[str, Any]] = []
         seen: set[str] = set()
@@ -642,14 +653,15 @@ class DongchediCollector:
             try:
                 post_id, normalized = normalize_post_url(url)
             except CollectorFailure as exc:
-                failures.append(
-                    {
-                        "url": url,
-                        "code": exc.code,
-                        "message": exc.message,
-                        "source_index": source_index,
-                    }
-                )
+                failure = {
+                    "url": url,
+                    "code": exc.code,
+                    "message": exc.message,
+                    "source_index": source_index,
+                }
+                failures.append(failure)
+                if on_progress:
+                    on_progress(None, failure)
                 continue
             if post_id in seen:
                 continue
@@ -664,17 +676,20 @@ class DongchediCollector:
                     failures=failures,
                 ) from exc
             if record is None:
-                failures.append(
-                    {
-                        "url": normalized,
-                        "code": "POST_NOT_FOUND",
-                        "message": "帖子详情当前不可用。",
-                        "source_index": source_index,
-                    }
-                )
+                failure = {
+                    "url": normalized,
+                    "code": "POST_NOT_FOUND",
+                    "message": "帖子详情当前不可用。",
+                    "source_index": source_index,
+                }
+                failures.append(failure)
+                if on_progress:
+                    on_progress(None, failure)
                 continue
             record["order_index"] = source_index
             records.append(record)
+            if on_progress:
+                on_progress(record, None)
         return {
             "records": records,
             "failures": failures,
