@@ -1,11 +1,14 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { CircleDot, FileText, Loader2, Plus, X } from 'lucide-react'
+import { ChevronDown, CircleDot, FileText, Loader2, Plus, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, errorMessage } from '@/lib/api'
-import type { Run, Vehicle } from '@/lib/types'
+import type { Circle, Run, Vehicle } from '@/lib/types'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
@@ -15,6 +18,11 @@ import { Sheet, SheetClose, SheetContent, SheetDescription, SheetFooter, SheetHe
 import { Textarea } from '@/components/ui/textarea'
 
 type Mode = 'circle_discovery' | 'url_list'
+
+const listOrderGroups: { value: Circle['list_order']; label: string }[] = [
+  { value: 'latest_reply', label: '最新回复' },
+  { value: 'latest_publish', label: '最新发布' },
+]
 
 export function NewExtractionSheet() {
   const client = useQueryClient()
@@ -27,6 +35,7 @@ export function NewExtractionSheet() {
   const [postUrls, setPostUrls] = useState('')
   const vehicles = useQuery({ queryKey: ['vehicles'], queryFn: () => api<Vehicle[]>('/vehicles') })
   const circles = useMemo(() => vehicles.data?.flatMap((item) => item.circles) ?? [], [vehicles.data])
+  const platformCircles = useMemo(() => circles.filter((circle) => circle.platform_code === platform), [circles, platform])
 
   const submit = useMutation({
     mutationFn: () => {
@@ -66,6 +75,12 @@ export function NewExtractionSheet() {
     setCircleUrls('')
     setPostUrls('')
     setQuantity(30)
+  }
+
+  function toggleCircleGroup(groupCircleIds: string[], checked: boolean) {
+    setSelectedCircleIds((items) => checked
+      ? [...new Set([...items, ...groupCircleIds])]
+      : items.filter((id) => !groupCircleIds.includes(id)))
   }
 
   const currentEmpty =
@@ -125,14 +140,36 @@ export function NewExtractionSheet() {
               <div className='space-y-5'>
                 <div className='space-y-2'>
                   <Label>已配置圈子</Label>
-                  <div className='max-h-48 space-y-2 overflow-auto rounded-xl border p-2'>
-                    {circles.length ? circles.map((circle) => {
-                      const checked = selectedCircleIds.includes(circle.id)
+                  <div className='max-h-56 space-y-2 overflow-auto rounded-xl border p-2'>
+                    {platformCircles.length ? listOrderGroups.map((group) => {
+                      const groupCircles = platformCircles.filter((circle) => circle.list_order === group.value)
+                      if (!groupCircles.length) return null
+                      const groupCircleIds = groupCircles.map((circle) => circle.id)
+                      const selectedCount = groupCircleIds.filter((id) => selectedCircleIds.includes(id)).length
+                      const groupChecked = selectedCount === 0 ? false : selectedCount === groupCircles.length ? true : 'indeterminate'
                       return (
-                        <label key={circle.id} className='flex cursor-pointer items-center gap-3 rounded-lg p-2 hover:bg-muted'>
-                          <input type='checkbox' checked={checked} onChange={() => setSelectedCircleIds((items) => checked ? items.filter((id) => id !== circle.id) : [...items, circle.id])} className='size-4 accent-[var(--primary)]' />
-                          <span className='min-w-0'><span className='block truncate text-sm font-medium'>{circle.name || circle.external_id}</span><span className='block truncate text-xs text-muted-foreground'>{circle.url}</span></span>
-                        </label>
+                        <Collapsible key={group.value} defaultOpen={false} className='overflow-hidden rounded-lg border bg-card/70'>
+                          <div className='grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2 px-3 py-2'>
+                            <Checkbox checked={groupChecked} onCheckedChange={(checked) => toggleCircleGroup(groupCircleIds, checked === true)} aria-label={`选择${group.label}全部来源`} />
+                            <CollapsibleTrigger asChild>
+                              <Button type='button' variant='ghost' className='group h-8 min-w-0 justify-between px-1 hover:bg-transparent' aria-label={`展开或收起${group.label}来源`}>
+                                <span className='flex min-w-0 items-center gap-2'><span className='truncate text-sm font-medium'>{group.label}</span><Badge variant='secondary' className='font-normal'>{selectedCount}/{groupCircles.length}</Badge></span>
+                                <ChevronDown className='size-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180' />
+                              </Button>
+                            </CollapsibleTrigger>
+                          </div>
+                          <CollapsibleContent>
+                            <div className='space-y-1 border-t p-2'>{groupCircles.map((circle) => {
+                              const checked = selectedCircleIds.includes(circle.id)
+                              return (
+                                <label key={circle.id} className='flex cursor-pointer items-center gap-3 rounded-lg p-2 hover:bg-muted'>
+                                  <Checkbox checked={checked} onCheckedChange={(nextChecked) => setSelectedCircleIds((items) => nextChecked === true ? [...new Set([...items, circle.id])] : items.filter((id) => id !== circle.id))} />
+                                  <span className='min-w-0'><span className='block truncate text-sm font-medium'>{circle.name || circle.external_id}</span><span className='block truncate text-xs text-muted-foreground'>{circle.url}</span></span>
+                                </label>
+                              )
+                            })}</div>
+                          </CollapsibleContent>
+                        </Collapsible>
                       )
                     }) : <div className='p-5 text-center text-sm text-muted-foreground'>暂无已配置圈子，可直接输入圈子链接。</div>}
                   </div>
