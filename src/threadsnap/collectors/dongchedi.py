@@ -16,7 +16,7 @@ from curl_cffi.requests import Cookies
 from lxml import html
 from scrapling.fetchers import DynamicSession
 
-ADAPTER_VERSION = "dongchedi-dynamic-v2"
+ADAPTER_VERSION = "dongchedi-dynamic-v3"
 BASE_URL = "https://www.dongchedi.com"
 DETAIL_ROOT = f"{BASE_URL}/motor/pc/ugc/detail"
 COMMON_PARAMS = {"aid": "1839", "app_name": "auto_web_pc"}
@@ -419,10 +419,18 @@ class DongchediCollector:
         car_info = (
             data.get("motor_car_info") if isinstance(data.get("motor_car_info"), dict) else {}
         )
-        content = _plain_text(data.get("content"))
-        platform_title = _plain_text(data.get("thread_title")) or _plain_text(
-            data.get("motor_title")
-        )
+        detail_content = _plain_text(data.get("content"))
+        motor_text = _plain_text(data.get("motor_title"))
+        thread_title = _plain_text(data.get("thread_title"))
+        if detail_content:
+            # 富文本文章把短标题放在 motor_title、正文放在 content；普通动态则常把
+            # 唯一可见文字放在 motor_title，并让 content 为空。按正文是否存在分流，
+            # 避免把普通动态的整段正文误存为标题。
+            content = detail_content
+            platform_title = thread_title or motor_text
+        else:
+            content = motor_text
+            platform_title = thread_title
         image_items = data.get("image_urls") if isinstance(data.get("image_urls"), list) else []
         images = _unique_urls(
             item.get("url") if isinstance(item, dict) else item for item in image_items

@@ -697,9 +697,7 @@ class ApiAndConfigTests(AppCase):
             },
         )
         self.assertEqual(200, plan.status_code)
-        self.assertEqual(
-            ["rule-merge-a", "rule-merge-b"], plan.json()["nodes"][0]["rule_ids"]
-        )
+        self.assertEqual(["rule-merge-a", "rule-merge-b"], plan.json()["nodes"][0]["rule_ids"])
 
         run = self.container.runs.create_scheduled(
             datetime(2026, 8, 17, 1, 45, tzinfo=timezone.utc),
@@ -750,9 +748,7 @@ class ApiAndConfigTests(AppCase):
                 ],
             )
             event = db.scalar(
-                select(ScheduleEvent).where(
-                    ScheduleEvent.schedule_node_id == "node-merge-0001"
-                )
+                select(ScheduleEvent).where(ScheduleEvent.schedule_node_id == "node-merge-0001")
             )
             assert event is not None
             self.assertEqual(2, len(event.rule_snapshots))
@@ -1019,6 +1015,62 @@ class QueueAndRetryTests(AppCase):
         self.assertTrue(self.container.worker.process_once())
         self.assertEqual("success", self.container.runs.get_run(two["id"])["status"])
 
+    def test_plain_dynamic_body_mapping_is_persisted_to_snapshot(self) -> None:
+        """普通动态的 motor_title 正文必须经 Worker 原样进入不可变快照。"""
+
+        class PlainDynamicCollector(DongchediCollector):
+            def _json_api(self, _endpoint: str, **_params: object) -> tuple[dict, int]:
+                return (
+                    {
+                        "status": 0,
+                        "data": {
+                            "group_id_str": "7674878578118377534",
+                            "thread_title": "",
+                            "motor_title": "第一句话。第二句话！\n第三段正文。",
+                            "content": "",
+                            "image_urls": [{"url": "https://example.test/a.jpg"}],
+                            "motor_profile_info": {"name": "作者甲"},
+                            "motor_car_info": {"source_desc": "风云A9车友圈"},
+                            "operation_status": 0,
+                            "comment_count": 0,
+                        },
+                    },
+                    200,
+                )
+
+            def collect_circle(
+                self,
+                _url: str,
+                _target: int,
+                skip_post_ids: set[str] | None = None,
+            ) -> dict:
+                record = self.fetch_post(
+                    "https://www.dongchedi.com/ugc/article/7674878578118377534"
+                )
+                assert record is not None
+                return {
+                    "records": [record],
+                    "failures": [],
+                    "stop_reason": "已经取得配置数量的有效帖子。",
+                }
+
+        circle = self.save_verified_circle()
+        self.container.worker._collector = lambda _platform, _concurrency=None: (  # type: ignore[method-assign]
+            PlainDynamicCollector(None)
+        )
+        run = self.container.runs.create_manual(
+            ManualRunCreate(platform_code="dongchedi", circle_ids=[circle.id], quantity=1),
+            scope="api",
+            header_key="plain-dynamic-body-0001",
+        )
+
+        self.assertTrue(self.container.worker.process_once())
+        items = self.container.runs.posts(run["id"])["items"]
+        self.assertEqual(1, len(items))
+        detail = self.container.runs.post_detail(run["id"], items[0]["id"])
+        self.assertEqual("第一句话。", detail["title"])
+        self.assertEqual("第一句话。第二句话！\n第三段正文。", detail["content"])
+
     def test_retry_contains_only_failed_urls_and_results_are_merged(self) -> None:
         circle = self.save_verified_circle()
         original = self.container.runs.create_manual(
@@ -1256,6 +1308,81 @@ class QueueAndRetryTests(AppCase):
 
 
 class CollectorTests(unittest.TestCase):
+    def test_plain_dynamic_uses_motor_title_as_body_when_content_is_empty(self) -> None:
+        collector = DongchediCollector(None)
+        collector._json_api = lambda _endpoint, **_params: (  # type: ignore[method-assign]
+            {
+                "status": 0,
+                "data": {
+                    "group_id_str": "7674878578118377534",
+                    "thread_title": "",
+                    "motor_title": "第一句话。第二句话！\n第三段正文。",
+                    "content": "",
+                    "image_urls": [{"url": "https://example.test/a.jpg"}],
+                    "operation_status": 0,
+                    "comment_count": 0,
+                },
+            },
+            200,
+        )
+
+        record = collector.fetch_post("https://www.dongchedi.com/ugc/article/7674878578118377534")
+
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual("第一句话。", record["title"])
+        self.assertEqual("第一句话。第二句话！\n第三段正文。", record["content"])
+
+    def test_plain_dynamic_preserves_explicit_thread_title(self) -> None:
+        collector = DongchediCollector(None)
+        collector._json_api = lambda _endpoint, **_params: (  # type: ignore[method-assign]
+            {
+                "status": 0,
+                "data": {
+                    "group_id_str": "1002",
+                    "thread_title": "平台明确标题",
+                    "motor_title": "第一句话。第二句话。",
+                    "content": "",
+                    "operation_status": 0,
+                    "comment_count": 0,
+                },
+            },
+            200,
+        )
+
+        record = collector.fetch_post("https://www.dongchedi.com/ugc/article/1002")
+
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual("平台明确标题", record["title"])
+        self.assertEqual("第一句话。第二句话。", record["content"])
+
+    def test_pure_media_post_keeps_title_and_content_empty(self) -> None:
+        collector = DongchediCollector(None)
+        collector._json_api = lambda _endpoint, **_params: (  # type: ignore[method-assign]
+            {
+                "status": 0,
+                "data": {
+                    "group_id_str": "1003",
+                    "thread_title": "",
+                    "motor_title": "",
+                    "content": "",
+                    "image_urls": [{"url": "https://example.test/a.jpg"}],
+                    "operation_status": 0,
+                    "comment_count": 0,
+                },
+            },
+            200,
+        )
+
+        record = collector.fetch_post("https://www.dongchedi.com/ugc/article/1003")
+
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertIsNone(record["title"])
+        self.assertIsNone(record["content"])
+        self.assertEqual(["https://example.test/a.jpg"], record["image_urls"])
+
     def test_rich_text_post_uses_motor_title_and_plain_content(self) -> None:
         collector = DongchediCollector(None)
         collector._json_api = lambda _endpoint, **_params: (  # type: ignore[method-assign]
@@ -1460,8 +1587,7 @@ class TemplateTests(AppCase):
         version = self.container.templates.upload("客户/模板", source.name, source.read_bytes())
 
         response = self.client.get(
-            f"/api/v1/templates/{version['template_id']}/versions/"
-            f"{version['version_id']}/download"
+            f"/api/v1/templates/{version['template_id']}/versions/{version['version_id']}/download"
         )
 
         self.assertEqual(200, response.status_code)
