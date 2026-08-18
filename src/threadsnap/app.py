@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from ipaddress import ip_address
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import (
     APIRouter,
@@ -276,6 +276,7 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
         number: str | None = None,
         status: list[str] | None = Query(None),
         trigger_type: str | None = None,
+        list_order: Literal["latest_reply", "latest_publish"] | None = None,
         created_from: datetime | None = None,
         created_to: datetime | None = None,
     ) -> dict[str, Any]:
@@ -285,6 +286,7 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
             number=number,
             statuses=status,
             trigger_type=trigger_type,
+            list_order=list_order,
             created_from=created_from,
             created_to=created_to,
         )

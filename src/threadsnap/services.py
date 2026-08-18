@@ -1487,6 +1487,7 @@ class RunService:
         number: str | None = None,
         statuses: list[str] | None = None,
         trigger_type: str | None = None,
+        list_order: str | None = None,
         created_from: datetime | None = None,
         created_to: datetime | None = None,
     ) -> dict[str, Any]:
@@ -1498,6 +1499,19 @@ class RunService:
                 conditions.append(ExtractionRun.status.in_(statuses))
             if trigger_type:
                 conditions.append(ExtractionRun.trigger_type == trigger_type)
+            if list_order:
+                conditions.extend(
+                    [
+                        ExtractionRun.input_mode == "circle_discovery",
+                        select(CircleTask.id)
+                        .where(
+                            CircleTask.run_id == ExtractionRun.id,
+                            CircleTask.circle_url != "",
+                            CircleTask.list_order == list_order,
+                        )
+                        .exists(),
+                    ]
+                )
             if created_from:
                 conditions.append(ExtractionRun.created_at >= created_from)
             if created_to:
@@ -1821,6 +1835,9 @@ def run_dict_from_tasks(
         extraction_rules = [
             {"id": run.extraction_rule_id, "version": run.extraction_rule_version}
         ]
+    list_orders = list(
+        dict.fromkeys(task.list_order for task in tasks if task.circle_url)
+    )
     return {
         "id": run.id,
         "number": run.number,
@@ -1835,6 +1852,11 @@ def run_dict_from_tasks(
         "circle_count": len(tasks),
         "circle_names": [task.circle_name or task.external_id for task in tasks[:3]],
         "source_names": [task_source_name(task) for task in tasks[:3]],
+        "list_orders": list_orders,
+        "list_order_names": [
+            "最新发布" if item == "latest_publish" else "最新回复"
+            for item in list_orders
+        ],
         "planned_count": run.planned_count,
         "completed_count": run.completed_count,
         "failed_count": run.failed_count,
