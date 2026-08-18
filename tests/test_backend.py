@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
+from patchright.async_api import Error as PlaywrightError
 from sqlalchemy import select
 
 from threadsnap.app import create_app, require_internal_loopback
@@ -174,6 +175,11 @@ class FakeAuthContext:
 
     async def close(self) -> None:
         self.closed = True
+
+
+class AlreadyClosedAuthContext(FakeAuthContext):
+    async def close(self) -> None:
+        raise PlaywrightError("BrowserContext.close: Target page, context or browser has been closed")
 
 
 class FakePlaywright:
@@ -1079,6 +1085,24 @@ class AuthComponentTests(AppCase):
         self.assertTrue(fresh["fresh_profile"])
         self.assertEqual("cancelled", self.container.auth.tasks[first["id"]].status)
         self.assertEqual("created", self.container.auth.tasks[fresh["id"]].status)
+
+    def test_closing_an_already_closed_auth_browser_is_idempotent(self) -> None:
+        task = AuthTask(
+            id="already-closed",
+            platform_code="dongchedi",
+            ticket="ticket",
+            expires_at=datetime.now(timezone.utc),
+            status="active",
+        )
+        task.context = AlreadyClosedAuthContext(auth_state("closed"))  # type: ignore[assignment]
+        task.playwright = FakePlaywright()  # type: ignore[assignment]
+        task.page = FakeAuthPage()  # type: ignore[assignment]
+
+        asyncio.run(self.container.auth._close_browser(task))
+
+        self.assertIsNone(task.context)
+        self.assertIsNone(task.page)
+        self.assertIsNone(task.playwright)
 
     def test_successful_validation_promotes_profile_and_resumes_platform(self) -> None:
         task = AuthTask(

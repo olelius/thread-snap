@@ -16,7 +16,14 @@ from urllib.parse import urlencode
 
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import WebSocket, WebSocketDisconnect
-from patchright.async_api import BrowserContext, CDPSession, Page, Playwright, async_playwright
+from patchright.async_api import (
+    BrowserContext,
+    CDPSession,
+    Page,
+    Playwright,
+    async_playwright,
+)
+from patchright.async_api import Error as PlaywrightError
 
 from .browser_runtime import browser_launch_args
 from .collectors import AuthenticationRequired, CollectorFailure, DongchediCollector
@@ -577,13 +584,19 @@ class BrowserAuthManager:
                 await self._close(task)
 
     async def _close_browser(self, task: AuthTask) -> None:
-        if task.context:
-            await task.context.close()
-            task.context = None
-            task.page = None
-        if task.playwright:
-            await task.playwright.stop()
-            task.playwright = None
+        context = task.context
+        task.context = None
+        task.page = None
+        if context:
+            try:
+                await context.close()
+            except PlaywrightError as exc:
+                if "has been closed" not in str(exc):
+                    raise
+        playwright = task.playwright
+        task.playwright = None
+        if playwright:
+            await playwright.stop()
 
     async def _close(self, task: AuthTask) -> None:
         await self._close_browser(task)

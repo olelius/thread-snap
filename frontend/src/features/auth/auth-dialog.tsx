@@ -52,6 +52,7 @@ export function AuthDialog({
   const queryClient = useQueryClient()
   const socketRef = useRef<WebSocket | null>(null)
   const imageRef = useRef<HTMLImageElement | null>(null)
+  const onOpenChangeRef = useRef(onOpenChange)
   const pointerFrameRef = useRef<number | undefined>(undefined)
   const pendingPointerRef = useRef<Record<string, unknown> | undefined>(undefined)
   const lastPointerRef = useRef({ x: 0, y: 0 })
@@ -64,6 +65,8 @@ export function AuthDialog({
   const [validationFailed, setValidationFailed] = useState(false)
   const [remaining, setRemaining] = useState(0)
   const [browserSize, setBrowserSize] = useState({ width: 1280, height: 800 })
+  // 父页面刷新查询时可能生成新的回调对象，但这不应重启正在交互的认证任务。
+  onOpenChangeRef.current = onOpenChange
 
   const createTask = useCallback(async (fresh = false) => {
     setConnection('connecting')
@@ -111,7 +114,7 @@ export function AuthDialog({
         setPageStatus('completed')
         await queryClient.invalidateQueries()
         toast.success('平台认证成功', { description: message.message })
-        onOpenChange(false)
+        onOpenChangeRef.current(false)
       } else if (message.type === 'validation_failed') {
         setPageStatus('ready')
         setValidationFailed(true)
@@ -122,7 +125,7 @@ export function AuthDialog({
         setFrame(undefined)
       }
     }
-  }, [onOpenChange, queryClient])
+  }, [queryClient])
 
   const start = useCallback((fresh = freshOnOpen) => {
     createTask(fresh).then(connect).catch((error) => {
@@ -168,7 +171,7 @@ export function AuthDialog({
 
   const endRun = useMutation({
     mutationFn: () => api(`/runs/${runId}/end-auth-wait`, { method: 'POST' }),
-    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ['runs'] }); toast.success('本次等待已结束'); onOpenChange(false) },
+    onSuccess: async () => { await queryClient.invalidateQueries({ queryKey: ['runs'] }); toast.success('本次等待已结束'); onOpenChangeRef.current(false) },
     onError: (error) => toast.error('操作未完成', { description: errorMessage(error) }),
   })
 
