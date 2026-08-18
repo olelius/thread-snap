@@ -40,12 +40,14 @@ export function AuthDialog({
   platformCode = 'dongchedi',
   platformName = '懂车帝',
   runId,
+  freshOnOpen = false,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   platformCode?: string
   platformName?: string
   runId?: string
+  freshOnOpen?: boolean
 }) {
   const queryClient = useQueryClient()
   const socketRef = useRef<WebSocket | null>(null)
@@ -122,14 +124,14 @@ export function AuthDialog({
     }
   }, [onOpenChange, queryClient])
 
-  const start = useCallback((fresh = false) => {
+  const start = useCallback((fresh = freshOnOpen) => {
     createTask(fresh).then(connect).catch((error) => {
       setConnection('offline')
       setPageStatus('failed')
       setPageError({ message: errorMessage(error) })
       toast.error('认证窗口启动失败', { description: errorMessage(error) })
     })
-  }, [connect, createTask])
+  }, [connect, createTask, freshOnOpen])
 
   useEffect(() => {
     if (!open) return
@@ -286,7 +288,7 @@ export function AuthDialog({
           <div className='pointer-events-none absolute right-4 bottom-4 flex items-center gap-2 rounded-full bg-black/55 px-3 py-1.5 text-[11px] text-slate-300 backdrop-blur'><Expand className='size-3.5' />1280 × 800 交互画布</div>
         </div>
         <div className='flex flex-wrap items-center justify-between gap-3 border-t bg-background px-5 py-3'>
-          <div className={`text-xs ${validationFailed ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-muted-foreground'}`}>{validationFailed ? '当前旧登录状态未通过采集校验，可使用全新登录环境重新登录。' : '画面支持悬停、点击、拖动、滚动和键盘输入；剪贴板文本会发送到当前页面焦点。'}</div>
+          <div className={`text-xs ${validationFailed ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-muted-foreground'}`}>{validationFailed ? '当前旧登录状态未通过采集校验，可使用全新登录环境重新登录。' : task?.fresh_profile && freshOnOpen ? '检测到批次中途认证失效，已启动全新登录环境，请重新完成平台登录。' : '画面支持悬停、点击、拖动、滚动和键盘输入；剪贴板文本会发送到当前页面焦点。'}</div>
           <div className='flex items-center gap-2'>
             {!task?.fresh_profile && <Button variant={validationFailed ? 'default' : 'outline'} disabled={pageStatus === 'starting' || pageStatus === 'loading' || pageStatus === 'validating'} onClick={() => start(true)}><LogIn className='size-4' />使用全新登录环境</Button>}
             <Button variant='outline' onClick={() => pageStatus === 'failed' || !task?.ticket ? start() : connect(task)}><RefreshCw className='size-4' />{pageStatus === 'failed' ? '重新创建认证浏览器' : '重新连接'}</Button>

@@ -302,7 +302,7 @@ export function RunDetailPage() {
         </SheetContent>
       </Sheet>
       <Dialog open={manualCopy !== undefined} onOpenChange={(open) => !open && setManualCopy(undefined)}><DialogContent><DialogHeader><DialogTitle>手动复制</DialogTitle><DialogDescription>当前浏览器上下文未开放剪贴板写入，文本已全选。</DialogDescription></DialogHeader><Textarea readOnly rows={12} value={manualCopy ?? ''} onFocus={(event) => event.currentTarget.select()} autoFocus /></DialogContent></Dialog>
-      <AuthDialog open={authOpen} onOpenChange={setAuthOpen} runId={runId} />
+      <AuthDialog open={authOpen} onOpenChange={setAuthOpen} runId={runId} freshOnOpen />
     </div>
   )
 }

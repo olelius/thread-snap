@@ -16,6 +16,17 @@
 
 ---
 
+## 2026-08-18 — 等待认证批次直接进入全新登录环境
+**总目标**：避免中途认证失效的批次再次打开已被采集门禁判定失效的旧 Profile，让“去认证”直接进入可重新登录的空白环境。
+**状态**：✅ 批次认证入口默认创建全新隔离 Profile，平台配置中的主动认证仍保留既有 Profile 复用语义。
+**干到哪里了**：
+- [x] 认证 Dialog 新增入口级 `freshOnOpen` 语义；提取列表和批次详情的等待认证入口首个请求直接使用 `fresh=true`，页面加载失败后的重新创建也继续保持全新环境。
+- [x] 全新环境显示“检测到批次中途认证失效”说明和既有状态标记；普通平台配置认证未传该参数，仍可复用正式 Profile 并手动切换全新环境。
+- [x] 61 项后端测试、前端 TypeScript 检查和生产构建通过；真实批次 `20260818-142155-001` 在 3/10 等待状态点击“去认证”后，首屏直接显示官方手机号验证码登录页、`全新登录环境` 标记和认证失效说明，未再次展示旧圈子登录外观；当前源码重启后浏览器 `user-data-dir` 位于 `data/auth-profiles/dongchedi/tasks/<task-id>`，测试产生的错误 `None/` Profile 已在确认进程退出和路径位于工作区后清理。
+**下一步**：用户在当前全新环境完成官方登录并执行“完成并校验”，门禁通过后同一批次按检查点续跑剩余 7 条。
+**边界**：全新临时 Profile 在门禁通过前不替换正式 Profile 或 Session；关闭、失败或超时保持原批次 `waiting_for_auth`，不丢失已有 3 条快照。
+**关联**：`CONTEXT.md`、`docs/adr/0007-official-login-and-encrypted-platform-session.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/first-platform-delivery.md`、`frontend/src/features/auth/auth-dialog.tsx`
+
 ## 2026-08-18 — 认证窗口支持全新登录环境
 **总目标**：处理旧浏览器 Profile 仍显示登录外观、但采集凭证已经失效时造成的认证误判，让用户直接进入不继承旧状态的登录环境。
 **状态**：✅ 认证 Dialog 可创建全新隔离 Profile，旧正式 Profile 与 Session 在新门禁通过前保持不变。
