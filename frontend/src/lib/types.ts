@@ -70,6 +70,8 @@ export type Run = {
   circle_count: number
   circle_names?: string[]
   source_names?: string[]
+  list_orders?: Array<'latest_reply' | 'latest_publish'>
+  list_order_names?: string[]
   planned_count: number
   completed_count: number
   failed_count: number

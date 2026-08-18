@@ -878,6 +878,77 @@ class ApiAndConfigTests(AppCase):
         for field in ("created_at", "queued_at"):
             self.assertRegex(response.json()[field], r"(?:Z|\+00:00)$")
 
+    def test_run_list_exposes_and_filters_circle_list_orders(self) -> None:
+        with self.container.sessions.begin() as db:
+            reply_run = ExtractionRun(
+                number="20260818-130000-001",
+                trigger_type="manual",
+                input_mode="circle_discovery",
+                idempotency_key="run-list-reply",
+                request_hash="r" * 64,
+            )
+            publish_run = ExtractionRun(
+                number="20260818-130000-002",
+                trigger_type="manual",
+                input_mode="circle_discovery",
+                idempotency_key="run-list-publish",
+                request_hash="p" * 64,
+            )
+            url_run = ExtractionRun(
+                number="20260818-130000-003",
+                trigger_type="manual",
+                input_mode="url_list",
+                idempotency_key="run-list-url",
+                request_hash="u" * 64,
+            )
+            db.add_all([reply_run, publish_run, url_run])
+            db.flush()
+            db.add_all(
+                [
+                    CircleTask(
+                        run_id=reply_run.id,
+                        platform_code="dongchedi",
+                        external_id="24729",
+                        circle_url="https://www.dongchedi.com/community/24729",
+                        list_order="latest_reply",
+                        queue_sequence=1,
+                        target_count=1,
+                    ),
+                    CircleTask(
+                        run_id=publish_run.id,
+                        platform_code="dongchedi",
+                        external_id="24729",
+                        circle_url=(
+                            "https://www.dongchedi.com/community/24729/dongtai-release"
+                        ),
+                        list_order="latest_publish",
+                        queue_sequence=2,
+                        target_count=1,
+                    ),
+                    CircleTask(
+                        run_id=url_run.id,
+                        platform_code="dongchedi",
+                        external_id="known-url-list",
+                        circle_url="",
+                        list_order="latest_reply",
+                        queue_sequence=3,
+                        target_count=1,
+                    ),
+                ]
+            )
+
+        reply = self.client.get("/api/v1/runs?list_order=latest_reply").json()
+        publish = self.client.get("/api/v1/runs?list_order=latest_publish").json()
+
+        self.assertEqual(1, reply["total"])
+        self.assertEqual([reply_run.id], [item["id"] for item in reply["items"]])
+        self.assertEqual(["latest_reply"], reply["items"][0]["list_orders"])
+        self.assertEqual(["最新回复"], reply["items"][0]["list_order_names"])
+        self.assertEqual(1, publish["total"])
+        self.assertEqual([publish_run.id], [item["id"] for item in publish["items"]])
+        self.assertEqual(["latest_publish"], publish["items"][0]["list_orders"])
+        self.assertEqual(["最新发布"], publish["items"][0]["list_order_names"])
+
     def test_session_is_encrypted_and_never_returned(self) -> None:
         state = {
             "cookies": [

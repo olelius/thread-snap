@@ -431,4 +431,4 @@ function progressValue(completed: number, target: number) {
   return target > 0 ? Math.min(100, Math.round((completed / target) * 100)) : 0
 }
 
-const emptyRunsSearch = { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, from: undefined, to: undefined }
+const emptyRunsSearch = { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }

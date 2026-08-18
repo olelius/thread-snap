@@ -11,6 +11,7 @@ import { useDebouncedValue } from '@/hooks/use-debounced-value'
 import { api, formatDate, platformName, queryString, shanghaiDayBoundary } from '@/lib/api'
 import type { PageResult, Run } from '@/lib/types'
 import { Button } from '@/components/ui/button'
+import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Progress } from '@/components/ui/progress'
@@ -24,6 +25,7 @@ type SearchState = {
   number?: string
   status?: 'queued' | 'running' | 'waiting_for_auth' | 'success' | 'partial_success' | 'failed'
   trigger?: 'manual' | 'scheduled'
+  listOrder?: 'latest_reply' | 'latest_publish'
   from?: string
   to?: string
 }
@@ -56,6 +58,7 @@ export function RunsPage() {
       number: debouncedNumber,
       status: search.status,
       trigger_type: search.trigger,
+      list_order: search.listOrder,
       created_from: search.from ? shanghaiDayBoundary(search.from) : undefined,
       created_to: search.to ? shanghaiDayBoundary(search.to, true) : undefined,
     })}`),
@@ -74,7 +77,7 @@ export function RunsPage() {
   const columns = useMemo(() => [
     column.display({ id: 'index', header: () => <span className='block text-center'>序号</span>, cell: ({ row }) => <span className='block text-center tabular-nums text-muted-foreground'>{offset + row.index + 1}</span> }),
     column.accessor('number', { header: '批次编号', cell: (info) => <div><div className='font-medium'>{info.getValue()}</div><div className='mt-1 text-xs text-muted-foreground'>{info.row.original.trigger_type_name}</div></div> }),
-    column.display({ id: 'scope', header: '提取范围', cell: ({ row }) => <div className='max-w-64'><div className='truncate text-sm'>{row.original.source_names?.join('、') || row.original.circle_names?.join('、') || `${row.original.circle_count} 个任务`}</div><div className='mt-1 text-xs text-muted-foreground'>{row.original.platform_codes?.map(platformName).join('、') || `${row.original.platform_count} 个平台`}</div></div> }),
+    column.display({ id: 'scope', header: '提取范围', cell: ({ row }) => <div className='max-w-64'><div className='truncate text-sm'>{row.original.source_names?.join('、') || row.original.circle_names?.join('、') || `${row.original.circle_count} 个任务`}</div><div className='mt-1 flex flex-wrap items-center gap-1 text-xs text-muted-foreground'><span>{row.original.platform_codes?.map(platformName).join('、') || `${row.original.platform_count} 个平台`}</span>{row.original.list_order_names?.map((name) => <Badge key={name} variant='outline' className='h-5 px-1.5 text-[11px] font-normal'>{name}</Badge>)}</div></div> }),
     column.accessor('status', { header: '状态', cell: ({ row }) => <StatusBadge value={row.original.status} label={row.original.status_name} /> }),
     column.display({ id: 'progress', header: '进度', cell: ({ row }) => { const run = row.original; const percent = run.planned_count ? Math.min(100, Math.round(((run.completed_count + run.failed_count) / run.planned_count) * 100)) : 0; return <div className='w-40 space-y-1.5'><div className='flex justify-between text-xs'><span>{run.completed_count} / {run.planned_count}</span><span className='text-muted-foreground'>{percent}%</span></div><Progress value={percent} className='h-1.5' />{run.failed_count > 0 && <div className='text-[11px] text-red-600 dark:text-red-300'>{run.failed_count} 项失败</div>}</div> } }),
     column.display({ id: 'time', header: '时间', cell: ({ row }) => <div className='whitespace-nowrap text-sm'><div>{formatDate(row.original.created_at)}</div><div className='mt-1 text-xs text-muted-foreground'>{row.original.finished_at ? `完成 ${formatDate(row.original.finished_at)}` : row.original.queue_position ? `队列第 ${row.original.queue_position} 位` : '进行中'}</div></div> }),
@@ -88,10 +91,11 @@ export function RunsPage() {
       <div className='shrink-0 space-y-4'>
         <PageHeader title='提取列表' description='查看手动与定时提取批次，状态变化由 SSE 通知并回查权威接口。' actions={<NewExtractionSheet />} />
         <Card className='border-border/70 bg-card/88 py-0 shadow-sm backdrop-blur'>
-          <CardContent className='grid gap-3 p-3 lg:grid-cols-[minmax(220px,1fr)_180px_160px_150px_150px_auto]'>
+          <CardContent className='grid gap-3 p-3 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-[minmax(220px,1fr)_160px_160px_160px_150px_150px_auto]'>
             <Input value={search.number ?? ''} onChange={(event) => patch({ number: event.target.value || undefined, page: 1 })} placeholder='搜索批次编号' aria-label='搜索批次编号' />
             <Select value={search.status ?? 'all'} onValueChange={(value) => patch({ status: value === 'all' ? undefined : value as SearchState['status'], page: 1 })}><SelectTrigger><SelectValue placeholder='全部状态' /></SelectTrigger><SelectContent><SelectItem value='all'>全部状态</SelectItem><SelectItem value='queued'>排队中</SelectItem><SelectItem value='running'>提取中</SelectItem><SelectItem value='waiting_for_auth'>等待平台认证</SelectItem><SelectItem value='success'>成功</SelectItem><SelectItem value='partial_success'>部分成功</SelectItem><SelectItem value='failed'>失败</SelectItem></SelectContent></Select>
             <Select value={search.trigger ?? 'all'} onValueChange={(value) => patch({ trigger: value === 'all' ? undefined : value as SearchState['trigger'], page: 1 })}><SelectTrigger><SelectValue placeholder='全部触发方式' /></SelectTrigger><SelectContent><SelectItem value='all'>全部触发方式</SelectItem><SelectItem value='manual'>手动触发</SelectItem><SelectItem value='scheduled'>定时提取</SelectItem></SelectContent></Select>
+            <Select value={search.listOrder ?? 'all'} onValueChange={(value) => patch({ listOrder: value === 'all' ? undefined : value as SearchState['listOrder'], page: 1 })}><SelectTrigger><SelectValue placeholder='全部列表类型' /></SelectTrigger><SelectContent><SelectItem value='all'>全部列表类型</SelectItem><SelectItem value='latest_reply'>最新回复</SelectItem><SelectItem value='latest_publish'>最新发布</SelectItem></SelectContent></Select>
             <Input type='date' value={search.from ?? ''} onChange={(event) => patch({ from: event.target.value || undefined, page: 1 })} aria-label='开始日期' />
             <Input type='date' value={search.to ?? ''} onChange={(event) => patch({ to: event.target.value || undefined, page: 1 })} aria-label='结束日期' />
             <div className='flex gap-1'><Button variant='outline' size='icon' onClick={() => query.refetch()} aria-label='刷新列表'><RefreshCw className={`size-4 ${query.isFetching ? 'animate-spin' : ''}`} /></Button><Button variant='ghost' size='icon' onClick={() => navigate({ to: '/runs', search: emptyRunsSearch, replace: true, resetScroll: false })} aria-label='重置筛选'><FilterX className='size-4' /></Button></div>
@@ -117,5 +121,5 @@ export function RunsPage() {
   )
 }
 
-const emptyRunsSearch = { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, from: undefined, to: undefined }
+const emptyRunsSearch = { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }
 const emptyDetailSearch = { page: undefined, pageSize: undefined, title: undefined, circle: undefined, visibility: undefined, sort: undefined, direction: undefined, post: undefined }

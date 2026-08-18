@@ -13,6 +13,7 @@ const runsRoute = createRoute({
     number: text(search.number),
     status: oneOf(search.status, ['queued', 'running', 'waiting_for_auth', 'success', 'partial_success', 'failed'] as const),
     trigger: oneOf(search.trigger, ['manual', 'scheduled'] as const),
+    listOrder: oneOf(search.listOrder, ['latest_reply', 'latest_publish'] as const),
     from: text(search.from),
     to: text(search.to),
   }),
@@ -51,4 +52,4 @@ function optionalPositiveInteger(value: unknown) { const parsed = Number(value);
 function oneOf<const T extends readonly string[]>(value: unknown, allowed: T): T[number] | undefined { return typeof value === 'string' && allowed.includes(value as T[number]) ? value as T[number] : undefined }
 function oneOfNumber<const T extends readonly number[]>(value: unknown, allowed: T): T[number] | undefined { const parsed = Number(value); return allowed.includes(parsed as T[number]) ? parsed as T[number] : undefined }
 
-const emptyRunsSearch = { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, from: undefined, to: undefined }
+const emptyRunsSearch = { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }
