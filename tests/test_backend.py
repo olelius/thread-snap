@@ -1928,7 +1928,7 @@ class TemplateTests(AppCase):
                     title=record["title"],
                     author=record["author"],
                     published_at=record["published_at"],
-                    content=record["content"],
+                    content=f"{record['content']}\n第二段正文",
                     reply_count=1,
                     like_count=3,
                     visibility="visible",
@@ -1956,8 +1956,15 @@ class TemplateTests(AppCase):
         sheet.title = "A9"
         sheet["A1"] = "帖子标题"
         sheet["B1"] = "评论"
+        sheet["C1"] = "正文"
         sheet["A2"] = f"{source_prefix}.post.title"
         sheet["B2"] = f"{source_prefix}.comments.content_with_likes"
+        sheet["C2"] = f"{source_prefix}.post.content"
+        sheet.column_dimensions["A"].width = 4
+        sheet.column_dimensions["B"].width = 4
+        sheet.column_dimensions["C"].width = 4
+        sheet.row_dimensions[2].height = 42
+        sheet.row_dimensions[3].height = 42
         source = Path(self.temp.name) / "source.xlsx"
         workbook.save(source)
         version = self.container.templates.upload("客户模板", source.name, source.read_bytes())
@@ -1970,7 +1977,16 @@ class TemplateTests(AppCase):
         self.assertIn("1. 作者：评论者乙", output["B2"].value)
         self.assertIn("时间：2026-08-14 10:35:00", output["B2"].value)
         self.assertIn("点赞：5赞", output["B2"].value)
+        self.assertEqual("正文3001\n第二段正文", output["C2"].value)
+        self.assertTrue(output["A2"].alignment.wrap_text)
         self.assertTrue(output["B2"].alignment.wrap_text)
+        self.assertTrue(output["C2"].alignment.wrap_text)
+        self.assertIsNone(output.row_dimensions[2].height)
+        self.assertIsNone(output.row_dimensions[3].height)
+        self.assertGreater(output.column_dimensions["A"].width, 4)
+        self.assertGreater(output.column_dimensions["B"].width, 4)
+        self.assertGreater(output.column_dimensions["C"].width, 4)
+        self.assertTrue(output.column_dimensions["A"].bestFit)
 
     def test_short_source_key_template_tag_targets_one_circle_feed_source(self) -> None:
         run, circle = self._seed_completed_run()
