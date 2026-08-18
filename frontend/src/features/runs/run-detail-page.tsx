@@ -55,7 +55,11 @@ export function RunDetailPage() {
   const closeFocusFrame = useRef<number | undefined>(undefined)
   const debouncedTitle = useDebouncedValue(search.title)
   const debouncedCircle = useDebouncedValue(search.circle)
-  const run = useQuery({ queryKey: ['run', runId], queryFn: () => api<Run>(`/runs/${runId}`), refetchInterval: 60_000 })
+  const run = useQuery({
+    queryKey: ['run', runId],
+    queryFn: () => api<Run>(`/runs/${runId}`),
+    refetchInterval: (current) => isActiveRun(current.state.data) ? 3_000 : 60_000,
+  })
   const postQueryValues = { title: debouncedTitle, circle: debouncedCircle, visibility: search.visibility, sort_by: search.sort, sort_direction: search.direction }
   const posts = useQuery({
     queryKey: ['posts', runId, { page: search.page, pageSize: search.pageSize, ...postQueryValues }],
@@ -429,6 +433,10 @@ function TaskRow({ task }: { task: RunTask }) {
 
 function progressValue(completed: number, target: number) {
   return target > 0 ? Math.min(100, Math.round((completed / target) * 100)) : 0
+}
+
+function isActiveRun(run?: Run) {
+  return Boolean(run && ['queued', 'running', 'waiting_for_auth'].includes(run.status))
 }
 
 const emptyRunsSearch = { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }

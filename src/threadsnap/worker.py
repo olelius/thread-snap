@@ -250,6 +250,8 @@ class WorkerService:
             run.status = "running"
             run.started_at = run.started_at or utc_now()
             run_id = run.id
+            running_summary_version = run.summary_version
+            running_completed_count = run.completed_count
             concurrency = min(
                 max(
                     int(
@@ -260,6 +262,14 @@ class WorkerService:
                     platform.min_concurrency,
                 ),
                 platform.max_concurrency,
+            )
+        if self.event_publisher:
+            self.event_publisher(
+                "run.changed",
+                run_id,
+                summary_version=running_summary_version,
+                status="running",
+                completed_count=running_completed_count,
             )
         collector = self._collector(platform, concurrency)
         results: dict[str, dict[str, Any]] = {}
@@ -318,6 +328,37 @@ class WorkerService:
             if circle_id:
                 circle = db.get(Circle, circle_id)
                 needs_validation = bool(circle and circle.validation_status != "verified")
+        pending_records: list[dict[str, Any]] = []
+        reported_failures = 0
+        flushed_failures = 0
+        progress_batch_size = 1 if target <= 20 else 10
+
+        def flush_progress() -> None:
+            nonlocal pending_records, flushed_failures
+            if not pending_records and reported_failures == flushed_failures:
+                return
+            self._apply_progress(task_id, pending_records, reported_failures)
+            pending_records = []
+            flushed_failures = reported_failures
+
+        def report_progress(
+            record: dict[str, Any] | None, failure: dict[str, Any] | None
+        ) -> None:
+            nonlocal reported_failures
+            if record is not None:
+                if source_indexes:
+                    record["order_index"] = int(
+                        source_indexes.get(record.get("url"), record.get("order_index", 0))
+                    )
+                pending_records.append(record)
+            if failure is not None:
+                reported_failures += 1
+            if (
+                len(pending_records) + reported_failures - flushed_failures
+                >= progress_batch_size
+            ):
+                flush_progress()
+
         validation = None
         generation = self.refresh_generation.get(platform_code, 0)
         try:
@@ -325,10 +366,13 @@ class WorkerService:
                 validation = collector.validate_circle(circle_url)
             remaining = max(0, target - len(completed_post_ids))
             payload = (
-                collector.collect_urls(known_urls)
+                collector.collect_urls(known_urls, on_progress=report_progress)
                 if known_urls
                 else collector.collect_circle(
-                    circle_url, remaining, skip_post_ids=completed_post_ids
+                    circle_url,
+                    remaining,
+                    skip_post_ids=completed_post_ids,
+                    on_progress=report_progress,
                 )
             )
             if source_indexes:
@@ -352,12 +396,13 @@ class WorkerService:
                     if needs_validation and validation is None:
                         validation = refreshed.validate_circle(circle_url)
                     payload = (
-                        refreshed.collect_urls(known_urls)
+                        refreshed.collect_urls(known_urls, on_progress=report_progress)
                         if known_urls
                         else refreshed.collect_circle(
                             circle_url,
                             remaining,
                             skip_post_ids=completed_post_ids,
+                            on_progress=report_progress,
                         )
                     )
                     if source_indexes:
@@ -392,6 +437,8 @@ class WorkerService:
                 "failures": [],
                 "validation": validation,
             }
+        finally:
+            flush_progress()
 
     def _refresh_after_auth(
         self, platform_code: str, trigger_url: str, observed_generation: int
@@ -475,6 +522,81 @@ class WorkerService:
             task.circle_url = validation["url"]
             task.list_order = validation["sort"]
         records = result.get("records") or []
+        existing = self._store_records(db, task, records)
+        task.completed_count = len(existing)
+        task.failed_count = len(result.get("failures") or [])
+        task.checkpoint = {
+            "trigger_url": result.get("trigger_url"),
+            "failed_urls": result.get("failures") or [],
+            "completed_post_ids": sorted(existing),
+        }
+        if result["kind"] == "auth":
+            task.status = "waiting_for_auth"
+            task.error_code = result["code"]
+            task.error_message = result["message"]
+            task.stop_reason = None
+        elif result["kind"] == "failed":
+            task.status = "partial_success" if task.completed_count else "failed"
+            task.error_code = result["code"]
+            task.error_message = result["message"]
+            task.stop_reason = result["message"]
+            task.finished_at = utc_now()
+        else:
+            task.stop_reason = result.get("stop_reason")
+            shortage_by_error = (
+                task.completed_count < task.target_count
+                and bool(result.get("failures"))
+                and "没有更多" not in str(task.stop_reason)
+            )
+            task.status = (
+                "partial_success"
+                if shortage_by_error and task.completed_count
+                else "failed"
+                if shortage_by_error
+                else "success"
+            )
+            task.error_code = "PARTIAL_RESULT" if shortage_by_error else None
+            task.error_message = "部分候选帖子未能成功提取。" if shortage_by_error else None
+            task.finished_at = utc_now()
+
+    def _apply_progress(
+        self, task_id: str, records: list[dict[str, Any]], failed_count: int
+    ) -> None:
+        """分段提交已完成快照，并在事务完成后通知前端回查权威进度。"""
+
+        with self.factory.begin() as db:
+            task = db.get(CircleTask, task_id)
+            if not task or task.status != "running":
+                return
+            existing = self._store_records(db, task, records)
+            task.completed_count = len(existing)
+            task.failed_count = max(task.failed_count, failed_count)
+            checkpoint = dict(task.checkpoint or {})
+            checkpoint["completed_post_ids"] = sorted(existing)
+            task.checkpoint = checkpoint
+            run = db.get(ExtractionRun, task.run_id)
+            if not run:
+                return
+            aggregate_run(db, run)
+            run_id = run.id
+            summary_version = run.summary_version
+            completed_count = run.completed_count
+            current_status = run.status
+        if self.event_publisher:
+            self.event_publisher(
+                "run.changed",
+                run_id,
+                summary_version=summary_version,
+                status=current_status,
+                completed_count=completed_count,
+            )
+
+    @staticmethod
+    def _store_records(
+        db: Session, task: CircleTask, records: list[dict[str, Any]]
+    ) -> set[str]:
+        """按任务幂等保存一组帖子和主评论，并返回当前全部帖子 ID。"""
+
         existing = set(
             db.scalars(
                 select(PostSnapshot.platform_post_id).where(PostSnapshot.circle_task_id == task.id)
@@ -521,52 +643,12 @@ class WorkerService:
                     )
                 )
             existing.add(record["platform_post_id"])
-        task.completed_count = (
-            db.scalar(
-                select(func.count())
-                .select_from(PostSnapshot)
-                .where(PostSnapshot.circle_task_id == task.id)
-            )
-            or 0
-        )
-        task.failed_count = len(result.get("failures") or [])
-        task.checkpoint = {
-            "trigger_url": result.get("trigger_url"),
-            "failed_urls": result.get("failures") or [],
-            "completed_post_ids": sorted(existing),
-        }
-        if result["kind"] == "auth":
-            task.status = "waiting_for_auth"
-            task.error_code = result["code"]
-            task.error_message = result["message"]
-            task.stop_reason = None
-        elif result["kind"] == "failed":
-            task.status = "partial_success" if task.completed_count else "failed"
-            task.error_code = result["code"]
-            task.error_message = result["message"]
-            task.stop_reason = result["message"]
-            task.finished_at = utc_now()
-        else:
-            task.stop_reason = result.get("stop_reason")
-            shortage_by_error = (
-                task.completed_count < task.target_count
-                and bool(result.get("failures"))
-                and "没有更多" not in str(task.stop_reason)
-            )
-            task.status = (
-                "partial_success"
-                if shortage_by_error and task.completed_count
-                else "failed"
-                if shortage_by_error
-                else "success"
-            )
-            task.error_code = "PARTIAL_RESULT" if shortage_by_error else None
-            task.error_message = "部分候选帖子未能成功提取。" if shortage_by_error else None
-            task.finished_at = utc_now()
+        return existing
 
     def resume_platform(self, platform_code: str) -> None:
         """认证状态更新后先恢复原等待任务和验证任务。"""
 
+        resumed_runs: dict[str, tuple[int, int]] = {}
         with self.factory.begin() as db:
             for task in db.scalars(
                 select(CircleTask).where(
@@ -581,6 +663,7 @@ class WorkerService:
                 if run:
                     run.status = "queued"
                     run.waiting_reason = None
+                    resumed_runs[run.id] = (run.summary_version, run.completed_count)
             circle_ids = select(Circle.id).where(Circle.platform_code == platform_code)
             for job in db.scalars(
                 select(ValidationJob).where(
@@ -591,3 +674,12 @@ class WorkerService:
                 job.status = "queued"
                 job.error_code = None
                 job.error_message = None
+        if self.event_publisher:
+            for run_id, (summary_version, completed_count) in resumed_runs.items():
+                self.event_publisher(
+                    "run.changed",
+                    run_id,
+                    summary_version=summary_version,
+                    status="queued",
+                    completed_count=completed_count,
+                )
