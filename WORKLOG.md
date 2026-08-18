@@ -16,6 +16,19 @@
 
 ---
 
+## 2026-08-18 — 目标服务器快速离线升级到当前版本
+**总目标**：在不重新下载系统、Python 和 Chromium 依赖的前提下，把目标 CentOS 服务器升级到当前 `main`，并按已确认边界清空旧业务数据库。
+**状态**：✅ 当前干净提交已完成服务器内离线重封装、版本切换和运行验证。
+**干到哪里了**：
+- [x] 通过 SSH 核对目标机仍保留已验证的完整离线包；旧包 SHA-256 为 `1e4a948b390b5aeabf35d9dbc4bb43f554c54e8b971f5f89ff650e424894acc6`，当前提交与旧发布之间的 Python、前端依赖锁定文件及 Linux 部署脚本均未变化。
+- [x] 从干净提交 `801c79c956699c7ab7c47c3a29acf12968846e1a` 生成 385259 字节业务构建包，在目标机复用旧包的 `wheelhouse`、Chromium、RPM 和系统包清单，形成 `/var/tmp/threadsnap-upgrade-801c79c/threadsnap-0.1.0-801c79c-centos-stream-10-x86_64-offline.tar.gz`；大小 `590440857` 字节，SHA-256 为 `7f210027dc250801cdc73dcb50724bc5b34c8a7c9557d887db9bf77f98eb6929`，884 项内部校验通过。
+- [x] 停服前确认活跃批次为 0；停止后端后清除 `threadsnap.db` 及 WAL/SHM，再由当前版本初始化全新 20 表基线。基础平台与调度配置按程序基线建立，历史规则、来源、批次和帖子数据未保留。
+- [x] 当前指针已切换到 `/opt/threadsnap/releases/0.1.0-801c79c95669`，previous 保留为 `0.1.0-1bc2916dae46`；后端停服窗口约 20 秒，`threadsnap`、`threadsnap-wayland`、`threadsnap-nginx` 均为 active。
+- [x] 安装器快速验证和切换后二次验证均通过：后端与 Nginx `/health`、SPA、内部接口屏蔽、8000 回环绑定、CDP 关闭、Fernet 配置及有头浏览器模式全部 PASS；启动后十分钟范围内没有 warning 级日志。
+**下一步**：如需从当前客户端直接访问 `8088`，继续核对上游端口映射或安全组；服务器 firewalld 已按既有规则仅允许当前 SSH 来源，但本次客户端直连仍未形成 Nginx 访问日志。连续三轮 2000 URL 最终吞吐门禁仍独立待执行。
+**边界**：本次没有联网下载目标机依赖，没有改动既有 Docker Nginx 的 `80/443`，没有格式化未挂载的 3.6 TiB 数据盘，也不把安装健康验证记为最终吞吐验收。
+**关联**：`docs/design/technical-route.md`、`docs/chains/first-platform-delivery.md`、`docs/deployment/linux-v1.md`
+
 ## 2026-08-18 — 导出单元格统一换行与宽高自适应
 **总目标**：让模板导出的所有字段都在单元格内换行，并让实际写入区域的列宽和行高适配本次导出内容。
 **状态**：✅ 全字段换行、列宽估算和自动行高处理均已实现并通过完整验证。
