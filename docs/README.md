@@ -24,6 +24,7 @@
 | 已冻结且确有保留价值的历史记录 | `docs/project-notes/` |
 | 采集框架 PoC 样本、阶段、指标和结果格式 | `docs/research/collector-stack-poc-plan.md` |
 | 舆情反馈 PoC 样本、模态覆盖、失败边界和结果格式 | `docs/research/sentiment-analysis-poc-plan.md` |
+| 舆情反馈 PoC 的真实 URL、模型用量和结构结果 | `docs/research/sentiment-analysis-poc-results.md` |
 | 第一版后端安装、配置、启动和验证 | `docs/deployment/backend-v1.md` |
 | 第一版前端安装、开发、构建和同源发布 | `docs/deployment/frontend-v1.md` |
 | 第一版 Linux 离线制包、目录、安装、验证、备份和回滚 | `docs/deployment/linux-v1.md` |
