@@ -22,7 +22,8 @@
 | 流程控制、验证阶梯和 Agent 回执 | `docs/process/` |
 | 已证实的可复用根因、坑和杠杆 | `docs/memories/` |
 | 已冻结且确有保留价值的历史记录 | `docs/project-notes/` |
-| PoC 样本、阶段、指标和结果格式 | `docs/research/collector-stack-poc-plan.md` |
+| 采集框架 PoC 样本、阶段、指标和结果格式 | `docs/research/collector-stack-poc-plan.md` |
+| 舆情反馈 PoC 样本、模态覆盖、失败边界和结果格式 | `docs/research/sentiment-analysis-poc-plan.md` |
 | 第一版后端安装、配置、启动和验证 | `docs/deployment/backend-v1.md` |
 | 第一版前端安装、开发、构建和同源发布 | `docs/deployment/frontend-v1.md` |
 | 第一版 Linux 离线制包、目录、安装、验证、备份和回滚 | `docs/deployment/linux-v1.md` |
@@ -76,6 +77,16 @@
 
 `docs/research/collection-and-antibot-landscape.md`用于了解候选技术背景，不直接替代 PoC 计划和已接受决策。
 
+### 3.5 舆情反馈设计、PoC 或实现
+
+必须读取：
+
+1. 技术实现任务要求的全部文件；
+2. `docs/chains/sentiment-analysis.md`；
+3. `docs/adr/0022-use-hosted-multimodal-api-for-sentiment-feedback.md`；
+4. `docs/research/sentiment-analysis-poc-plan.md`；
+5. 执行 PoC 时读取 Git 外的 `artifacts/poc/inputs/sentiment-analysis/` 真实样本。
+
 ## 4. 已接受 ADR
 
 | ADR | 决策 |
@@ -101,6 +112,7 @@
 | `docs/adr/0019-distinguish-circle-feed-sources-and-live-baselines.md` | 同圈最新回复/最新发布作为独立来源，清洁配置草稿跟随服务器版本 |
 | `docs/adr/0020-use-short-source-keys-in-xlsx-tags.md` | 历史方案：XLSX 模板使用 22 位可逆来源键（已由 ADR 0021 替代） |
 | `docs/adr/0021-persist-platform-neutral-export-keys.md` | XLSX 模板使用全平台统一的 10 位持久化来源键 |
+| `docs/adr/0022-use-hosted-multimodal-api-for-sentiment-feedback.md` | 舆情反馈使用在线多模态 API、URL 直传和异步持久任务 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 
@@ -128,12 +140,15 @@ artifacts/poc/
 
 具体命名、保留期限和结果文件结构见 PoC 计划。
 
+舆情反馈 PoC 使用 `inputs/sentiment-analysis/` 和 `results/sentiment-qwen3-5-omni-plus/<round-id>/`；完整签名 URL、原始模型响应和 API 配置只保存在 Git 外本地产物中。
+
 ## 6. 文档维护规则
 
 - 动代码时更新 `WORKLOG.md` 最新条目；纯文档或只读任务不为凑流程追加账本。
 - 修改功能范围或验收条件时，同步更新产品设计和相关链档。
 - 修改技术决策时，同步更新技术路线、相关 ADR 和相关链档。
-- 修改 PoC 阶段、指标、输入或结果结构时，同步更新 PoC 计划、模板说明和 `docs/chains/first-platform-delivery.md`。
+- 修改采集框架 PoC 阶段、指标、输入或结果结构时，同步更新采集 PoC 计划、模板说明和 `docs/chains/first-platform-delivery.md`。
+- 修改舆情反馈 PoC 阶段、输入、模态覆盖或结果结构时，同步更新舆情 PoC 计划和 `docs/chains/sentiment-analysis.md`。
 - 详细执行过程和长日志写入被忽略的 `artifacts/runtime/`，账本只保留恢复所需证据入口。
 - 调研结论成为正式决策前，必须经过真实样本或环境验证并写入技术路线或 ADR。
 - 项目记忆只记录已发生、可复用的根因、坑和杠杆，不记录普通提交历史。
