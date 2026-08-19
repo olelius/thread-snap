@@ -16,6 +16,20 @@
 
 ---
 
+## 2026-08-19 — 在线多模态舆情反馈技术设计
+**总目标**：明确帖子负面/非负面及负面类型分析应采用的技术路线、媒体输入、人工复核、结果继承、失败边界和正式实现前 PoC。
+**状态**：✅ 需求与技术设计已确认并写入 owner 文档；尚未运行真实视频 PoC，也未实现数据库、队列、接口或页面。
+**干到哪里了**：
+- [x] 确认该需求不是对话型智能体：每条帖子以一次在线多模态 API 请求同时分析完整标题、正文、全部图片 URL 和全部视频 URL，不使用本地小模型、Agent 框架、RAG、工具、联网搜索或第二模型复核。
+- [x] 第一轮 PoC 固定百炼 OpenAI 兼容接口和 `qwen3.5-omni-plus-2026-03-15`；视频由提供方直接读取 URL 并分别报告画面与音频覆盖，ThreadSnap 不下载、中转、转码、抽帧或 ASR。
+- [x] 分析采用同一应用进程内的独立持久任务和 Worker，提取与分析状态分离；保存原始模型响应、规范化字段、版本、请求追踪、用量、耗时和失败证据，程序只校验结构与模态覆盖。
+- [x] 有效结论优先级确定为“当前人工修正 > 内容未变化时继承的人工判定 > 当前或精确复用的完整 AI 反馈”；人工复核随机发生，不设置强制复核比例、召回率、误判率、漏判上限或多人一致性流程。
+- [x] 只读样本基线记录为 2880 个帖子快照、842 个不同帖子、1939 个含图片快照、0 个含视频快照；因此 PoC 前必须另取至少 30 条真实视频帖子，事实报告只统计 URL 获取、画面/音频覆盖、结构、耗时、用量、成本和失败分布。
+- [x] 已建立 `docs/adr/0022-use-hosted-multimodal-api-for-sentiment-feedback.md`、`docs/chains/sentiment-analysis.md` 和 `docs/research/sentiment-analysis-poc-plan.md`，并同步 `CONTEXT.md`、产品设计、技术路线及文档索引。
+**下一步**：在 `artifacts/poc/inputs/sentiment-analysis/` 收集至少 30 条真实视频帖子，在 Git 外配置 API 后按 PoC 计划运行；报告完成后再决定进入实现，或针对有证据的 URL 失败另立媒体传输决策。
+**边界**：当前没有提交业务代码或数据库迁移；PoC 不评价 AI 情感与类别是否客观正确，不因 URL 失败自动下载视频，也不把文档设计写成已交付功能。
+**关联**：`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/adr/0022-use-hosted-multimodal-api-for-sentiment-feedback.md`、`docs/chains/sentiment-analysis.md`、`docs/research/sentiment-analysis-poc-plan.md`
+
 ## 2026-08-18 — 目标服务器快速离线升级到当前版本
 **总目标**：在不重新下载系统、Python 和 Chromium 依赖的前提下，把目标 CentOS 服务器升级到当前 `main`，并按已确认边界清空旧业务数据库。
 **状态**：✅ 当前干净提交已完成服务器内离线重封装、版本切换和运行验证。
