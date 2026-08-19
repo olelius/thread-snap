@@ -16,6 +16,23 @@
 
 ---
 
+## 2026-08-19 — 在线多模态舆情反馈受控 PoC
+**总目标**：在不由 ThreadSnap 下载视频且严格限制千问调用次数的前提下，完成真实视频 URL 获取、公开可达性和端到端多模态反馈验证。
+**状态**：✅ PoC 已按 30 条 URL 传输样本、1 次千问调用、0 次自动重试完成；证据支持保持 URL 直传并进入最小实现。
+**干到哪里了**：
+- [x] 从真实圈子列表扫描 171 条详情取得 30 条视频；30/30 有 `vid`、0/30 有 `video_play_info`。使用现有加密 Session 启动完整 Chromium，在请求层阻断 77 次媒体正文请求后，30/30 取得播放器直接 URL。
+- [x] 30/30 个 URL 在无 Cookie、无 Referer 的 `HEAD` 请求中返回 HTTP 200 和 `video/mp4`；视频时长最小/中位/最大为 7/22/117 秒，Content-Length 最小/中位/最大为 1,231,606/4,178,614/20,059,134 字节。
+- [x] 唯一一次 `qwen3.5-omni-plus-2026-03-15` 请求使用 A9L 的 42 秒视频，HTTP 200、耗时 15,122 ms；用量为 Prompt 25,882、Completion 535、Total 26,417，其中视频 24,950、音频 296、文字输入 636 Token。
+- [x] 模型真实反馈命中 A9L、`non_negative`、视频画面 `processed` 1/1、视频音频 `speech` 1/1。原始 JSON 尾部多出 Markdown 围栏；原始严格结构失败，本地仅移除围栏后通过 Pydantic 校验，两个状态分别保留。
+- [x] 新增 `src/threadsnap/poc/sentiment.py` 和 5 项自动化测试；调用账本在请求前记账并阻止第 2 次请求。原始样本、签名 URL、配置、响应和日志均留在被 Git 忽略的 `artifacts/poc/`。
+- [x] 事实报告写入 `docs/research/sentiment-analysis-poc-results.md`，并修正 Qwen-Omni 必须流式接收、JSON Object 加本地 Schema 校验及本轮零重试口径。
+- [x] 验证通过：70 项后端测试、Ruff、`compileall`、`pip check`、`git diff --check` 和候选提交文件凭证扫描；三个关键 PoC 产物均由 `git check-ignore` 确认为忽略状态。
+**下一步**：进入最小实现，先把“`video_play_info` 为空且 `vid` 存在时，以完整 Chromium 阻断媒体正文并读取播放 URL”的路径收敛到采集器契约，再实现持久舆情任务、窄模型客户端、结果落库、接口与页面。
+**边界**：30 是 URL 传输验证分母，模型验证分母只有 1；不得宣称 30/30 模型成功，也不外推静音、失效签名或模态冲突表现。当前没有引入视频下载、中转、对象存储、转码、抽帧或 ASR。
+**关联**：`docs/research/sentiment-analysis-poc-results.md`、`docs/research/sentiment-analysis-poc-plan.md`、`docs/adr/0022-use-hosted-multimodal-api-for-sentiment-feedback.md`、`docs/chains/sentiment-analysis.md`
+
+---
+
 ## 2026-08-19 — 在线多模态舆情反馈技术设计
 **总目标**：明确帖子负面/非负面及负面类型分析应采用的技术路线、媒体输入、人工复核、结果继承、失败边界和正式实现前 PoC。
 **状态**：✅ 需求与技术设计已确认并写入 owner 文档；尚未运行真实视频 PoC，也未实现数据库、队列、接口或页面。
