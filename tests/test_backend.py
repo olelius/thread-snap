@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import tempfile
@@ -362,10 +363,13 @@ class ApiAndConfigTests(AppCase):
             assert post is not None
             post_id = post.id
 
-        with patch(
-            "threadsnap.worker.VideoUrlResolver.resolve",
-            return_value=fresh_urls,
-        ) as resolved:
+        with (
+            patch(
+                "threadsnap.collectors.dongchedi.DongchediCollector.resolve_video_urls",
+                return_value=fresh_urls,
+            ) as resolved,
+            patch("threadsnap.worker.sync_playwright") as browser_started,
+        ):
             response = self.client.post(
                 f"/api/v1/runs/{run['id']}/posts/{post_id}/media/resolve"
             )
@@ -383,6 +387,7 @@ class ApiAndConfigTests(AppCase):
         self.assertIsNotNone(response.json()["expires_at"])
         self.assertEqual(response.json(), cached.json())
         self.assertEqual(1, resolved.call_count)
+        browser_started.assert_not_called()
         playback = self.client.get(response.json()["playback_urls"][0], follow_redirects=False)
         self.assertEqual(307, playback.status_code)
         self.assertEqual(fresh_urls[0], playback.headers["location"])
@@ -1979,6 +1984,74 @@ class CollectorTests(unittest.TestCase):
             "https://www.dongchedi.com/community/24729/dongtai-release",
             latest_publish.url,
         )
+
+    def test_video_id_resolves_highest_bitrate_url_over_two_http_requests(self) -> None:
+        """视频 ID 通过授权与播放信息接口解析，不加载帖子网页或媒体正文。"""
+
+        video_id = "video-id-1"
+        signed_query = "Action=GetPlayInfo&Version=2019-03-15&signature=test"
+        encoded_token = base64.b64encode(
+            json.dumps(
+                {"GetPlayInfoToken": signed_query, "Version": "v1"}
+            ).encode("utf-8")
+        ).decode("ascii")
+        responses = iter(
+            [
+                SimpleNamespace(
+                    status_code=200,
+                    content=json.dumps(
+                        {
+                            "status": 0,
+                            "data": {"play_auth_token": encoded_token},
+                        }
+                    ).encode("utf-8"),
+                    url="https://www.dongchedi.com/motor/pc/common/token",
+                    headers={"content-type": "application/json"},
+                ),
+                SimpleNamespace(
+                    status_code=200,
+                    content=json.dumps(
+                        {
+                            "Result": {
+                                "Data": {
+                                    "VideoID": video_id,
+                                    "PlayInfoList": [
+                                        {
+                                            "Bitrate": 500,
+                                            "MainPlayUrl": "https://media.test/low.mp4",
+                                        },
+                                        {
+                                            "Bitrate": 1000,
+                                            "MainPlayUrl": "https://media.test/high.mp4",
+                                            "BackupPlayUrl": "https://backup.test/high.mp4",
+                                        },
+                                    ],
+                                }
+                            }
+                        }
+                    ).encode("utf-8"),
+                    url="https://vod.bytedanceapi.com/",
+                    headers={"content-type": "application/json"},
+                ),
+            ]
+        )
+        requested: list[str] = []
+        collector = DongchediCollector(None)
+
+        def fake_get(url: str) -> SimpleNamespace:
+            requested.append(url)
+            return next(responses)
+
+        collector._get = fake_get  # type: ignore[method-assign]
+
+        urls = collector.resolve_video_urls(video_id)
+
+        self.assertEqual(["https://media.test/high.mp4"], urls)
+        self.assertEqual(2, len(requested))
+        self.assertIn("/motor/pc/common/token?", requested[0])
+        self.assertIn(f"video_id={video_id}", requested[0])
+        self.assertTrue(requested[1].startswith("https://vod.bytedanceapi.com/?"))
+        self.assertIn("signature=test", requested[1])
 
     def test_plain_dynamic_uses_motor_title_as_body_when_content_is_empty(self) -> None:
         collector = DongchediCollector(None)

@@ -66,7 +66,8 @@ class WorkerService:
                 raise DomainError("POST_NOT_FOUND", "指定帖子快照不存在。", status_code=404)
             task = db.get(CircleTask, post.circle_task_id)
             platform_code = task.platform_code if task else None
-            post_url = post.url
+            raw_status = post.raw_status if isinstance(post.raw_status, dict) else {}
+            video_id = str(raw_status.get("video_id") or "").strip()
         if platform_code != "dongchedi":
             raise DomainError(
                 "MEDIA_RESOLVER_UNAVAILABLE",
@@ -83,13 +84,19 @@ class WorkerService:
             now_tick = monotonic()
             if cached and cached[0] > now_tick:
                 return dict(cached[1])
-            resolver = VideoUrlResolver(
-                self.session_store.get_state(platform_code),
-                headless=self.session_store.settings.auth_browser_headless,
-                timezone_name=self.session_store.settings.timezone,
-            )
             try:
-                urls = deduplicate_media_urls(resolver.resolve(post_url))
+                if not video_id:
+                    raise DomainError(
+                        "MEDIA_URL_NOT_FOUND",
+                        "帖子快照没有可用于刷新播放地址的视频 ID，请打开原帖查看。",
+                        status_code=404,
+                    )
+                collector = DongchediCollector(
+                    self.session_store.get_state(platform_code), concurrency=1
+                )
+                urls = deduplicate_media_urls(collector.resolve_video_urls(video_id))
+            except DomainError:
+                raise
             except Exception as exc:
                 raise DomainError(
                     "MEDIA_URL_REFRESH_FAILED",
@@ -97,8 +104,6 @@ class WorkerService:
                     status_code=502,
                     details=[{"reason": type(exc).__name__}],
                 ) from exc
-            finally:
-                resolver.close()
             if not urls:
                 raise DomainError(
                     "MEDIA_URL_NOT_FOUND",
@@ -429,12 +434,6 @@ class WorkerService:
         reported_failures = 0
         flushed_failures = 0
         progress_batch_size = 1 if target <= 20 else 10
-        video_resolver = VideoUrlResolver(
-            getattr(collector, "storage_state", None),
-            headless=self.session_store.settings.auth_browser_headless,
-            timezone_name=self.session_store.settings.timezone,
-        )
-
         def flush_progress() -> None:
             nonlocal pending_records, flushed_failures
             if not pending_records and reported_failures == flushed_failures:
@@ -451,7 +450,9 @@ class WorkerService:
                 raw_status = record.get("raw_status") or {}
                 if not record.get("video_urls") and raw_status.get("video_id"):
                     try:
-                        record["video_urls"] = video_resolver.resolve(record["url"])
+                        record["video_urls"] = collector.resolve_video_urls(
+                            str(raw_status["video_id"])
+                        )
                         raw_status["video_url_resolution"] = (
                             "resolved" if record["video_urls"] else "not_found"
                         )
@@ -552,7 +553,6 @@ class WorkerService:
             }
         finally:
             flush_progress()
-            video_resolver.close()
 
     def _refresh_after_auth(
         self, platform_code: str, trigger_url: str, observed_generation: int
@@ -815,82 +815,3 @@ def playback_url_expiry(url: str) -> datetime | None:
     except (OverflowError, OSError, ValueError):
         return None
     return value if 2020 <= value.year <= 2100 else None
-
-
-class VideoUrlResolver:
-    """按任务复用完整 Chromium，只观察媒体请求 URL 并阻断媒体正文下载。"""
-
-    def __init__(
-        self,
-        storage_state: dict[str, Any] | None,
-        *,
-        headless: bool,
-        timezone_name: str,
-    ):
-        self.storage_state = storage_state
-        self.headless = headless
-        self.timezone_name = timezone_name
-        self.playwright: Any = None
-        self.browser: Any = None
-        self.context: Any = None
-        self.page: Any = None
-        self.observed: list[str] = []
-
-    def _ensure_page(self) -> None:
-        if self.page:
-            return
-        self.playwright = sync_playwright().start()
-        self.browser = self.playwright.chromium.launch(
-            headless=self.headless,
-            args=browser_launch_args(),
-        )
-        self.context = self.browser.new_context(
-            storage_state=self.storage_state,
-            locale="zh-CN",
-            timezone_id=self.timezone_name,
-        )
-
-        def intercept(route: Any, request: Any) -> None:
-            if request.resource_type == "media":
-                self.observed.append(request.url)
-                route.abort()
-            else:
-                route.continue_()
-
-        self.context.route("**/*", intercept)
-        self.page = self.context.new_page()
-        self.page.on(
-            "request",
-            lambda request: self.observed.append(request.url)
-            if request.resource_type == "media"
-            else None,
-        )
-
-    def resolve(self, post_url: str) -> list[str]:
-        self._ensure_page()
-        self.observed = []
-        self.page.goto(post_url, wait_until="domcontentloaded", timeout=60_000)
-        self.page.wait_for_timeout(1500)
-        dom_urls = self.page.locator("video, video source").evaluate_all(
-            "elements => elements.flatMap(el => [el.currentSrc, el.src]).filter(Boolean)"
-        )
-        output: list[str] = []
-        for value in [*dom_urls, *self.observed]:
-            if not isinstance(value, str) or not value.startswith(("http://", "https://")):
-                continue
-            parts = urlsplit(value)
-            path = parts.path.lower()
-            if not (path.endswith((".mp4", ".m3u8")) or "video" in path or "play" in path):
-                continue
-            if value not in output:
-                output.append(value)
-        return deduplicate_media_urls(output)
-
-    def close(self) -> None:
-        for resource in (self.context, self.browser, self.playwright):
-            if resource:
-                try:
-                    resource.close() if hasattr(resource, "close") else resource.stop()
-                except Exception:
-                    pass
-        self.page = None
