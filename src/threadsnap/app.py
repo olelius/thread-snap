@@ -39,9 +39,12 @@ from .schemas import (
     ExportCreate,
     ExtractionPlanUpdate,
     ManualRunCreate,
+    ManualSentimentRevisionCreate,
     PlatformConfigUpdate,
+    SentimentConfigUpdate,
     SessionImport,
 )
+from .sentiment import SentimentService, SentimentWorker
 from .services import ConfigService, RunService, bootstrap_database, validation_job_dict
 from .session_store import SessionStore
 from .templates import TemplateService
@@ -69,11 +72,18 @@ class Container:
         self.config = ConfigService(self.sessions)
         self.runs = RunService(self.sessions, settings.timezone)
         self.events = EventBus()
+        self.sentiment = SentimentService(
+            self.sessions,
+            self.session_store,
+            event_publisher=self.events.publish,
+        )
+        self.sentiment_worker = SentimentWorker(self.sentiment, settings.worker_poll_seconds)
         self.worker = WorkerService(
             self.sessions,
             self.session_store,
             settings.worker_poll_seconds,
             event_publisher=self.events.publish,
+            sentiment_service=self.sentiment,
         )
         self.scheduler = SchedulerService(
             self.sessions,
@@ -92,10 +102,12 @@ class Container:
     async def start(self) -> None:
         if self.settings.start_background_services:
             self.worker.start()
+            self.sentiment_worker.start()
             self.scheduler.start()
 
     async def stop(self) -> None:
         self.scheduler.stop()
+        self.sentiment_worker.stop()
         self.worker.stop()
         await self.auth.close_all()
         self.engine.dispose()
@@ -130,6 +142,40 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
     @router.get("/platforms")
     def list_platforms(request: Request) -> list[dict[str, Any]]:
         return _container(request).config.list_platforms()
+
+    @router.get("/sentiment/config")
+    def get_sentiment_config(request: Request) -> dict[str, Any]:
+        return _container(request).sentiment.get_config()
+
+    @router.put("/sentiment/config")
+    def update_sentiment_config(
+        value: SentimentConfigUpdate, request: Request
+    ) -> dict[str, Any]:
+        if value.api_key is not None:
+            host = request.client.host if request.client else ""
+            loopback = host == "testclient"
+            if not loopback:
+                try:
+                    loopback = ip_address(host).is_loopback
+                except ValueError:
+                    loopback = False
+            if request.url.scheme != "https" and not loopback:
+                raise DomainError(
+                    "SENTIMENT_KEY_HTTPS_REQUIRED",
+                    "远程页面必须通过 HTTPS 保存 API Key。",
+                    status_code=403,
+                )
+        container = _container(request)
+        result = container.sentiment.update_config(value)
+        container.events.publish("sentiment.config.changed", "sentiment-config")
+        return result
+
+    @router.post("/sentiment/config/test")
+    def test_sentiment_config(request: Request) -> dict[str, Any]:
+        container = _container(request)
+        result = container.sentiment.test_connection()
+        container.events.publish("sentiment.config.changed", "sentiment-config")
+        return result
 
     @router.put("/platforms/{code}")
     def update_platform(code: str, value: PlatformConfigUpdate, request: Request) -> dict[str, Any]:
@@ -326,6 +372,8 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
         title: str | None = None,
         circle: str | None = None,
         visibility: str | None = None,
+        sentiment_result: Literal["negative", "non_negative", "unrelated"] | None = None,
+        analysis_status: str | None = None,
         sort_by: str = Query("source", pattern="^(source|published_at|reply_count|like_count)$"),
         sort_direction: str = Query("asc", pattern="^(asc|desc)$"),
     ) -> dict[str, Any]:
@@ -336,6 +384,8 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
             title=title,
             circle=circle,
             visibility=visibility,
+            sentiment_result=sentiment_result,
+            analysis_status=analysis_status,
             sort_by=sort_by,
             sort_direction=sort_direction,
         )
@@ -347,6 +397,8 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
         title: str | None = None,
         circle: str | None = None,
         visibility: str | None = None,
+        sentiment_result: Literal["negative", "non_negative", "unrelated"] | None = None,
+        analysis_status: str | None = None,
         sort_by: str = Query("source", pattern="^(source|published_at|reply_count|like_count)$"),
         sort_direction: str = Query("asc", pattern="^(asc|desc)$"),
     ) -> dict[str, Any]:
@@ -355,6 +407,8 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
             title=title,
             circle=circle,
             visibility=visibility,
+            sentiment_result=sentiment_result,
+            analysis_status=analysis_status,
             sort_by=sort_by,
             sort_direction=sort_direction,
         )
@@ -362,6 +416,19 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
     @router.get("/runs/{run_id}/posts/{post_id}")
     def post_detail(run_id: str, post_id: str, request: Request) -> dict[str, Any]:
         return _container(request).runs.post_detail(run_id, post_id)
+
+    @router.post("/runs/{run_id}/posts/{post_id}/sentiment/manual-revisions")
+    def revise_post_sentiment(
+        run_id: str,
+        post_id: str,
+        value: ManualSentimentRevisionCreate,
+        request: Request,
+    ) -> dict[str, Any]:
+        result = _container(request).sentiment.manual_revision(run_id, post_id, value)
+        _container(request).events.publish(
+            "sentiment.changed", post_id, status=result["analysis_status"]
+        )
+        return result
 
     @router.get("/runs/{run_id}/posts/{post_id}/navigation")
     def post_navigation(
@@ -371,6 +438,8 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
         title: str | None = None,
         circle: str | None = None,
         visibility: str | None = None,
+        sentiment_result: Literal["negative", "non_negative", "unrelated"] | None = None,
+        analysis_status: str | None = None,
         sort_by: str = Query("source", pattern="^(source|published_at|reply_count|like_count)$"),
         sort_direction: str = Query("asc", pattern="^(asc|desc)$"),
     ) -> dict[str, Any]:
@@ -380,6 +449,8 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
             title=title,
             circle=circle,
             visibility=visibility,
+            sentiment_result=sentiment_result,
+            analysis_status=analysis_status,
             sort_by=sort_by,
             sort_direction=sort_direction,
         )

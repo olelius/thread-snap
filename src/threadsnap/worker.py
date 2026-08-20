@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from patchright.sync_api import sync_playwright
 from sqlalchemy import func, select
@@ -22,6 +23,7 @@ from .models import (
     ValidationJob,
     utc_now,
 )
+from .sentiment import SentimentService
 from .services import aggregate_run
 from .session_store import SessionStore
 
@@ -35,11 +37,13 @@ class WorkerService:
         session_store: SessionStore,
         poll_seconds: float = 1.0,
         event_publisher: Callable[..., Any] | None = None,
+        sentiment_service: SentimentService | None = None,
     ):
         self.factory = factory
         self.session_store = session_store
         self.poll_seconds = poll_seconds
         self.event_publisher = event_publisher
+        self.sentiment_service = sentiment_service
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.refresh_lock = threading.Lock()
@@ -332,6 +336,11 @@ class WorkerService:
         reported_failures = 0
         flushed_failures = 0
         progress_batch_size = 1 if target <= 20 else 10
+        video_resolver = VideoUrlResolver(
+            getattr(collector, "storage_state", None),
+            headless=self.session_store.settings.auth_browser_headless,
+            timezone_name=self.session_store.settings.timezone,
+        )
 
         def flush_progress() -> None:
             nonlocal pending_records, flushed_failures
@@ -346,6 +355,17 @@ class WorkerService:
         ) -> None:
             nonlocal reported_failures
             if record is not None:
+                raw_status = record.get("raw_status") or {}
+                if not record.get("video_urls") and raw_status.get("video_id"):
+                    try:
+                        record["video_urls"] = video_resolver.resolve(record["url"])
+                        raw_status["video_url_resolution"] = (
+                            "resolved" if record["video_urls"] else "not_found"
+                        )
+                    except Exception as exc:
+                        raw_status["video_url_resolution"] = "failed"
+                        raw_status["video_url_resolution_error"] = type(exc).__name__
+                    record["raw_status"] = raw_status
                 if source_indexes:
                     record["order_index"] = int(
                         source_indexes.get(record.get("url"), record.get("order_index", 0))
@@ -439,6 +459,7 @@ class WorkerService:
             }
         finally:
             flush_progress()
+            video_resolver.close()
 
     def _refresh_after_auth(
         self, platform_code: str, trigger_url: str, observed_generation: int
@@ -591,8 +612,8 @@ class WorkerService:
                 completed_count=completed_count,
             )
 
-    @staticmethod
     def _store_records(
+        self,
         db: Session, task: CircleTask, records: list[dict[str, Any]]
     ) -> set[str]:
         """按任务幂等保存一组帖子和主评论，并返回当前全部帖子 ID。"""
@@ -629,6 +650,8 @@ class WorkerService:
             )
             db.add(post)
             db.flush()
+            if self.sentiment_service:
+                self.sentiment_service.enqueue_for_post(db, post, task.platform_code)
             next_order = max(next_order + 1, int(record.get("order_index", next_order)) + 1)
             for index, comment in enumerate(record.get("comments") or []):
                 db.add(
@@ -683,3 +706,82 @@ class WorkerService:
                     status="queued",
                     completed_count=completed_count,
                 )
+
+
+class VideoUrlResolver:
+    """按任务复用完整 Chromium，只观察媒体请求 URL 并阻断媒体正文下载。"""
+
+    def __init__(
+        self,
+        storage_state: dict[str, Any] | None,
+        *,
+        headless: bool,
+        timezone_name: str,
+    ):
+        self.storage_state = storage_state
+        self.headless = headless
+        self.timezone_name = timezone_name
+        self.playwright: Any = None
+        self.browser: Any = None
+        self.context: Any = None
+        self.page: Any = None
+        self.observed: list[str] = []
+
+    def _ensure_page(self) -> None:
+        if self.page:
+            return
+        self.playwright = sync_playwright().start()
+        self.browser = self.playwright.chromium.launch(
+            headless=self.headless,
+            args=browser_launch_args(),
+        )
+        self.context = self.browser.new_context(
+            storage_state=self.storage_state,
+            locale="zh-CN",
+            timezone_id=self.timezone_name,
+        )
+
+        def intercept(route: Any, request: Any) -> None:
+            if request.resource_type == "media":
+                self.observed.append(request.url)
+                route.abort()
+            else:
+                route.continue_()
+
+        self.context.route("**/*", intercept)
+        self.page = self.context.new_page()
+        self.page.on(
+            "request",
+            lambda request: self.observed.append(request.url)
+            if request.resource_type == "media"
+            else None,
+        )
+
+    def resolve(self, post_url: str) -> list[str]:
+        self._ensure_page()
+        self.observed = []
+        self.page.goto(post_url, wait_until="domcontentloaded", timeout=60_000)
+        self.page.wait_for_timeout(1500)
+        dom_urls = self.page.locator("video, video source").evaluate_all(
+            "elements => elements.flatMap(el => [el.currentSrc, el.src]).filter(Boolean)"
+        )
+        output: list[str] = []
+        for value in [*dom_urls, *self.observed]:
+            if not isinstance(value, str) or not value.startswith(("http://", "https://")):
+                continue
+            parts = urlsplit(value)
+            path = parts.path.lower()
+            if not (path.endswith((".mp4", ".m3u8")) or "video" in path or "play" in path):
+                continue
+            if value not in output:
+                output.append(value)
+        return output
+
+    def close(self) -> None:
+        for resource in (self.context, self.browser, self.playwright):
+            if resource:
+                try:
+                    resource.close() if hasattr(resource, "close") else resource.stop()
+                except Exception:
+                    pass
+        self.page = None

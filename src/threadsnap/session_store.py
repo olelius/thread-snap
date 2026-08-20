@@ -123,3 +123,20 @@ class SessionStore:
                 record.status = "missing"
                 record.last_verified_at = None
                 record.error_message = None
+
+    def encrypt_secret(self, value: str) -> bytes:
+        """使用同一实例密钥加密应用凭证。"""
+
+        return self.fernet.encrypt(value.encode("utf-8"))
+
+    def decrypt_secret(self, encrypted: bytes) -> str:
+        """解密应用凭证，且不在错误信息中暴露原值。"""
+
+        try:
+            return self.fernet.decrypt(encrypted).decode("utf-8")
+        except (InvalidToken, UnicodeDecodeError) as exc:
+            raise DomainError(
+                "SECRET_DECRYPT_FAILED",
+                "舆情模型凭证读取失败，请重新填写 API Key。",
+                status_code=500,
+            ) from exc

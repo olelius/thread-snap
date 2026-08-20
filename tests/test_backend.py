@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import tempfile
 import unittest
@@ -37,6 +38,7 @@ from threadsnap.models import (
     PostSnapshot,
     ScheduleEvent,
     ScheduleNodeRule,
+    SentimentAnalysis,
     Vehicle,
 )
 from threadsnap.schemas import (
@@ -333,7 +335,197 @@ class ApiAndConfigTests(AppCase):
         with self.container.sessions() as db:
             platform = db.get(PlatformConfig, "dongchedi")
             assert platform is not None
-            self.assertEqual(ADAPTER_VERSION, platform.adapter_version)
+        self.assertEqual(ADAPTER_VERSION, platform.adapter_version)
+
+    def test_sentiment_config_worker_filters_detail_and_manual_revision(self) -> None:
+        """覆盖配置、单次分析、三态列表、详情依据和人工优先的组合路径。"""
+
+        class FakeSentimentClient:
+            def request(self, _base_url: str, _key: str, body: dict):
+                text = body["messages"][0]["content"][-1]["text"]
+                if "ok" in text:
+                    return '{"ok":true}', None, "test-request", 5
+                feedback = {
+                    "subject_relevance": True,
+                    "matched_subjects": ["A9L"],
+                    "sentiment": "negative",
+                    "primary_category": "product_complaint",
+                    "secondary_categories": [],
+                    "modalities": {
+                        "text": {"status": "processed", "evidence": ["正文描述产品故障"]},
+                        "image": {
+                            "status": "processed",
+                            "expected_count": 1,
+                            "processed_count": 1,
+                            "items": [{
+                                "input_index": 0,
+                                "url_hash": hashlib.sha256(
+                                    b"https://example.test/a.jpg"
+                                ).hexdigest(),
+                                "status": "processed",
+                                "evidence": ["图片显示故障提示"],
+                            }],
+                        },
+                        "video_visual": {
+                            "status": "absent", "expected_count": 0,
+                            "processed_count": 0, "items": [],
+                        },
+                        "video_audio": {
+                            "status": "absent", "expected_count": 0,
+                            "processed_count": 0, "items": [],
+                        },
+                    },
+                    "summary": "帖子反馈 A9L 产品故障。",
+                }
+                return json.dumps(feedback, ensure_ascii=False), {"total_tokens": 123}, "model-request", 18
+
+        config = self.client.get("/api/v1/sentiment/config").json()
+        self.assertFalse(config["api_key_configured"])
+        saved = self.client.put(
+            "/api/v1/sentiment/config",
+            json={
+                "revision": config["revision"],
+                "enabled": False,
+                "api_base_url": "https://api.example.test/v1",
+                "api_key": "test-secret-key",
+                "model_code": "qwen3.5-omni-plus-2026-03-15",
+                "subject": {
+                    "brand": "奇瑞",
+                    "products": ["A9L"],
+                    "supplement": "包含品牌服务反馈",
+                },
+            },
+        )
+        self.assertEqual(200, saved.status_code)
+        self.assertNotIn("test-secret-key", saved.text)
+        self.container.sentiment.client = FakeSentimentClient()
+        with patch(
+            "threadsnap.sentiment.validate_public_https_base_url",
+            side_effect=lambda value, resolve: value.rstrip("/"),
+        ):
+            tested = self.client.post("/api/v1/sentiment/config/test")
+        self.assertEqual(200, tested.status_code)
+        current = self.client.get("/api/v1/sentiment/config").json()
+        enabled = self.client.put(
+            "/api/v1/sentiment/config",
+            json={
+                "revision": current["revision"],
+                "enabled": True,
+                "api_base_url": current["api_base_url"],
+                "model_code": current["model_code"],
+                "subject": {
+                    "brand": current["subject"]["brand"],
+                    "products": current["subject"]["products"],
+                    "supplement": current["subject"]["supplement"],
+                },
+            },
+        )
+        self.assertEqual(200, enabled.status_code)
+
+        circle = self.save_verified_circle(name="A9L")
+        run_response = self.client.post(
+            "/api/v1/runs/manual",
+            json={"platform_code": "dongchedi", "circle_ids": [circle.id], "quantity": 1, "idempotency_key": "sentiment-test-run"},
+        )
+        self.assertEqual(202, run_response.status_code, run_response.text)
+        run = run_response.json()
+        with self.container.sessions.begin() as db:
+            task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            assert task is not None
+            self.container.worker._store_records(db, task, [sample_record("sentiment-1")])
+            analysis = db.scalar(select(SentimentAnalysis))
+            assert analysis is not None
+            self.assertEqual("analysis_queued", analysis.status)
+        with patch(
+            "threadsnap.sentiment.validate_public_https_base_url",
+            side_effect=lambda value, resolve: value.rstrip("/"),
+        ):
+            self.assertTrue(self.container.sentiment_worker.process_once())
+
+        listed = self.client.get(
+            f"/api/v1/runs/{run['id']}/posts",
+            params={"sentiment_result": "negative", "analysis_status": "analysis_completed"},
+        ).json()
+        self.assertEqual(1, listed["total"])
+        post = listed["items"][0]
+        self.assertEqual("negative", post["sentiment_result"])
+        self.assertEqual("ai", post["sentiment_source"])
+        detail = self.client.get(
+            f"/api/v1/runs/{run['id']}/posts/{post['id']}"
+        ).json()
+        self.assertEqual("帖子反馈 A9L 产品故障。", detail["sentiment"]["summary"])
+        self.assertNotIn("raw_response", detail["sentiment"])
+
+        revised = self.client.post(
+            f"/api/v1/runs/{run['id']}/posts/{post['id']}/sentiment/manual-revisions",
+            json={
+                "action": "set_result",
+                "result": "non_negative",
+                "secondary_categories": [],
+                "note": "人工核对",
+            },
+        )
+        self.assertEqual(200, revised.status_code)
+        self.assertEqual("manual", revised.json()["source"])
+        restored = self.client.post(
+            f"/api/v1/runs/{run['id']}/posts/{post['id']}/sentiment/manual-revisions",
+            json={"action": "restore_ai", "secondary_categories": []},
+        )
+        self.assertEqual(200, restored.status_code)
+        self.assertEqual("ai", restored.json()["source"])
+
+        # 启用中替换连接配置必须先保存并自动关闭，避免旧验证状态继续消费模型。
+        active_config = self.client.get("/api/v1/sentiment/config").json()
+        rotated = self.client.put(
+            "/api/v1/sentiment/config",
+            json={
+                "revision": active_config["revision"],
+                "enabled": True,
+                "api_base_url": active_config["api_base_url"],
+                "api_key": "rotated-test-secret",
+                "model_code": active_config["model_code"],
+                "subject": {
+                    "brand": active_config["subject"]["brand"],
+                    "products": active_config["subject"]["products"],
+                    "supplement": active_config["subject"]["supplement"],
+                },
+            },
+        )
+        self.assertEqual(200, rotated.status_code)
+        self.assertFalse(rotated.json()["enabled"])
+        self.assertEqual("unverified", rotated.json()["validation_status"])
+        self.assertNotIn("rotated-test-secret", rotated.text)
+
+        # 关闭期间的新快照保持禁用，不得绕过开关复用同内容的历史 AI 或人工结论。
+        second_run_response = self.client.post(
+            "/api/v1/runs/manual",
+            json={
+                "platform_code": "dongchedi",
+                "circle_ids": [circle.id],
+                "quantity": 1,
+                "idempotency_key": "sentiment-disabled-run",
+            },
+        )
+        self.assertEqual(202, second_run_response.status_code)
+        second_run = second_run_response.json()
+        with self.container.sessions.begin() as db:
+            second_task = db.scalar(
+                select(CircleTask).where(CircleTask.run_id == second_run["id"])
+            )
+            assert second_task is not None
+            self.container.worker._store_records(
+                db, second_task, [sample_record("sentiment-1")]
+            )
+            second_post = db.scalar(
+                select(PostSnapshot).where(PostSnapshot.run_id == second_run["id"])
+            )
+            assert second_post is not None
+            second_analysis = db.scalar(
+                select(SentimentAnalysis).where(SentimentAnalysis.post_id == second_post.id)
+            )
+            assert second_analysis is not None
+            self.assertEqual("analysis_disabled", second_analysis.status)
+            self.assertIsNone(second_post.sentiment_result)
 
     def test_internal_api_rejects_non_loopback_client(self) -> None:
         request = SimpleNamespace(client=SimpleNamespace(host="10.20.30.40"))

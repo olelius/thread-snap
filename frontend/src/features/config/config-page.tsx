@@ -1,13 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useBlocker, useNavigate, useSearch } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArchiveRestore, CalendarClock, CarFront, Check, ChevronDown, ChevronsUpDown, CirclePlus, Copy, Download, KeyRound, Loader2, Plus, RefreshCw, RotateCcw, Save, Settings2, Trash2, Upload } from 'lucide-react'
+import { ArchiveRestore, BrainCircuit, CalendarClock, CarFront, Check, ChevronDown, ChevronsUpDown, CirclePlus, Copy, Download, KeyRound, Loader2, Plus, RefreshCw, RotateCcw, Save, Settings2, Trash2, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { AuthDialog } from '@/features/auth/auth-dialog'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
 import { ApiError, api, errorMessage, formatDate, queryString } from '@/lib/api'
-import type { Circle, ExtractionPlan, Platform, SessionStatus, Template, Vehicle } from '@/lib/types'
+import type { Circle, ExtractionPlan, Platform, SentimentConfig, SessionStatus, Template, Vehicle } from '@/lib/types'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
@@ -28,7 +28,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 
-const tabValues = ['rules', 'schedule', 'platforms', 'circles', 'history', 'templates'] as const
+const tabValues = ['rules', 'schedule', 'platforms', 'circles', 'history', 'templates', 'sentiment'] as const
 type Tab = typeof tabValues[number]
 const weekdays = ['一', '二', '三', '四', '五', '六', '日']
 
@@ -216,7 +216,8 @@ export function ConfigPage() {
   })
   const [platformDirty, setPlatformDirty] = useState(false)
   const [circleDirty, setCircleDirty] = useState(false)
-  const dirty = plan.dirty || platformDirty || circleDirty
+  const [sentimentDirty, setSentimentDirty] = useState(false)
+  const dirty = plan.dirty || platformDirty || circleDirty || sentimentDirty
   const blocker = useBlocker({
     shouldBlockFn: ({ current, next }) => dirty && current.pathname !== next.pathname,
     enableBeforeUnload: dirty,
@@ -231,13 +232,14 @@ export function ConfigPage() {
     <div className='flex h-full min-h-0 flex-col'>
       <div className='shrink-0'><PageHeader title='配置管理' description='每项配置只在唯一归属页面编辑；跨页区域只展示摘要和跳转入口。' /></div>
       <Tabs className='mt-4 flex min-h-0 flex-1 flex-col' value={tab} onValueChange={(value) => navigate({ to: '/config', search: { tab: value as Tab }, replace: true, resetScroll: false })}>
-        <div className='shrink-0 overflow-x-auto'><TabsList className='h-10 min-w-max bg-muted/65 p-1'><TabsTrigger value='rules'><ConfigTabLabel dirty={plan.rulesDirty}>自动提取规则</ConfigTabLabel></TabsTrigger><TabsTrigger value='schedule'><ConfigTabLabel dirty={plan.scheduleDirty}>每周计划</ConfigTabLabel></TabsTrigger><TabsTrigger value='platforms'><ConfigTabLabel dirty={platformDirty}>平台配置</ConfigTabLabel></TabsTrigger><TabsTrigger value='circles'><ConfigTabLabel dirty={circleDirty}>来源与圈子</ConfigTabLabel></TabsTrigger><TabsTrigger value='history'>手动圈子历史</TabsTrigger><TabsTrigger value='templates'>导出模板</TabsTrigger></TabsList></div>
+        <div className='shrink-0 overflow-x-auto'><TabsList className='h-10 min-w-max bg-muted/65 p-1'><TabsTrigger value='rules'><ConfigTabLabel dirty={plan.rulesDirty}>自动提取规则</ConfigTabLabel></TabsTrigger><TabsTrigger value='schedule'><ConfigTabLabel dirty={plan.scheduleDirty}>每周计划</ConfigTabLabel></TabsTrigger><TabsTrigger value='platforms'><ConfigTabLabel dirty={platformDirty}>平台配置</ConfigTabLabel></TabsTrigger><TabsTrigger value='circles'><ConfigTabLabel dirty={circleDirty}>来源与圈子</ConfigTabLabel></TabsTrigger><TabsTrigger value='history'>手动圈子历史</TabsTrigger><TabsTrigger value='templates'>导出模板</TabsTrigger><TabsTrigger value='sentiment'><ConfigTabLabel dirty={sentimentDirty}>AI 舆情</ConfigTabLabel></TabsTrigger></TabsList></div>
         <TabsContent forceMount value='rules' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><RulesPanel workspace={plan} /></TabsContent>
         <TabsContent forceMount value='schedule' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><SchedulePanel workspace={plan} /></TabsContent>
         <TabsContent forceMount value='platforms' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><PlatformPanel onDirtyChange={setPlatformDirty} /></TabsContent>
         <TabsContent forceMount value='circles' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden xl:overflow-hidden'><CirclePanel onDirtyChange={setCircleDirty} /></TabsContent>
         <TabsContent forceMount value='history' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><HistoryPanel /></TabsContent>
         <TabsContent forceMount value='templates' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><TemplatePanel /></TabsContent>
+        <TabsContent forceMount value='sentiment' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><SentimentPanel onDirtyChange={setSentimentDirty} /></TabsContent>
       </Tabs>
       <AlertDialog open={plan.revisionConflict} onOpenChange={plan.setRevisionConflict}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>服务器提取配置已有更新</AlertDialogTitle><AlertDialogDescription>当前标签的草稿仍保留。可以继续留在页面核对，或放弃规则和计划草稿并加载服务器最新版本。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel onClick={() => plan.setRevisionConflict(false)}>保留当前草稿</AlertDialogCancel><AlertDialogAction onClick={plan.reloadServerPlan}>放弃草稿并重新加载</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
       <AlertDialog open={blocker.status === 'blocked'}>
@@ -595,3 +597,53 @@ function TemplatePanel() {
 }
 
 type TemplateField = { tag: string; field: string; type: string; description: string }
+
+function sentimentSignature(value?: SentimentConfig) {
+  if (!value) return ''
+  return JSON.stringify({ enabled: value.enabled, api_base_url: value.api_base_url, model_code: value.model_code, subject: { brand: value.subject.brand, products: value.subject.products, supplement: value.subject.supplement ?? '' } })
+}
+
+function SentimentPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void }) {
+  const client = useQueryClient()
+  const query = useQuery({ queryKey: ['sentiment-config'], queryFn: () => api<SentimentConfig>('/sentiment/config') })
+  const [draft, setDraft] = useState<SentimentConfig>()
+  const [apiKey, setApiKey] = useState('')
+  useEffect(() => { if (query.data && !draft) setDraft(structuredClone(query.data)) }, [query.data, draft])
+  const dirty = Boolean(draft && query.data) && (sentimentSignature(draft) !== sentimentSignature(query.data) || Boolean(apiKey.trim()))
+  useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange])
+  const save = useMutation({
+    mutationFn: () => api<SentimentConfig>('/sentiment/config', { method: 'PUT', body: JSON.stringify({ revision: draft?.revision, enabled: draft?.enabled, api_base_url: draft?.api_base_url, api_key: apiKey.trim() || undefined, model_code: draft?.model_code, subject: { brand: draft?.subject.brand, products: draft?.subject.products, supplement: draft?.subject.supplement || undefined } }) }),
+    onSuccess: (value) => { setDraft(structuredClone(value)); setApiKey(''); client.setQueryData(['sentiment-config'], value); toast.success('AI 舆情配置已保存') },
+    onError: (error) => toast.error('保存失败', { description: errorMessage(error) }),
+  })
+  const test = useMutation({
+    mutationFn: () => api<{ status: string; duration_ms: number }>('/sentiment/config/test', { method: 'POST' }),
+    onSuccess: async (value) => { const result = await query.refetch(); if (result.data) setDraft(structuredClone(result.data)); toast.success('连接测试通过', { description: `${value.duration_ms} ms；本次只发送最小文字请求。` }) },
+    onError: async (error) => { await query.refetch(); toast.error('连接测试失败', { description: errorMessage(error) }) },
+  })
+  if (!draft || !query.data) return <Card><CardContent className='p-8 text-sm text-muted-foreground'>正在加载 AI 舆情配置…</CardContent></Card>
+  const discard = () => { setDraft(structuredClone(query.data)); setApiKey(''); onDirtyChange(false) }
+  const connectionDirty = Boolean(apiKey.trim()) || draft.api_base_url !== query.data.api_base_url || draft.model_code !== query.data.model_code
+  const validationLabel = draft.validation_status === 'valid' ? '已通过' : draft.validation_status === 'invalid' ? '未通过' : '待测试'
+  return <div className='space-y-5'>
+    <ConfigSectionToolbar icon={<BrainCircuit className='size-4.5' />} title='AI 舆情' summary={`${draft.enabled ? '已启用' : '已停用'} · 连接${validationLabel}`} description='每条新入库帖子以一次在线多模态请求分析；保存配置本身不会调用模型。'>
+      <Button variant='outline' disabled={!dirty || save.isPending} onClick={discard}><RotateCcw className='size-4' />放弃修改</Button>
+      <Button disabled={!dirty || save.isPending} onClick={() => save.mutate()}>{save.isPending ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}保存当前标签</Button>
+    </ConfigSectionToolbar>
+    <div className='grid gap-5 xl:grid-cols-2'>
+      <Card><CardHeader><CardTitle>模型连接</CardTitle><CardDescription>首版使用受控模型；API Key 只写入加密存储，页面不会再次读取明文。</CardDescription></CardHeader><CardContent className='space-y-5'>
+        <div className='flex items-center justify-between rounded-lg border p-3'><div><div className='text-sm font-medium'>启用自动分析</div><div className='text-xs text-muted-foreground'>只影响后续新帖子；关闭时排队任务转为已禁用</div></div><Switch checked={draft.enabled} disabled={connectionDirty || draft.validation_status !== 'valid'} onCheckedChange={(enabled) => setDraft({ ...draft, enabled })} /></div>
+        <div><Label htmlFor='sentiment-base-url'>OpenAI 兼容 Base URL</Label><Input id='sentiment-base-url' className='mt-2' value={draft.api_base_url} placeholder='https://HOST/compatible-mode/v1' onChange={(event) => setDraft({ ...draft, enabled: false, api_base_url: event.target.value, validation_status: 'unverified' })} /><p className='mt-1.5 text-xs text-muted-foreground'>仅支持公网 HTTPS。代理服务将接收 API Key、帖子文字和媒体 URL。</p></div>
+        <div><Label htmlFor='sentiment-api-key'>API Key</Label><Input id='sentiment-api-key' className='mt-2' type='password' autoComplete='new-password' value={apiKey} placeholder={draft.api_key_configured ? '已配置；留空表示不替换' : '请输入 API Key'} onChange={(event) => { setApiKey(event.target.value); setDraft({ ...draft, enabled: false, validation_status: 'unverified' }) }} /></div>
+        <div><Label>模型</Label><Select value={draft.model_code} onValueChange={(model_code) => setDraft({ ...draft, enabled: false, model_code, validation_status: 'unverified' })}><SelectTrigger className='mt-2'><SelectValue /></SelectTrigger><SelectContent>{draft.available_models.map((model) => <SelectItem key={model} value={model}>{model}</SelectItem>)}</SelectContent></Select></div>
+        <div className='flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3'><div><StatusBadge value={draft.validation_status === 'valid' ? 'success' : draft.validation_status === 'invalid' ? 'failed' : 'unknown'} label={`连接${validationLabel}`} /><div className='mt-1 text-xs text-muted-foreground'>{draft.validated_at ? `最近测试：${formatDate(draft.validated_at)}` : '尚未测试'}{draft.validation_error ? ` · ${draft.validation_error}` : ''}</div></div><Button variant='outline' disabled={dirty || !draft.api_base_url || !draft.api_key_configured || test.isPending} onClick={() => test.mutate()}>{test.isPending ? <Loader2 className='size-4 animate-spin' /> : <RefreshCw className='size-4' />}测试连接</Button></div>
+      </CardContent></Card>
+      <Card><CardHeader><CardTitle>舆情判定对象</CardTitle><CardDescription>模型结合上下文识别常见别名、品牌服务及实际相关性，后端不做关键词重判。</CardDescription></CardHeader><CardContent className='space-y-5'>
+        <div><Label htmlFor='sentiment-brand'>品牌</Label><Input id='sentiment-brand' className='mt-2' value={draft.subject.brand} onChange={(event) => setDraft({ ...draft, subject: { ...draft.subject, brand: event.target.value } })} /></div>
+        <div><Label htmlFor='sentiment-products'>重点产品（每行一个）</Label><Textarea id='sentiment-products' className='mt-2 min-h-52' value={draft.subject.products.join('\n')} onChange={(event) => setDraft({ ...draft, subject: { ...draft.subject, products: event.target.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean) } })} /></div>
+        <div><Label htmlFor='sentiment-supplement'>补充说明（选填）</Label><Textarea id='sentiment-supplement' className='mt-2' value={draft.subject.supplement ?? ''} placeholder='例如需要纳入的服务、产品线或语境说明' onChange={(event) => setDraft({ ...draft, subject: { ...draft.subject, supplement: event.target.value } })} /></div>
+        <Alert><BrainCircuit className='size-4' /><AlertTitle>判定口径</AlertTitle><AlertDescription>模型输出负面、非负面或不相关，并提供中文总结及各模态事实依据；ThreadSnap 只校验结构与覆盖，不二次改写结论。</AlertDescription></Alert>
+      </CardContent></Card>
+    </div>
+  </div>
+}

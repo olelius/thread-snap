@@ -122,7 +122,7 @@ export function RunsPage() {
 }
 
 const emptyRunsSearch = { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }
-const emptyDetailSearch = { page: undefined, pageSize: undefined, title: undefined, circle: undefined, visibility: undefined, sort: undefined, direction: undefined, post: undefined }
+const emptyDetailSearch = { page: undefined, pageSize: undefined, title: undefined, circle: undefined, visibility: undefined, sentiment: undefined, analysisStatus: undefined, sort: undefined, direction: undefined, post: undefined }
 
 function isActiveRun(run: Run) {
   return ['queued', 'running', 'waiting_for_auth'].includes(run.status)
