@@ -300,10 +300,106 @@ class PostSnapshot(Base):
     visibility: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
     raw_status: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     order_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    analysis_status: Mapped[str | None] = mapped_column(String(32))
+    sentiment_result: Mapped[str | None] = mapped_column(String(32))
+    sentiment_source: Mapped[str | None] = mapped_column(String(32))
+    sentiment_updated_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
     comments: Mapped[list["CommentSnapshot"]] = relationship(
         cascade="all, delete-orphan", passive_deletes=True
     )
+
+
+class SentimentConfig(Base):
+    """舆情模型的单例运行配置；密钥只保存密文。"""
+
+    __tablename__ = "sentiment_configs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    base_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    encrypted_api_key: Mapped[bytes | None] = mapped_column(LargeBinary)
+    model_code: Mapped[str] = mapped_column(
+        String(120), nullable=False, default="qwen3.5-omni-plus-2026-03-15"
+    )
+    validation_status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="unverified"
+    )
+    validation_error: Mapped[str | None] = mapped_column(Text)
+    validated_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    subject_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    brand: Mapped[str] = mapped_column(String(120), nullable=False, default="奇瑞")
+    products: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    supplement: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
+
+
+class SentimentAnalysis(Base):
+    """每个帖子快照的一条持久舆情分析任务与审计结果。"""
+
+    __tablename__ = "sentiment_analyses"
+    __table_args__ = (
+        UniqueConstraint("post_id", name="uq_sentiment_analysis_post"),
+        Index("ix_sentiment_analysis_queue", "status", "created_at"),
+        Index("ix_sentiment_analysis_identity", "platform_code", "platform_post_id", "input_hash"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    post_id: Mapped[str] = mapped_column(
+        ForeignKey("post_snapshots.id", ondelete="CASCADE"), nullable=False
+    )
+    platform_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    platform_post_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    config_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    subject_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    subject_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    model_code: Mapped[str] = mapped_column(String(120), nullable=False)
+    prompt_version: Mapped[str] = mapped_column(String(32), nullable=False, default="v1")
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    result: Mapped[str | None] = mapped_column(String(32))
+    matched_subjects: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    primary_category: Mapped[str | None] = mapped_column(String(64))
+    secondary_categories: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    summary: Mapped[str | None] = mapped_column(Text)
+    modalities: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    raw_response: Mapped[str | None] = mapped_column(Text)
+    locally_recovered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    provider_request_id: Mapped[str | None] = mapped_column(String(200))
+    usage: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    reused_from_analysis_id: Mapped[str | None] = mapped_column(
+        ForeignKey("sentiment_analyses.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class ManualSentimentRevision(Base):
+    """人工修订追加历史；恢复 AI 也以事件记录而非删除历史。"""
+
+    __tablename__ = "manual_sentiment_revisions"
+    __table_args__ = (Index("ix_manual_sentiment_post_created", "post_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    post_id: Mapped[str] = mapped_column(
+        ForeignKey("post_snapshots.id", ondelete="CASCADE"), nullable=False
+    )
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    result: Mapped[str | None] = mapped_column(String(32))
+    primary_category: Mapped[str | None] = mapped_column(String(64))
+    secondary_categories: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    note: Mapped[str | None] = mapped_column(Text)
+    inherited_from_revision_id: Mapped[str | None] = mapped_column(
+        ForeignKey("manual_sentiment_revisions.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
 
 
 class CommentSnapshot(Base):

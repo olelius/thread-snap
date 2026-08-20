@@ -94,6 +94,53 @@ class SessionImport(StrictModel):
     storage_state: dict[str, Any]
 
 
+class SentimentSubjectUpdate(StrictModel):
+    brand: str = Field(min_length=1, max_length=120)
+    products: list[str] = Field(min_length=1, max_length=100)
+    supplement: str | None = Field(default=None, max_length=4000)
+
+    @field_validator("products")
+    @classmethod
+    def normalize_products(cls, values: list[str]) -> list[str]:
+        normalized = [value.strip() for value in values if value.strip()]
+        if not normalized:
+            raise ValueError("至少配置一个重点产品")
+        return list(dict.fromkeys(normalized))
+
+
+class SentimentConfigUpdate(StrictModel):
+    revision: int = Field(ge=1)
+    enabled: bool
+    api_base_url: str = Field(max_length=2000)
+    api_key: str | None = Field(default=None, min_length=8, max_length=4000)
+    model_code: Literal["qwen3.5-omni-plus-2026-03-15"]
+    subject: SentimentSubjectUpdate
+
+
+class ManualSentimentRevisionCreate(StrictModel):
+    action: Literal["set_result", "restore_ai"]
+    result: Literal["negative", "non_negative", "unrelated"] | None = None
+    primary_category: Literal[
+        "product_complaint",
+        "product_criticism",
+        "service_complaint",
+        "brand_criticism",
+        "competitor_attack",
+        "other",
+    ] | None = None
+    secondary_categories: list[
+        Literal[
+            "product_complaint",
+            "product_criticism",
+            "service_complaint",
+            "brand_criticism",
+            "competitor_attack",
+            "other",
+        ]
+    ] = Field(default_factory=list)
+    note: str | None = Field(default=None, max_length=2000)
+
+
 class PageResult(BaseModel):
     items: list[dict[str, Any]]
     total: int

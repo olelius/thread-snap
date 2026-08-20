@@ -486,6 +486,7 @@ class DongchediCollector:
                 "api_status": payload.get("status"),
                 "operation_status": operation_status,
                 "visibility_level": data.get("visibility_level"),
+                "video_id": str(data.get("vid") or "").strip() or None,
             },
             "comments": comments,
         }

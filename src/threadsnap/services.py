@@ -45,6 +45,7 @@ from .schemas import (
     ManualRunCreate,
     PlatformConfigUpdate,
 )
+from .sentiment import sentiment_summary
 
 TERMINAL_STATUSES = frozenset({"success", "partial_success", "failed"})
 RUN_STATUS_ZH = {
@@ -1619,6 +1620,8 @@ class RunService:
         title: str | None = None,
         circle: str | None = None,
         visibility: str | None = None,
+        sentiment_result: str | None = None,
+        analysis_status: str | None = None,
     ):
         run_ids = related_run_ids(db, run_id)
         conditions = [PostSnapshot.run_id.in_(run_ids)]
@@ -1631,6 +1634,10 @@ class RunService:
             )
         if visibility:
             conditions.append(PostSnapshot.visibility == visibility)
+        if sentiment_result:
+            conditions.append(PostSnapshot.sentiment_result == sentiment_result)
+        if analysis_status:
+            conditions.append(PostSnapshot.analysis_status == analysis_status)
         return (
             select(
                 PostSnapshot.id.label("post_id"),
@@ -1667,10 +1674,20 @@ class RunService:
         title: str | None = None,
         circle: str | None = None,
         visibility: str | None = None,
+        sentiment_result: str | None = None,
+        analysis_status: str | None = None,
         sort_by: str = "source",
         sort_direction: str = "asc",
     ) -> tuple[Any, int]:
-        ranked = self._ranked_posts(db, run_id, title=title, circle=circle, visibility=visibility)
+        ranked = self._ranked_posts(
+            db,
+            run_id,
+            title=title,
+            circle=circle,
+            visibility=visibility,
+            sentiment_result=sentiment_result,
+            analysis_status=analysis_status,
+        )
         total = (
             db.scalar(select(func.count()).select_from(ranked).where(ranked.c.dedupe_rank == 1))
             or 0
@@ -1705,6 +1722,8 @@ class RunService:
         title: str | None = None,
         circle: str | None = None,
         visibility: str | None = None,
+        sentiment_result: str | None = None,
+        analysis_status: str | None = None,
         sort_by: str = "source",
         sort_direction: str = "asc",
     ) -> dict[str, Any]:
@@ -1717,6 +1736,8 @@ class RunService:
                 title=title,
                 circle=circle,
                 visibility=visibility,
+                sentiment_result=sentiment_result,
+                analysis_status=analysis_status,
                 sort_by=sort_by,
                 sort_direction=sort_direction,
             )
@@ -1771,7 +1792,9 @@ class RunService:
                     .order_by(CommentSnapshot.order_index)
                 )
             ]
-            return post_dict(post, comments, task)
+            result = post_dict(post, comments, task)
+            result["sentiment"] = sentiment_summary(db, post)
+            return result
 
     def post_navigation(self, run_id: str, post_id: str, **filters: Any) -> dict[str, Any]:
         """返回帖子在当前完整筛选和排序结果中的相邻项。"""
@@ -1966,6 +1989,10 @@ def post_dict(
         "visibility": item.visibility,
         "raw_status": item.raw_status,
         "order_index": item.order_index,
+        "analysis_status": item.analysis_status,
+        "sentiment_result": item.sentiment_result,
+        "sentiment_source": item.sentiment_source,
+        "sentiment_updated_at": item.sentiment_updated_at,
         "comments": comments,
     }
 

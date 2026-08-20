@@ -131,6 +131,11 @@ export type Post = {
   section?: string
   visibility: 'visible' | 'hidden' | 'unknown'
   raw_status?: unknown
+  analysis_status?: AnalysisStatus
+  sentiment_result?: SentimentResult
+  sentiment_source?: SentimentSource
+  sentiment_updated_at?: string
+  sentiment?: SentimentDetail
   comments: Array<{
     platform_comment_id?: string
     author?: string
@@ -139,6 +144,50 @@ export type Post = {
     like_count?: number
   }>
 }
+
+export type SentimentResult = 'negative' | 'non_negative' | 'unrelated'
+export type SentimentSource = 'ai' | 'manual' | 'inherited_manual'
+export type AnalysisStatus = 'analysis_queued' | 'analysis_running' | 'analysis_completed' | 'analysis_partial' | 'analysis_failed' | 'analysis_paused' | 'analysis_disabled'
+
+export type SentimentConfig = {
+  revision: number
+  enabled: boolean
+  api_base_url: string
+  api_key_configured: boolean
+  model_code: string
+  available_models: string[]
+  validation_status: 'unverified' | 'valid' | 'invalid'
+  validation_error?: string
+  validated_at?: string
+  subject: { brand: string; products: string[]; supplement?: string; version: number }
+}
+
+export type SentimentDetail = {
+  analysis_status?: AnalysisStatus
+  result?: SentimentResult
+  source?: SentimentSource
+  summary?: string
+  matched_subjects: string[]
+  primary_category?: string
+  secondary_categories: string[]
+  modalities?: {
+    text: { status: string; evidence: string[] }
+    image: SentimentMediaCoverage
+    video_visual: SentimentMediaCoverage
+    video_audio: SentimentMediaCoverage
+  }
+  model_code?: string
+  provider_request_id?: string
+  duration_ms?: number
+  error_code?: string
+  error_message?: string
+  updated_at?: string
+  can_manual_correct: boolean
+  can_restore_ai: boolean
+  manual_history: Array<{ id: string; action: string; result?: SentimentResult; primary_category?: string; secondary_categories: string[]; note?: string; inherited: boolean; created_at: string }>
+}
+
+export type SentimentMediaCoverage = { status: string; expected_count: number; processed_count: number; items: Array<{ input_index: number; url_hash: string; status: string; evidence: string[] }> }
 
 export type PageResult<T> = { items: T[]; total: number; offset: number; limit: number }
 

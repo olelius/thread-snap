@@ -2,21 +2,23 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ArrowLeft, CircleAlert, CircleCheckBig, CircleStop, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, Gauge, KeyRound, Layers3, ListTree, LoaderCircle, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowLeft, BrainCircuit, CircleAlert, CircleCheckBig, CircleStop, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, Gauge, KeyRound, Layers3, ListTree, LoaderCircle, PencilLine, RefreshCw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AuthDialog } from '@/features/auth/auth-dialog'
 import { useDebouncedValue } from '@/hooks/use-debounced-value'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
 import { api, errorMessage, formatDate, platformName, queryString } from '@/lib/api'
-import type { PageResult, Post, PostNavigation, Run, RunTask, Template } from '@/lib/types'
+import type { AnalysisStatus, PageResult, Post, PostNavigation, Run, RunTask, SentimentResult, Template } from '@/lib/types'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -26,7 +28,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 
-type SearchState = { page?: number; pageSize?: 20 | 50 | 100; title?: string; circle?: string; visibility?: 'visible' | 'hidden' | 'unknown'; sort?: 'source' | 'published_at' | 'reply_count' | 'like_count'; direction?: 'asc' | 'desc'; post?: string }
+type SearchState = { page?: number; pageSize?: 20 | 50 | 100; title?: string; circle?: string; visibility?: 'visible' | 'hidden' | 'unknown'; sentiment?: SentimentResult; analysisStatus?: AnalysisStatus; sort?: 'source' | 'published_at' | 'reply_count' | 'like_count'; direction?: 'asc' | 'desc'; post?: string }
 type PostSwitch = { id: string; direction: 'previous' | 'next' }
 
 export function RunDetailPage() {
@@ -44,6 +46,7 @@ export function RunDetailPage() {
   const [authOpen, setAuthOpen] = useState(false)
   const [tasksOpen, setTasksOpen] = useState(false)
   const [manualCopy, setManualCopy] = useState<string>()
+  const [manualCorrectionOpen, setManualCorrectionOpen] = useState(false)
   const [postSwitch, setPostSwitch] = useState<PostSwitch>()
   const [selectionRevealPostId, setSelectionRevealPostId] = useState<string>()
   const [lastViewedPostId, setLastViewedPostId] = useState<string>()
@@ -60,11 +63,12 @@ export function RunDetailPage() {
     queryFn: () => api<Run>(`/runs/${runId}`),
     refetchInterval: (current) => isActiveRun(current.state.data) ? 3_000 : 60_000,
   })
-  const postQueryValues = { title: debouncedTitle, circle: debouncedCircle, visibility: search.visibility, sort_by: search.sort, sort_direction: search.direction }
+  const postQueryValues = { title: debouncedTitle, circle: debouncedCircle, visibility: search.visibility, sentiment_result: search.sentiment, analysis_status: search.analysisStatus, sort_by: search.sort, sort_direction: search.direction }
   const posts = useQuery({
     queryKey: ['posts', runId, { page: search.page, pageSize: search.pageSize, ...postQueryValues }],
     queryFn: () => api<PageResult<Post>>(`/runs/${runId}/posts${queryString({ offset: ((search.page ?? 1) - 1) * (search.pageSize ?? 50), limit: search.pageSize, ...postQueryValues })}`),
     placeholderData: keepPreviousData,
+    refetchInterval: (current) => current.state.data?.items.some((post) => ['analysis_queued', 'analysis_running'].includes(post.analysis_status ?? '')) ? 3_000 : false,
   })
   const templates = useQuery({ queryKey: ['templates'], queryFn: () => api<Template[]>('/templates') })
   const detail = useQuery({
@@ -72,6 +76,7 @@ export function RunDetailPage() {
     queryFn: () => api<Post>(`/runs/${runId}/posts/${search.post}`),
     enabled: Boolean(search.post),
     placeholderData: keepPreviousData,
+    refetchInterval: (current) => ['analysis_queued', 'analysis_running'].includes(current.state.data?.analysis_status ?? '') ? 3_000 : false,
   })
   const navigation = useQuery({
     queryKey: ['post-navigation', runId, search.post, postQueryValues],
@@ -216,15 +221,15 @@ export function RunDetailPage() {
       ].map(([label, value]) => <Card key={String(label)} className='border-border/70 bg-card/88 py-0'><CardContent className='p-3'><div className='text-xs text-muted-foreground'>{label}</div><div className='mt-1 text-sm font-semibold'>{value}</div></CardContent></Card>)}</div>}
       {run.data?.waiting_reason && <Alert><KeyRound className='size-4' /><AlertTitle>等待平台认证</AlertTitle><AlertDescription>{run.data.waiting_reason}</AlertDescription></Alert>}
       {run.data?.error_message && <Alert variant='destructive'><AlertTitle>批次错误</AlertTitle><AlertDescription>{run.data.error_message}</AlertDescription></Alert>}
-        <Card className='border-border/70 bg-card/88 py-0'><CardContent className='grid gap-3 p-3 lg:grid-cols-[1fr_220px_170px_180px_140px_auto]'><Input placeholder='搜索帖子标题' aria-label='搜索帖子标题' value={search.title ?? ''} onChange={(event) => patch({ title: event.target.value || undefined, page: 1 })} /><Input placeholder='搜索圈子' aria-label='搜索圈子' value={search.circle ?? ''} onChange={(event) => patch({ circle: event.target.value || undefined, page: 1 })} /><Select value={search.visibility ?? 'all'} onValueChange={(value) => patch({ visibility: value === 'all' ? undefined : value as SearchState['visibility'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部可见状态</SelectItem><SelectItem value='visible'>可见</SelectItem><SelectItem value='hidden'>不可见</SelectItem><SelectItem value='unknown'>未知</SelectItem></SelectContent></Select><Select value={search.sort} onValueChange={(value) => patch({ sort: value as SearchState['sort'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='source'>来源顺序</SelectItem><SelectItem value='published_at'>发布时间</SelectItem><SelectItem value='reply_count'>评论数</SelectItem><SelectItem value='like_count'>点赞数</SelectItem></SelectContent></Select><Select value={search.direction} onValueChange={(value) => patch({ direction: value as SearchState['direction'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='asc'>正序</SelectItem><SelectItem value='desc'>倒序</SelectItem></SelectContent></Select><div className='flex items-center justify-end gap-2'><Button variant='outline' onClick={copyAll}><Copy className='size-4' />复制全部</Button><Select onValueChange={(value) => exportRun.mutate(value)} disabled={!templates.data?.length || exportRun.isPending}><SelectTrigger className='w-56'><Download className='size-4' /><SelectValue placeholder={templates.data?.length ? '导出 Excel' : '暂无导出模板'} /></SelectTrigger><SelectContent>{templates.data?.map((item) => item.versions[0] && <SelectItem key={item.versions[0].version_id} value={item.versions[0].version_id}>{item.name}</SelectItem>)}</SelectContent></Select></div></CardContent></Card>
+        <Card className='border-border/70 bg-card/88 py-0'><CardContent className='grid gap-3 p-3 lg:grid-cols-4 xl:grid-cols-[1fr_190px_150px_165px_165px_165px_120px_auto]'><Input placeholder='搜索帖子标题' aria-label='搜索帖子标题' value={search.title ?? ''} onChange={(event) => patch({ title: event.target.value || undefined, page: 1 })} /><Input placeholder='搜索圈子' aria-label='搜索圈子' value={search.circle ?? ''} onChange={(event) => patch({ circle: event.target.value || undefined, page: 1 })} /><Select value={search.visibility ?? 'all'} onValueChange={(value) => patch({ visibility: value === 'all' ? undefined : value as SearchState['visibility'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部可见状态</SelectItem><SelectItem value='visible'>可见</SelectItem><SelectItem value='hidden'>不可见</SelectItem><SelectItem value='unknown'>未知</SelectItem></SelectContent></Select><Select value={search.sentiment ?? 'all'} onValueChange={(value) => patch({ sentiment: value === 'all' ? undefined : value as SentimentResult, page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部舆情结果</SelectItem><SelectItem value='negative'>负面</SelectItem><SelectItem value='non_negative'>非负面</SelectItem><SelectItem value='unrelated'>不相关</SelectItem></SelectContent></Select><Select value={search.analysisStatus ?? 'all'} onValueChange={(value) => patch({ analysisStatus: value === 'all' ? undefined : value as AnalysisStatus, page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部分析状态</SelectItem>{Object.entries(analysisStatusNames).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select><Select value={search.sort} onValueChange={(value) => patch({ sort: value as SearchState['sort'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='source'>来源顺序</SelectItem><SelectItem value='published_at'>发布时间</SelectItem><SelectItem value='reply_count'>评论数</SelectItem><SelectItem value='like_count'>点赞数</SelectItem></SelectContent></Select><Select value={search.direction} onValueChange={(value) => patch({ direction: value as SearchState['direction'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='asc'>正序</SelectItem><SelectItem value='desc'>倒序</SelectItem></SelectContent></Select><div className='flex items-center justify-end gap-2'><Button variant='outline' onClick={copyAll}><Copy className='size-4' />复制全部</Button><Select onValueChange={(value) => exportRun.mutate(value)} disabled={!templates.data?.length || exportRun.isPending}><SelectTrigger className='w-48'><Download className='size-4' /><SelectValue placeholder={templates.data?.length ? '导出 Excel' : '暂无模板'} /></SelectTrigger><SelectContent>{templates.data?.map((item) => item.versions[0] && <SelectItem key={item.versions[0].version_id} value={item.versions[0].version_id}>{item.name}</SelectItem>)}</SelectContent></Select></div></CardContent></Card>
       </div>
       <div className='min-h-[360px] flex-1 xl:min-h-0'>
         <div className='flex h-[min(65svh,640px)] min-h-[360px] flex-col overflow-hidden rounded-xl border border-border/70 bg-card/90 xl:h-full xl:min-h-0'>
         <div className='min-h-0 flex-1 overflow-auto' data-list-viewport='run-posts'>
           <Table className='min-w-[1050px]'>
-            <TableHeader><TableRow className='bg-muted/35'><TableHead className='w-16 text-center'>序号</TableHead><TableHead>标题</TableHead><TableHead>圈子</TableHead><TableHead>作者</TableHead><TableHead>发布时间</TableHead><TableHead>可见状态</TableHead><TableHead className='text-right'>评论数</TableHead><TableHead className='text-right'>点赞数</TableHead><TableHead className='text-right'>操作</TableHead></TableRow></TableHeader>
+            <TableHeader><TableRow className='bg-muted/35'><TableHead className='w-16 text-center'>序号</TableHead><TableHead>标题</TableHead><TableHead>圈子</TableHead><TableHead>作者</TableHead><TableHead>发布时间</TableHead><TableHead>可见状态</TableHead><TableHead>舆情结果</TableHead><TableHead className='text-right'>评论数</TableHead><TableHead className='text-right'>点赞数</TableHead><TableHead className='text-right'>操作</TableHead></TableRow></TableHeader>
             <TableBody>
-              {posts.isLoading ? Array.from({ length: 6 }).map((_, index) => <TableRow key={index}>{Array.from({ length: 9 }).map((__, cell) => <TableCell key={cell}><Skeleton className='h-6 w-full' /></TableCell>)}</TableRow>) : posts.data?.items.length ? posts.data.items.map((post, index) => {
+              {posts.isLoading ? Array.from({ length: 6 }).map((_, index) => <TableRow key={index}>{Array.from({ length: 10 }).map((__, cell) => <TableCell key={cell}><Skeleton className='h-6 w-full' /></TableCell>)}</TableRow>) : posts.data?.items.length ? posts.data.items.map((post, index) => {
                 const isCurrentPost = post.id === search.post
                 const isLastViewedPost = !search.post && post.id === lastViewedPostId
                 const isHighlightedPost = isCurrentPost || isLastViewedPost
@@ -256,9 +261,9 @@ export function RunDetailPage() {
                       </AnimatePresence>
                       <span className='min-w-0 truncate'>{post.title || '无标题'}</span><ExternalLink className='ml-1.5 size-3 shrink-0' />
                     </motion.a>
-                  </TableCell><TableCell>{post.source_name || post.circle_name || '—'}</TableCell><TableCell>{post.author || '—'}</TableCell><TableCell className='whitespace-nowrap'>{formatDate(post.published_at)}</TableCell><TableCell><StatusBadge value={post.visibility} label={{ visible: '可见', hidden: '不可见', unknown: '未知' }[post.visibility]} /></TableCell><TableCell className='text-right tabular-nums'>{post.reply_count ?? '—'}</TableCell><TableCell className='text-right tabular-nums'>{post.like_count ?? '—'}</TableCell><TableCell><div className='flex justify-end gap-1'><Button variant='ghost' size='sm' data-post-detail-trigger='true' onClick={(event) => openPost(post.id, event.currentTarget)}>查看</Button><Button variant='ghost' size='icon' onClick={() => copyText(post.url)} aria-label='复制帖子链接'><Copy className='size-4' /></Button></div></TableCell>
+                  </TableCell><TableCell>{post.source_name || post.circle_name || '—'}</TableCell><TableCell>{post.author || '—'}</TableCell><TableCell className='whitespace-nowrap'>{formatDate(post.published_at)}</TableCell><TableCell><StatusBadge value={post.visibility} label={{ visible: '可见', hidden: '不可见', unknown: '未知' }[post.visibility]} /></TableCell><TableCell><SentimentCell post={post} /></TableCell><TableCell className='text-right tabular-nums'>{post.reply_count ?? '—'}</TableCell><TableCell className='text-right tabular-nums'>{post.like_count ?? '—'}</TableCell><TableCell><div className='flex justify-end gap-1'><Button variant='ghost' size='sm' data-post-detail-trigger='true' onClick={(event) => openPost(post.id, event.currentTarget)}>查看</Button><Button variant='ghost' size='icon' onClick={() => copyText(post.url)} aria-label='复制帖子链接'><Copy className='size-4' /></Button></div></TableCell>
                 </TableRow>
-              }) : <TableRow><TableCell colSpan={9} className='h-52 text-center text-muted-foreground'>当前筛选条件下没有帖子结果。</TableCell></TableRow>}
+              }) : <TableRow><TableCell colSpan={10} className='h-52 text-center text-muted-foreground'>当前筛选条件下没有帖子结果。</TableCell></TableRow>}
             </TableBody>
           </Table>
         </div>
@@ -302,13 +307,61 @@ export function RunDetailPage() {
               </div>
             </div>
           </SheetHeader>
-          {detail.isLoading ? <div className='space-y-4 p-6'><Skeleton className='h-10 w-2/3' /><Skeleton className='h-72 w-full' /></div> : detail.data && <div className='space-y-6 p-6'><div className='grid gap-3 rounded-xl border bg-muted/20 p-4 sm:grid-cols-2'><Meta label='来源' value={detail.data.source_name || detail.data.circle_name} /><Meta label='作者' value={detail.data.author} /><Meta label='发布时间' value={formatDate(detail.data.published_at)} /><Meta label='平台帖子 ID' value={detail.data.platform_post_id} /></div><div><h3 className='mb-2 text-sm font-semibold'>正文快照</h3><div className='whitespace-pre-wrap rounded-xl border bg-background p-4 text-sm leading-7'>{detail.data.content || '正文为空'}</div></div><div><h3 className='mb-2 text-sm font-semibold'>一级评论（{detail.data.comments.length}）</h3><div className='space-y-2'>{detail.data.comments.length ? detail.data.comments.map((comment, index) => <div key={comment.platform_comment_id || index} className='rounded-xl border p-4'><div className='flex justify-between text-xs text-muted-foreground'><span>{comment.author || '匿名用户'}</span><span>{formatDate(comment.published_at)}</span></div><p className='mt-2 whitespace-pre-wrap text-sm'>{comment.content || '—'}</p></div>) : <div className='rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground'>没有已保存的一级评论。</div>}</div></div></div>}
+          {detail.isLoading ? <div className='space-y-4 p-6'><Skeleton className='h-10 w-2/3' /><Skeleton className='h-72 w-full' /></div> : detail.data && <PostDetailContent post={detail.data} onCorrect={() => setManualCorrectionOpen(true)} />}
         </SheetContent>
       </Sheet>
+      <ManualSentimentDialog open={manualCorrectionOpen} onOpenChange={setManualCorrectionOpen} runId={runId} post={detail.data} onSaved={async () => { await Promise.all([detail.refetch(), posts.refetch()]) }} />
       <Dialog open={manualCopy !== undefined} onOpenChange={(open) => !open && setManualCopy(undefined)}><DialogContent><DialogHeader><DialogTitle>手动复制</DialogTitle><DialogDescription>当前浏览器上下文未开放剪贴板写入，文本已全选。</DialogDescription></DialogHeader><Textarea readOnly rows={12} value={manualCopy ?? ''} onFocus={(event) => event.currentTarget.select()} autoFocus /></DialogContent></Dialog>
       <AuthDialog open={authOpen} onOpenChange={setAuthOpen} runId={runId} freshOnOpen />
     </div>
   )
+}
+
+const analysisStatusNames: Record<AnalysisStatus, string> = {
+  analysis_queued: '等待分析', analysis_running: '分析中', analysis_completed: '分析成功', analysis_partial: '分析不完整', analysis_failed: '分析失败', analysis_paused: '分析暂停', analysis_disabled: '分析禁用',
+}
+const sentimentNames: Record<SentimentResult, string> = { negative: '负面', non_negative: '非负面', unrelated: '不相关' }
+const sentimentSourceNames = { ai: 'AI', manual: '人工', inherited_manual: '继承人工' }
+const categoryNames: Record<string, string> = { product_complaint: '产品客诉', product_criticism: '产品吐槽', service_complaint: '服务投诉', brand_criticism: '品牌吐槽', competitor_attack: '竞品攻击', other: '其他' }
+const categories = Object.keys(categoryNames)
+
+function SentimentCell({ post }: { post: Post }) {
+  if (post.sentiment_result) return <div className='flex flex-wrap gap-1.5'><StatusBadge value={post.sentiment_result === 'negative' ? 'failed' : post.sentiment_result === 'non_negative' ? 'success' : 'unknown'} label={sentimentNames[post.sentiment_result]} />{post.sentiment_source && <Badge variant='outline' className='font-normal'>{sentimentSourceNames[post.sentiment_source]}</Badge>}</div>
+  return post.analysis_status ? <StatusBadge value={post.analysis_status === 'analysis_failed' ? 'failed' : post.analysis_status === 'analysis_running' ? 'running' : 'unknown'} label={analysisStatusNames[post.analysis_status]} /> : <span className='text-muted-foreground'>—</span>
+}
+
+function EvidenceList({ values }: { values?: string[] }) {
+  return values?.length ? <ul className='list-disc space-y-1 pl-5 text-sm leading-6'>{values.map((value, index) => <li key={`${value}-${index}`}>{value}</li>)}</ul> : <div className='text-sm text-muted-foreground'>暂无事实依据。</div>
+}
+
+function PostDetailContent({ post, onCorrect }: { post: Post; onCorrect: () => void }) {
+  const sentiment = post.sentiment
+  return <div className='space-y-6 p-6'>
+    <div className='grid gap-3 rounded-xl border bg-muted/20 p-4 sm:grid-cols-2'><Meta label='来源' value={post.source_name || post.circle_name} /><Meta label='作者' value={post.author} /><Meta label='发布时间' value={formatDate(post.published_at)} /><Meta label='平台帖子 ID' value={post.platform_post_id} /></div>
+    <section className='space-y-3 rounded-xl border p-4'>
+      <div className='flex flex-wrap items-start justify-between gap-3'><div><div className='flex items-center gap-2'><BrainCircuit className='size-4 text-primary' /><h3 className='text-sm font-semibold'>舆情反馈</h3></div><div className='mt-2 flex flex-wrap gap-1.5'>{post.sentiment_result ? <><StatusBadge value={post.sentiment_result === 'negative' ? 'failed' : post.sentiment_result === 'non_negative' ? 'success' : 'unknown'} label={sentimentNames[post.sentiment_result]} />{post.sentiment_source && <Badge variant='outline'>{sentimentSourceNames[post.sentiment_source]}</Badge>}</> : post.analysis_status ? <StatusBadge value={post.analysis_status === 'analysis_failed' ? 'failed' : post.analysis_status === 'analysis_running' ? 'running' : 'unknown'} label={analysisStatusNames[post.analysis_status]} /> : <Badge variant='outline'>未建立分析任务</Badge>}</div></div>{sentiment?.can_manual_correct && <Button variant='outline' size='sm' onClick={onCorrect}><PencilLine className='size-4' />人工修正</Button>}</div>
+      {sentiment?.summary && <div><div className='mb-1 text-xs font-medium text-muted-foreground'>中文总结</div><div className='whitespace-pre-wrap text-sm leading-7'>{sentiment.summary}</div></div>}
+      {sentiment?.matched_subjects.length ? <div className='flex flex-wrap gap-1.5'>{sentiment.matched_subjects.map((item) => <Badge key={item} variant='secondary'>{item}</Badge>)}</div> : null}
+      {sentiment?.primary_category && <div className='text-sm'>主要类型：<Badge variant='outline'>{categoryNames[sentiment.primary_category] ?? sentiment.primary_category}</Badge>{sentiment.secondary_categories.length ? <span className='ml-2 text-muted-foreground'>次要类型：{sentiment.secondary_categories.map((item) => categoryNames[item] ?? item).join('、')}</span> : null}</div>}
+      {sentiment?.modalities && <div className='grid gap-3 md:grid-cols-2'><div className='rounded-lg bg-muted/30 p-3'><div className='mb-2 text-xs font-medium text-muted-foreground'>文字依据 · {sentiment.modalities.text.status}</div><EvidenceList values={sentiment.modalities.text.evidence} /></div>{post.image_urls.map((url, index) => { const item = sentiment.modalities?.image.items.find((value) => value.input_index === index); return <div key={url} className='space-y-2 rounded-lg bg-muted/30 p-3'><div className='text-xs font-medium text-muted-foreground'>图片 {index + 1} · {item?.status ?? '未报告'}</div><img src={url} loading='lazy' referrerPolicy='no-referrer' className='max-h-72 w-full rounded-lg border object-contain' alt={`帖子图片 ${index + 1}`} /><EvidenceList values={item?.evidence} /></div> })}{post.video_urls.map((url, index) => { const visual = sentiment.modalities?.video_visual.items.find((value) => value.input_index === index); const audio = sentiment.modalities?.video_audio.items.find((value) => value.input_index === index); return <div key={url} className='space-y-2 rounded-lg bg-muted/30 p-3 md:col-span-2'><div className='text-xs font-medium text-muted-foreground'>视频 {index + 1} · 画面 {visual?.status ?? '未报告'} · 音频 {audio?.status ?? '未报告'}</div><video controls preload='none' src={url} className='max-h-96 w-full rounded-lg border'>当前浏览器未能播放该视频。</video><div className='grid gap-3 md:grid-cols-2'><div><div className='mb-1 text-xs text-muted-foreground'>画面依据</div><EvidenceList values={visual?.evidence} /></div><div><div className='mb-1 text-xs text-muted-foreground'>音频依据</div><EvidenceList values={audio?.evidence} /></div></div></div> })}</div>}
+      {(post.image_urls.length > 0 || post.video_urls.length > 0) && !sentiment?.modalities && <div className='grid gap-3 md:grid-cols-2'>{post.image_urls.map((url, index) => <img key={url} src={url} loading='lazy' referrerPolicy='no-referrer' className='max-h-72 w-full rounded-lg border object-contain' alt={`帖子图片 ${index + 1}`} />)}{post.video_urls.map((url) => <video key={url} controls preload='none' src={url} className='max-h-96 w-full rounded-lg border' />)}</div>}
+      {sentiment?.error_message && <Alert variant='destructive'><AlertTitle>{analysisStatusNames[sentiment.analysis_status ?? 'analysis_failed']}</AlertTitle><AlertDescription>{sentiment.error_message}</AlertDescription></Alert>}
+      {sentiment?.model_code && <div className='text-xs text-muted-foreground'>模型：{sentiment.model_code}{sentiment.updated_at ? ` · 更新时间：${formatDate(sentiment.updated_at)}` : ''}{sentiment.duration_ms !== undefined ? ` · ${sentiment.duration_ms} ms` : ''}</div>}
+      <Button variant='link' className='h-auto px-0' asChild><a href={post.url} target='_blank' rel='noreferrer'>媒体无法显示时打开原帖<ExternalLink className='size-3.5' /></a></Button>
+    </section>
+    <div><h3 className='mb-2 text-sm font-semibold'>正文快照</h3><div className='whitespace-pre-wrap rounded-xl border bg-background p-4 text-sm leading-7'>{post.content || '正文为空'}</div></div>
+    <div><h3 className='mb-2 text-sm font-semibold'>一级评论（{post.comments.length}）</h3><div className='space-y-2'>{post.comments.length ? post.comments.map((comment, index) => <div key={comment.platform_comment_id || index} className='rounded-xl border p-4'><div className='flex justify-between text-xs text-muted-foreground'><span>{comment.author || '匿名用户'}</span><span>{formatDate(comment.published_at)}</span></div><p className='mt-2 whitespace-pre-wrap text-sm'>{comment.content || '—'}</p></div>) : <div className='rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground'>没有已保存的一级评论。</div>}</div></div>
+  </div>
+}
+
+function ManualSentimentDialog({ open, onOpenChange, runId, post, onSaved }: { open: boolean; onOpenChange: (open: boolean) => void; runId: string; post?: Post; onSaved: () => Promise<void> }) {
+  const [result, setResult] = useState<SentimentResult>('negative')
+  const [primary, setPrimary] = useState('product_complaint')
+  const [secondary, setSecondary] = useState<string[]>([])
+  const [note, setNote] = useState('')
+  useEffect(() => { if (open) { setResult(post?.sentiment_result ?? 'negative'); setPrimary(post?.sentiment?.primary_category ?? 'product_complaint'); setSecondary(post?.sentiment?.secondary_categories ?? []); setNote('') } }, [open, post])
+  const save = useMutation({ mutationFn: (action: 'set_result' | 'restore_ai') => api(`/runs/${runId}/posts/${post?.id}/sentiment/manual-revisions`, { method: 'POST', body: JSON.stringify({ action, result: action === 'set_result' ? result : undefined, primary_category: action === 'set_result' && result === 'negative' ? primary : undefined, secondary_categories: action === 'set_result' && result === 'negative' ? secondary : [], note: note.trim() || undefined }) }), onSuccess: async () => { await onSaved(); onOpenChange(false); toast.success('舆情结论已更新') }, onError: (error) => toast.error('人工修正失败', { description: errorMessage(error) }) })
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className='sm:max-w-xl'><DialogHeader><DialogTitle>人工修正舆情结论</DialogTitle><DialogDescription>本次操作追加保存历史，人工结论优先于 AI；分析中状态不会开放此入口。</DialogDescription></DialogHeader><div className='space-y-5'><div><Label>结论</Label><Select value={result} onValueChange={(value) => { setResult(value as SentimentResult); if (value !== 'negative') setSecondary([]) }}><SelectTrigger className='mt-2'><SelectValue /></SelectTrigger><SelectContent><SelectItem value='negative'>负面</SelectItem><SelectItem value='non_negative'>非负面</SelectItem><SelectItem value='unrelated'>不相关</SelectItem></SelectContent></Select></div>{result === 'negative' && <><div><Label>主要类型</Label><Select value={primary} onValueChange={(value) => { setPrimary(value); setSecondary((items) => items.filter((item) => item !== value)) }}><SelectTrigger className='mt-2'><SelectValue /></SelectTrigger><SelectContent>{categories.map((value) => <SelectItem key={value} value={value}>{categoryNames[value]}</SelectItem>)}</SelectContent></Select></div><div><Label>次要类型（可多选）</Label><div className='mt-2 grid gap-2 sm:grid-cols-2'>{categories.filter((value) => value !== primary).map((value) => <label key={value} className='flex items-center gap-2 rounded-lg border p-2.5 text-sm'><Checkbox checked={secondary.includes(value)} onCheckedChange={(checked) => setSecondary(checked ? [...secondary, value] : secondary.filter((item) => item !== value))} />{categoryNames[value]}</label>)}</div></div></>}<div><Label htmlFor='sentiment-note'>修正备注（选填）</Label><Textarea id='sentiment-note' className='mt-2' value={note} onChange={(event) => setNote(event.target.value)} /></div><div className='flex flex-wrap justify-between gap-2'><Button variant='outline' disabled={!post?.sentiment?.can_restore_ai || save.isPending} onClick={() => save.mutate('restore_ai')}>恢复 AI 结论</Button><Button disabled={save.isPending} onClick={() => save.mutate('set_result')}>{save.isPending ? <LoaderCircle className='size-4 animate-spin' /> : <PencilLine className='size-4' />}保存人工修正</Button></div></div></DialogContent></Dialog>
 }
 
 function Meta({ label, value }: { label: string; value?: string }) { return <div><div className='text-xs text-muted-foreground'>{label}</div><div className='mt-1 break-all text-sm'>{value || '—'}</div></div> }

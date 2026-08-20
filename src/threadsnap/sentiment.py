@@ -1,0 +1,994 @@
+"""在线多模态舆情配置、持久任务、模型客户端与人工修订。"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import socket
+import threading
+from ipaddress import ip_address
+from time import monotonic
+from typing import Any, Callable, Literal
+from urllib.parse import urlsplit
+
+import httpx
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from sqlalchemy import select, update
+from sqlalchemy.orm import Session, sessionmaker
+
+from .errors import DomainError
+from .models import (
+    ExtractionRun,
+    ManualSentimentRevision,
+    PostSnapshot,
+    SentimentAnalysis,
+    SentimentConfig,
+    utc_now,
+)
+from .poc.sentiment import parse_feedback_text, parse_sse_lines, stable_url_hash
+from .schemas import ManualSentimentRevisionCreate, SentimentConfigUpdate
+from .session_store import SessionStore
+
+MODEL_CODES = ("qwen3.5-omni-plus-2026-03-15",)
+PROMPT_VERSION = "v1"
+CATEGORIES = (
+    "product_complaint",
+    "product_criticism",
+    "service_complaint",
+    "brand_criticism",
+    "competitor_attack",
+    "other",
+)
+MANUAL_ALLOWED_STATUSES = frozenset(
+    {"analysis_completed", "analysis_partial", "analysis_failed", "analysis_disabled"}
+)
+DEFAULT_PRODUCTS = [
+    "A9",
+    "A9L",
+    "QQ3 EV",
+    "T9L",
+    "T11",
+    "T9",
+    "艾瑞泽8",
+    "艾瑞泽8PRO",
+    "瑞虎8",
+    "瑞虎8PLUS",
+    "瑞虎8PRO",
+    "瑞虎9",
+    "瑞虎7L",
+    "风云T7",
+]
+
+
+class TextCoverage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["absent", "processed", "unprocessed"]
+    evidence: list[str] = Field(default_factory=list)
+
+
+class MediaItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    input_index: int = Field(ge=0)
+    url_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    status: Literal[
+        "absent",
+        "processed",
+        "speech",
+        "silent",
+        "no_speech",
+        "inaccessible",
+        "unrecognizable",
+        "unprocessed",
+    ]
+    evidence: list[str] = Field(default_factory=list)
+
+
+class MediaCoverage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: str
+    expected_count: int = Field(ge=0)
+    processed_count: int = Field(ge=0)
+    items: list[MediaItem] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_counts(self) -> "MediaCoverage":
+        if len(self.items) != self.expected_count:
+            raise ValueError("媒体 items 数量必须等于 expected_count")
+        if self.processed_count > self.expected_count:
+            raise ValueError("processed_count 不得超过 expected_count")
+        actual_processed = sum(
+            item.status in {"processed", "speech", "silent", "no_speech"}
+            for item in self.items
+        )
+        if self.processed_count != actual_processed:
+            raise ValueError("processed_count 与逐媒体处理状态不一致")
+        if self.expected_count == 0 and self.status != "absent":
+            raise ValueError("没有媒体输入时覆盖状态必须为 absent")
+        if self.expected_count > 0 and self.status == "absent":
+            raise ValueError("存在媒体输入时覆盖状态不得为 absent")
+        return self
+
+
+class VisualCoverage(MediaCoverage):
+    status: Literal["absent", "processed", "inaccessible", "unrecognizable", "unprocessed"]
+
+
+class AudioCoverage(MediaCoverage):
+    status: Literal[
+        "absent",
+        "speech",
+        "silent",
+        "no_speech",
+        "inaccessible",
+        "unrecognizable",
+        "unprocessed",
+    ]
+
+
+class Modalities(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: TextCoverage
+    image: VisualCoverage
+    video_visual: VisualCoverage
+    video_audio: AudioCoverage
+
+
+class SentimentFeedback(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    subject_relevance: bool
+    matched_subjects: list[str] = Field(default_factory=list)
+    sentiment: Literal["negative", "non_negative"] | None
+    primary_category: Literal[
+        "product_complaint",
+        "product_criticism",
+        "service_complaint",
+        "brand_criticism",
+        "competitor_attack",
+        "other",
+    ] | None
+    secondary_categories: list[
+        Literal[
+            "product_complaint",
+            "product_criticism",
+            "service_complaint",
+            "brand_criticism",
+            "competitor_attack",
+            "other",
+        ]
+    ] = Field(default_factory=list)
+    modalities: Modalities
+    summary: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_result(self) -> "SentimentFeedback":
+        if not self.subject_relevance:
+            if (
+                self.sentiment is not None
+                or self.primary_category is not None
+                or self.secondary_categories
+            ):
+                raise ValueError("不相关结果的情感和负面类型必须为空")
+        elif self.sentiment == "negative" and self.primary_category is None:
+            raise ValueError("负面结果必须包含 primary_category")
+        elif self.sentiment == "non_negative" and (
+            self.primary_category is not None or self.secondary_categories
+        ):
+            raise ValueError("非负面结果不得包含负面类型")
+        elif self.sentiment is None:
+            raise ValueError("相关结果必须包含 sentiment")
+        if self.primary_category in self.secondary_categories:
+            raise ValueError("次要类型不得重复主要类型")
+        if len(set(self.secondary_categories)) != len(self.secondary_categories):
+            raise ValueError("次要类型不得重复")
+        return self
+
+
+def sentiment_input_hash(post: PostSnapshot) -> str:
+    """只对实际模型输入计算稳定哈希，媒体签名查询不影响继承。"""
+
+    payload = {
+        "title": post.title or "",
+        "content": post.content or "",
+        "images": [stable_url_hash(value) for value in post.image_urls or []],
+        "videos": [stable_url_hash(value) for value in post.video_urls or []],
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def validate_modality_identity(feedback: SentimentFeedback, post: PostSnapshot) -> None:
+    """核对模型逐媒体索引和稳定 URL 哈希确实对应本次输入。"""
+
+    has_text = bool((post.title or "").strip() or (post.content or "").strip())
+    if has_text == (feedback.modalities.text.status == "absent"):
+        raise ValueError("文字覆盖状态与实际标题、正文输入不一致")
+    expected = {
+        "image": [stable_url_hash(value) for value in post.image_urls or []],
+        "video_visual": [stable_url_hash(value) for value in post.video_urls or []],
+        "video_audio": [stable_url_hash(value) for value in post.video_urls or []],
+    }
+    for name, hashes in expected.items():
+        coverage = getattr(feedback.modalities, name)
+        if coverage.expected_count != len(hashes):
+            raise ValueError(f"{name}.expected_count 与实际输入数量不一致")
+        observed = {item.input_index: item.url_hash for item in coverage.items}
+        if set(observed) != set(range(len(hashes))):
+            raise ValueError(f"{name}.items 的输入索引不完整或重复")
+        if any(observed[index] != value for index, value in enumerate(hashes)):
+            raise ValueError(f"{name}.items 的 URL 哈希与实际输入不一致")
+
+
+def validate_public_https_base_url(value: str, *, resolve: bool) -> str:
+    """限制模型入口为无凭证、无查询的公网 HTTPS 根地址。"""
+
+    normalized = value.strip().rstrip("/")
+    parts = urlsplit(normalized)
+    if (
+        parts.scheme != "https"
+        or not parts.hostname
+        or parts.username
+        or parts.password
+        or parts.query
+        or parts.fragment
+    ):
+        raise DomainError(
+            "SENTIMENT_BASE_URL_INVALID",
+            "API 地址必须是无账号、查询参数和片段的公网 HTTPS 地址。",
+        )
+    if resolve:
+        try:
+            addresses = {
+                item[4][0]
+                for item in socket.getaddrinfo(parts.hostname, parts.port or 443, type=socket.SOCK_STREAM)
+            }
+        except OSError as exc:
+            raise DomainError("SENTIMENT_HOST_UNRESOLVED", "API 地址域名解析失败。") from exc
+        if not addresses or any(not ip_address(value).is_global for value in addresses):
+            raise DomainError(
+                "SENTIMENT_HOST_NOT_PUBLIC",
+                "API 地址只允许解析到公网 IP。",
+            )
+    return normalized
+
+
+def build_prompt(
+    post: PostSnapshot, config: SentimentConfig, subject_snapshot: dict[str, Any] | None = None
+) -> str:
+    images = [stable_url_hash(value) for value in post.image_urls or []]
+    videos = [stable_url_hash(value) for value in post.video_urls or []]
+    subject = subject_snapshot or {
+        "brand": config.brand,
+        "products": config.products,
+        "supplement": config.supplement or "",
+    }
+    return f"""只返回一个标准 JSON 对象，不使用 Markdown，不联网搜索。
+判定对象配置：{json.dumps(subject, ensure_ascii=False)}。
+请结合语境自行识别品牌、产品、服务和常见别名；内容与判定对象无关时 subject_relevance=false。
+对判定对象不利为 negative，中性或正面为 non_negative。负面主要类型仅允许：{json.dumps(CATEGORIES, ensure_ascii=False)}。
+只分析标题、正文、全部图片和全部视频，不分析评论。逐项报告文字、图片、视频画面和视频音频的实际处理状态与中文事实依据。
+
+标题：{post.title or ''}
+正文：{post.content or ''}
+图片 URL 哈希：{json.dumps(images)}
+视频 URL 哈希：{json.dumps(videos)}
+
+返回字段：subject_relevance、matched_subjects、sentiment、primary_category、secondary_categories、modalities、summary。
+不相关时 sentiment 与 primary_category 为 null；负面必须有 primary_category；次要类型不得重复主要类型。
+modalities.text 包含 status/evidence；modalities.image、video_visual、video_audio 均包含 status、expected_count、processed_count、items。
+每个 items 项包含 input_index、对应 url_hash、status、evidence，items 数量必须等于 expected_count。
+expected_count：image={len(images)}，video_visual={len(videos)}，video_audio={len(videos)}。"""
+
+
+def build_request(
+    post: PostSnapshot,
+    config: SentimentConfig,
+    *,
+    tiny_test: bool = False,
+    subject_snapshot: dict[str, Any] | None = None,
+    model_code: str | None = None,
+) -> dict[str, Any]:
+    if tiny_test:
+        content: list[dict[str, Any]] = [
+            {"type": "text", "text": "只返回 JSON 对象：{\"ok\":true}。"}
+        ]
+    else:
+        content = [
+            *({"type": "image_url", "image_url": {"url": value}} for value in post.image_urls or []),
+            *({"type": "video_url", "video_url": {"url": value}} for value in post.video_urls or []),
+            {"type": "text", "text": build_prompt(post, config, subject_snapshot)},
+        ]
+    return {
+        "model": model_code or config.model_code,
+        "messages": [{"role": "user", "content": content}],
+        "modalities": ["text"],
+        "response_format": {"type": "json_object"},
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+
+
+class SentimentModelClient:
+    """窄 OpenAI 兼容客户端：不跟随重定向，不自动重试。"""
+
+    def request(
+        self, base_url: str, api_key: str, body: dict[str, Any]
+    ) -> tuple[str, dict[str, Any] | None, str | None, int]:
+        endpoint = base_url.rstrip("/") + "/chat/completions"
+        started = monotonic()
+        timeout = httpx.Timeout(connect=20.0, read=600.0, write=60.0, pool=20.0)
+        with httpx.Client(timeout=timeout, follow_redirects=False) as client:
+            with client.stream(
+                "POST",
+                endpoint,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json=body,
+            ) as response:
+                if 300 <= response.status_code < 400:
+                    raise ModelRequestError(
+                        "模型入口返回重定向，已阻止跨地址发送凭证。",
+                        status_code=response.status_code,
+                        config_error=True,
+                    )
+                if response.status_code >= 400:
+                    response_text = response.read().decode("utf-8", errors="replace")[:2000].lower()
+                    model_error = response.status_code in {400, 404} and "model" in response_text
+                    input_too_large = response.status_code in {400, 413} and any(
+                        marker in response_text
+                        for marker in ("limit", "length", "too large", "too long")
+                    )
+                    raise ModelRequestError(
+                        f"模型接口返回 HTTP {response.status_code}",
+                        status_code=response.status_code,
+                        retryable=response.status_code == 429 or response.status_code >= 500,
+                        config_error=response.status_code in {401, 403} or model_error,
+                        input_too_large=input_too_large,
+                    )
+                request_id = response.headers.get("x-request-id") or response.headers.get(
+                    "x-dashscope-request-id"
+                )
+                text, usage, _chunks = parse_sse_lines(response.iter_lines())
+        return text, usage, request_id, round((monotonic() - started) * 1000)
+
+
+class ModelRequestError(RuntimeError):
+    """模型传输错误的受控分类，不携带提供方响应正文。"""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retryable: bool = False,
+        config_error: bool = False,
+        input_too_large: bool = False,
+    ):
+        super().__init__(message)
+        self.status_code = status_code
+        self.retryable = retryable
+        self.config_error = config_error
+        self.input_too_large = input_too_large
+
+
+class SentimentService:
+    def __init__(
+        self,
+        factory: sessionmaker[Session],
+        secrets: SessionStore,
+        event_publisher: Callable[..., Any] | None = None,
+        client: SentimentModelClient | None = None,
+    ):
+        self.factory = factory
+        self.secrets = secrets
+        self.event_publisher = event_publisher
+        self.client = client or SentimentModelClient()
+
+    @staticmethod
+    def ensure_default(db: Session) -> SentimentConfig:
+        config = db.get(SentimentConfig, 1)
+        if not config:
+            config = SentimentConfig(id=1, products=list(DEFAULT_PRODUCTS))
+            db.add(config)
+            db.flush()
+        return config
+
+    def get_config(self) -> dict[str, Any]:
+        with self.factory.begin() as db:
+            return self.config_dict(self.ensure_default(db))
+
+    @staticmethod
+    def config_dict(config: SentimentConfig) -> dict[str, Any]:
+        return {
+            "revision": config.revision,
+            "enabled": config.enabled,
+            "api_base_url": config.base_url,
+            "api_key_configured": bool(config.encrypted_api_key),
+            "model_code": config.model_code,
+            "available_models": list(MODEL_CODES),
+            "validation_status": config.validation_status,
+            "validation_error": config.validation_error,
+            "validated_at": config.validated_at,
+            "subject": {
+                "brand": config.brand,
+                "products": config.products,
+                "supplement": config.supplement,
+                "version": config.subject_version,
+            },
+        }
+
+    def update_config(self, value: SentimentConfigUpdate) -> dict[str, Any]:
+        base_url = (
+            validate_public_https_base_url(value.api_base_url, resolve=False)
+            if value.api_base_url
+            else ""
+        )
+        with self.factory.begin() as db:
+            config = self.ensure_default(db)
+            if value.revision != config.revision:
+                raise DomainError(
+                    "SENTIMENT_CONFIG_REVISION_CONFLICT",
+                    "舆情配置已更新，请刷新后重试。",
+                    status_code=409,
+                )
+            key_changed = value.api_key is not None
+            connection_changed = (
+                base_url != config.base_url or value.model_code != config.model_code or key_changed
+            )
+            subject_changed = (
+                value.subject.brand.strip() != config.brand
+                or value.subject.products != config.products
+                or (value.subject.supplement or "").strip() != (config.supplement or "")
+            )
+            if value.api_key is not None:
+                config.encrypted_api_key = self.secrets.encrypt_secret(value.api_key.strip())
+            if value.enabled and not connection_changed and (
+                config.validation_status != "valid"
+                or not config.encrypted_api_key
+                or not base_url
+            ):
+                raise DomainError(
+                    "SENTIMENT_CONFIG_NOT_VALIDATED",
+                    "连接配置必须先保存并通过连接测试，之后才能启用分析。",
+                    status_code=409,
+                )
+            was_enabled = config.enabled
+            # 连接参数一旦变化，保存新值并自动关闭；新连接测试通过后再显式开启。
+            config.enabled = value.enabled and not connection_changed
+            config.base_url = base_url
+            config.model_code = value.model_code
+            config.brand = value.subject.brand.strip()
+            config.products = value.subject.products
+            config.supplement = (value.subject.supplement or "").strip() or None
+            config.revision += 1
+            if subject_changed:
+                config.subject_version += 1
+            if connection_changed:
+                config.validation_status = "unverified"
+                config.validation_error = None
+                config.validated_at = None
+            if was_enabled and not config.enabled:
+                db.execute(
+                    update(SentimentAnalysis)
+                    .where(SentimentAnalysis.status == "analysis_queued")
+                    .values(status="analysis_disabled", finished_at=utc_now())
+                )
+                db.execute(
+                    update(PostSnapshot)
+                    .where(PostSnapshot.analysis_status == "analysis_queued")
+                    .values(analysis_status="analysis_disabled", sentiment_updated_at=utc_now())
+                )
+            elif not was_enabled and config.enabled:
+                db.execute(
+                    update(SentimentAnalysis)
+                    .where(SentimentAnalysis.status == "analysis_paused")
+                    .values(status="analysis_queued", error_code=None, error_message=None)
+                )
+                db.execute(
+                    update(PostSnapshot)
+                    .where(PostSnapshot.analysis_status == "analysis_paused")
+                    .values(analysis_status="analysis_queued", sentiment_updated_at=utc_now())
+                )
+            return self.config_dict(config)
+
+    def test_connection(self) -> dict[str, Any]:
+        with self.factory() as db:
+            config = self.ensure_default(db)
+            if not config.base_url or not config.encrypted_api_key:
+                raise DomainError(
+                    "SENTIMENT_CONFIG_INCOMPLETE", "请先保存 API 地址和 API Key。", status_code=409
+                )
+            config_id = config.id
+            revision = config.revision
+            base_url = validate_public_https_base_url(config.base_url, resolve=True)
+            api_key = self.secrets.decrypt_secret(config.encrypted_api_key)
+            body = build_request(PostSnapshot(), config, tiny_test=True)
+        try:
+            text, _usage, request_id, duration_ms = self.client.request(base_url, api_key, body)
+            parsed, _strict, _recovered = parse_feedback_text(text)
+            if parsed.get("ok") is not True:
+                raise ValueError("测试响应缺少 ok=true")
+        except (httpx.HTTPError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
+            with self.factory.begin() as db:
+                config = db.get(SentimentConfig, config_id)
+                if config and config.revision == revision:
+                    config.validation_status = "invalid"
+                    config.validation_error = str(exc)[:1000]
+                    config.validated_at = utc_now()
+            raise DomainError("SENTIMENT_CONNECTION_FAILED", f"连接测试失败：{exc}") from exc
+        with self.factory.begin() as db:
+            config = db.get(SentimentConfig, config_id)
+            if not config or config.revision != revision:
+                raise DomainError(
+                    "SENTIMENT_CONFIG_CHANGED", "测试期间配置已变化，请重新测试。", status_code=409
+                )
+            config.validation_status = "valid"
+            config.validation_error = None
+            config.validated_at = utc_now()
+        return {"status": "valid", "request_id": request_id, "duration_ms": duration_ms}
+
+    def enqueue_for_post(self, db: Session, post: PostSnapshot, platform_code: str) -> None:
+        """新帖子入库时决定禁用、继承、精确复用或排队。"""
+
+        config = self.ensure_default(db)
+        input_hash = sentiment_input_hash(post)
+        status = (
+            "analysis_queued"
+            if config.enabled and config.validation_status == "valid"
+            else "analysis_disabled"
+        )
+        analysis = SentimentAnalysis(
+            post_id=post.id,
+            platform_code=platform_code,
+            platform_post_id=post.platform_post_id,
+            input_hash=input_hash,
+            status=status,
+            config_revision=config.revision,
+            subject_version=config.subject_version,
+            subject_snapshot={
+                "brand": config.brand,
+                "products": list(config.products),
+                "supplement": config.supplement or "",
+            },
+            model_code=config.model_code,
+            prompt_version=PROMPT_VERSION,
+        )
+        if status == "analysis_disabled":
+            post.analysis_status = status
+            post.sentiment_updated_at = utc_now()
+            db.add(analysis)
+            db.flush()
+            return
+        # 内容未变化时，继承同一平台帖子身份的最后一条仍有效人工结论。
+        latest_revision = db.scalar(
+            select(ManualSentimentRevision)
+            .join(PostSnapshot, PostSnapshot.id == ManualSentimentRevision.post_id)
+            .join(SentimentAnalysis, SentimentAnalysis.post_id == PostSnapshot.id)
+            .where(
+                SentimentAnalysis.platform_code == platform_code,
+                PostSnapshot.platform_post_id == post.platform_post_id,
+                SentimentAnalysis.input_hash == input_hash,
+                PostSnapshot.id != post.id,
+            )
+            .order_by(ManualSentimentRevision.created_at.desc())
+            .limit(1)
+        )
+        previous = latest_revision if latest_revision and latest_revision.action == "set_result" else None
+        if previous:
+            analysis.status = "analysis_completed"
+            analysis.finished_at = utc_now()
+            post.analysis_status = analysis.status
+            post.sentiment_result = previous.result
+            post.sentiment_source = "inherited_manual"
+            inherited = ManualSentimentRevision(
+                post_id=post.id,
+                action="set_result",
+                result=previous.result,
+                primary_category=previous.primary_category,
+                secondary_categories=previous.secondary_categories,
+                note=previous.note,
+                inherited_from_revision_id=previous.id,
+            )
+            db.add(inherited)
+        else:
+            reused = db.scalar(
+                select(SentimentAnalysis)
+                .where(
+                    SentimentAnalysis.platform_code == platform_code,
+                    SentimentAnalysis.platform_post_id == post.platform_post_id,
+                    SentimentAnalysis.input_hash == input_hash,
+                    SentimentAnalysis.subject_version == config.subject_version,
+                    SentimentAnalysis.prompt_version == PROMPT_VERSION,
+                    SentimentAnalysis.model_code == config.model_code,
+                    SentimentAnalysis.status == "analysis_completed",
+                    SentimentAnalysis.result.is_not(None),
+                )
+                .order_by(SentimentAnalysis.finished_at.desc())
+            )
+            if reused:
+                analysis.status = "analysis_completed"
+                analysis.result = reused.result
+                analysis.matched_subjects = reused.matched_subjects
+                analysis.primary_category = reused.primary_category
+                analysis.secondary_categories = reused.secondary_categories
+                analysis.summary = reused.summary
+                analysis.modalities = reused.modalities
+                analysis.reused_from_analysis_id = reused.id
+                analysis.finished_at = utc_now()
+                post.sentiment_result = reused.result
+                post.sentiment_source = "ai"
+            post.analysis_status = analysis.status
+        post.sentiment_updated_at = utc_now()
+        db.add(analysis)
+        db.flush()
+
+    def manual_revision(
+        self, run_id: str, post_id: str, value: ManualSentimentRevisionCreate
+    ) -> dict[str, Any]:
+        with self.factory.begin() as db:
+            post = db.get(PostSnapshot, post_id)
+            if not post or post.run_id not in _related_run_ids(db, run_id):
+                raise DomainError("POST_NOT_FOUND", "指定帖子快照不存在。", status_code=404)
+            analysis = db.scalar(
+                select(SentimentAnalysis).where(SentimentAnalysis.post_id == post.id)
+            )
+            if post.analysis_status not in MANUAL_ALLOWED_STATUSES:
+                raise DomainError(
+                    "SENTIMENT_MANUAL_CONFLICT",
+                    "排队、分析中或暂停状态暂不允许人工修正。",
+                    status_code=409,
+                )
+            if value.action == "restore_ai":
+                if not analysis or analysis.status != "analysis_completed" or not analysis.result:
+                    raise DomainError(
+                        "SENTIMENT_AI_RESULT_UNAVAILABLE",
+                        "当前帖子没有可恢复的完整 AI 结论。",
+                        status_code=409,
+                    )
+                revision = ManualSentimentRevision(post_id=post.id, action="restore_ai", note=value.note)
+                post.sentiment_result = analysis.result
+                post.sentiment_source = "ai"
+            else:
+                self._validate_manual(value)
+                revision = ManualSentimentRevision(
+                    post_id=post.id,
+                    action="set_result",
+                    result=value.result,
+                    primary_category=value.primary_category,
+                    secondary_categories=list(dict.fromkeys(value.secondary_categories)),
+                    note=(value.note or "").strip() or None,
+                )
+                post.sentiment_result = value.result
+                post.sentiment_source = "manual"
+            post.sentiment_updated_at = utc_now()
+            db.add(revision)
+            db.flush()
+            return self.detail_dict(db, post)
+
+    @staticmethod
+    def _validate_manual(value: ManualSentimentRevisionCreate) -> None:
+        if value.result is None:
+            raise DomainError("SENTIMENT_RESULT_REQUIRED", "人工修正必须选择结论。")
+        if value.result == "negative" and value.primary_category is None:
+            raise DomainError("SENTIMENT_CATEGORY_REQUIRED", "负面结论必须选择主要类型。")
+        if value.result != "negative" and (
+            value.primary_category is not None or value.secondary_categories
+        ):
+            raise DomainError("SENTIMENT_CATEGORY_INVALID", "非负面或不相关结论不填写负面类型。")
+        if value.primary_category in value.secondary_categories:
+            raise DomainError("SENTIMENT_CATEGORY_DUPLICATED", "次要类型不得重复主要类型。")
+
+    @staticmethod
+    def detail_dict(db: Session, post: PostSnapshot) -> dict[str, Any]:
+        analysis = db.scalar(
+            select(SentimentAnalysis).where(SentimentAnalysis.post_id == post.id)
+        )
+        revisions = list(
+            db.scalars(
+                select(ManualSentimentRevision)
+                .where(ManualSentimentRevision.post_id == post.id)
+                .order_by(ManualSentimentRevision.created_at.desc())
+            )
+        )
+        active = next((item for item in revisions if item.action == "set_result"), None)
+        return {
+            "analysis_status": post.analysis_status,
+            "result": post.sentiment_result,
+            "source": post.sentiment_source,
+            "summary": analysis.summary if analysis else None,
+            "matched_subjects": analysis.matched_subjects if analysis else [],
+            "primary_category": (
+                active.primary_category if post.sentiment_source in {"manual", "inherited_manual"} and active else analysis.primary_category if analysis else None
+            ),
+            "secondary_categories": (
+                active.secondary_categories if post.sentiment_source in {"manual", "inherited_manual"} and active else analysis.secondary_categories if analysis else []
+            ),
+            "modalities": analysis.modalities if analysis else None,
+            "model_code": analysis.model_code if analysis else None,
+            "provider_request_id": analysis.provider_request_id if analysis else None,
+            "duration_ms": analysis.duration_ms if analysis else None,
+            "error_code": analysis.error_code if analysis else None,
+            "error_message": analysis.error_message if analysis else None,
+            "updated_at": post.sentiment_updated_at,
+            "can_manual_correct": post.analysis_status in MANUAL_ALLOWED_STATUSES,
+            "can_restore_ai": bool(analysis and analysis.status == "analysis_completed" and analysis.result),
+            "manual_history": [
+                {
+                    "id": item.id,
+                    "action": item.action,
+                    "result": item.result,
+                    "primary_category": item.primary_category,
+                    "secondary_categories": item.secondary_categories,
+                    "note": item.note,
+                    "inherited": bool(item.inherited_from_revision_id),
+                    "created_at": item.created_at,
+                }
+                for item in revisions
+            ],
+        }
+
+
+class SentimentWorker:
+    """与提取 Worker 分离的单线程持久任务执行器。"""
+
+    def __init__(self, service: SentimentService, poll_seconds: float = 1.0):
+        self.service = service
+        self.poll_seconds = poll_seconds
+        self.stop_event = threading.Event()
+        self.thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self.thread and self.thread.is_alive():
+            return
+        self.recover_interrupted()
+        self.stop_event.clear()
+        self.thread = threading.Thread(target=self._loop, name="threadsnap-sentiment", daemon=True)
+        self.thread.start()
+
+    def stop(self) -> None:
+        self.stop_event.set()
+        if self.thread:
+            self.thread.join(timeout=10)
+
+    def recover_interrupted(self) -> None:
+        with self.service.factory.begin() as db:
+            db.execute(
+                update(SentimentAnalysis)
+                .where(SentimentAnalysis.status == "analysis_running")
+                .values(status="analysis_queued", started_at=None)
+            )
+            db.execute(
+                update(PostSnapshot)
+                .where(PostSnapshot.analysis_status == "analysis_running")
+                .values(analysis_status="analysis_queued")
+            )
+
+    def _loop(self) -> None:
+        while not self.stop_event.is_set():
+            try:
+                progressed = self.process_once()
+            except Exception:
+                progressed = False
+            if not progressed:
+                self.stop_event.wait(self.poll_seconds)
+
+    def process_once(self) -> bool:
+        with self.service.factory.begin() as db:
+            config = self.service.ensure_default(db)
+            if not config.enabled or config.validation_status != "valid":
+                return False
+            analysis = db.scalar(
+                select(SentimentAnalysis)
+                .where(SentimentAnalysis.status == "analysis_queued")
+                .order_by(SentimentAnalysis.created_at)
+                .limit(1)
+            )
+            if not analysis:
+                return False
+            post = db.get(PostSnapshot, analysis.post_id)
+            if not post:
+                db.delete(analysis)
+                return True
+            analysis.status = "analysis_running"
+            analysis.started_at = utc_now()
+            post.analysis_status = analysis.status
+            analysis_id = analysis.id
+            post_id = post.id
+        try:
+            base_url = validate_public_https_base_url(config.base_url, resolve=True)
+            api_key = self.service.secrets.decrypt_secret(config.encrypted_api_key or b"")
+            body = build_request(
+                post,
+                config,
+                subject_snapshot=analysis.subject_snapshot,
+                model_code=analysis.model_code,
+            )
+        except Exception as exc:
+            self._record_failure(
+                analysis_id,
+                post_id,
+                ModelRequestError(f"模型运行配置不可用：{exc}", config_error=True),
+            )
+            return True
+        raw = ""
+        retry_count = 0
+        transport_retries = 0
+        structure_retries = 0
+        media_retries = 0
+        while True:
+            try:
+                raw, usage, request_id, duration_ms = self.service.client.request(
+                    base_url, api_key, body
+                )
+            except (httpx.HTTPError, RuntimeError) as exc:
+                retryable = isinstance(exc, httpx.HTTPError) or (
+                    isinstance(exc, ModelRequestError) and exc.retryable
+                )
+                if retryable and transport_retries < 3:
+                    self.stop_event.wait(2**transport_retries)
+                    transport_retries += 1
+                    retry_count += 1
+                    continue
+                self._record_failure(
+                    analysis_id,
+                    post_id,
+                    exc,
+                    raw_response=raw,
+                    retry_count=retry_count,
+                )
+                return True
+            try:
+                payload, _strict, recovered = parse_feedback_text(raw)
+                feedback = SentimentFeedback.model_validate(payload)
+                validate_modality_identity(feedback, post)
+            except (ValueError, json.JSONDecodeError, ValidationError) as exc:
+                if structure_retries < 1:
+                    structure_retries += 1
+                    retry_count += 1
+                    continue
+                self._record_failure(
+                    analysis_id,
+                    post_id,
+                    exc,
+                    raw_response=raw,
+                    retry_count=retry_count,
+                )
+                return True
+            status = self._coverage_status(feedback)
+            if status == "analysis_partial" and media_retries < 1:
+                media_retries += 1
+                retry_count += 1
+                continue
+            result = "unrelated" if not feedback.subject_relevance else feedback.sentiment
+            break
+        with self.service.factory.begin() as db:
+            analysis = db.get(SentimentAnalysis, analysis_id)
+            post = db.get(PostSnapshot, post_id)
+            if not analysis or not post:
+                return True
+            analysis.status = status
+            analysis.result = result
+            analysis.matched_subjects = feedback.matched_subjects
+            analysis.primary_category = feedback.primary_category
+            analysis.secondary_categories = feedback.secondary_categories
+            analysis.summary = feedback.summary
+            analysis.modalities = feedback.modalities.model_dump()
+            analysis.raw_response = raw
+            analysis.locally_recovered = recovered
+            analysis.provider_request_id = request_id
+            analysis.usage = usage
+            analysis.retry_count = retry_count
+            analysis.duration_ms = duration_ms
+            analysis.finished_at = utc_now()
+            post.analysis_status = status
+            if status == "analysis_completed":
+                post.sentiment_result = result
+                post.sentiment_source = "ai"
+            post.sentiment_updated_at = utc_now()
+        if self.service.event_publisher:
+            self.service.event_publisher("sentiment.changed", post_id, status=status)
+        return True
+
+    @staticmethod
+    def _coverage_status(feedback: SentimentFeedback) -> str:
+        modalities = feedback.modalities
+        complete = modalities.text.status in {"absent", "processed"}
+        complete = complete and all(
+            item.expected_count == item.processed_count
+            for item in (modalities.image, modalities.video_visual, modalities.video_audio)
+        )
+        complete = complete and modalities.image.status in {"absent", "processed"}
+        complete = complete and modalities.video_visual.status in {"absent", "processed"}
+        complete = complete and modalities.video_audio.status in {
+            "absent",
+            "speech",
+            "silent",
+            "no_speech",
+        }
+        return "analysis_completed" if complete else "analysis_partial"
+
+    def _record_failure(
+        self,
+        analysis_id: str,
+        post_id: str,
+        exc: Exception,
+        *,
+        raw_response: str = "",
+        retry_count: int = 0,
+    ) -> None:
+        config_error = isinstance(exc, httpx.HTTPError) or (
+            isinstance(exc, ModelRequestError) and exc.config_error
+        )
+        input_too_large = isinstance(exc, ModelRequestError) and exc.input_too_large
+        status = (
+            "analysis_paused"
+            if config_error
+            else "analysis_partial"
+            if input_too_large
+            else "analysis_failed"
+        )
+        with self.service.factory.begin() as db:
+            analysis = db.get(SentimentAnalysis, analysis_id)
+            post = db.get(PostSnapshot, post_id)
+            if analysis:
+                analysis.status = status
+                analysis.error_code = "MODEL_CONFIG_ERROR" if config_error else "MODEL_RESPONSE_ERROR"
+                analysis.error_message = f"{type(exc).__name__}: {exc}"[:2000]
+                analysis.raw_response = raw_response or None
+                analysis.retry_count = retry_count
+                analysis.finished_at = utc_now()
+            if post:
+                post.analysis_status = status
+                post.sentiment_updated_at = utc_now()
+            if config_error:
+                config = db.get(SentimentConfig, 1)
+                if config:
+                    config.enabled = False
+                    config.validation_status = "invalid"
+                    config.validation_error = str(exc)[:1000]
+                    config.validated_at = utc_now()
+                db.execute(
+                    update(SentimentAnalysis)
+                    .where(SentimentAnalysis.status == "analysis_queued")
+                    .values(
+                        status="analysis_paused",
+                        error_code="MODEL_CONFIG_ERROR",
+                        error_message="模型连接配置失效，等待重新测试。",
+                    )
+                )
+                db.execute(
+                    update(PostSnapshot)
+                    .where(PostSnapshot.analysis_status == "analysis_queued")
+                    .values(analysis_status="analysis_paused", sentiment_updated_at=utc_now())
+                )
+
+
+def sentiment_summary(db: Session, post: PostSnapshot) -> dict[str, Any]:
+    """供帖子列表和详情复用的有效舆情视图。"""
+
+    return SentimentService.detail_dict(db, post)
+
+
+def _related_run_ids(db: Session, run_id: str) -> list[str]:
+    """在本模块内解析补提关系，避免与 RunService 形成循环依赖。"""
+
+    current = db.get(ExtractionRun, run_id)
+    if not current:
+        return []
+    while current.related_run_id:
+        parent = db.get(ExtractionRun, current.related_run_id)
+        if not parent:
+            break
+        current = parent
+    result = [current.id]
+    cursor = 0
+    while cursor < len(result):
+        children = db.scalars(
+            select(ExtractionRun.id).where(ExtractionRun.related_run_id == result[cursor])
+        )
+        result.extend(item for item in children if item not in result)
+        cursor += 1
+    return result

@@ -28,6 +28,8 @@ const runDetailRoute = createRoute({
     title: text(search.title),
     circle: text(search.circle),
     visibility: oneOf(search.visibility, ['visible', 'hidden', 'unknown'] as const),
+    sentiment: oneOf(search.sentiment, ['negative', 'non_negative', 'unrelated'] as const),
+    analysisStatus: oneOf(search.analysisStatus, ['analysis_queued', 'analysis_running', 'analysis_completed', 'analysis_partial', 'analysis_failed', 'analysis_paused', 'analysis_disabled'] as const),
     sort: oneOf(search.sort, ['source', 'published_at', 'reply_count', 'like_count'] as const),
     direction: oneOf(search.direction, ['asc', 'desc'] as const),
     post: text(search.post),
@@ -37,7 +39,7 @@ const configRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/config',
   component: lazyRouteComponent(() => import('@/features/config/config-page'), 'ConfigPage'),
-  validateSearch: (search: Record<string, unknown>) => ({ tab: oneOf(search.tab, ['plan', 'rules', 'schedule', 'platforms', 'circles', 'history', 'templates'] as const) ?? 'rules' }),
+  validateSearch: (search: Record<string, unknown>) => ({ tab: oneOf(search.tab, ['plan', 'rules', 'schedule', 'platforms', 'circles', 'history', 'templates', 'sentiment'] as const) ?? 'rules' }),
 })
 
 const routeTree = rootRoute.addChildren([indexRoute, runsRoute, runDetailRoute, configRoute])
