@@ -118,6 +118,8 @@ export type Post = {
   circle_id?: string
   circle_name?: string
   source_name?: string
+  list_order?: 'latest_reply' | 'latest_publish'
+  list_order_name?: string
   platform_post_id: string
   url: string
   title?: string

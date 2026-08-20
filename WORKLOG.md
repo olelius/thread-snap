@@ -16,6 +16,21 @@
 
 ---
 
+## 2026-08-20 — 来源名称实时展示与列表类型标识
+**总目标**：让来源名称修改后同步反映到历史批次展示和后续导出，并在帖子结果中明确区分“最新回复”与“最新发布”。
+**状态**：✅ 后端当前名称解析、删除回退、列表类型字段、前端展示、必要测试和本地重启均已完成。
+**干到哪里了**：
+- [x] 批次摘要、来源任务、帖子列表和帖子详情通过稳定 `circle_id` 批量读取来源当前名称；来源已删除或关联失效时继续使用任务创建时名称快照，不改写历史任务。
+- [x] 帖子 API 增加 `list_order` 与中文 `list_order_name`；结果表“圈子”列改为“来源”，在当前名称旁显示“最新回复/最新发布”标签，详情来源摘要同步显示列表类型。
+- [x] `source.name` 导出字段改用来源当前名称，任务名称快照继续仅承担追溯和回退职责；产品设计和技术路线已同步。
+- [x] 2 项针对性后端测试、受影响 Python 文件 Ruff 检查、前端 TypeScript 检查和 `git diff --check` 通过。
+- [x] 本地后端已重启；真实历史批次 API 与页面均显示当前名称“风云A9”和“最新发布”，Vite 健康代理返回 HTTP 200；截图位于 `artifacts/runtime/live-source-labels-20260820/run-detail.png`。
+**下一步**：无；本任务进入 Git 收尾。
+**边界**：名称仅作为可变展示属性跟随配置；URL、列表顺序、数量和其他实际执行参数仍使用批次快照。
+**关联**：`src/threadsnap/services.py`、`src/threadsnap/templates.py`、`frontend/src/features/runs/run-detail-page.tsx`、`frontend/src/lib/types.ts`、`tests/test_backend.py`、`docs/design/product-design.md`、`docs/design/technical-route.md`
+
+---
+
 ## 2026-08-20 — 详情 Sheet 自动加载视频
 **总目标**：打开含视频的帖子详情 Sheet 后直接获取当前播放地址并创建播放器，去掉必须再次点击“加载视频”的冗余步骤。
 **状态**：✅ 自动加载、失败重试、显式刷新、前端构建和真实页面验收均已完成。
