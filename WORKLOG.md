@@ -24,6 +24,7 @@
 - [x] 1536px 以上改用八列紧凑网格：标题搜索最小 180px，圈子、状态、排序和方向按内容缩减，导出选择由 192px 收敛为 144px，组间距统一为 8px；较窄视口回退四列或两列。
 - [x] `npm.cmd run check --prefix frontend`、`npm.cmd run build --prefix frontend` 与 `git diff --check` 通过；在真实批次 `01a01e38-eb72-7d5c-9055-f5201c2bd70f` 的 1680×900 和 1536×900 视口确认八组控件均为单行、标题输入完整、操作可达且无横向溢出，截图保存于 `artifacts/runtime/run-toolbar-layout-20260820/`。
 - [x] 用户的 2560px 截图暴露标题列使用 `1fr` 会独占全部剩余宽度；现仅在 ≥2000px 将标题搜索框封顶 360px，以弹性留白分隔筛选组和右侧操作区，同时保留 1536–1999px 的弹性八列布局。已在 2560×1292 与 1536×900 实页复验，截图保存于 `artifacts/runtime/run-toolbar-ultrawide-20260820/`。
+- [x] 相邻状态筛选的网格间距计算值虽为 8px，但通用 `SelectTrigger` 的 `w-fit + nowrap + px-3 + gap-2` 最小内容宽度会越过 125/130px 固定轨道，视觉间距因此只剩 1–4px。工具栏直属下拉框现改为填满列宽、允许收缩，并使用 8px 横向内边距和 4px 图文间距；1536px 与 2560px 实测五个筛选框之间均恢复为精确 8px，截图保存于 `artifacts/runtime/run-toolbar-spacing-20260820/`。
 **下一步**：无；本任务进入 Git 收尾。
 **边界**：只调整批次详情筛选栏的响应式尺寸与间距，不改变筛选、复制、导出或批次数据逻辑。
 **关联**：`frontend/src/features/runs/run-detail-page.tsx`、`docs/design/product-design.md`、`docs/design/technical-route.md`
