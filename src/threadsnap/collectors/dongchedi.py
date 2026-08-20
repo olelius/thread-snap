@@ -606,7 +606,10 @@ class DongchediCollector:
                 bitrate = int(item.get("Bitrate") or 0)
             except (TypeError, ValueError):
                 bitrate = 0
-            for priority, key in enumerate(("MainPlayUrl", "BackupPlayUrl")):
+            # 同一清晰度优先使用备用 CDN。真实浏览器验证中，主 CDN 虽返回
+            # 206，却未声明 Accept-Ranges，播放到首段缓冲末尾后无法续取；
+            # 备用 CDN 返回等价媒体并支持连续字节范围请求。
+            for priority, key in enumerate(("BackupPlayUrl", "MainPlayUrl")):
                 value = item.get(key)
                 if isinstance(value, str) and value.startswith(("http://", "https://")):
                     ranked.append((bitrate, -priority, value))

@@ -2139,7 +2139,7 @@ class CollectorTests(unittest.TestCase):
 
         urls = collector.resolve_video_urls(video_id)
 
-        self.assertEqual(["https://media.test/high.mp4"], urls)
+        self.assertEqual(["https://backup.test/high.mp4"], urls)
         self.assertEqual(2, len(requested))
         self.assertIn("/motor/pc/common/token?", requested[0])
         self.assertIn(f"video_id={video_id}", requested[0])
