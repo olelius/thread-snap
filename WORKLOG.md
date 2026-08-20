@@ -16,6 +16,22 @@
 
 ---
 
+## 2026-08-20 — 舆情正式接入产品与技术合同
+**总目标**：在 PoC 完成后收敛模型配置、判定对象、有效结果、分析状态、列表/详情交互和人工修订边界，为前后端进入同一实现基线。
+**状态**：✅ 需求访谈已完成并写入 owner 文档；数据库、Worker、接口和页面尚未实现。
+**干到哪里了**：
+- [x] 模型服务确定为可持久化的“AI 舆情”配置：API Key 以 Fernet 加密且只写不读，受控模型下拉首版只有 `qwen3.5-omni-plus-2026-03-15`，显式最小文字测试成功后才能开启；允许经过 SSRF 防护的公网 HTTPS OpenAI 兼容代理，不增加余额查询、本地 HTTP 模型或自由模型名。
+- [x] 判定对象收缩为目标品牌、14 个重点车型和选填补充说明；常见别名、品牌服务及帖子实际相关性由模型结合语境判断。有效结果明确为负面、非负面或不相关，后端只校验结构和模态覆盖，不做关键词重判。
+- [x] 分析状态补齐暂停和禁用：关闭时已发出请求继续，排队和关闭期间新帖进入禁用，重新开启只影响未来新帖；配置错误暂停并在配置测试通过后恢复。第一版不自动回刷历史、不提供重新分析。
+- [x] 列表增加舆情结果及来源标签，并分别提供结果和分析状态筛选；人工修正只在详情的全局 Dialog 中进行，备注选填，负面次要类型可多选，所有修订追加保存且人工始终优先。
+- [x] 详情沿用现有 Sheet，按中文段落展示总结和分模态依据，并以浏览器懒加载图片、点击后直连播放视频；ThreadSnap 不为展示下载或代理媒体，失败时提供原帖入口。
+- [x] 补充记录一次真实图文请求：HTTP 200、5,681 ms、Prompt 2,041、Completion 463、Total 2,504 Token、图片 1/1 processed；原始尾部围栏与视频样本一致，本地确定性恢复成功。证据位于 Git 忽略目录 `artifacts/poc/results/sentiment-qwen3-5-omni-plus-image-text/20260820T033138Z/summary.json`。
+**下一步**：按 `docs/design/technical-route.md` 的接口合同进入功能分支，先实现视频 `vid` 播放 URL 回退与模型配置/任务/结果数据库基线，再实现 Worker、列表筛选、详情媒体和人工修订 Dialog，最后触发真实“提取入库 → 自动分析 → 列表/详情 → 人工修正”组合路径验收。
+**边界**：本条只完成正式接入合同和 PoC 事实同步，不把文档、连接测试或单样本结果表述为功能交付；API Key、签名 URL 和模型原始响应继续留在 Git 外，远程纯 HTTP 页面不得写入 API Key。
+**关联**：`CONTEXT.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/adr/0023-use-validated-runtime-config-for-sentiment-service.md`、`docs/chains/sentiment-analysis.md`、`docs/research/sentiment-analysis-poc-results.md`
+
+---
+
 ## 2026-08-19 — 在线多模态舆情反馈受控 PoC
 **总目标**：在不由 ThreadSnap 下载视频且严格限制千问调用次数的前提下，完成真实视频 URL 获取、公开可达性和端到端多模态反馈验证。
 **状态**：✅ PoC 已按 30 条 URL 传输样本、1 次千问调用、0 次自动重试完成；证据支持保持 URL 直传并进入最小实现。
