@@ -85,8 +85,9 @@
 1. 技术实现任务要求的全部文件；
 2. `docs/chains/sentiment-analysis.md`；
 3. `docs/adr/0022-use-hosted-multimodal-api-for-sentiment-feedback.md`；
-4. `docs/research/sentiment-analysis-poc-plan.md`；
-5. 执行 PoC 时读取 Git 外的 `artifacts/poc/inputs/sentiment-analysis/` 真实样本。
+4. `docs/adr/0023-use-validated-runtime-config-for-sentiment-service.md`；
+5. `docs/research/sentiment-analysis-poc-plan.md`；
+6. 执行 PoC 时读取 Git 外的 `artifacts/poc/inputs/sentiment-analysis/` 真实样本。
 
 ## 4. 已接受 ADR
 
@@ -114,6 +115,7 @@
 | `docs/adr/0020-use-short-source-keys-in-xlsx-tags.md` | 历史方案：XLSX 模板使用 22 位可逆来源键（已由 ADR 0021 替代） |
 | `docs/adr/0021-persist-platform-neutral-export-keys.md` | XLSX 模板使用全平台统一的 10 位持久化来源键 |
 | `docs/adr/0022-use-hosted-multimodal-api-for-sentiment-feedback.md` | 舆情反馈使用在线多模态 API、URL 直传和异步持久任务 |
+| `docs/adr/0023-use-validated-runtime-config-for-sentiment-service.md` | 舆情模型服务使用加密、显式测试且受控端点的运行时配置 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 
@@ -141,7 +143,7 @@ artifacts/poc/
 
 具体命名、保留期限和结果文件结构见 PoC 计划。
 
-舆情反馈 PoC 使用 `inputs/sentiment-analysis/` 和 `results/sentiment-qwen3-5-omni-plus/<round-id>/`；完整签名 URL、原始模型响应和 API 配置只保存在 Git 外本地产物中。
+舆情反馈 PoC 使用 `inputs/sentiment-analysis/`、`results/sentiment-qwen3-5-omni-plus/<round-id>/` 和 `results/sentiment-qwen3-5-omni-plus-image-text/<round-id>/`；完整签名 URL、原始模型响应和 API 配置只保存在 Git 外本地产物中。
 
 ## 6. 文档维护规则
 
