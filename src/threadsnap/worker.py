@@ -23,7 +23,7 @@ from .models import (
     ValidationJob,
     utc_now,
 )
-from .sentiment import SentimentService
+from .sentiment import SentimentService, deduplicate_media_urls
 from .services import aggregate_run
 from .session_store import SessionStore
 
@@ -775,7 +775,7 @@ class VideoUrlResolver:
                 continue
             if value not in output:
                 output.append(value)
-        return output
+        return deduplicate_media_urls(output)
 
     def close(self) -> None:
         for resource in (self.context, self.browser, self.playwright):

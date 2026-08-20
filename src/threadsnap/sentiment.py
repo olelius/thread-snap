@@ -6,6 +6,7 @@ import hashlib
 import json
 import socket
 import threading
+from copy import deepcopy
 from ipaddress import ip_address, ip_network
 from time import monotonic
 from typing import Any, Callable, Literal
@@ -30,7 +31,7 @@ from .schemas import ManualSentimentRevisionCreate, SentimentConfigUpdate
 from .session_store import SessionStore
 
 MODEL_CODES = ("qwen3.5-omni-plus-2026-03-15",)
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2"
 CATEGORIES = (
     "product_complaint",
     "product_criticism",
@@ -59,6 +60,7 @@ DEFAULT_PRODUCTS = [
     "风云T7",
 ]
 PROXY_FAKE_IP_NETWORK = ip_network("198.18.0.0/15")
+SENTIMENT_WORKER_CONCURRENCY = 2
 
 
 class TextCoverage(BaseModel):
@@ -120,6 +122,7 @@ class VisualCoverage(MediaCoverage):
 class AudioCoverage(MediaCoverage):
     status: Literal[
         "absent",
+        "processed",
         "speech",
         "silent",
         "no_speech",
@@ -189,14 +192,28 @@ class SentimentFeedback(BaseModel):
         return self
 
 
+def deduplicate_media_urls(values: list[str] | None) -> list[str]:
+    """按忽略签名查询的稳定媒体身份去重，并保留首个可用 URL。"""
+
+    output: list[str] = []
+    observed: set[str] = set()
+    for value in values or []:
+        identity = stable_url_hash(value)
+        if identity in observed:
+            continue
+        observed.add(identity)
+        output.append(value)
+    return output
+
+
 def sentiment_input_hash(post: PostSnapshot) -> str:
     """只对实际模型输入计算稳定哈希，媒体签名查询不影响继承。"""
 
     payload = {
         "title": post.title or "",
         "content": post.content or "",
-        "images": [stable_url_hash(value) for value in post.image_urls or []],
-        "videos": [stable_url_hash(value) for value in post.video_urls or []],
+        "images": [stable_url_hash(value) for value in deduplicate_media_urls(post.image_urls)],
+        "videos": [stable_url_hash(value) for value in deduplicate_media_urls(post.video_urls)],
     }
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
@@ -209,9 +226,15 @@ def validate_modality_identity(feedback: SentimentFeedback, post: PostSnapshot) 
     if has_text == (feedback.modalities.text.status == "absent"):
         raise ValueError("文字覆盖状态与实际标题、正文输入不一致")
     expected = {
-        "image": [stable_url_hash(value) for value in post.image_urls or []],
-        "video_visual": [stable_url_hash(value) for value in post.video_urls or []],
-        "video_audio": [stable_url_hash(value) for value in post.video_urls or []],
+        "image": [
+            stable_url_hash(value) for value in deduplicate_media_urls(post.image_urls)
+        ],
+        "video_visual": [
+            stable_url_hash(value) for value in deduplicate_media_urls(post.video_urls)
+        ],
+        "video_audio": [
+            stable_url_hash(value) for value in deduplicate_media_urls(post.video_urls)
+        ],
     }
     for name, hashes in expected.items():
         coverage = getattr(feedback.modalities, name)
@@ -222,6 +245,67 @@ def validate_modality_identity(feedback: SentimentFeedback, post: PostSnapshot) 
             raise ValueError(f"{name}.items 的输入索引不完整或重复")
         if any(observed[index] != value for index, value in enumerate(hashes)):
             raise ValueError(f"{name}.items 的 URL 哈希与实际输入不一致")
+
+
+def normalize_feedback_payload(
+    payload: dict[str, Any], post: PostSnapshot
+) -> tuple[dict[str, Any], bool]:
+    """只修复可由输入契约唯一确定的提供方 JSON 形状，不改写观点字段。"""
+
+    normalized = deepcopy(payload)
+    changed = False
+    modalities = normalized.get("modalities")
+    if not isinstance(modalities, dict):
+        return normalized, changed
+
+    text = modalities.get("text")
+    if isinstance(text, dict) and isinstance(text.get("evidence"), str):
+        text["evidence"] = [text["evidence"]]
+        changed = True
+
+    expected = {
+        "image": [
+            stable_url_hash(value) for value in deduplicate_media_urls(post.image_urls)
+        ],
+        "video_visual": [
+            stable_url_hash(value) for value in deduplicate_media_urls(post.video_urls)
+        ],
+        "video_audio": [
+            stable_url_hash(value) for value in deduplicate_media_urls(post.video_urls)
+        ],
+    }
+    for name, expected_hashes in expected.items():
+        coverage = modalities.get(name)
+        if not isinstance(coverage, dict):
+            continue
+        if not expected_hashes and coverage.get("status") == "skipped":
+            coverage["status"] = "absent"
+            changed = True
+        items = coverage.get("items")
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if isinstance(item, dict) and isinstance(item.get("evidence"), str):
+                item["evidence"] = [item["evidence"]]
+                changed = True
+        if not expected_hashes or len(items) != len(expected_hashes):
+            continue
+        indexes = {
+            item.get("input_index")
+            for item in items
+            if isinstance(item, dict) and isinstance(item.get("input_index"), int)
+        }
+        one_based = indexes == set(range(1, len(expected_hashes) + 1))
+        hashes_match = one_based and all(
+            isinstance(item, dict)
+            and item.get("url_hash") == expected_hashes[item["input_index"] - 1]
+            for item in items
+        )
+        if hashes_match:
+            for item in items:
+                item["input_index"] -= 1
+            changed = True
+    return normalized, changed
 
 
 def validate_public_https_base_url(value: str, *, resolve: bool) -> str:
@@ -275,8 +359,8 @@ def validate_public_https_base_url(value: str, *, resolve: bool) -> str:
 def build_prompt(
     post: PostSnapshot, config: SentimentConfig, subject_snapshot: dict[str, Any] | None = None
 ) -> str:
-    images = [stable_url_hash(value) for value in post.image_urls or []]
-    videos = [stable_url_hash(value) for value in post.video_urls or []]
+    images = [stable_url_hash(value) for value in deduplicate_media_urls(post.image_urls)]
+    videos = [stable_url_hash(value) for value in deduplicate_media_urls(post.video_urls)]
     subject = subject_snapshot or {
         "brand": config.brand,
         "products": config.products,
@@ -297,6 +381,9 @@ def build_prompt(
 不相关时 sentiment 与 primary_category 为 null；负面必须有 primary_category；次要类型不得重复主要类型。
 modalities.text 包含 status/evidence；modalities.image、video_visual、video_audio 均包含 status、expected_count、processed_count、items。
 每个 items 项包含 input_index、对应 url_hash、status、evidence，items 数量必须等于 expected_count。
+所有 evidence 必须是 JSON 字符串数组，即使只有一条也不得直接返回字符串。
+每种媒体的 input_index 均从 0 开始连续编号；没有输入的模态必须返回 status=absent、expected_count=0、processed_count=0、items=[]，不得使用 skipped。
+视频音频 status 只使用 absent、speech、silent、no_speech、inaccessible、unrecognizable 或 unprocessed。
 expected_count：image={len(images)}，video_visual={len(videos)}，video_audio={len(videos)}。"""
 
 
@@ -313,9 +400,11 @@ def build_request(
             {"type": "text", "text": "只返回 JSON 对象：{\"ok\":true}。"}
         ]
     else:
+        image_urls = deduplicate_media_urls(post.image_urls)
+        video_urls = deduplicate_media_urls(post.video_urls)
         content = [
-            *({"type": "image_url", "image_url": {"url": value}} for value in post.image_urls or []),
-            *({"type": "video_url", "video_url": {"url": value}} for value in post.video_urls or []),
+            *({"type": "image_url", "image_url": {"url": value}} for value in image_urls),
+            *({"type": "video_url", "video_url": {"url": value}} for value in video_urls),
             {"type": "text", "text": build_prompt(post, config, subject_snapshot)},
         ]
     return {
@@ -357,12 +446,20 @@ class SentimentModelClient:
                         marker in response_text
                         for marker in ("limit", "length", "too large", "too long")
                     )
+                    retry_after = response.headers.get("retry-after")
+                    try:
+                        retry_after_seconds = (
+                            max(1.0, min(float(retry_after), 300.0)) if retry_after else None
+                        )
+                    except ValueError:
+                        retry_after_seconds = None
                     raise ModelRequestError(
                         f"模型接口返回 HTTP {response.status_code}",
                         status_code=response.status_code,
                         retryable=response.status_code == 429 or response.status_code >= 500,
                         config_error=response.status_code in {401, 403} or model_error,
                         input_too_large=input_too_large,
+                        retry_after_seconds=retry_after_seconds,
                     )
                 request_id = response.headers.get("x-request-id") or response.headers.get(
                     "x-dashscope-request-id"
@@ -382,12 +479,14 @@ class ModelRequestError(RuntimeError):
         retryable: bool = False,
         config_error: bool = False,
         input_too_large: bool = False,
+        retry_after_seconds: float | None = None,
     ):
         super().__init__(message)
         self.status_code = status_code
         self.retryable = retryable
         self.config_error = config_error
         self.input_too_large = input_too_large
+        self.retry_after_seconds = retry_after_seconds
 
 
 class SentimentService:
@@ -748,26 +847,43 @@ class SentimentService:
 
 
 class SentimentWorker:
-    """与提取 Worker 分离的单线程持久任务执行器。"""
+    """与提取 Worker 分离、固定小并发的持久任务执行器。"""
 
-    def __init__(self, service: SentimentService, poll_seconds: float = 1.0):
+    def __init__(
+        self,
+        service: SentimentService,
+        poll_seconds: float = 1.0,
+        concurrency: int = SENTIMENT_WORKER_CONCURRENCY,
+    ):
         self.service = service
         self.poll_seconds = poll_seconds
+        self.concurrency = max(1, min(concurrency, SENTIMENT_WORKER_CONCURRENCY))
         self.stop_event = threading.Event()
-        self.thread: threading.Thread | None = None
+        self.threads: list[threading.Thread] = []
+        self.claim_lock = threading.Lock()
+        self.rate_limit_lock = threading.Lock()
+        self.rate_limit_until = 0.0
 
     def start(self) -> None:
-        if self.thread and self.thread.is_alive():
+        if any(thread.is_alive() for thread in self.threads):
             return
         self.recover_interrupted()
         self.stop_event.clear()
-        self.thread = threading.Thread(target=self._loop, name="threadsnap-sentiment", daemon=True)
-        self.thread.start()
+        self.threads = [
+            threading.Thread(
+                target=self._loop,
+                name=f"threadsnap-sentiment-{index + 1}",
+                daemon=True,
+            )
+            for index in range(self.concurrency)
+        ]
+        for thread in self.threads:
+            thread.start()
 
     def stop(self) -> None:
         self.stop_event.set()
-        if self.thread:
-            self.thread.join(timeout=10)
+        for thread in self.threads:
+            thread.join(timeout=10)
 
     def recover_interrupted(self) -> None:
         with self.service.factory.begin() as db:
@@ -791,28 +907,48 @@ class SentimentWorker:
             if not progressed:
                 self.stop_event.wait(self.poll_seconds)
 
-    def process_once(self) -> bool:
-        with self.service.factory.begin() as db:
-            config = self.service.ensure_default(db)
-            if not config.enabled or config.validation_status != "valid":
-                return False
-            analysis = db.scalar(
-                select(SentimentAnalysis)
-                .where(SentimentAnalysis.status == "analysis_queued")
-                .order_by(SentimentAnalysis.created_at)
-                .limit(1)
-            )
-            if not analysis:
-                return False
-            post = db.get(PostSnapshot, analysis.post_id)
-            if not post:
-                db.delete(analysis)
+    def _wait_for_rate_limit(self) -> bool:
+        """让两个消费者共享提供方 429 冷却窗口。"""
+
+        while not self.stop_event.is_set():
+            with self.rate_limit_lock:
+                delay = max(0.0, self.rate_limit_until - monotonic())
+            if delay <= 0:
                 return True
-            analysis.status = "analysis_running"
-            analysis.started_at = utc_now()
-            post.analysis_status = analysis.status
-            analysis_id = analysis.id
-            post_id = post.id
+            if self.stop_event.wait(delay):
+                return False
+        return False
+
+    def _extend_rate_limit(self, delay: float) -> None:
+        with self.rate_limit_lock:
+            self.rate_limit_until = max(self.rate_limit_until, monotonic() + delay)
+
+    def process_once(self) -> bool:
+        # SQLite 不支持 SKIP LOCKED；只串行化很短的领取事务，模型请求仍可并发执行。
+        with self.claim_lock:
+            with self.service.factory.begin() as db:
+                config = self.service.ensure_default(db)
+                if not config.enabled or config.validation_status != "valid":
+                    return False
+                analysis = db.scalar(
+                    select(SentimentAnalysis)
+                    .where(SentimentAnalysis.status == "analysis_queued")
+                    .order_by(SentimentAnalysis.created_at)
+                    .limit(1)
+                )
+                if not analysis:
+                    return False
+                post = db.get(PostSnapshot, analysis.post_id)
+                if not post:
+                    db.delete(analysis)
+                    return True
+                analysis.status = "analysis_running"
+                # 尚未成功请求的旧排队任务在领取时绑定当前提示词实现，避免记录版本失真。
+                analysis.prompt_version = PROMPT_VERSION
+                analysis.started_at = utc_now()
+                post.analysis_status = analysis.status
+                analysis_id = analysis.id
+                post_id = post.id
         try:
             base_url = validate_public_https_base_url(config.base_url, resolve=True)
             api_key = self.service.secrets.decrypt_secret(config.encrypted_api_key or b"")
@@ -832,9 +968,9 @@ class SentimentWorker:
         raw = ""
         retry_count = 0
         transport_retries = 0
-        structure_retries = 0
-        media_retries = 0
         while True:
+            if not self._wait_for_rate_limit():
+                return False
             try:
                 raw, usage, request_id, duration_ms = self.service.client.request(
                     base_url, api_key, body
@@ -843,8 +979,18 @@ class SentimentWorker:
                 retryable = isinstance(exc, httpx.HTTPError) or (
                     isinstance(exc, ModelRequestError) and exc.retryable
                 )
-                if retryable and transport_retries < 3:
-                    self.stop_event.wait(2**transport_retries)
+                rate_limited = isinstance(exc, ModelRequestError) and exc.status_code == 429
+                retry_limit = 1 if rate_limited else 3
+                if retryable and transport_retries < retry_limit:
+                    delay = (
+                        exc.retry_after_seconds or 30.0
+                        if rate_limited
+                        else float(2**transport_retries)
+                    )
+                    if rate_limited:
+                        self._extend_rate_limit(delay)
+                    elif self.stop_event.wait(delay):
+                        return False
                     transport_retries += 1
                     retry_count += 1
                     continue
@@ -858,13 +1004,10 @@ class SentimentWorker:
                 return True
             try:
                 payload, _strict, recovered = parse_feedback_text(raw)
+                payload, normalized = normalize_feedback_payload(payload, post)
                 feedback = SentimentFeedback.model_validate(payload)
                 validate_modality_identity(feedback, post)
             except (ValueError, json.JSONDecodeError, ValidationError) as exc:
-                if structure_retries < 1:
-                    structure_retries += 1
-                    retry_count += 1
-                    continue
                 self._record_failure(
                     analysis_id,
                     post_id,
@@ -874,10 +1017,6 @@ class SentimentWorker:
                 )
                 return True
             status = self._coverage_status(feedback)
-            if status == "analysis_partial" and media_retries < 1:
-                media_retries += 1
-                retry_count += 1
-                continue
             result = "unrelated" if not feedback.subject_relevance else feedback.sentiment
             break
         with self.service.factory.begin() as db:
@@ -893,7 +1032,7 @@ class SentimentWorker:
             analysis.summary = feedback.summary
             analysis.modalities = feedback.modalities.model_dump()
             analysis.raw_response = raw
-            analysis.locally_recovered = recovered
+            analysis.locally_recovered = recovered or normalized
             analysis.provider_request_id = request_id
             analysis.usage = usage
             analysis.retry_count = retry_count
@@ -920,6 +1059,7 @@ class SentimentWorker:
         complete = complete and modalities.video_visual.status in {"absent", "processed"}
         complete = complete and modalities.video_audio.status in {
             "absent",
+            "processed",
             "speech",
             "silent",
             "no_speech",

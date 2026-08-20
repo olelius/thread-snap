@@ -45,7 +45,7 @@ from .schemas import (
     ManualRunCreate,
     PlatformConfigUpdate,
 )
-from .sentiment import sentiment_summary
+from .sentiment import deduplicate_media_urls, sentiment_summary
 
 TERMINAL_STATUSES = frozenset({"success", "partial_success", "failed"})
 RUN_STATUS_ZH = {
@@ -1981,8 +1981,8 @@ def post_dict(
         "author": item.author,
         "published_at": item.published_at,
         "content": item.content,
-        "image_urls": item.image_urls,
-        "video_urls": item.video_urls,
+        "image_urls": deduplicate_media_urls(item.image_urls),
+        "video_urls": deduplicate_media_urls(item.video_urls),
         "reply_count": item.reply_count,
         "like_count": item.like_count,
         "section": item.section,
