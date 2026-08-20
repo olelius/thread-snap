@@ -89,14 +89,17 @@ class SentimentFeedback(BaseModel):
     subject_relevance: bool
     matched_subjects: list[str]
     sentiment: Literal["negative", "non_negative"]
-    primary_category: Literal[
-        "product_complaint",
-        "product_criticism",
-        "service_complaint",
-        "brand_criticism",
-        "competitor_attack",
-        "other",
-    ] | None
+    primary_category: (
+        Literal[
+            "product_complaint",
+            "product_criticism",
+            "service_complaint",
+            "brand_criticism",
+            "competitor_attack",
+            "other",
+        ]
+        | None
+    )
     secondary_categories: list[
         Literal[
             "product_complaint",
@@ -140,11 +143,15 @@ def stable_url_hash(url: str) -> str:
 
     parts = urlsplit(url)
     path = parts.path
-    if parts.netloc.lower().endswith("dcarvod.com"):
+    netloc = parts.netloc.lower()
+    if netloc.endswith("dcarvod.com"):
         match = re.search(r"/[0-9a-fA-F]{32}/[0-9a-fA-F]{8}(/video/.*)", path)
         if match:
             path = match.group(1)
-    normalized = urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, "", ""))
+            # 同一视频会在多个 dcarvod CDN 主机上返回等价播放地址；主机也不属于
+            # 稳定媒体身份，否则一次帖子会被误当成多个视频送入模型。
+            netloc = "dcarvod.com"
+    normalized = urlunsplit((parts.scheme.lower(), netloc, path, "", ""))
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
@@ -164,8 +171,8 @@ def build_prompt(sample: dict[str, Any]) -> str:
 4. 只依据本次输入，不搜索网页，不引用作者历史或评论。
 5. evidence 保持简短，只描述本次输入中实际观察到的事实。
 
-帖子标题：{sample.get('title') or ''}
-帖子正文：{sample.get('content') or ''}
+帖子标题：{sample.get("title") or ""}
+帖子正文：{sample.get("content") or ""}
 图片 URL 哈希（按输入顺序）：{json.dumps(image_hashes)}
 视频 URL 哈希（按输入顺序）：{json.dumps(video_hashes)}
 
@@ -206,7 +213,9 @@ def build_request(sample: dict[str, Any], model: str) -> dict[str, Any]:
     }
 
 
-def parse_sse_lines(lines: Iterable[str]) -> tuple[str, dict[str, Any] | None, list[dict[str, Any]]]:
+def parse_sse_lines(
+    lines: Iterable[str],
+) -> tuple[str, dict[str, Any] | None, list[dict[str, Any]]]:
     """聚合 OpenAI 兼容流式响应，同时保留可审计的 JSON 块。"""
 
     content: list[str] = []
@@ -366,7 +375,13 @@ def run_once(sample_path: Path, env_path: Path, results_root: Path) -> Path:
         SentimentFeedback.model_validate(parsed)
         recovered_structure_valid = locally_recovered
         status = "completed" if structure_valid else "completed_with_local_recovery"
-    except (httpx.HTTPError, RuntimeError, ValueError, json.JSONDecodeError, ValidationError) as exc:
+    except (
+        httpx.HTTPError,
+        RuntimeError,
+        ValueError,
+        json.JSONDecodeError,
+        ValidationError,
+    ) as exc:
         error = f"{type(exc).__name__}: {exc}"
 
     finished = datetime.now(timezone.utc)

@@ -103,8 +103,7 @@ class MediaCoverage(BaseModel):
         if self.processed_count > self.expected_count:
             raise ValueError("processed_count 不得超过 expected_count")
         actual_processed = sum(
-            item.status in {"processed", "speech", "silent", "no_speech"}
-            for item in self.items
+            item.status in {"processed", "speech", "silent", "no_speech"} for item in self.items
         )
         if self.processed_count != actual_processed:
             raise ValueError("processed_count 与逐媒体处理状态不一致")
@@ -147,14 +146,17 @@ class SentimentFeedback(BaseModel):
     subject_relevance: bool
     matched_subjects: list[str] = Field(default_factory=list)
     sentiment: Literal["negative", "non_negative"] | None
-    primary_category: Literal[
-        "product_complaint",
-        "product_criticism",
-        "service_complaint",
-        "brand_criticism",
-        "competitor_attack",
-        "other",
-    ] | None
+    primary_category: (
+        Literal[
+            "product_complaint",
+            "product_criticism",
+            "service_complaint",
+            "brand_criticism",
+            "competitor_attack",
+            "other",
+        ]
+        | None
+    )
     secondary_categories: list[
         Literal[
             "product_complaint",
@@ -226,9 +228,7 @@ def validate_modality_identity(feedback: SentimentFeedback, post: PostSnapshot) 
     if has_text == (feedback.modalities.text.status == "absent"):
         raise ValueError("文字覆盖状态与实际标题、正文输入不一致")
     expected = {
-        "image": [
-            stable_url_hash(value) for value in deduplicate_media_urls(post.image_urls)
-        ],
+        "image": [stable_url_hash(value) for value in deduplicate_media_urls(post.image_urls)],
         "video_visual": [
             stable_url_hash(value) for value in deduplicate_media_urls(post.video_urls)
         ],
@@ -254,19 +254,40 @@ def normalize_feedback_payload(
 
     normalized = deepcopy(payload)
     changed = False
+    matched_subjects = normalized.get("matched_subjects")
+    if isinstance(matched_subjects, list):
+        normalized_subjects: list[Any] = []
+        for item in matched_subjects:
+            if isinstance(item, dict):
+                value = item.get("product") or item.get("brand")
+                if isinstance(value, str) and value.strip():
+                    normalized_subjects.append(value.strip())
+                    changed = True
+                    continue
+            normalized_subjects.append(item)
+        normalized["matched_subjects"] = normalized_subjects
+    if normalized.get("sentiment") == "non_negative":
+        if normalized.get("primary_category") is not None:
+            normalized["primary_category"] = None
+            changed = True
+        if normalized.get("secondary_categories"):
+            normalized["secondary_categories"] = []
+            changed = True
     modalities = normalized.get("modalities")
     if not isinstance(modalities, dict):
         return normalized, changed
 
     text = modalities.get("text")
-    if isinstance(text, dict) and isinstance(text.get("evidence"), str):
-        text["evidence"] = [text["evidence"]]
-        changed = True
+    if isinstance(text, dict):
+        if isinstance(text.get("evidence"), str):
+            text["evidence"] = [text["evidence"]]
+            changed = True
+        if text.get("status") == "present":
+            text["status"] = "processed"
+            changed = True
 
     expected = {
-        "image": [
-            stable_url_hash(value) for value in deduplicate_media_urls(post.image_urls)
-        ],
+        "image": [stable_url_hash(value) for value in deduplicate_media_urls(post.image_urls)],
         "video_visual": [
             stable_url_hash(value) for value in deduplicate_media_urls(post.video_urls)
         ],
@@ -281,12 +302,30 @@ def normalize_feedback_payload(
         if not expected_hashes and coverage.get("status") == "skipped":
             coverage["status"] = "absent"
             changed = True
+        elif (
+            expected_hashes
+            and coverage.get("status") == "present"
+            and coverage.get("processed_count") == coverage.get("expected_count")
+        ):
+            coverage["status"] = "processed"
+            changed = True
         items = coverage.get("items")
         if not isinstance(items, list):
             continue
         for item in items:
-            if isinstance(item, dict) and isinstance(item.get("evidence"), str):
+            if not isinstance(item, dict):
+                continue
+            if isinstance(item.get("evidence"), str):
                 item["evidence"] = [item["evidence"]]
+                changed = True
+            # 提供方偶尔把“已处理且与主题相关”写成 relevant。覆盖层只表达
+            # 是否成功处理；当汇总状态和计数均明确为已处理时可唯一归一为 processed。
+            if (
+                item.get("status") in {"relevant", "present"}
+                and coverage.get("status") == "processed"
+                and coverage.get("processed_count") == coverage.get("expected_count")
+            ):
+                item["status"] = "processed"
                 changed = True
         if not expected_hashes or len(items) != len(expected_hashes):
             continue
@@ -295,16 +334,19 @@ def normalize_feedback_payload(
             for item in items
             if isinstance(item, dict) and isinstance(item.get("input_index"), int)
         }
-        one_based = indexes == set(range(1, len(expected_hashes) + 1))
-        hashes_match = one_based and all(
-            isinstance(item, dict)
-            and item.get("url_hash") == expected_hashes[item["input_index"] - 1]
-            for item in items
-        )
-        if hashes_match:
+        if indexes == set(range(1, len(expected_hashes) + 1)):
             for item in items:
                 item["input_index"] -= 1
             changed = True
+            indexes = set(range(len(expected_hashes)))
+        # URL 哈希和输入数量均由后端掌握。模型只需用完整、不重复的索引关联
+        # 观点与依据；避免让模型抄写 64 位冗余标识成为任务成败条件。
+        if indexes == set(range(len(expected_hashes))):
+            for item in items:
+                expected_hash = expected_hashes[item["input_index"]]
+                if item.get("url_hash") != expected_hash:
+                    item["url_hash"] = expected_hash
+                    changed = True
     return normalized, changed
 
 
@@ -338,7 +380,9 @@ def validate_public_https_base_url(value: str, *, resolve: bool) -> str:
         try:
             addresses = {
                 item[4][0]
-                for item in socket.getaddrinfo(parts.hostname, parts.port or 443, type=socket.SOCK_STREAM)
+                for item in socket.getaddrinfo(
+                    parts.hostname, parts.port or 443, type=socket.SOCK_STREAM
+                )
             }
         except OSError as exc:
             raise DomainError("SENTIMENT_HOST_UNRESOLVED", "API 地址域名解析失败。") from exc
@@ -372,8 +416,8 @@ def build_prompt(
 对判定对象不利为 negative，中性或正面为 non_negative。负面主要类型仅允许：{json.dumps(CATEGORIES, ensure_ascii=False)}。
 只分析标题、正文、全部图片和全部视频，不分析评论。逐项报告文字、图片、视频画面和视频音频的实际处理状态与中文事实依据。
 
-标题：{post.title or ''}
-正文：{post.content or ''}
+标题：{post.title or ""}
+正文：{post.content or ""}
 图片 URL 哈希：{json.dumps(images)}
 视频 URL 哈希：{json.dumps(videos)}
 
@@ -397,7 +441,7 @@ def build_request(
 ) -> dict[str, Any]:
     if tiny_test:
         content: list[dict[str, Any]] = [
-            {"type": "text", "text": "只返回 JSON 对象：{\"ok\":true}。"}
+            {"type": "text", "text": '只返回 JSON 对象：{"ok":true}。'}
         ]
     else:
         image_urls = deduplicate_media_urls(post.image_urls)
@@ -560,10 +604,14 @@ class SentimentService:
             )
             if value.api_key is not None:
                 config.encrypted_api_key = self.secrets.encrypt_secret(value.api_key.strip())
-            if value.enabled and not connection_changed and (
-                config.validation_status != "valid"
-                or not config.encrypted_api_key
-                or not base_url
+            if (
+                value.enabled
+                and not connection_changed
+                and (
+                    config.validation_status != "valid"
+                    or not config.encrypted_api_key
+                    or not base_url
+                )
             ):
                 raise DomainError(
                     "SENTIMENT_CONFIG_NOT_VALIDATED",
@@ -691,7 +739,9 @@ class SentimentService:
             .order_by(ManualSentimentRevision.created_at.desc())
             .limit(1)
         )
-        previous = latest_revision if latest_revision and latest_revision.action == "set_result" else None
+        previous = (
+            latest_revision if latest_revision and latest_revision.action == "set_result" else None
+        )
         if previous:
             analysis.status = "analysis_completed"
             analysis.finished_at = utc_now()
@@ -763,7 +813,9 @@ class SentimentService:
                         "当前帖子没有可恢复的完整 AI 结论。",
                         status_code=409,
                     )
-                revision = ManualSentimentRevision(post_id=post.id, action="restore_ai", note=value.note)
+                revision = ManualSentimentRevision(
+                    post_id=post.id, action="restore_ai", note=value.note
+                )
                 post.sentiment_result = analysis.result
                 post.sentiment_source = "ai"
             else:
@@ -798,9 +850,7 @@ class SentimentService:
 
     @staticmethod
     def detail_dict(db: Session, post: PostSnapshot) -> dict[str, Any]:
-        analysis = db.scalar(
-            select(SentimentAnalysis).where(SentimentAnalysis.post_id == post.id)
-        )
+        analysis = db.scalar(select(SentimentAnalysis).where(SentimentAnalysis.post_id == post.id))
         revisions = list(
             db.scalars(
                 select(ManualSentimentRevision)
@@ -816,10 +866,18 @@ class SentimentService:
             "summary": analysis.summary if analysis else None,
             "matched_subjects": analysis.matched_subjects if analysis else [],
             "primary_category": (
-                active.primary_category if post.sentiment_source in {"manual", "inherited_manual"} and active else analysis.primary_category if analysis else None
+                active.primary_category
+                if post.sentiment_source in {"manual", "inherited_manual"} and active
+                else analysis.primary_category
+                if analysis
+                else None
             ),
             "secondary_categories": (
-                active.secondary_categories if post.sentiment_source in {"manual", "inherited_manual"} and active else analysis.secondary_categories if analysis else []
+                active.secondary_categories
+                if post.sentiment_source in {"manual", "inherited_manual"} and active
+                else analysis.secondary_categories
+                if analysis
+                else []
             ),
             "modalities": analysis.modalities if analysis else None,
             "model_code": analysis.model_code if analysis else None,
@@ -829,7 +887,9 @@ class SentimentService:
             "error_message": analysis.error_message if analysis else None,
             "updated_at": post.sentiment_updated_at,
             "can_manual_correct": post.analysis_status in MANUAL_ALLOWED_STATUSES,
-            "can_restore_ai": bool(analysis and analysis.status == "analysis_completed" and analysis.result),
+            "can_restore_ai": bool(
+                analysis and analysis.status == "analysis_completed" and analysis.result
+            ),
             "manual_history": [
                 {
                     "id": item.id,
@@ -854,10 +914,12 @@ class SentimentWorker:
         service: SentimentService,
         poll_seconds: float = 1.0,
         concurrency: int = SENTIMENT_WORKER_CONCURRENCY,
+        media_resolver: Callable[[str, str], dict[str, Any]] | None = None,
     ):
         self.service = service
         self.poll_seconds = poll_seconds
         self.concurrency = max(1, min(concurrency, SENTIMENT_WORKER_CONCURRENCY))
+        self.media_resolver = media_resolver
         self.stop_event = threading.Event()
         self.threads: list[threading.Thread] = []
         self.claim_lock = threading.Lock()
@@ -952,6 +1014,21 @@ class SentimentWorker:
         try:
             base_url = validate_public_https_base_url(config.base_url, resolve=True)
             api_key = self.service.secrets.decrypt_secret(config.encrypted_api_key or b"")
+        except Exception as exc:
+            self._record_failure(
+                analysis_id,
+                post_id,
+                ModelRequestError(f"模型运行配置不可用：{exc}", config_error=True),
+            )
+            return True
+        try:
+            if self.media_resolver and deduplicate_media_urls(post.video_urls):
+                resolved = self.media_resolver(post.run_id, post.id)
+                fresh_video_urls = resolved.get("video_urls")
+                if not isinstance(fresh_video_urls, list) or not fresh_video_urls:
+                    raise ValueError("视频播放地址刷新结果为空")
+                # post 已离开领取事务；这里只替换本次请求输入，不改写历史快照。
+                post.video_urls = [str(value) for value in fresh_video_urls]
             body = build_request(
                 post,
                 config,
@@ -962,7 +1039,7 @@ class SentimentWorker:
             self._record_failure(
                 analysis_id,
                 post_id,
-                ModelRequestError(f"模型运行配置不可用：{exc}", config_error=True),
+                ValueError(f"模型输入准备失败：{exc}"),
             )
             return True
         raw = ""
@@ -1091,7 +1168,9 @@ class SentimentWorker:
             post = db.get(PostSnapshot, post_id)
             if analysis:
                 analysis.status = status
-                analysis.error_code = "MODEL_CONFIG_ERROR" if config_error else "MODEL_RESPONSE_ERROR"
+                analysis.error_code = (
+                    "MODEL_CONFIG_ERROR" if config_error else "MODEL_RESPONSE_ERROR"
+                )
                 analysis.error_message = f"{type(exc).__name__}: {exc}"[:2000]
                 analysis.raw_response = raw_response or None
                 analysis.retry_count = retry_count

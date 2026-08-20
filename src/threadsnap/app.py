@@ -77,13 +77,17 @@ class Container:
             self.session_store,
             event_publisher=self.events.publish,
         )
-        self.sentiment_worker = SentimentWorker(self.sentiment, settings.worker_poll_seconds)
         self.worker = WorkerService(
             self.sessions,
             self.session_store,
             settings.worker_poll_seconds,
             event_publisher=self.events.publish,
             sentiment_service=self.sentiment,
+        )
+        self.sentiment_worker = SentimentWorker(
+            self.sentiment,
+            settings.worker_poll_seconds,
+            media_resolver=self.worker.resolve_post_video_urls,
         )
         self.scheduler = SchedulerService(
             self.sessions,
@@ -148,9 +152,7 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
         return _container(request).sentiment.get_config()
 
     @router.put("/sentiment/config")
-    def update_sentiment_config(
-        value: SentimentConfigUpdate, request: Request
-    ) -> dict[str, Any]:
+    def update_sentiment_config(value: SentimentConfigUpdate, request: Request) -> dict[str, Any]:
         if value.api_key is not None:
             host = request.client.host if request.client else ""
             loopback = host == "testclient"
@@ -550,9 +552,7 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
             return {"message": "平台会话已加密保存，等待任务将自动续跑。"}
 
     @router.post("/platforms/{code}/auth/tasks", status_code=202)
-    async def create_auth_task(
-        code: str, request: Request, fresh: bool = False
-    ) -> dict[str, Any]:
+    async def create_auth_task(code: str, request: Request, fresh: bool = False) -> dict[str, Any]:
         return await _container(request).auth.create(code, fresh=fresh)
 
     @router.get("/auth/tasks/{task_id}")
