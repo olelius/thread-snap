@@ -4,7 +4,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from threadsnap.errors import DomainError
 from threadsnap.poc.sentiment import (
     build_request,
     parse_feedback_text,
@@ -12,9 +14,18 @@ from threadsnap.poc.sentiment import (
     reserve_api_call,
     stable_url_hash,
 )
+from threadsnap.sentiment import validate_public_https_base_url
 
 
 class SentimentPocTests(unittest.TestCase):
+    def test_public_https_validation_accepts_proxy_fake_ip_only_for_domain(self) -> None:
+        url = "https://workspace.example.test/compatible-mode/v1"
+        fake_result = [(2, 1, 6, "", ("198.18.0.17", 443))]
+        with patch("threadsnap.sentiment.socket.getaddrinfo", return_value=fake_result):
+            self.assertEqual(url, validate_public_https_base_url(url, resolve=True))
+        with self.assertRaises(DomainError):
+            validate_public_https_base_url("https://198.18.0.17/v1", resolve=True)
+
     def test_stable_url_hash_ignores_signature_query(self) -> None:
         first = stable_url_hash("https://media.example/video.mp4?signature=one")
         second = stable_url_hash("https://media.example/video.mp4?signature=two")
