@@ -277,7 +277,7 @@ export function RunDetailPage() {
             <div className='flex items-start justify-between gap-4 pr-8'>
               <div>
                 <SheetTitle>{detail.data?.title || '帖子快照详情'}</SheetTitle>
-                <SheetDescription className='mt-1'>数据库快照，不会在打开时重新访问平台。{navigation.data && ` 当前为筛选结果第 ${navigation.data.position} / ${navigation.data.total} 条。`}</SheetDescription>
+                <SheetDescription className='mt-1'>正文与统计来自数据库快照；含视频时仅刷新播放地址。{navigation.data && ` 当前为筛选结果第 ${navigation.data.position} / ${navigation.data.total} 条。`}</SheetDescription>
               </div>
               <div className='flex gap-1'>
                 <Button
@@ -357,19 +357,24 @@ function PostDetailContent({ runId, post, onCorrect }: { runId: string; post: Po
 type MediaResolveResponse = { video_urls: string[]; playback_urls: string[]; expires_at: string | null; source: 'live_url' }
 
 function VideoMedia({ runId, post, sentiment }: { runId: string; post: Post; sentiment?: Post['sentiment'] }) {
-  const resolveMedia = useMutation({
-    mutationFn: () => api<MediaResolveResponse>(`/runs/${runId}/posts/${post.id}/media/resolve`, { method: 'POST' }),
+  const resolvedMedia = useQuery({
+    queryKey: ['post-video-media', runId, post.id],
+    queryFn: () => api<MediaResolveResponse>(`/runs/${runId}/posts/${post.id}/media/resolve`, { method: 'POST' }),
+    retry: false,
+    refetchOnWindowFocus: false,
+    gcTime: 0,
   })
-  const urls = resolveMedia.data?.playback_urls ?? []
+  const urls = resolvedMedia.data?.playback_urls ?? []
   return <div className='space-y-3 rounded-lg bg-muted/30 p-3 md:col-span-2'>
     <div className='flex flex-wrap items-start justify-between gap-3'>
-      <div><div className='text-xs font-medium text-muted-foreground'>视频媒体 · URL 播放</div><p className='mt-1 text-xs leading-5 text-muted-foreground'>点击时从原帖解析最新临时地址；后端不下载、不保存视频文件。</p></div>
-      <Button type='button' size='sm' variant={urls.length ? 'outline' : 'default'} disabled={resolveMedia.isPending} onClick={() => resolveMedia.mutate()}>{resolveMedia.isPending ? <LoaderCircle className='size-4 animate-spin' /> : <RefreshCw className='size-4' />}{urls.length ? '刷新播放地址' : '加载视频'}</Button>
+      <div><div className='text-xs font-medium text-muted-foreground'>视频媒体 · URL 播放</div><p className='mt-1 text-xs leading-5 text-muted-foreground'>打开详情时自动获取最新临时地址；后端不下载、不保存视频文件。</p></div>
+      <Button type='button' size='sm' variant='outline' disabled={resolvedMedia.isFetching} onClick={() => void resolvedMedia.refetch()}>{resolvedMedia.isFetching ? <LoaderCircle className='size-4 animate-spin' /> : <RefreshCw className='size-4' />}{resolvedMedia.isFetching ? '正在加载' : resolvedMedia.isError ? '重试加载' : '刷新播放地址'}</Button>
     </div>
-    {resolveMedia.isError && <Alert variant='destructive'><CircleAlert className='size-4' /><AlertTitle>视频地址获取失败</AlertTitle><AlertDescription>{errorMessage(resolveMedia.error)}</AlertDescription></Alert>}
-    {!resolveMedia.isPending && !resolveMedia.isError && urls.length === 0 && <div className='rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground'>历史播放地址具有时效，点击“加载视频”获取当前可用 URL。</div>}
+    {resolvedMedia.isPending && <div className='flex items-center justify-center gap-2 rounded-lg border border-dashed p-8 text-sm text-muted-foreground'><LoaderCircle className='size-4 animate-spin' />正在获取当前视频地址…</div>}
+    {resolvedMedia.isError && <Alert variant='destructive'><CircleAlert className='size-4' /><AlertTitle>视频地址获取失败</AlertTitle><AlertDescription>{errorMessage(resolvedMedia.error)}</AlertDescription></Alert>}
+    {!resolvedMedia.isPending && !resolvedMedia.isError && urls.length === 0 && <div className='rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground'>当前帖子没有返回可播放的视频地址。</div>}
     {urls.map((url, index) => { const visual = sentiment?.modalities?.video_visual.items.find((value) => value.input_index === index); const audio = sentiment?.modalities?.video_audio.items.find((value) => value.input_index === index); return <div key={url} className='space-y-2'><div className='text-xs font-medium text-muted-foreground'>视频 {index + 1} · 画面 {visual?.status ?? '未报告'} · 音频 {audio?.status ?? '未报告'}</div><video controls preload='metadata' src={url} className='max-h-96 w-full rounded-lg border'>当前浏览器未能播放该视频。</video>{sentiment?.modalities && <div className='grid gap-3 md:grid-cols-2'><div><div className='mb-1 text-xs text-muted-foreground'>画面依据</div><EvidenceList values={visual?.evidence} /></div><div><div className='mb-1 text-xs text-muted-foreground'>音频依据</div><EvidenceList values={audio?.evidence} /></div></div>}</div> })}
-    {resolveMedia.data?.expires_at && <div className='text-xs text-muted-foreground'>当前播放地址预计有效至：{formatDate(resolveMedia.data.expires_at)}</div>}
+    {resolvedMedia.data?.expires_at && <div className='text-xs text-muted-foreground'>当前播放地址预计有效至：{formatDate(resolvedMedia.data.expires_at)}</div>}
   </div>
 }
 
