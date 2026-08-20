@@ -16,6 +16,21 @@
 
 ---
 
+## 2026-08-20 — 视频播放地址改为直接 HTTP 解析
+**总目标**：去除帖子详情加载与视频帖采集中的 Chromium 启动，使用平台实际 HTTP 接口直接把快照 `video_id` 解析为当前播放 URL。
+**状态**：✅ 直接解析、最高码率选择、真实媒体可达性、无新增浏览器进程和服务重启均已完成。
+**干到哪里了**：
+- [x] 一次有界网络取证确认平台网页先请求 `motor/pc/common/token` 获取三天播放授权，再请求 VOD `GetPlayInfo`；后者 JSON 返回三档 `MainPlayUrl`/`BackupPlayUrl`。省略网页动态生成的 `msToken` 与 `a_bogus` 后，两个真实视频 ID 的两段请求仍均返回 HTTP 200。
+- [x] 懂车帝适配器新增两段直接 HTTP 解析，只返回最高码率主地址；详情显式加载和采集时 `video_play_info` 为空的回退均改用该方法，原 `VideoUrlResolver` 及其帖子页面导航、媒体请求观察和 Chromium 生命周期已经移除。
+- [x] 真实视频 ID 解析取得 1 个 `v26-microapp-dcar.dcarvod.com` 地址，单字节 Range 请求返回 `206 Partial Content`、`video/mp4` 且仅接收 1 字节；调用前后浏览器进程均为 19，没有新增 PID，证据位于 `artifacts/runtime/direct-video-url-investigation/direct-http-proof.json`。
+- [x] 76 项后端测试、Ruff、`compileall`、`pip check`、前端 TypeScript 检查、生产构建和 `git diff --check` 通过；测试显式断言媒体解析接口不调用 `sync_playwright`。
+- [x] 本地后端已使用 `H:\ThreadSnap\.vevn\Scripts\python.exe` 重启；后端 `/health` 与 Vite `/health` 代理均为 `ok`。真实帖子媒体解析接口在 373ms 内返回 1 个播放地址和 1 个同源播放入口，调用前后浏览器进程保持 19，没有新增 PID。
+**下一步**：无；本任务进入 Git 收尾。
+**边界**：视频播放仍由用户浏览器直连 CDN；ThreadSnap 只请求授权和播放信息 JSON，不下载、转存或代理媒体。认证、Session 有界恢复及圈子 SSR 不足回退的既有浏览器边界保持不变，本次仅去除常规视频链路误用的浏览器。
+**关联**：`src/threadsnap/collectors/dongchedi.py`、`src/threadsnap/worker.py`、`tests/test_backend.py`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/sentiment-analysis.md`、`docs/research/sentiment-analysis-poc-results.md`
+
+---
+
 ## 2026-08-20 — 详情视频时效 URL 刷新与无 Referer 播放
 **总目标**：修复历史帖子详情中的视频地址过期后无法加载，同时坚持 URL 直连且不让 ThreadSnap 下载、代理或保存视频文件。
 **状态**：✅ 按需刷新、稳定媒体去重、无正文重定向、前端显式加载和真实 Chrome 播放验收均已完成。

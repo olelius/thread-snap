@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import math
 import re
@@ -20,6 +22,8 @@ from scrapling.fetchers import DynamicSession
 ADAPTER_VERSION = "dongchedi-dynamic-v4"
 BASE_URL = "https://www.dongchedi.com"
 DETAIL_ROOT = f"{BASE_URL}/motor/pc/ugc/detail"
+VIDEO_TOKEN_URL = f"{BASE_URL}/motor/pc/common/token"
+VIDEO_PLAY_INFO_URL = "https://vod.bytedanceapi.com/"
 COMMON_PARAMS = {"aid": "1839", "app_name": "auto_web_pc"}
 CIRCLE_RE = re.compile(
     r"^https?://(?:www\.)?dongchedi\.com/community/(?P<id>\d+)"
@@ -517,6 +521,99 @@ class DongchediCollector:
 
         walk(value)
         return output
+
+    def resolve_video_urls(self, video_id: str) -> list[str]:
+        """使用平台公开网页同款的两段 HTTP 接口解析当前最高画质播放 URL。"""
+
+        normalized_id = str(video_id or "").strip()
+        if not normalized_id:
+            return []
+        token_params = {
+            **COMMON_PARAMS,
+            "video_id": normalized_id,
+            "format_type": "mp4",
+        }
+        token_url = f"{VIDEO_TOKEN_URL}?{urlencode(token_params)}"
+        token_response = self._get(token_url)
+        self._detect_auth(token_response)
+        if token_response.status_code != 200:
+            raise CollectorFailure(
+                "VIDEO_TOKEN_ERROR",
+                f"懂车帝视频授权接口返回 HTTP {token_response.status_code}。",
+            )
+        try:
+            token_payload = json.loads(token_response.content)
+            encoded_token = token_payload["data"]["play_auth_token"]
+            decoded_token = json.loads(base64.b64decode(encoded_token, validate=True))
+            signed_query = str(decoded_token["GetPlayInfoToken"]).strip()
+        except (
+            binascii.Error,
+            json.JSONDecodeError,
+            KeyError,
+            TypeError,
+            ValueError,
+        ) as exc:
+            raise CollectorFailure(
+                "VIDEO_TOKEN_INVALID",
+                "懂车帝视频授权接口返回结构无效。",
+            ) from exc
+        if token_payload.get("status") != 0 or not signed_query:
+            raise CollectorFailure(
+                "VIDEO_TOKEN_INVALID",
+                "懂车帝视频授权接口没有返回有效授权。",
+            )
+
+        play_params = urlencode(
+            {
+                "codec_type": 0,
+                "definition": 0,
+                "format_type": "mp4",
+                "stream_type": "video",
+                "video_id": normalized_id,
+                "watermark": "unwatermarked",
+                "ssl": "true",
+                "aid": 36,
+            }
+        )
+        play_response = self._get(f"{VIDEO_PLAY_INFO_URL}?{signed_query}&{play_params}")
+        if play_response.status_code != 200:
+            raise CollectorFailure(
+                "VIDEO_PLAY_INFO_ERROR",
+                f"视频播放信息接口返回 HTTP {play_response.status_code}。",
+            )
+        try:
+            play_payload = json.loads(play_response.content)
+        except json.JSONDecodeError as exc:
+            raise CollectorFailure(
+                "VIDEO_PLAY_INFO_INVALID",
+                "视频播放信息接口返回结构无效。",
+            ) from exc
+        result = play_payload.get("Result", {}) if isinstance(play_payload, dict) else {}
+        data = result.get("Data", {}) if isinstance(result, dict) else {}
+        if not isinstance(data, dict) or str(data.get("VideoID") or "") != normalized_id:
+            raise CollectorFailure(
+                "VIDEO_PLAY_INFO_INVALID",
+                "视频播放信息与请求的视频不匹配。",
+            )
+        play_infos = data.get("PlayInfoList")
+        if not isinstance(play_infos, list):
+            return []
+        ranked: list[tuple[int, int, str]] = []
+        for item in play_infos:
+            if not isinstance(item, dict):
+                continue
+            try:
+                bitrate = int(item.get("Bitrate") or 0)
+            except (TypeError, ValueError):
+                bitrate = 0
+            for priority, key in enumerate(("MainPlayUrl", "BackupPlayUrl")):
+                value = item.get(key)
+                if isinstance(value, str) and value.startswith(("http://", "https://")):
+                    ranked.append((bitrate, -priority, value))
+        if not ranked:
+            return []
+        ranked.sort(reverse=True)
+        return [ranked[0][2]]
 
     def _fetch_comments(self, post_id: str, reply_count: int) -> list[dict[str, Any]]:
         if reply_count <= 0:
