@@ -6,7 +6,7 @@ import hashlib
 import json
 import socket
 import threading
-from ipaddress import ip_address
+from ipaddress import ip_address, ip_network
 from time import monotonic
 from typing import Any, Callable, Literal
 from urllib.parse import urlsplit
@@ -58,6 +58,7 @@ DEFAULT_PRODUCTS = [
     "瑞虎7L",
     "风云T7",
 ]
+PROXY_FAKE_IP_NETWORK = ip_network("198.18.0.0/15")
 
 
 class TextCoverage(BaseModel):
@@ -240,6 +241,15 @@ def validate_public_https_base_url(value: str, *, resolve: bool) -> str:
             "SENTIMENT_BASE_URL_INVALID",
             "API 地址必须是无账号、查询参数和片段的公网 HTTPS 地址。",
         )
+    try:
+        literal_host = ip_address(parts.hostname)
+    except ValueError:
+        literal_host = None
+    if literal_host is not None and not literal_host.is_global:
+        raise DomainError(
+            "SENTIMENT_HOST_NOT_PUBLIC",
+            "API 地址只允许使用公网域名或公网 IP。",
+        )
     if resolve:
         try:
             addresses = {
@@ -248,7 +258,13 @@ def validate_public_https_base_url(value: str, *, resolve: bool) -> str:
             }
         except OSError as exc:
             raise DomainError("SENTIMENT_HOST_UNRESOLVED", "API 地址域名解析失败。") from exc
-        if not addresses or any(not ip_address(value).is_global for value in addresses):
+        parsed_addresses = [ip_address(value) for value in addresses]
+        # Clash/Mihomo 等透明代理的 Fake-IP 模式会把公网域名映射到 RFC 2544
+        # 基准网段；仅对“域名解析结果”兼容该网段，直接填写该网段 IP 仍在上方拒绝。
+        if not parsed_addresses or any(
+            not address.is_global and address not in PROXY_FAKE_IP_NETWORK
+            for address in parsed_addresses
+        ):
             raise DomainError(
                 "SENTIMENT_HOST_NOT_PUBLIC",
                 "API 地址只允许解析到公网 IP。",
