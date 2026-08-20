@@ -49,7 +49,9 @@ from threadsnap.schemas import (
 from threadsnap.sentiment import (
     SentimentFeedback,
     build_request,
+    classify_empty_model_stream,
     deduplicate_media_urls,
+    extract_provider_error_code,
     normalize_feedback_payload,
     validate_modality_identity,
 )
@@ -406,6 +408,111 @@ class ApiAndConfigTests(AppCase):
         ]
         self.assertEqual([first], [item["video_url"]["url"] for item in videos])
 
+    def test_sentiment_normalizes_observed_present_status_and_positive_categories(self) -> None:
+        """JSON Mode 的状态别名和正向分类不会覆盖模型自己的非负面结论。"""
+
+        video = "https://media.example.test/a9.mp4"
+        video_hash = hashlib.sha256(video.encode()).hexdigest()
+        post = PostSnapshot(
+            title="智美纯电轿跑，风云A9",
+            content="视频展示提车过程",
+            image_urls=[],
+            video_urls=[video],
+        )
+        payload = {
+            "subject_relevance": True,
+            "matched_subjects": ["风云A9"],
+            "sentiment": "non_negative",
+            "primary_category": "product_review",
+            "secondary_categories": ["design_praise", "performance_feedback"],
+            "modalities": {
+                "text": {"status": "present", "evidence": "标题提及风云A9"},
+                "image": {
+                    "status": "absent", "expected_count": 0,
+                    "processed_count": 0, "items": [],
+                },
+                "video_visual": {
+                    "status": "present", "expected_count": 1,
+                    "processed_count": 1,
+                    "items": [{
+                        "input_index": 0, "url_hash": video_hash,
+                        "status": "processed", "evidence": "视频展示车辆",
+                    }],
+                },
+                "video_audio": {
+                    "status": "speech", "expected_count": 1,
+                    "processed_count": 1,
+                    "items": [{
+                        "input_index": 0, "url_hash": video_hash,
+                        "status": "speech", "evidence": "音频有人声介绍",
+                    }],
+                },
+            },
+            "summary": "内容为风云A9的正向提车分享。",
+        }
+
+        normalized, changed = normalize_feedback_payload(payload, post)
+        feedback = SentimentFeedback.model_validate(normalized)
+        validate_modality_identity(feedback, post)
+
+        self.assertTrue(changed)
+        self.assertEqual("processed", feedback.modalities.text.status)
+        self.assertEqual("processed", feedback.modalities.video_visual.status)
+        self.assertIsNone(feedback.primary_category)
+        self.assertEqual([], feedback.secondary_categories)
+        self.assertEqual("product_review", payload["primary_category"])
+
+    def test_sentiment_normalizes_observed_media_item_aliases_and_unknown_negative_type(
+        self,
+    ) -> None:
+        """完整处理声明有输入、依据和稳定身份时才收敛逐媒体别名。"""
+
+        image = "https://media.example.test/a9.jpg"
+        image_hash = hashlib.sha256(image.encode()).hexdigest()
+        post = PostSnapshot(
+            title="车辆反馈",
+            content="车机存在问题",
+            image_urls=[image],
+            video_urls=[],
+        )
+        payload = {
+            "subject_relevance": True,
+            "matched_subjects": ["风云A9"],
+            "sentiment": "negative",
+            "primary_category": "software_problem",
+            "secondary_categories": ["product_complaint", "software_problem"],
+            "modalities": {
+                "text": {"status": "processed", "evidence": ["正文反馈车机问题"]},
+                "image": {
+                    "status": "processed", "expected_count": 1,
+                    "processed_count": 1,
+                    "items": [{
+                        "input_index": 0, "url_hash": image_hash[:-5],
+                        "status": "relevant", "evidence": "图片显示车机界面",
+                    }],
+                },
+                "video_visual": {
+                    "status": "absent", "expected_count": 0,
+                    "processed_count": 0, "items": [],
+                },
+                "video_audio": {
+                    "status": "absent", "expected_count": 0,
+                    "processed_count": 0, "items": [],
+                },
+            },
+            "summary": "帖子反馈风云A9车机问题。",
+        }
+
+        normalized, changed = normalize_feedback_payload(payload, post)
+        feedback = SentimentFeedback.model_validate(normalized)
+        validate_modality_identity(feedback, post)
+
+        self.assertTrue(changed)
+        self.assertEqual("processed", feedback.modalities.image.items[0].status)
+        self.assertEqual(image_hash, feedback.modalities.image.items[0].url_hash)
+        self.assertEqual("other", feedback.primary_category)
+        self.assertEqual(["product_complaint"], feedback.secondary_categories)
+
     def test_sentiment_worker_starts_two_bounded_consumers(self) -> None:
         worker = self.container.sentiment_worker
         worker.start()
@@ -415,6 +522,43 @@ class ApiAndConfigTests(AppCase):
             self.assertTrue(all(thread.is_alive() for thread in worker.threads))
         finally:
             worker.stop()
+
+    def test_sentiment_classifies_error_inside_successful_sse_stream(self) -> None:
+        """HTTP 200 流内错误必须保留提供方代码和请求审计信息。"""
+
+        error = classify_empty_model_stream(
+            [{"code": "Throttling.RateQuota", "message": "rate limited"}],
+            provider_request_id="request-1",
+            usage={"total_tokens": 0},
+            duration_ms=15,
+        )
+
+        self.assertEqual(429, error.status_code)
+        self.assertTrue(error.retryable)
+        self.assertEqual("request-1", error.provider_request_id)
+        self.assertEqual({"total_tokens": 0}, error.usage)
+        self.assertIn("Throttling.RateQuota", str(error))
+
+        exhausted = classify_empty_model_stream(
+            [{"error": {"code": "insufficient_quota"}}],
+            provider_request_id="request-2",
+            usage=None,
+            duration_ms=9,
+        )
+        self.assertTrue(exhausted.config_error)
+        self.assertFalse(exhausted.retryable)
+
+    def test_sentiment_extracts_only_provider_http_error_code(self) -> None:
+        """HTTP 错误诊断不复制可能包含敏感 URL 的 message。"""
+
+        body = json.dumps({
+            "error": {
+                "code": "Arrearage",
+                "message": "media https://signed.example.test/a?token=secret",
+            }
+        })
+
+        self.assertEqual("Arrearage", extract_provider_error_code(body))
 
     def test_bootstrap_refreshes_available_adapter_version(self) -> None:
         with self.container.sessions.begin() as db:

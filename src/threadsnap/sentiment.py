@@ -31,7 +31,7 @@ from .schemas import ManualSentimentRevisionCreate, SentimentConfigUpdate
 from .session_store import SessionStore
 
 MODEL_CODES = ("qwen3.5-omni-plus-2026-03-15",)
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
 CATEGORIES = (
     "product_complaint",
     "product_criticism",
@@ -250,10 +250,51 @@ def validate_modality_identity(feedback: SentimentFeedback, post: PostSnapshot) 
 def normalize_feedback_payload(
     payload: dict[str, Any], post: PostSnapshot
 ) -> tuple[dict[str, Any], bool]:
-    """只修复可由输入契约唯一确定的提供方 JSON 形状，不改写观点字段。"""
+    """把可由输入和模型上层结论唯一确定的提供方偏差收敛到业务合同。"""
 
     normalized = deepcopy(payload)
     changed = False
+
+    # 分类字段只承载负面类型。模型已经明确给出“不相关”或“非负面”时，
+    # 清除它额外生成的正向分类不会改变情感结论；原始响应仍单独完整保存。
+    relevance = normalized.get("subject_relevance")
+    sentiment = normalized.get("sentiment")
+    if relevance is False:
+        for field, value in (
+            ("sentiment", None),
+            ("primary_category", None),
+            ("secondary_categories", []),
+        ):
+            if normalized.get(field) != value:
+                normalized[field] = value
+                changed = True
+    elif sentiment == "non_negative":
+        for field, value in (
+            ("primary_category", None),
+            ("secondary_categories", []),
+        ):
+            if normalized.get(field) != value:
+                normalized[field] = value
+                changed = True
+    elif sentiment == "negative":
+        primary = normalized.get("primary_category")
+        if primary is not None and primary not in CATEGORIES:
+            normalized["primary_category"] = "other"
+            primary = "other"
+            changed = True
+        secondary = normalized.get("secondary_categories")
+        if isinstance(secondary, list):
+            filtered = list(
+                dict.fromkeys(
+                    value
+                    for value in secondary
+                    if value in CATEGORIES and value != primary
+                )
+            )
+            if filtered != secondary:
+                normalized["secondary_categories"] = filtered
+                changed = True
+
     modalities = normalized.get("modalities")
     if not isinstance(modalities, dict):
         return normalized, changed
@@ -261,6 +302,15 @@ def normalize_feedback_payload(
     text = modalities.get("text")
     if isinstance(text, dict) and isinstance(text.get("evidence"), str):
         text["evidence"] = [text["evidence"]]
+        changed = True
+    if (
+        isinstance(text, dict)
+        and text.get("status") == "present"
+        and bool((post.title or "").strip() or (post.content or "").strip())
+        and isinstance(text.get("evidence"), list)
+        and bool(text["evidence"])
+    ):
+        text["status"] = "processed"
         changed = True
 
     expected = {
@@ -288,6 +338,29 @@ def normalize_feedback_payload(
             if isinstance(item, dict) and isinstance(item.get("evidence"), str):
                 item["evidence"] = [item["evidence"]]
                 changed = True
+        full_claim = (
+            bool(expected_hashes)
+            and coverage.get("status") in {"processed", "present"}
+            and coverage.get("processed_count") == len(expected_hashes)
+            and len(items) == len(expected_hashes)
+        )
+        if full_claim:
+            for item in items:
+                if (
+                    isinstance(item, dict)
+                    and item.get("status") in {"present", "relevant", "irrelevant"}
+                    and isinstance(item.get("evidence"), list)
+                    and bool(item["evidence"])
+                ):
+                    item["status"] = "processed"
+                    changed = True
+            if coverage.get("status") == "present" and all(
+                isinstance(item, dict)
+                and item.get("status") in {"processed", "speech", "silent", "no_speech"}
+                for item in items
+            ):
+                coverage["status"] = "processed"
+                changed = True
         if not expected_hashes or len(items) != len(expected_hashes):
             continue
         indexes = {
@@ -296,16 +369,32 @@ def normalize_feedback_payload(
             if isinstance(item, dict) and isinstance(item.get("input_index"), int)
         }
         one_based = indexes == set(range(1, len(expected_hashes) + 1))
-        hashes_match = one_based and all(
-            isinstance(item, dict)
-            and item.get("url_hash") == expected_hashes[item["input_index"] - 1]
-            for item in items
-        )
-        if hashes_match:
+        if one_based and len(indexes) == len(items):
             for item in items:
                 item["input_index"] -= 1
             changed = True
+            indexes = set(range(len(expected_hashes)))
+        # URL 哈希是本地为输入生成的冗余身份字段。提供方已返回完整连续索引时，
+        # 以实际输入顺序恢复被截断或拼接的哈希；原始响应仍保留其错误值。
+        if indexes == set(range(len(expected_hashes))) and len(indexes) == len(items):
+            for item in items:
+                expected_hash = expected_hashes[item["input_index"]]
+                if item.get("url_hash") != expected_hash:
+                    item["url_hash"] = expected_hash
+                    changed = True
     return normalized, changed
+
+
+def parse_and_validate_feedback(
+    raw: str, post: PostSnapshot
+) -> tuple[SentimentFeedback, bool]:
+    """解析一次模型响应，并按生产 Worker 的同一规则完成归一化与校验。"""
+
+    payload, _strict, recovered = parse_feedback_text(raw)
+    payload, normalized = normalize_feedback_payload(payload, post)
+    feedback = SentimentFeedback.model_validate(payload)
+    validate_modality_identity(feedback, post)
+    return feedback, recovered or normalized
 
 
 def validate_public_https_base_url(value: str, *, resolve: bool) -> str:
@@ -378,12 +467,15 @@ def build_prompt(
 视频 URL 哈希：{json.dumps(videos)}
 
 返回字段：subject_relevance、matched_subjects、sentiment、primary_category、secondary_categories、modalities、summary。
-不相关时 sentiment 与 primary_category 为 null；负面必须有 primary_category；次要类型不得重复主要类型。
+不相关时 sentiment 与 primary_category 为 null、secondary_categories=[]；非负面时 primary_category=null、secondary_categories=[]；负面必须有 primary_category；次要类型不得重复主要类型。不得返回正向分类代码。
 modalities.text 包含 status/evidence；modalities.image、video_visual、video_audio 均包含 status、expected_count、processed_count、items。
 每个 items 项包含 input_index、对应 url_hash、status、evidence，items 数量必须等于 expected_count。
 所有 evidence 必须是 JSON 字符串数组，即使只有一条也不得直接返回字符串。
 每种媒体的 input_index 均从 0 开始连续编号；没有输入的模态必须返回 status=absent、expected_count=0、processed_count=0、items=[]，不得使用 skipped。
-视频音频 status 只使用 absent、speech、silent、no_speech、inaccessible、unrecognizable 或 unprocessed。
+文字 status 只使用 absent、processed 或 unprocessed。
+图片和视频画面的顶层及逐项 status 只使用 absent、processed、inaccessible、unrecognizable 或 unprocessed。
+视频音频的顶层及逐项 status 只使用 absent、processed、speech、silent、no_speech、inaccessible、unrecognizable 或 unprocessed。
+任何 status 都不得使用 present、relevant、irrelevant 或 skipped。
 expected_count：image={len(images)}，video_visual={len(videos)}，video_audio={len(videos)}。"""
 
 
@@ -440,10 +532,12 @@ class SentimentModelClient:
                         config_error=True,
                     )
                 if response.status_code >= 400:
-                    response_text = response.read().decode("utf-8", errors="replace")[:2000].lower()
-                    model_error = response.status_code in {400, 404} and "model" in response_text
+                    response_text = response.read().decode("utf-8", errors="replace")[:2000]
+                    lowered_response = response_text.lower()
+                    provider_code = extract_provider_error_code(response_text)
+                    model_error = response.status_code in {400, 404} and "model" in lowered_response
                     input_too_large = response.status_code in {400, 413} and any(
-                        marker in response_text
+                        marker in lowered_response
                         for marker in ("limit", "length", "too large", "too long")
                     )
                     retry_after = response.headers.get("retry-after")
@@ -454,7 +548,8 @@ class SentimentModelClient:
                     except ValueError:
                         retry_after_seconds = None
                     raise ModelRequestError(
-                        f"模型接口返回 HTTP {response.status_code}",
+                        f"模型接口返回 HTTP {response.status_code}"
+                        + (f"（{provider_code}）" if provider_code else ""),
                         status_code=response.status_code,
                         retryable=response.status_code == 429 or response.status_code >= 500,
                         config_error=response.status_code in {401, 403} or model_error,
@@ -464,8 +559,16 @@ class SentimentModelClient:
                 request_id = response.headers.get("x-request-id") or response.headers.get(
                     "x-dashscope-request-id"
                 )
-                text, usage, _chunks = parse_sse_lines(response.iter_lines())
-        return text, usage, request_id, round((monotonic() - started) * 1000)
+                text, usage, chunks = parse_sse_lines(response.iter_lines())
+        duration_ms = round((monotonic() - started) * 1000)
+        if not text.strip():
+            raise classify_empty_model_stream(
+                chunks,
+                provider_request_id=request_id,
+                usage=usage,
+                duration_ms=duration_ms,
+            )
+        return text, usage, request_id, duration_ms
 
 
 class ModelRequestError(RuntimeError):
@@ -480,6 +583,9 @@ class ModelRequestError(RuntimeError):
         config_error: bool = False,
         input_too_large: bool = False,
         retry_after_seconds: float | None = None,
+        provider_request_id: str | None = None,
+        usage: dict[str, Any] | None = None,
+        duration_ms: int | None = None,
     ):
         super().__init__(message)
         self.status_code = status_code
@@ -487,6 +593,65 @@ class ModelRequestError(RuntimeError):
         self.config_error = config_error
         self.input_too_large = input_too_large
         self.retry_after_seconds = retry_after_seconds
+        self.provider_request_id = provider_request_id
+        self.usage = usage
+        self.duration_ms = duration_ms
+
+
+def extract_provider_error_code(response_text: str) -> str:
+    """只提取提供方错误代码，避免把响应中的媒体 URL 或凭证写入错误信息。"""
+
+    try:
+        value = json.loads(response_text)
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(value, dict):
+        return ""
+    error = value.get("error")
+    code = error.get("code") if isinstance(error, dict) else value.get("code")
+    return str(code).strip()[:120] if code is not None else ""
+
+
+def classify_empty_model_stream(
+    chunks: list[dict[str, Any]],
+    *,
+    provider_request_id: str | None,
+    usage: dict[str, Any] | None,
+    duration_ms: int,
+) -> ModelRequestError:
+    """把 HTTP 200 流中的提供方错误转为可追溯失败，避免空串伪装成 JSON 错误。"""
+
+    code = ""
+    for chunk in chunks:
+        error = chunk.get("error")
+        if isinstance(error, dict):
+            code = str(error.get("code") or error.get("type") or "").strip()
+        if not code:
+            code = str(chunk.get("code") or "").strip()
+        if code:
+            break
+    lowered = code.lower()
+    quota_exhausted = any(
+        marker in lowered for marker in ("insufficient_quota", "arrearage", "balance")
+    )
+    rate_limited = not quota_exhausted and any(
+        marker in lowered for marker in ("rate", "thrott", "quota")
+    )
+    retryable = rate_limited or any(
+        marker in lowered for marker in ("timeout", "internal", "server", "unavailable")
+    )
+    input_too_large = any(marker in lowered for marker in ("length", "limit", "too_large"))
+    message = f"模型流返回错误：{code}" if code else "模型流未返回文字内容"
+    return ModelRequestError(
+        message,
+        status_code=429 if rate_limited else None,
+        retryable=retryable,
+        config_error=quota_exhausted,
+        input_too_large=input_too_large,
+        provider_request_id=provider_request_id,
+        usage=usage,
+        duration_ms=duration_ms,
+    )
 
 
 class SentimentService:
@@ -1003,10 +1168,7 @@ class SentimentWorker:
                 )
                 return True
             try:
-                payload, _strict, recovered = parse_feedback_text(raw)
-                payload, normalized = normalize_feedback_payload(payload, post)
-                feedback = SentimentFeedback.model_validate(payload)
-                validate_modality_identity(feedback, post)
+                feedback, locally_recovered = parse_and_validate_feedback(raw, post)
             except (ValueError, json.JSONDecodeError, ValidationError) as exc:
                 self._record_failure(
                     analysis_id,
@@ -1014,6 +1176,9 @@ class SentimentWorker:
                     exc,
                     raw_response=raw,
                     retry_count=retry_count,
+                    provider_request_id=request_id,
+                    usage=usage,
+                    duration_ms=duration_ms,
                 )
                 return True
             status = self._coverage_status(feedback)
@@ -1032,7 +1197,7 @@ class SentimentWorker:
             analysis.summary = feedback.summary
             analysis.modalities = feedback.modalities.model_dump()
             analysis.raw_response = raw
-            analysis.locally_recovered = recovered or normalized
+            analysis.locally_recovered = locally_recovered
             analysis.provider_request_id = request_id
             analysis.usage = usage
             analysis.retry_count = retry_count
@@ -1074,6 +1239,9 @@ class SentimentWorker:
         *,
         raw_response: str = "",
         retry_count: int = 0,
+        provider_request_id: str | None = None,
+        usage: dict[str, Any] | None = None,
+        duration_ms: int | None = None,
     ) -> None:
         config_error = isinstance(exc, httpx.HTTPError) or (
             isinstance(exc, ModelRequestError) and exc.config_error
@@ -1095,6 +1263,11 @@ class SentimentWorker:
                 analysis.error_message = f"{type(exc).__name__}: {exc}"[:2000]
                 analysis.raw_response = raw_response or None
                 analysis.retry_count = retry_count
+                analysis.provider_request_id = provider_request_id or getattr(
+                    exc, "provider_request_id", None
+                )
+                analysis.usage = usage or getattr(exc, "usage", None)
+                analysis.duration_ms = duration_ms or getattr(exc, "duration_ms", None)
                 analysis.finished_at = utc_now()
             if post:
                 post.analysis_status = status
