@@ -46,6 +46,13 @@ from threadsnap.schemas import (
     CircleRow,
     ManualRunCreate,
 )
+from threadsnap.sentiment import (
+    SentimentFeedback,
+    build_request,
+    deduplicate_media_urls,
+    normalize_feedback_payload,
+    validate_modality_identity,
+)
 from threadsnap.services import bootstrap_database
 
 
@@ -323,6 +330,92 @@ class AppCase(unittest.TestCase):
 
 
 class ApiAndConfigTests(AppCase):
+    def test_sentiment_normalizes_provider_shape_and_deduplicates_signed_media(self) -> None:
+        """兼容已观察到的提供方形状偏差，同时只提交一次同一稳定媒体。"""
+
+        first = "https://media.example.test/video.mp4?token=first"
+        second = "https://media.example.test/video.mp4?token=second"
+        video_hash = hashlib.sha256(b"https://media.example.test/video.mp4").hexdigest()
+        post = PostSnapshot(
+            title="提车记录",
+            content="风云A9 提车仪式",
+            image_urls=[],
+            video_urls=[first, second],
+        )
+        payload = {
+            "subject_relevance": True,
+            "matched_subjects": ["风云A9"],
+            "sentiment": "non_negative",
+            "primary_category": None,
+            "secondary_categories": [],
+            "modalities": {
+                "text": {"status": "processed", "evidence": "标题与正文描述提车"},
+                "image": {
+                    "status": "skipped",
+                    "expected_count": 0,
+                    "processed_count": 0,
+                    "items": [],
+                },
+                "video_visual": {
+                    "status": "processed",
+                    "expected_count": 1,
+                    "processed_count": 1,
+                    "items": [{
+                        "input_index": 1,
+                        "url_hash": video_hash,
+                        "status": "processed",
+                        "evidence": "视频展示提车仪式",
+                    }],
+                },
+                "video_audio": {
+                    "status": "processed",
+                    "expected_count": 1,
+                    "processed_count": 1,
+                    "items": [{
+                        "input_index": 1,
+                        "url_hash": video_hash,
+                        "status": "processed",
+                        "evidence": "音频已处理",
+                    }],
+                },
+            },
+            "summary": "内容为风云A9提车分享。",
+        }
+
+        normalized, changed = normalize_feedback_payload(payload, post)
+        feedback = SentimentFeedback.model_validate(normalized)
+        validate_modality_identity(feedback, post)
+
+        self.assertTrue(changed)
+        self.assertEqual(["标题与正文描述提车"], feedback.modalities.text.evidence)
+        self.assertEqual("absent", feedback.modalities.image.status)
+        self.assertEqual(0, feedback.modalities.video_visual.items[0].input_index)
+        self.assertEqual([first], deduplicate_media_urls(post.video_urls))
+
+        config = SimpleNamespace(
+            model_code="qwen3.5-omni-plus-2026-03-15",
+            brand="奇瑞",
+            products=["风云A9"],
+            supplement=None,
+        )
+        request = build_request(post, config)
+        videos = [
+            item
+            for item in request["messages"][0]["content"]
+            if item["type"] == "video_url"
+        ]
+        self.assertEqual([first], [item["video_url"]["url"] for item in videos])
+
+    def test_sentiment_worker_starts_two_bounded_consumers(self) -> None:
+        worker = self.container.sentiment_worker
+        worker.start()
+        try:
+            self.assertEqual(2, worker.concurrency)
+            self.assertEqual(2, len(worker.threads))
+            self.assertTrue(all(thread.is_alive() for thread in worker.threads))
+        finally:
+            worker.stop()
+
     def test_bootstrap_refreshes_available_adapter_version(self) -> None:
         with self.container.sessions.begin() as db:
             platform = db.get(PlatformConfig, "dongchedi")
@@ -352,26 +445,26 @@ class ApiAndConfigTests(AppCase):
                     "primary_category": "product_complaint",
                     "secondary_categories": [],
                     "modalities": {
-                        "text": {"status": "processed", "evidence": ["正文描述产品故障"]},
+                        "text": {"status": "processed", "evidence": "正文描述产品故障"},
                         "image": {
                             "status": "processed",
                             "expected_count": 1,
                             "processed_count": 1,
                             "items": [{
-                                "input_index": 0,
+                                "input_index": 1,
                                 "url_hash": hashlib.sha256(
                                     b"https://example.test/a.jpg"
                                 ).hexdigest(),
                                 "status": "processed",
-                                "evidence": ["图片显示故障提示"],
+                                "evidence": "图片显示故障提示",
                             }],
                         },
                         "video_visual": {
-                            "status": "absent", "expected_count": 0,
+                            "status": "skipped", "expected_count": 0,
                             "processed_count": 0, "items": [],
                         },
                         "video_audio": {
-                            "status": "absent", "expected_count": 0,
+                            "status": "skipped", "expected_count": 0,
                             "processed_count": 0, "items": [],
                         },
                     },
