@@ -16,6 +16,24 @@
 
 ---
 
+## 2026-08-20 — 舆情结果清空、付费队列恢复与视频时效输入修复
+**总目标**：在余额补充后清空既有舆情结果并只重跑原 30 条分析范围，同时避免历史视频临时 URL 过期造成付费请求空响应。
+**状态**：✅ 30 条既有范围已完成重新分析；最终为 30/30 `analysis_completed`、0 失败，服务与配置均已恢复。
+**干到哪里了**：
+- [x] 现场分母为 2910 条帖子、30 条已有舆情任务、17 条完成、13 条余额不足暂停和 1 条人工修订；没有分析记录的另外 2880 条历史帖子未进入本次付费回刷。
+- [x] 停止 Worker 后通过 SQLite 在线备份 API 保存 `artifacts/runtime/sentiment-full-reset-20260820-220632/threadsnap-before-reset.db`（SHA-256 `63030B6CAD4C84EE3CA840C95E3672F157EE2B31AB27FDFEF390DB7D455B7B95`），随后清空 30 条 AI 结果/原始响应/用量和 1 条人工修订，并把 30 条原任务恢复排队。
+- [x] 一次最小连接测试从原 `403 insufficient_quota` 恢复为 `valid`，配置重新启用；初次续跑确认历史快照视频 URL 已返回 HTTP 403，而按 `video_id` 直接 HTTP 刷新的当前 URL 返回 HTTP 206 `video/mp4`。
+- [x] 模型 Worker 在付费请求前复用现有直接 HTTP 媒体刷新器，只替换本次请求输入、不改写帖子快照；同一视频的等价 dcarvod CDN 主机纳入稳定身份去重。提供方把已完成模态写成 `relevant`/`present` 时，只在汇总状态和计数可唯一确认的条件下本地归一化。
+- [x] “来源搜索仍按任务快照平台圈子名匹配、与当前来源名展示不一致”的问题已登记到 `docs/chains/first-platform-delivery.md`，本任务不顺带修改筛选语义。
+- [x] 两个受控消费者完成全部 30 次真实模型请求：18 条直接通过，12 条仅因提供方把冗余结构字段写成 `present`/`relevant`、对象式匹配项或复制错误 URL 哈希而进入结构失败；随后只使用已经保存的原始响应、后端权威媒体索引和输入身份做确定性恢复，没有追加模型请求，最终 30/30 `analysis_completed`、0 失败。
+- [x] 本地后端已加载最终代码；配置为 revision 14、`enabled=true`、`validation_status=valid`，后端 `/health` 与 Vite `/health` 代理均返回 `ok`。
+- [x] 79 项后端测试通过；本任务 5 个 Python 文件 Ruff 格式与静态检查、`compileall`、`pip check` 和 `git diff --check` 均通过。全仓格式检查另命中 7 个任务外既有文件，本任务未顺带重排。
+**下一步**：无；本任务进入 Git 收尾，不再触发本批次模型请求。
+**边界**：只重跑原有 30 条任务，不新建历史回刷；媒体仍由模型服务读取当前 URL，ThreadSnap 不下载、转存或代理视频；有效模型观点和原始依据不做业务改写。
+**关联**：`src/threadsnap/poc/sentiment.py`、`src/threadsnap/sentiment.py`、`src/threadsnap/app.py`、`tests/test_sentiment_poc.py`、`tests/test_backend.py`、`docs/chains/sentiment-analysis.md`、`docs/chains/first-platform-delivery.md`、`docs/design/technical-route.md`
+
+---
+
 ## 2026-08-20 — 来源名称实时展示与列表类型标识
 **总目标**：让来源名称修改后同步反映到历史批次展示和后续导出，并在帖子结果中明确区分“最新回复”与“最新发布”。
 **状态**：✅ 后端当前名称解析、删除回退、列表类型字段、前端展示、必要测试和本地重启均已完成。

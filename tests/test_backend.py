@@ -201,7 +201,9 @@ class FakeAuthContext:
 
 class AlreadyClosedAuthContext(FakeAuthContext):
     async def close(self) -> None:
-        raise PlaywrightError("BrowserContext.close: Target page, context or browser has been closed")
+        raise PlaywrightError(
+            "BrowserContext.close: Target page, context or browser has been closed"
+        )
 
 
 class FakePlaywright:
@@ -405,12 +407,8 @@ class ApiAndConfigTests(AppCase):
             ) as resolved,
             patch("threadsnap.worker.sync_playwright") as browser_started,
         ):
-            response = self.client.post(
-                f"/api/v1/runs/{run['id']}/posts/{post_id}/media/resolve"
-            )
-            cached = self.client.post(
-                f"/api/v1/runs/{run['id']}/posts/{post_id}/media/resolve"
-            )
+            response = self.client.post(f"/api/v1/runs/{run['id']}/posts/{post_id}/media/resolve")
+            cached = self.client.post(f"/api/v1/runs/{run['id']}/posts/{post_id}/media/resolve")
 
         self.assertEqual(200, response.status_code, response.text)
         self.assertEqual([fresh_urls[0]], response.json()["video_urls"])
@@ -447,10 +445,10 @@ class ApiAndConfigTests(AppCase):
         )
         payload = {
             "subject_relevance": True,
-            "matched_subjects": ["风云A9"],
+            "matched_subjects": [{"brand": "奇瑞", "product": "风云A9"}],
             "sentiment": "non_negative",
-            "primary_category": None,
-            "secondary_categories": [],
+            "primary_category": "product_showcase",
+            "secondary_categories": ["other"],
             "modalities": {
                 "text": {"status": "processed", "evidence": "标题与正文描述提车"},
                 "image": {
@@ -463,23 +461,27 @@ class ApiAndConfigTests(AppCase):
                     "status": "processed",
                     "expected_count": 1,
                     "processed_count": 1,
-                    "items": [{
-                        "input_index": 1,
-                        "url_hash": video_hash,
-                        "status": "processed",
-                        "evidence": "视频展示提车仪式",
-                    }],
+                    "items": [
+                        {
+                            "input_index": 1,
+                            "url_hash": video_hash,
+                            "status": "processed",
+                            "evidence": "视频展示提车仪式",
+                        }
+                    ],
                 },
                 "video_audio": {
                     "status": "processed",
                     "expected_count": 1,
                     "processed_count": 1,
-                    "items": [{
-                        "input_index": 1,
-                        "url_hash": video_hash,
-                        "status": "processed",
-                        "evidence": "音频已处理",
-                    }],
+                    "items": [
+                        {
+                            "input_index": 1,
+                            "url_hash": video_hash,
+                            "status": "processed",
+                            "evidence": "音频已处理",
+                        }
+                    ],
                 },
             },
             "summary": "内容为风云A9提车分享。",
@@ -502,12 +504,64 @@ class ApiAndConfigTests(AppCase):
             supplement=None,
         )
         request = build_request(post, config)
-        videos = [
-            item
-            for item in request["messages"][0]["content"]
-            if item["type"] == "video_url"
-        ]
+        videos = [item for item in request["messages"][0]["content"] if item["type"] == "video_url"]
         self.assertEqual([first], [item["video_url"]["url"] for item in videos])
+
+    def test_sentiment_normalizes_relevant_media_item_as_processed(self) -> None:
+        """汇总计数明确完成时，兼容提供方把逐图状态写成 relevant。"""
+
+        image_url = "https://media.example.test/a.jpg"
+        image_hash = hashlib.sha256(image_url.encode()).hexdigest()
+        post = PostSnapshot(title="风云A9", image_urls=[image_url], video_urls=[])
+        payload = {
+            "subject_relevance": True,
+            "matched_subjects": ["风云A9"],
+            "sentiment": "non_negative",
+            "primary_category": None,
+            "secondary_categories": [],
+            "modalities": {
+                "text": {"status": "present", "evidence": ["标题提及车型"]},
+                "image": {
+                    "status": "present",
+                    "expected_count": 1,
+                    "processed_count": 1,
+                    "items": [
+                        {
+                            "input_index": 0,
+                            "url_hash": "model-copied-wrong-hash",
+                            "status": "relevant",
+                            "evidence": ["图片展示车辆"],
+                        }
+                    ],
+                },
+                "video_visual": {
+                    "status": "absent",
+                    "expected_count": 0,
+                    "processed_count": 0,
+                    "items": [],
+                },
+                "video_audio": {
+                    "status": "absent",
+                    "expected_count": 0,
+                    "processed_count": 0,
+                    "items": [],
+                },
+            },
+            "summary": "内容为车型展示。",
+        }
+
+        normalized, changed = normalize_feedback_payload(payload, post)
+        feedback = SentimentFeedback.model_validate(normalized)
+        validate_modality_identity(feedback, post)
+
+        self.assertTrue(changed)
+        self.assertEqual(["风云A9"], feedback.matched_subjects)
+        self.assertIsNone(feedback.primary_category)
+        self.assertEqual([], feedback.secondary_categories)
+        self.assertEqual("processed", feedback.modalities.text.status)
+        self.assertEqual("processed", feedback.modalities.image.status)
+        self.assertEqual("processed", feedback.modalities.image.items[0].status)
+        self.assertEqual(image_hash, feedback.modalities.image.items[0].url_hash)
 
     def test_sentiment_worker_starts_two_bounded_consumers(self) -> None:
         worker = self.container.sentiment_worker
@@ -553,27 +607,38 @@ class ApiAndConfigTests(AppCase):
                             "status": "processed",
                             "expected_count": 1,
                             "processed_count": 1,
-                            "items": [{
-                                "input_index": 1,
-                                "url_hash": hashlib.sha256(
-                                    b"https://example.test/a.jpg"
-                                ).hexdigest(),
-                                "status": "processed",
-                                "evidence": "图片显示故障提示",
-                            }],
+                            "items": [
+                                {
+                                    "input_index": 1,
+                                    "url_hash": hashlib.sha256(
+                                        b"https://example.test/a.jpg"
+                                    ).hexdigest(),
+                                    "status": "processed",
+                                    "evidence": "图片显示故障提示",
+                                }
+                            ],
                         },
                         "video_visual": {
-                            "status": "skipped", "expected_count": 0,
-                            "processed_count": 0, "items": [],
+                            "status": "skipped",
+                            "expected_count": 0,
+                            "processed_count": 0,
+                            "items": [],
                         },
                         "video_audio": {
-                            "status": "skipped", "expected_count": 0,
-                            "processed_count": 0, "items": [],
+                            "status": "skipped",
+                            "expected_count": 0,
+                            "processed_count": 0,
+                            "items": [],
                         },
                     },
                     "summary": "帖子反馈 A9L 产品故障。",
                 }
-                return json.dumps(feedback, ensure_ascii=False), {"total_tokens": 123}, "model-request", 18
+                return (
+                    json.dumps(feedback, ensure_ascii=False),
+                    {"total_tokens": 123},
+                    "model-request",
+                    18,
+                )
 
         config = self.client.get("/api/v1/sentiment/config").json()
         self.assertFalse(config["api_key_configured"])
@@ -621,7 +686,12 @@ class ApiAndConfigTests(AppCase):
         circle = self.save_verified_circle(name="A9L")
         run_response = self.client.post(
             "/api/v1/runs/manual",
-            json={"platform_code": "dongchedi", "circle_ids": [circle.id], "quantity": 1, "idempotency_key": "sentiment-test-run"},
+            json={
+                "platform_code": "dongchedi",
+                "circle_ids": [circle.id],
+                "quantity": 1,
+                "idempotency_key": "sentiment-test-run",
+            },
         )
         self.assertEqual(202, run_response.status_code, run_response.text)
         run = run_response.json()
@@ -646,9 +716,7 @@ class ApiAndConfigTests(AppCase):
         post = listed["items"][0]
         self.assertEqual("negative", post["sentiment_result"])
         self.assertEqual("ai", post["sentiment_source"])
-        detail = self.client.get(
-            f"/api/v1/runs/{run['id']}/posts/{post['id']}"
-        ).json()
+        detail = self.client.get(f"/api/v1/runs/{run['id']}/posts/{post['id']}").json()
         self.assertEqual("帖子反馈 A9L 产品故障。", detail["sentiment"]["summary"])
         self.assertNotIn("raw_response", detail["sentiment"])
 
@@ -705,13 +773,9 @@ class ApiAndConfigTests(AppCase):
         self.assertEqual(202, second_run_response.status_code)
         second_run = second_run_response.json()
         with self.container.sessions.begin() as db:
-            second_task = db.scalar(
-                select(CircleTask).where(CircleTask.run_id == second_run["id"])
-            )
+            second_task = db.scalar(select(CircleTask).where(CircleTask.run_id == second_run["id"]))
             assert second_task is not None
-            self.container.worker._store_records(
-                db, second_task, [sample_record("sentiment-1")]
-            )
+            self.container.worker._store_records(db, second_task, [sample_record("sentiment-1")])
             second_post = db.scalar(
                 select(PostSnapshot).where(PostSnapshot.run_id == second_run["id"])
             )
@@ -1324,9 +1388,7 @@ class ApiAndConfigTests(AppCase):
                         run_id=publish_run.id,
                         platform_code="dongchedi",
                         external_id="24729",
-                        circle_url=(
-                            "https://www.dongchedi.com/community/24729/dongtai-release"
-                        ),
+                        circle_url=("https://www.dongchedi.com/community/24729/dongtai-release"),
                         list_order="latest_publish",
                         queue_sequence=2,
                         target_count=1,
@@ -1475,9 +1537,7 @@ class AuthComponentTests(AppCase):
     def test_fresh_auth_task_replaces_active_task(self) -> None:
         first = self.client.post("/api/v1/platforms/dongchedi/auth/tasks").json()
         reused = self.client.post("/api/v1/platforms/dongchedi/auth/tasks").json()
-        fresh = self.client.post(
-            "/api/v1/platforms/dongchedi/auth/tasks?fresh=true"
-        ).json()
+        fresh = self.client.post("/api/v1/platforms/dongchedi/auth/tasks?fresh=true").json()
 
         self.assertEqual(first["id"], reused["id"])
         self.assertNotEqual(first["id"], fresh["id"])
@@ -2026,9 +2086,7 @@ class CollectorTests(unittest.TestCase):
         video_id = "video-id-1"
         signed_query = "Action=GetPlayInfo&Version=2019-03-15&signature=test"
         encoded_token = base64.b64encode(
-            json.dumps(
-                {"GetPlayInfoToken": signed_query, "Version": "v1"}
-            ).encode("utf-8")
+            json.dumps({"GetPlayInfoToken": signed_query, "Version": "v1"}).encode("utf-8")
         ).decode("ascii")
         responses = iter(
             [

@@ -31,6 +31,16 @@ class SentimentPocTests(unittest.TestCase):
         second = stable_url_hash("https://media.example/video.mp4?signature=two")
         self.assertEqual(first, second)
 
+    def test_stable_url_hash_ignores_dcarvod_cdn_host(self) -> None:
+        tail = "/video/tos/cn/tos-cn-v-4eff5f/sample/"
+        first = stable_url_hash(
+            f"https://v3-microapp-dcar.dcarvod.com/{'a' * 32}/12345678{tail}?token=one"
+        )
+        second = stable_url_hash(
+            f"https://v26-microapp-dcar.dcarvod.com/{'b' * 32}/87654321{tail}?token=two"
+        )
+        self.assertEqual(first, second)
+
     def test_build_request_uses_one_streaming_multimodal_call(self) -> None:
         request = build_request(
             {
