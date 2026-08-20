@@ -307,7 +307,7 @@ export function RunDetailPage() {
               </div>
             </div>
           </SheetHeader>
-          {detail.isLoading ? <div className='space-y-4 p-6'><Skeleton className='h-10 w-2/3' /><Skeleton className='h-72 w-full' /></div> : detail.data && <PostDetailContent post={detail.data} onCorrect={() => setManualCorrectionOpen(true)} />}
+          {detail.isLoading ? <div className='space-y-4 p-6'><Skeleton className='h-10 w-2/3' /><Skeleton className='h-72 w-full' /></div> : detail.data && <PostDetailContent runId={runId} post={detail.data} onCorrect={() => setManualCorrectionOpen(true)} />}
         </SheetContent>
       </Sheet>
       <ManualSentimentDialog open={manualCorrectionOpen} onOpenChange={setManualCorrectionOpen} runId={runId} post={detail.data} onSaved={async () => { await Promise.all([detail.refetch(), posts.refetch()]) }} />
@@ -334,7 +334,7 @@ function EvidenceList({ values }: { values?: string[] }) {
   return values?.length ? <ul className='list-disc space-y-1 pl-5 text-sm leading-6'>{values.map((value, index) => <li key={`${value}-${index}`}>{value}</li>)}</ul> : <div className='text-sm text-muted-foreground'>暂无事实依据。</div>
 }
 
-function PostDetailContent({ post, onCorrect }: { post: Post; onCorrect: () => void }) {
+function PostDetailContent({ runId, post, onCorrect }: { runId: string; post: Post; onCorrect: () => void }) {
   const sentiment = post.sentiment
   return <div className='space-y-6 p-6'>
     <div className='grid gap-3 rounded-xl border bg-muted/20 p-4 sm:grid-cols-2'><Meta label='来源' value={post.source_name || post.circle_name} /><Meta label='作者' value={post.author} /><Meta label='发布时间' value={formatDate(post.published_at)} /><Meta label='平台帖子 ID' value={post.platform_post_id} /></div>
@@ -343,14 +343,33 @@ function PostDetailContent({ post, onCorrect }: { post: Post; onCorrect: () => v
       {sentiment?.summary && <div><div className='mb-1 text-xs font-medium text-muted-foreground'>中文总结</div><div className='whitespace-pre-wrap text-sm leading-7'>{sentiment.summary}</div></div>}
       {sentiment?.matched_subjects.length ? <div className='flex flex-wrap gap-1.5'>{sentiment.matched_subjects.map((item) => <Badge key={item} variant='secondary'>{item}</Badge>)}</div> : null}
       {sentiment?.primary_category && <div className='text-sm'>主要类型：<Badge variant='outline'>{categoryNames[sentiment.primary_category] ?? sentiment.primary_category}</Badge>{sentiment.secondary_categories.length ? <span className='ml-2 text-muted-foreground'>次要类型：{sentiment.secondary_categories.map((item) => categoryNames[item] ?? item).join('、')}</span> : null}</div>}
-      {sentiment?.modalities && <div className='grid gap-3 md:grid-cols-2'><div className='rounded-lg bg-muted/30 p-3'><div className='mb-2 text-xs font-medium text-muted-foreground'>文字依据 · {sentiment.modalities.text.status}</div><EvidenceList values={sentiment.modalities.text.evidence} /></div>{post.image_urls.map((url, index) => { const item = sentiment.modalities?.image.items.find((value) => value.input_index === index); return <div key={url} className='space-y-2 rounded-lg bg-muted/30 p-3'><div className='text-xs font-medium text-muted-foreground'>图片 {index + 1} · {item?.status ?? '未报告'}</div><img src={url} loading='lazy' referrerPolicy='no-referrer' className='max-h-72 w-full rounded-lg border object-contain' alt={`帖子图片 ${index + 1}`} /><EvidenceList values={item?.evidence} /></div> })}{post.video_urls.map((url, index) => { const visual = sentiment.modalities?.video_visual.items.find((value) => value.input_index === index); const audio = sentiment.modalities?.video_audio.items.find((value) => value.input_index === index); return <div key={url} className='space-y-2 rounded-lg bg-muted/30 p-3 md:col-span-2'><div className='text-xs font-medium text-muted-foreground'>视频 {index + 1} · 画面 {visual?.status ?? '未报告'} · 音频 {audio?.status ?? '未报告'}</div><video controls preload='none' src={url} className='max-h-96 w-full rounded-lg border'>当前浏览器未能播放该视频。</video><div className='grid gap-3 md:grid-cols-2'><div><div className='mb-1 text-xs text-muted-foreground'>画面依据</div><EvidenceList values={visual?.evidence} /></div><div><div className='mb-1 text-xs text-muted-foreground'>音频依据</div><EvidenceList values={audio?.evidence} /></div></div></div> })}</div>}
-      {(post.image_urls.length > 0 || post.video_urls.length > 0) && !sentiment?.modalities && <div className='grid gap-3 md:grid-cols-2'>{post.image_urls.map((url, index) => <img key={url} src={url} loading='lazy' referrerPolicy='no-referrer' className='max-h-72 w-full rounded-lg border object-contain' alt={`帖子图片 ${index + 1}`} />)}{post.video_urls.map((url) => <video key={url} controls preload='none' src={url} className='max-h-96 w-full rounded-lg border' />)}</div>}
+      {sentiment?.modalities && <div className='grid gap-3 md:grid-cols-2'><div className='rounded-lg bg-muted/30 p-3'><div className='mb-2 text-xs font-medium text-muted-foreground'>文字依据 · {sentiment.modalities.text.status}</div><EvidenceList values={sentiment.modalities.text.evidence} /></div>{post.image_urls.map((url, index) => { const item = sentiment.modalities?.image.items.find((value) => value.input_index === index); return <div key={url} className='space-y-2 rounded-lg bg-muted/30 p-3'><div className='text-xs font-medium text-muted-foreground'>图片 {index + 1} · {item?.status ?? '未报告'}</div><img src={url} loading='lazy' referrerPolicy='no-referrer' className='max-h-72 w-full rounded-lg border object-contain' alt={`帖子图片 ${index + 1}`} /><EvidenceList values={item?.evidence} /></div> })}{post.video_urls.length > 0 && <VideoMedia key={post.id} runId={runId} post={post} sentiment={sentiment} />}</div>}
+      {(post.image_urls.length > 0 || post.video_urls.length > 0) && !sentiment?.modalities && <div className='grid gap-3 md:grid-cols-2'>{post.image_urls.map((url, index) => <img key={url} src={url} loading='lazy' referrerPolicy='no-referrer' className='max-h-72 w-full rounded-lg border object-contain' alt={`帖子图片 ${index + 1}`} />)}{post.video_urls.length > 0 && <VideoMedia key={post.id} runId={runId} post={post} sentiment={sentiment} />}</div>}
       {sentiment?.error_message && <Alert variant='destructive'><AlertTitle>{analysisStatusNames[sentiment.analysis_status ?? 'analysis_failed']}</AlertTitle><AlertDescription>{sentiment.error_message}</AlertDescription></Alert>}
       {sentiment?.model_code && <div className='text-xs text-muted-foreground'>模型：{sentiment.model_code}{sentiment.updated_at ? ` · 更新时间：${formatDate(sentiment.updated_at)}` : ''}{sentiment.duration_ms !== undefined ? ` · ${sentiment.duration_ms} ms` : ''}</div>}
       <Button variant='link' className='h-auto px-0' asChild><a href={post.url} target='_blank' rel='noreferrer'>媒体无法显示时打开原帖<ExternalLink className='size-3.5' /></a></Button>
     </section>
     <div><h3 className='mb-2 text-sm font-semibold'>正文快照</h3><div className='whitespace-pre-wrap rounded-xl border bg-background p-4 text-sm leading-7'>{post.content || '正文为空'}</div></div>
     <div><h3 className='mb-2 text-sm font-semibold'>一级评论（{post.comments.length}）</h3><div className='space-y-2'>{post.comments.length ? post.comments.map((comment, index) => <div key={comment.platform_comment_id || index} className='rounded-xl border p-4'><div className='flex justify-between text-xs text-muted-foreground'><span>{comment.author || '匿名用户'}</span><span>{formatDate(comment.published_at)}</span></div><p className='mt-2 whitespace-pre-wrap text-sm'>{comment.content || '—'}</p></div>) : <div className='rounded-xl border border-dashed p-8 text-center text-sm text-muted-foreground'>没有已保存的一级评论。</div>}</div></div>
+  </div>
+}
+
+type MediaResolveResponse = { video_urls: string[]; playback_urls: string[]; expires_at: string | null; source: 'live_url' }
+
+function VideoMedia({ runId, post, sentiment }: { runId: string; post: Post; sentiment?: Post['sentiment'] }) {
+  const resolveMedia = useMutation({
+    mutationFn: () => api<MediaResolveResponse>(`/runs/${runId}/posts/${post.id}/media/resolve`, { method: 'POST' }),
+  })
+  const urls = resolveMedia.data?.playback_urls ?? []
+  return <div className='space-y-3 rounded-lg bg-muted/30 p-3 md:col-span-2'>
+    <div className='flex flex-wrap items-start justify-between gap-3'>
+      <div><div className='text-xs font-medium text-muted-foreground'>视频媒体 · URL 播放</div><p className='mt-1 text-xs leading-5 text-muted-foreground'>点击时从原帖解析最新临时地址；后端不下载、不保存视频文件。</p></div>
+      <Button type='button' size='sm' variant={urls.length ? 'outline' : 'default'} disabled={resolveMedia.isPending} onClick={() => resolveMedia.mutate()}>{resolveMedia.isPending ? <LoaderCircle className='size-4 animate-spin' /> : <RefreshCw className='size-4' />}{urls.length ? '刷新播放地址' : '加载视频'}</Button>
+    </div>
+    {resolveMedia.isError && <Alert variant='destructive'><CircleAlert className='size-4' /><AlertTitle>视频地址获取失败</AlertTitle><AlertDescription>{errorMessage(resolveMedia.error)}</AlertDescription></Alert>}
+    {!resolveMedia.isPending && !resolveMedia.isError && urls.length === 0 && <div className='rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground'>历史播放地址具有时效，点击“加载视频”获取当前可用 URL。</div>}
+    {urls.map((url, index) => { const visual = sentiment?.modalities?.video_visual.items.find((value) => value.input_index === index); const audio = sentiment?.modalities?.video_audio.items.find((value) => value.input_index === index); return <div key={url} className='space-y-2'><div className='text-xs font-medium text-muted-foreground'>视频 {index + 1} · 画面 {visual?.status ?? '未报告'} · 音频 {audio?.status ?? '未报告'}</div><video controls preload='metadata' src={url} className='max-h-96 w-full rounded-lg border'>当前浏览器未能播放该视频。</video>{sentiment?.modalities && <div className='grid gap-3 md:grid-cols-2'><div><div className='mb-1 text-xs text-muted-foreground'>画面依据</div><EvidenceList values={visual?.evidence} /></div><div><div className='mb-1 text-xs text-muted-foreground'>音频依据</div><EvidenceList values={audio?.evidence} /></div></div>}</div> })}
+    {resolveMedia.data?.expires_at && <div className='text-xs text-muted-foreground'>当前播放地址预计有效至：{formatDate(resolveMedia.data.expires_at)}</div>}
   </div>
 }
 

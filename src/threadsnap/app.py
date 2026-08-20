@@ -23,7 +23,7 @@ from fastapi import (
     WebSocket,
 )
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 
 from .auth import BrowserAuthManager
 from .config import Settings, get_settings
@@ -416,6 +416,29 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
     @router.get("/runs/{run_id}/posts/{post_id}")
     def post_detail(run_id: str, post_id: str, request: Request) -> dict[str, Any]:
         return _container(request).runs.post_detail(run_id, post_id)
+
+    @router.post("/runs/{run_id}/posts/{post_id}/media/resolve")
+    def resolve_post_media(run_id: str, post_id: str, request: Request) -> dict[str, Any]:
+        result = _container(request).worker.resolve_post_video_urls(run_id, post_id)
+        result["playback_urls"] = [
+            f"{prefix}/runs/{run_id}/posts/{post_id}/media/play/{index}"
+            for index, _url in enumerate(result["video_urls"])
+        ]
+        return result
+
+    @router.get("/runs/{run_id}/posts/{post_id}/media/play/{index}")
+    def play_post_media(
+        run_id: str,
+        post_id: str,
+        index: int,
+        request: Request,
+    ) -> RedirectResponse:
+        target = _container(request).worker.cached_post_video_url(run_id, post_id, index)
+        return RedirectResponse(
+            target,
+            status_code=307,
+            headers={"Referrer-Policy": "no-referrer", "Cache-Control": "no-store"},
+        )
 
     @router.post("/runs/{run_id}/posts/{post_id}/sentiment/manual-revisions")
     def revise_post_sentiment(

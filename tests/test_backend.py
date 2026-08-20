@@ -330,6 +330,69 @@ class AppCase(unittest.TestCase):
 
 
 class ApiAndConfigTests(AppCase):
+    def test_media_resolve_returns_fresh_deduplicated_urls_without_mutating_snapshot(self) -> None:
+        """按需刷新只返回临时 URL；路径签名不同的同一视频只保留一条。"""
+
+        circle = self.save_verified_circle(name="A9L")
+        run = self.container.runs.create_manual(
+            ManualRunCreate(platform_code="dongchedi", circle_ids=[circle.id], quantity=1),
+            scope="api",
+            header_key="media-resolve-test-0001",
+        )
+        stable_tail = "/video/tos/cn/tos-cn-v-4eff5f/video-content-id/"
+        old_urls = [
+            f"https://v26-microapp-dcar.dcarvod.com/{signature}/{expiry}{stable_tail}?token={index}"
+            for index, (signature, expiry) in enumerate(
+                (("a" * 32, "6a86c4ac"), ("b" * 32, "6a86c4ab")),
+                start=1,
+            )
+        ]
+        fresh_urls = [
+            f"https://v26-microapp-dcar.dcarvod.com/{signature}/7fffffff{stable_tail}?token={index}"
+            for index, signature in enumerate(("c" * 32, "d" * 32), start=1)
+        ]
+        record = sample_record("media-resolve-1")
+        record["video_urls"] = old_urls
+        record["raw_status"] = {"video_id": "video-content-id"}
+        with self.container.sessions.begin() as db:
+            task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            assert task is not None
+            self.container.worker._store_records(db, task, [record])
+            post = db.scalar(select(PostSnapshot).where(PostSnapshot.run_id == run["id"]))
+            assert post is not None
+            post_id = post.id
+
+        with patch(
+            "threadsnap.worker.VideoUrlResolver.resolve",
+            return_value=fresh_urls,
+        ) as resolved:
+            response = self.client.post(
+                f"/api/v1/runs/{run['id']}/posts/{post_id}/media/resolve"
+            )
+            cached = self.client.post(
+                f"/api/v1/runs/{run['id']}/posts/{post_id}/media/resolve"
+            )
+
+        self.assertEqual(200, response.status_code, response.text)
+        self.assertEqual([fresh_urls[0]], response.json()["video_urls"])
+        self.assertEqual(
+            [f"/api/v1/runs/{run['id']}/posts/{post_id}/media/play/0"],
+            response.json()["playback_urls"],
+        )
+        self.assertEqual("live_url", response.json()["source"])
+        self.assertIsNotNone(response.json()["expires_at"])
+        self.assertEqual(response.json(), cached.json())
+        self.assertEqual(1, resolved.call_count)
+        playback = self.client.get(response.json()["playback_urls"][0], follow_redirects=False)
+        self.assertEqual(307, playback.status_code)
+        self.assertEqual(fresh_urls[0], playback.headers["location"])
+        self.assertEqual("no-referrer", playback.headers["referrer-policy"])
+        self.assertEqual("no-store", playback.headers["cache-control"])
+        with self.container.sessions() as db:
+            stored = db.get(PostSnapshot, post_id)
+            assert stored is not None
+            self.assertEqual(old_urls, stored.video_urls)
+
     def test_sentiment_normalizes_provider_shape_and_deduplicates_signed_media(self) -> None:
         """兼容已观察到的提供方形状偏差，同时只提交一次同一稳定媒体。"""
 

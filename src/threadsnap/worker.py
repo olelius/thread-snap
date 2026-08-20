@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
+from time import monotonic
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
@@ -13,6 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .browser_runtime import browser_launch_args
 from .collectors import AuthenticationRequired, CollectorFailure, DongchediCollector
+from .errors import DomainError
 from .models import (
     Circle,
     CircleTask,
@@ -24,7 +28,7 @@ from .models import (
     utc_now,
 )
 from .sentiment import SentimentService, deduplicate_media_urls
-from .services import aggregate_run
+from .services import aggregate_run, related_run_ids
 from .session_store import SessionStore
 
 
@@ -48,6 +52,95 @@ class WorkerService:
         self.thread: threading.Thread | None = None
         self.refresh_lock = threading.Lock()
         self.refresh_generation: dict[str, int] = {}
+        self.media_resolution_lock = threading.Lock()
+        self.media_url_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+    def resolve_post_video_urls(self, run_id: str, post_id: str) -> dict[str, Any]:
+        """按需解析临时播放 URL，不改写不可变帖子快照。"""
+
+        with self.factory() as db:
+            if not db.get(ExtractionRun, run_id):
+                raise DomainError("RUN_NOT_FOUND", "指定提取批次不存在。", status_code=404)
+            post = db.get(PostSnapshot, post_id)
+            if not post or post.run_id not in related_run_ids(db, run_id):
+                raise DomainError("POST_NOT_FOUND", "指定帖子快照不存在。", status_code=404)
+            task = db.get(CircleTask, post.circle_task_id)
+            platform_code = task.platform_code if task else None
+            post_url = post.url
+        if platform_code != "dongchedi":
+            raise DomainError(
+                "MEDIA_RESOLVER_UNAVAILABLE",
+                "当前平台尚未接入视频播放地址刷新。",
+                status_code=409,
+            )
+
+        cached = self.media_url_cache.get(post_id)
+        now_tick = monotonic()
+        if cached and cached[0] > now_tick:
+            return dict(cached[1])
+        with self.media_resolution_lock:
+            cached = self.media_url_cache.get(post_id)
+            now_tick = monotonic()
+            if cached and cached[0] > now_tick:
+                return dict(cached[1])
+            resolver = VideoUrlResolver(
+                self.session_store.get_state(platform_code),
+                headless=self.session_store.settings.auth_browser_headless,
+                timezone_name=self.session_store.settings.timezone,
+            )
+            try:
+                urls = deduplicate_media_urls(resolver.resolve(post_url))
+            except Exception as exc:
+                raise DomainError(
+                    "MEDIA_URL_REFRESH_FAILED",
+                    "视频播放地址刷新失败，请稍后重试或打开原帖。",
+                    status_code=502,
+                    details=[{"reason": type(exc).__name__}],
+                ) from exc
+            finally:
+                resolver.close()
+            if not urls:
+                raise DomainError(
+                    "MEDIA_URL_NOT_FOUND",
+                    "原帖当前没有返回可播放的视频地址，请打开原帖查看。",
+                    status_code=404,
+                )
+            expiries = [value for url in urls if (value := playback_url_expiry(url))]
+            expires_at = min(expiries) if expiries else None
+            now = utc_now()
+            ttl_seconds = 300.0
+            if expires_at:
+                ttl_seconds = max(1.0, min(2700.0, (expires_at - now).total_seconds() - 60.0))
+            result = {
+                "video_urls": urls,
+                "expires_at": expires_at.isoformat() if expires_at else None,
+                "source": "live_url",
+            }
+            if len(self.media_url_cache) >= 256:
+                self.media_url_cache.pop(next(iter(self.media_url_cache)))
+            self.media_url_cache[post_id] = (now_tick + ttl_seconds, result)
+            return dict(result)
+
+    def cached_post_video_url(self, run_id: str, post_id: str, index: int) -> str:
+        """返回用户刚刚显式解析的播放 URL，不在媒体请求中再次访问平台。"""
+
+        with self.factory() as db:
+            if not db.get(ExtractionRun, run_id):
+                raise DomainError("RUN_NOT_FOUND", "指定提取批次不存在。", status_code=404)
+            post = db.get(PostSnapshot, post_id)
+            if not post or post.run_id not in related_run_ids(db, run_id):
+                raise DomainError("POST_NOT_FOUND", "指定帖子快照不存在。", status_code=404)
+        cached = self.media_url_cache.get(post_id)
+        if not cached or cached[0] <= monotonic():
+            raise DomainError(
+                "MEDIA_URL_EXPIRED",
+                "视频播放地址已过期，请重新点击加载视频。",
+                status_code=410,
+            )
+        urls = cached[1]["video_urls"]
+        if index < 0 or index >= len(urls):
+            raise DomainError("MEDIA_URL_NOT_FOUND", "指定视频不存在。", status_code=404)
+        return str(urls[index])
 
     def start(self) -> None:
         if self.thread and self.thread.is_alive():
@@ -706,6 +799,22 @@ class WorkerService:
                     status="queued",
                     completed_count=completed_count,
                 )
+
+
+_SIGNED_VIDEO_EXPIRY = re.compile(r"/([0-9a-fA-F]{8})/video/")
+
+
+def playback_url_expiry(url: str) -> datetime | None:
+    """读取已观察到的懂车帝 CDN 路径到期时间；未知格式返回空。"""
+
+    match = _SIGNED_VIDEO_EXPIRY.search(urlsplit(url).path)
+    if not match:
+        return None
+    try:
+        value = datetime.fromtimestamp(int(match.group(1), 16), timezone.utc)
+    except (OverflowError, OSError, ValueError):
+        return None
+    return value if 2020 <= value.year <= 2100 else None
 
 
 class VideoUrlResolver:

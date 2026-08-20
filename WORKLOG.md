@@ -16,6 +16,21 @@
 
 ---
 
+## 2026-08-20 — 详情视频时效 URL 刷新与无 Referer 播放
+**总目标**：修复历史帖子详情中的视频地址过期后无法加载，同时坚持 URL 直连且不让 ThreadSnap 下载、代理或保存视频文件。
+**状态**：✅ 按需刷新、稳定媒体去重、无正文重定向、前端显式加载和真实 Chrome 播放验收均已完成。
+**干到哪里了**：
+- [x] 现场确认帖子 `7675753962574168601` 的两条快照 CDN URL 均返回 HTTP 403；路径签名中的到期时间表明有效期约一小时。重新解析所得 URL 在无 Referer 的单字节 Range 请求中返回 `206 Partial Content` 与 `video/mp4`，携带本地页面 Referer 时仍返回 403，因此问题同时包含地址过期和 CDN 来源限制。
+- [x] 新增按帖子显式解析接口：只使用数据库原帖 URL 与现有平台 Session，复用完整 Chromium 观察媒体请求并阻断媒体正文；结果按忽略查询和已验证 CDN 路径签名的稳定身份去重，最多缓存 256 个且受五分钟、到期前一分钟和四十五分钟上限约束，原快照不改写。
+- [x] 新增同源播放地址：只对刚缓存 URL 返回 `307`、`Referrer-Policy: no-referrer` 和 `Cache-Control: no-store`，浏览器随后直接访问 CDN；后端不读取媒体正文。前端打开详情时不访问平台，只有点击“加载视频”后才解析并创建播放器，支持显式刷新、中文失败提示和原帖入口。
+- [x] 自动化回归覆盖当前 URL 返回、路径签名去重、短缓存复用、播放重定向响应头及数据库快照不变；75 项后端测试、Ruff、`compileall`、`pip check`、前端 TypeScript 检查、生产构建和 `git diff --check` 全部通过。
+- [x] 本地后端已用 `H:\ThreadSnap\.vevn\Scripts\python.exe` 重启；后端 `/health`、Vite `/health` 代理均为 `ok`。真实 Chrome 点击加载后播放器显示实际首帧和 `0:00 / 0:07` 时长，验收截图位于 `artifacts/runtime/video-url-refresh-20260820/chrome-video-loaded.png`。
+**下一步**：无；本任务进入 Git 收尾。
+**边界**：本次没有调用千问、没有下载或转存完整视频、没有改写历史帖子快照；同源 GET 只返回重定向响应，媒体流量仍由浏览器直达 CDN。
+**关联**：`src/threadsnap/worker.py`、`src/threadsnap/app.py`、`frontend/src/features/runs/run-detail-page.tsx`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/sentiment-analysis.md`
+
+---
+
 ## 2026-08-20 — 批次详情筛选栏桌面布局修复
 **总目标**：修复宽桌面下八组筛选/操作控件挤压标题搜索框的问题，在可容纳时保持紧凑单行并在较窄宽度有序换行。
 **状态**：✅ 常规宽屏与超宽屏布局、owner 文档、自动检查和真实页面验收均已完成。

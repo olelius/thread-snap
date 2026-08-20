@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -135,10 +136,15 @@ def load_env_file(path: Path) -> dict[str, str]:
 
 
 def stable_url_hash(url: str) -> str:
-    """移除签名查询后计算稳定 URL 哈希，避免日志泄露时效参数。"""
+    """移除查询及已知 CDN 路径签名后计算稳定媒体 URL 哈希。"""
 
     parts = urlsplit(url)
-    normalized = urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path, "", ""))
+    path = parts.path
+    if parts.netloc.lower().endswith("dcarvod.com"):
+        match = re.search(r"/[0-9a-fA-F]{32}/[0-9a-fA-F]{8}(/video/.*)", path)
+        if match:
+            path = match.group(1)
+    normalized = urlunsplit((parts.scheme.lower(), parts.netloc.lower(), path, "", ""))
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
