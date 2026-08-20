@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -1544,6 +1545,7 @@ class RunService:
             grouped: dict[str, list[CircleTask]] = {}
             for task in tasks:
                 grouped.setdefault(task.run_id, []).append(task)
+            live_source_names = current_source_names(db, tasks)
             queued = list(
                 db.scalars(
                     select(CircleTask)
@@ -1553,7 +1555,13 @@ class RunService:
             )
             return {
                 "items": [
-                    run_dict_from_tasks(item, grouped.get(item.id, []), queued) for item in runs
+                    run_dict_from_tasks(
+                        item,
+                        grouped.get(item.id, []),
+                        queued,
+                        live_source_names,
+                    )
+                    for item in runs
                 ],
                 "total": total,
                 "offset": offset,
@@ -1752,6 +1760,7 @@ class RunService:
                 item.id: item
                 for item in db.scalars(select(CircleTask).where(CircleTask.id.in_(task_ids)))
             }
+            live_source_names = current_source_names(db, tasks.values())
             comments = (
                 list(
                     db.scalars(
@@ -1768,7 +1777,12 @@ class RunService:
                 grouped.setdefault(item.post_id, []).append(comment_dict(item))
             return {
                 "items": [
-                    post_dict(item, grouped.get(item.id, []), tasks.get(item.circle_task_id))
+                    post_dict(
+                        item,
+                        grouped.get(item.id, []),
+                        tasks.get(item.circle_task_id),
+                        live_source_names,
+                    )
                     for item in posts
                 ],
                 "total": total,
@@ -1792,7 +1806,12 @@ class RunService:
                     .order_by(CommentSnapshot.order_index)
                 )
             ]
-            result = post_dict(post, comments, task)
+            result = post_dict(
+                post,
+                comments,
+                task,
+                current_source_names(db, [task] if task else []),
+            )
             result["sentiment"] = sentiment_summary(db, post)
             return result
 
@@ -1840,7 +1859,10 @@ class RunService:
 
 
 def run_dict_from_tasks(
-    run: ExtractionRun, tasks: list[CircleTask], queued_tasks: list[CircleTask] | None = None
+    run: ExtractionRun,
+    tasks: list[CircleTask],
+    queued_tasks: list[CircleTask] | None = None,
+    live_source_names: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """使用已集合加载的任务构造批次摘要，避免列表逐行查询。"""
 
@@ -1874,7 +1896,7 @@ def run_dict_from_tasks(
         "platform_codes": sorted({task.platform_code for task in tasks}),
         "circle_count": len(tasks),
         "circle_names": [task.circle_name or task.external_id for task in tasks[:3]],
-        "source_names": [task_source_name(task) for task in tasks[:3]],
+        "source_names": [task_source_name(task, live_source_names) for task in tasks[:3]],
         "list_orders": list_orders,
         "list_order_names": [
             "最新发布" if item == "latest_publish" else "最新回复"
@@ -1930,21 +1952,22 @@ def run_dict(db: Session, run: ExtractionRun, include_tasks: bool = False) -> di
             )
             or 0
         ) + 1
-    result = run_dict_from_tasks(run, tasks)
+    live_source_names = current_source_names(db, tasks)
+    result = run_dict_from_tasks(run, tasks, live_source_names=live_source_names)
     result["queue_position"] = queue_position
     if include_tasks:
-        result["tasks"] = [task_dict(task) for task in tasks]
+        result["tasks"] = [task_dict(task, live_source_names) for task in tasks]
     return result
 
 
-def task_dict(item: CircleTask) -> dict[str, Any]:
+def task_dict(item: CircleTask, live_source_names: dict[str, str] | None = None) -> dict[str, Any]:
     return {
         "id": item.id,
         "platform_code": item.platform_code,
         "circle_id": item.circle_id,
         "external_id": item.external_id,
         "circle_name": item.circle_name,
-        "source_name": task_source_name(item),
+        "source_name": task_source_name(item, live_source_names),
         "circle_url": item.circle_url,
         "list_order": item.list_order,
         "list_order_name": "最新发布" if item.list_order == "latest_publish" else "最新回复",
@@ -1966,6 +1989,7 @@ def post_dict(
     item: PostSnapshot,
     comments: list[dict[str, Any]],
     task: CircleTask | None = None,
+    live_source_names: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     return {
         "id": item.id,
@@ -1974,7 +1998,11 @@ def post_dict(
         "platform_code": task.platform_code if task else None,
         "circle_id": task.circle_id if task else None,
         "circle_name": (task.circle_name or task.external_id) if task else None,
-        "source_name": task_source_name(task) if task else None,
+        "source_name": task_source_name(task, live_source_names) if task else None,
+        "list_order": task.list_order if task else None,
+        "list_order_name": (
+            "最新发布" if task and task.list_order == "latest_publish" else "最新回复"
+        ) if task else None,
         "platform_post_id": item.platform_post_id,
         "url": item.url,
         "title": item.title,
@@ -1997,8 +2025,33 @@ def post_dict(
     }
 
 
-def task_source_name(task: CircleTask) -> str:
-    """返回批次创建时冻结的用户来源名称，旧任务使用可辨识回退。"""
+def current_source_names(db: Session, tasks: Iterable[CircleTask]) -> dict[str, str]:
+    """批量读取仍存在来源的当前用户名称。"""
+
+    circle_ids = {task.circle_id for task in tasks if task and task.circle_id}
+    if not circle_ids:
+        return {}
+    rows = db.execute(
+        select(Circle.id, Vehicle.name)
+        .outerjoin(Vehicle, Vehicle.id == Circle.vehicle_id)
+        .where(Circle.id.in_(circle_ids))
+    ).all()
+    return {
+        row.id: row.name.strip()
+        for row in rows
+        if isinstance(row.name, str) and row.name.strip()
+    }
+
+
+def task_source_name(
+    task: CircleTask, live_source_names: dict[str, str] | None = None
+) -> str:
+    """优先返回来源当前名称；来源删除后回退到批次快照。"""
+
+    if task.circle_id and live_source_names:
+        current = live_source_names.get(task.circle_id)
+        if current:
+            return current
 
     snapshot = task.config_snapshot or {}
     configured = snapshot.get("source_name") or snapshot.get("vehicle_name")

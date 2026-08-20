@@ -31,7 +31,7 @@ from .models import (
     TemplateVersion,
     utc_now,
 )
-from .services import related_run_ids
+from .services import current_source_names, related_run_ids, task_source_name
 
 TAG_RE = re.compile(
     r"^s\.(?P<source_key>[23456789abcdefghjkmnpqrstuvwxyz]{10})\."
@@ -371,6 +371,7 @@ class TemplateService:
                     .order_by(CircleTask.created_at, CircleTask.queue_sequence)
                 )
             )
+            live_source_names = current_source_names(db, tasks)
             selected_sources: dict[str, list[CircleTask]] = {}
             for task in tasks:
                 if task.completed_count and task.circle_id:
@@ -378,7 +379,7 @@ class TemplateService:
 
             def collect(
                 task_group: list[CircleTask],
-            ) -> list[tuple[PostSnapshot, list[CommentSnapshot], CircleTask]]:
+            ) -> list[tuple[PostSnapshot, list[CommentSnapshot], CircleTask, str]]:
                 values = []
                 seen_post_ids: set[str] = set()
                 for task in task_group:
@@ -400,7 +401,9 @@ class TemplateService:
                                 .order_by(CommentSnapshot.order_index)
                             )
                         )
-                        values.append((post, comments, task))
+                        values.append(
+                            (post, comments, task, task_source_name(task, live_source_names))
+                        )
                 return values
 
             source_post_map = {key: collect(group) for key, group in selected_sources.items()}
@@ -475,11 +478,12 @@ class TemplateService:
         post: PostSnapshot,
         comments: list[CommentSnapshot],
         task: CircleTask,
+        current_source_name: str,
     ) -> Any:
         if field == "source.id":
             return task.circle_id
         if field == "source.name":
-            return task.config_snapshot.get("source_name")
+            return current_source_name
         if field == "source.list_order":
             return task.list_order
         if field == "source.list_order_name":

@@ -331,6 +331,41 @@ class AppCase(unittest.TestCase):
 
 
 class ApiAndConfigTests(AppCase):
+    def test_historical_results_use_current_source_name_and_include_list_order(self) -> None:
+        circle = self.save_verified_circle(name="A9L")
+        run = self.container.runs.create_manual(
+            ManualRunCreate(platform_code="dongchedi", circle_ids=[circle.id], quantity=1),
+            scope="api",
+            header_key="live-source-name-test-0001",
+        )
+        with self.container.sessions.begin() as db:
+            task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            self.assertIsNotNone(task)
+            assert task is not None
+            record = sample_record("live-source-name-post")
+            db.add(
+                PostSnapshot(
+                    run_id=run["id"],
+                    circle_task_id=task.id,
+                    platform_post_id=record["platform_post_id"],
+                    url=record["url"],
+                    title=record["title"],
+                    visibility="visible",
+                    order_index=0,
+                )
+            )
+            configured_circle = db.get(Circle, circle.id)
+            assert configured_circle is not None and configured_circle.vehicle_id
+            db.get(Vehicle, configured_circle.vehicle_id).name = "A9"
+
+        current_run = self.client.get(f"/api/v1/runs/{run['id']}").json()
+        posts = self.client.get(f"/api/v1/runs/{run['id']}/posts").json()["items"]
+        self.assertEqual(["A9"], current_run["source_names"])
+        self.assertEqual("A9", current_run["tasks"][0]["source_name"])
+        self.assertEqual("A9", posts[0]["source_name"])
+        self.assertEqual("latest_reply", posts[0]["list_order"])
+        self.assertEqual("最新回复", posts[0]["list_order_name"])
+
     def test_media_resolve_returns_fresh_deduplicated_urls_without_mutating_snapshot(self) -> None:
         """按需刷新只返回临时 URL；路径签名不同的同一视频只保留一条。"""
 
@@ -2440,7 +2475,7 @@ class TemplateTests(AppCase):
         output = load_workbook(self.container.templates.export_path(exported["id"])).active
         self.assertEqual("标题3001", output["A1"].value)
         self.assertEqual("标题3002", output["A2"].value)
-        self.assertEqual("风云A9最新回复", output["B1"].value)
+        self.assertEqual("风云A9", output["B1"].value)
         self.assertEqual("最新回复", output["C1"].value)
 
     def test_template_field_rules_are_identical_across_platforms(self) -> None:
