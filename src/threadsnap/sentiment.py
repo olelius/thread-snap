@@ -193,7 +193,7 @@ class SentimentFeedback(BaseModel):
 
 
 def deduplicate_media_urls(values: list[str] | None) -> list[str]:
-    """按忽略签名查询的稳定媒体身份去重，并保留首个可用 URL。"""
+    """按忽略查询及已知路径签名的稳定媒体身份去重，并保留首个 URL。"""
 
     output: list[str] = []
     observed: set[str] = set()
