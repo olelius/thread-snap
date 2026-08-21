@@ -59,7 +59,7 @@ MODEL_PROFILES = {
     },
 }
 HOSTED_PROMPT_VERSION = "v2"
-DEEPSEEK_PROMPT_VERSION = "deepseek-text-v1"
+DEEPSEEK_PROMPT_VERSION = "deepseek-text-v2"
 LOCAL_PIPELINE_VERSION = "local-v1"
 CATEGORIES = (
     "product_complaint",
@@ -456,6 +456,12 @@ def normalize_text_only_feedback_payload(
     modalities = normalized.setdefault("modalities", {})
     if not isinstance(modalities, dict):
         return normalized, changed
+    text = modalities.get("text")
+    if isinstance(text, dict) and text.get("status") in {"analyzed", "completed"}:
+        # DeepSeek JSON Object 保证语法，不约束字段枚举。两种状态都明确表达
+        # 文字已经完成分析，可唯一归一为统一合同中的 processed。
+        text["status"] = "processed"
+        changed = True
     counts = {
         "image": len(deduplicate_media_urls(post.image_urls)),
         "video_visual": len(deduplicate_media_urls(post.video_urls)),
@@ -567,7 +573,7 @@ def build_text_only_prompt(
         "products": config.products,
         "supplement": config.supplement or "",
     }
-    return f"""只返回一个标准 JSON 对象，不使用 Markdown，不联网搜索。
+    prompt = f"""只返回一个标准 JSON 对象，不使用 Markdown，不联网搜索。
 只根据标题和正文进行分析；图片、视频画面、视频音频均未提供给你，不得据此形成观点或依据。
 判定对象配置：{json.dumps(subject, ensure_ascii=False)}。
 请结合文字语境自行识别品牌、产品、服务和常见别名；内容与判定对象无关时 subject_relevance=false。
@@ -579,8 +585,16 @@ def build_text_only_prompt(
 返回字段：subject_relevance、matched_subjects、sentiment、primary_category、secondary_categories、modalities、summary。
 不相关时 sentiment 与 primary_category 为 null；负面必须有 primary_category；次要类型不得重复主要类型。
 modalities 只返回 text，包含 status 和中文 evidence；所有 evidence 必须是 JSON 字符串数组。
+modalities.text.status 只允许以下三个英文值：absent、processed、unprocessed。
+标题或正文至少一项非空且你已完成分析时必须返回 processed；标题和正文都为空时返回 absent；文字存在但未完成分析时返回 unprocessed。
+禁止使用 analyzed、completed、present、skipped 或其他状态值。
 不要生成 image、video_visual 或 video_audio 字段，ThreadSnap 会按未请求分析统一补全媒体覆盖。
 summary 使用中文概括文字内容、对象相关性和情感结论，不描述未提供的媒体。"""
+
+    return prompt + """
+
+严格遵循以下 JSON 形状；示例值只用于说明格式，实际值必须依据本帖文字生成：
+{"subject_relevance":true,"matched_subjects":["示例对象"],"sentiment":"non_negative","primary_category":null,"secondary_categories":[],"modalities":{"text":{"status":"processed","evidence":["示例依据"]}},"summary":"示例中文总结"}"""
 
 
 def build_request(
