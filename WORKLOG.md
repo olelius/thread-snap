@@ -18,7 +18,7 @@
 
 ## 2026-08-21 — DeepSeek 文字状态合同修复
 **总目标**：让 DeepSeek 原始响应按 ThreadSnap 统一文字状态枚举返回，并避免已完成分析因同义状态值整批失败。
-**状态**：✅ 提示词合同、兼容归一化、自动化检查和真实单条验证均已完成。
+**状态**：✅ 提示词合同、兼容归一化、自动化检查和30条真实重跑均已完成。
 **干到哪里了**：
 - [x] 现场核对批次 `20260821-142151-001` 的 30 条 DeepSeek 分析全部为 `MODEL_RESPONSE_ERROR`；原始 JSON 均可解析，其中 28 条 `modalities.text.status=analyzed`、2 条为 `completed`，根因是 JSON Object 只保证 JSON 语法，而旧提示词没有给出文字状态枚举。
 - [x] DeepSeek 提示词升级为 `deepseek-text-v2`，明确只允许 `absent`、`processed`、`unprocessed`，禁止已观察到的同义值并附完整 JSON 形状示例。
@@ -26,8 +26,9 @@
 - [x] 4 条定向测试与 Ruff 已通过，覆盖提示词枚举、JSON 示例、两个真实同义值及既有文字媒体补全路径。
 - [x] 94 项后端测试、Ruff、compileall、pip check 和 `git diff --check` 全部通过。
 - [x] 先备份数据库和30条原失败审计，再只重放“瑞虎8油耗”一条；DeepSeek 原始 JSON 已按 `deepseek-text-v2` 返回 `modalities.text.status=processed`，规范化结果同为 `processed`，任务为 `analysis_completed`。证据为 `artifacts/runtime/deepseek-text-status-contract-20260821/single-live-verification.json`，SHA-256 `183dab4de4200adcd9fba2f99263919fab261b4c0b107110a1405b2acb86c48d`。
-**下一步**：无；其余29条历史失败记录保持原样，若需要恢复可另行明确触发，避免把一次耗时 497.375 秒的异常慢响应直接扩成29次付费请求。
-**边界**：不增加第二次付费重试；仅修复 DeepSeek 纯文字路径，千问多模态和本地 Nano 合同保持不变；现场验证只重放1条，失败前原始响应和数据库备份均保存在被 Git 忽略的 runtime artifact。
+- [x] 用户明确要求后，先再次备份30条当前状态，再将同批次30条全部重排；最终30/30 `analysis_completed`，提示词版本均为 `deepseek-text-v2`，模型原始与规范化 `modalities.text.status` 均为30/30 `processed`，0复用、0失败。请求耗时最小782 ms、P50 1648 ms、P95 2078 ms、最大2359 ms；总用量24069 Token。证据为 `artifacts/runtime/deepseek-rerun-all-20260821-144939/final-verification.json`，SHA-256 `965ed79f9d57e7f60e129a33b07b269c4e5a76231fa5251bd9d5e11a370011be`。
+**下一步**：无。
+**边界**：不增加第二次付费重试；仅修复 DeepSeek 纯文字路径，千问多模态和本地 Nano 合同保持不变；两次重跑前的原始响应与数据库备份均保存在被 Git 忽略的 runtime artifact。
 **关联**：`src/threadsnap/sentiment.py`、`tests/test_backend.py`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/sentiment-analysis.md`
 
 ---
