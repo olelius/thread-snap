@@ -2330,6 +2330,110 @@ class QueueAndRetryTests(AppCase):
         self.assertEqual(second_id, reverse_navigation["previous_id"])
         self.assertIsNone(reverse_navigation["next_id"])
 
+    def test_retry_rediscovers_remaining_circle_results_after_task_level_failure(
+        self,
+    ) -> None:
+        """任务级异常没有失败 URL 时，补提按缺口继续发现并跳过已保存帖子。"""
+
+        circle = self.save_verified_circle()
+        original = self.container.runs.create_manual(
+            ManualRunCreate(platform_code="dongchedi", circle_ids=[circle.id], quantity=2),
+            scope="api",
+            header_key="retry-task-failure-0001",
+        )
+        with self.container.sessions.begin() as db:
+            run = db.get(ExtractionRun, original["id"])
+            task = db.scalar(select(CircleTask).where(CircleTask.run_id == original["id"]))
+            assert run is not None and task is not None
+            task.status = "partial_success"
+            task.completed_count = 1
+            task.error_code = "TASK_INTERNAL_ERROR"
+            task.error_message = "提取任务执行异常：database is locked"
+            task.checkpoint = {"completed_post_ids": ["1001"], "failed_urls": []}
+            db.add(
+                PostSnapshot(
+                    run_id=run.id,
+                    circle_task_id=task.id,
+                    platform_post_id="1001",
+                    url="https://www.dongchedi.com/ugc/article/1001",
+                    title="原结果",
+                    order_index=0,
+                )
+            )
+            run.status = "partial_success"
+            run.completed_count = 1
+
+        retry = self.container.runs.retry(
+            original["id"], "retry-task-failure-key-0001", "api"
+        )
+        with self.container.sessions() as db:
+            retry_task = db.scalar(select(CircleTask).where(CircleTask.run_id == retry["id"]))
+            assert retry_task is not None
+            self.assertEqual(1, retry_task.target_count)
+            self.assertEqual(["1001"], retry_task.config_snapshot["skip_post_ids"])
+            self.assertNotIn("known_post_urls", retry_task.config_snapshot)
+            self.assertEqual("dynamic", retry_task.section)
+
+        self.assertTrue(self.container.worker.process_once())
+        merged = self.container.runs.posts(retry["id"])
+        self.assertEqual(2, merged["total"])
+        self.assertEqual(
+            {"1001", "1002"}, {item["platform_post_id"] for item in merged["items"]}
+        )
+
+    def test_retry_recovers_unresolved_known_urls_after_task_level_failure(self) -> None:
+        """URL 清单任务缺少逐 URL 失败记录时，从原始输入扣除已保存 URL。"""
+
+        urls = [
+            "https://www.dongchedi.com/ugc/article/3001",
+            "https://www.dongchedi.com/ugc/article/3002",
+        ]
+        original = self.container.runs.create_manual(
+            ManualRunCreate(
+                platform_code="dongchedi",
+                known_post_urls=urls,
+                quantity=2,
+            ),
+            scope="api",
+            header_key="retry-known-task-failure-0001",
+        )
+        with self.container.sessions.begin() as db:
+            run = db.get(ExtractionRun, original["id"])
+            task = db.scalar(select(CircleTask).where(CircleTask.run_id == original["id"]))
+            assert run is not None and task is not None
+            task.status = "partial_success"
+            task.completed_count = 1
+            task.error_code = "TASK_INTERNAL_ERROR"
+            task.checkpoint = {"completed_post_ids": ["3001"], "failed_urls": []}
+            db.add(
+                PostSnapshot(
+                    run_id=run.id,
+                    circle_task_id=task.id,
+                    platform_post_id="3001",
+                    url=urls[0],
+                    title="原结果",
+                    order_index=0,
+                )
+            )
+            run.status = "partial_success"
+            run.completed_count = 1
+
+        retry = self.container.runs.retry(
+            original["id"], "retry-known-task-failure-key-0001", "api"
+        )
+        with self.container.sessions() as db:
+            retry_task = db.scalar(select(CircleTask).where(CircleTask.run_id == retry["id"]))
+            assert retry_task is not None
+            self.assertEqual(1, retry_task.target_count)
+            self.assertEqual([urls[1]], retry_task.config_snapshot["known_post_urls"])
+
+        self.assertTrue(self.container.worker.process_once())
+        merged = self.container.runs.posts(retry["id"])
+        self.assertEqual(2, merged["total"])
+        self.assertEqual(
+            {"3001", "3002"}, {item["platform_post_id"] for item in merged["items"]}
+        )
+
     def test_auth_wait_blocks_only_its_platform_queue(self) -> None:
         with self.container.sessions.begin() as db:
             yiche = db.get(PlatformConfig, "yiche")

@@ -418,12 +418,18 @@ class WorkerService:
             circle_id = task.circle_id
             known_urls = list(snapshot.get("known_post_urls") or [])
             source_indexes = dict(snapshot.get("source_indexes") or {})
-            completed_post_ids = set(
+            persisted_post_ids = set(
                 db.scalars(
                     select(PostSnapshot.platform_post_id).where(
                         PostSnapshot.circle_task_id == task_id
                     )
                 )
+            )
+            completed_post_ids = set(persisted_post_ids)
+            completed_post_ids.update(
+                post_id
+                for post_id in snapshot.get("skip_post_ids", [])
+                if isinstance(post_id, str) and post_id
             )
             needs_validation = transient
             platform_code = task.platform_code
@@ -478,7 +484,7 @@ class WorkerService:
         try:
             if needs_validation:
                 validation = collector.validate_circle(circle_url)
-            remaining = max(0, target - len(completed_post_ids))
+            remaining = max(0, target - len(persisted_post_ids))
             payload = (
                 collector.collect_urls(known_urls, on_progress=report_progress)
                 if known_urls
