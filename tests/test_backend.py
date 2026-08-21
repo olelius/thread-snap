@@ -48,10 +48,12 @@ from threadsnap.schemas import (
     ManualRunCreate,
 )
 from threadsnap.sentiment import (
+    HOSTED_MODEL_CODE,
     SentimentFeedback,
     build_request,
     deduplicate_media_urls,
     normalize_feedback_payload,
+    sentiment_input_hash,
     validate_modality_identity,
 )
 from threadsnap.services import bootstrap_database
@@ -572,6 +574,154 @@ class ApiAndConfigTests(AppCase):
             self.assertTrue(all(thread.is_alive() for thread in worker.threads))
         finally:
             worker.stop()
+
+    def test_local_text_sentiment_skips_cloud_and_media_resolution(self) -> None:
+        """验证本地模型可无密钥启用，且只消费标题和正文。"""
+
+        class FakeLocalAnalyzer:
+            def __init__(self) -> None:
+                self.validations = 0
+                self.analyses = 0
+
+            def validate(self, subject: dict) -> int:
+                self.validations += 1
+                self.assert_subject = subject
+                return 12
+
+            def analyze(self, **values):
+                self.analyses += 1
+                self.assert_values = values
+
+                def skipped(count: int) -> dict:
+                    return {
+                        "status": "not_requested" if count else "absent",
+                        "expected_count": count,
+                        "processed_count": 0,
+                        "items": [],
+                    }
+
+                return (
+                    {
+                        "subject_relevance": True,
+                        "matched_subjects": ["风云A9"],
+                        "sentiment": "negative",
+                        "primary_category": "product_criticism",
+                        "secondary_categories": [],
+                        "modalities": {
+                            "text": {"status": "processed", "evidence": ["车机太卡了。"]},
+                            "image": skipped(values["image_count"]),
+                            "video_visual": skipped(values["video_count"]),
+                            "video_audio": skipped(values["video_count"]),
+                        },
+                        "summary": "本地文字模型识别到风云A9车机卡顿的负面反馈。",
+                    },
+                    '{"provider":"local-test"}',
+                    23,
+                )
+
+        fake_local = FakeLocalAnalyzer()
+        self.container.sentiment.local_analyzer = fake_local
+        config = self.client.get("/api/v1/sentiment/config").json()
+        saved = self.client.put(
+            "/api/v1/sentiment/config",
+            json={
+                "revision": config["revision"],
+                "enabled": False,
+                "api_base_url": "",
+                "model_code": "paddlenlp-local-text-nano-v1",
+                "subject": {
+                    "brand": "奇瑞",
+                    "products": ["风云A9"],
+                    "supplement": "",
+                },
+            },
+        )
+        self.assertEqual(200, saved.status_code, saved.text)
+        self.assertEqual("local", saved.json()["model_provider"])
+        self.assertEqual("text_only", saved.json()["model_input_mode"])
+        self.assertFalse(saved.json()["api_key_configured"])
+
+        tested = self.client.post("/api/v1/sentiment/config/test")
+        self.assertEqual(200, tested.status_code, tested.text)
+        self.assertEqual(1, fake_local.validations)
+        current = self.client.get("/api/v1/sentiment/config").json()
+        enabled = self.client.put(
+            "/api/v1/sentiment/config",
+            json={
+                "revision": current["revision"],
+                "enabled": True,
+                "api_base_url": current["api_base_url"],
+                "model_code": current["model_code"],
+                "subject": {
+                    "brand": current["subject"]["brand"],
+                    "products": current["subject"]["products"],
+                    "supplement": current["subject"]["supplement"],
+                },
+            },
+        )
+        self.assertEqual(200, enabled.status_code, enabled.text)
+        self.assertTrue(enabled.json()["enabled"])
+
+        circle = self.save_verified_circle(name="风云A9")
+        run = self.client.post(
+            "/api/v1/runs/manual",
+            json={
+                "platform_code": "dongchedi",
+                "circle_ids": [circle.id],
+                "quantity": 1,
+                "idempotency_key": "local-sentiment-test-run",
+            },
+        ).json()
+        record = sample_record("local-sentiment-1")
+        record.update(
+            title="风云A9车机太卡",
+            content="风云A9的车机太卡了。",
+            image_urls=["https://example.test/local.jpg"],
+            video_urls=["https://example.test/local.mp4"],
+        )
+        with self.container.sessions.begin() as db:
+            task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            assert task is not None
+            self.container.worker._store_records(db, task, [record])
+
+        def unexpected_media_resolution(*_args, **_kwargs):
+            raise AssertionError("本地文字模型不应解析视频播放地址")
+
+        class UnexpectedCloudClient:
+            def request(self, *_args, **_kwargs):
+                raise AssertionError("本地文字模型不应请求云端 API")
+
+        self.container.sentiment.client = UnexpectedCloudClient()
+        self.container.sentiment_worker.media_resolver = unexpected_media_resolution
+        self.assertTrue(self.container.sentiment_worker.process_once())
+        self.assertEqual(1, fake_local.analyses)
+        self.assertEqual(1, fake_local.assert_values["image_count"])
+        self.assertEqual(1, fake_local.assert_values["video_count"])
+        with self.container.sessions() as db:
+            analysis = db.scalar(select(SentimentAnalysis))
+            assert analysis is not None
+            self.assertEqual("analysis_completed", analysis.status)
+            self.assertEqual("negative", analysis.result)
+            self.assertEqual("not_requested", analysis.modalities["image"]["status"])
+            self.assertEqual("not_requested", analysis.modalities["video_visual"]["status"])
+            self.assertEqual({"provider": "local", "billable_tokens": 0}, analysis.usage)
+
+    def test_local_sentiment_input_hash_excludes_media(self) -> None:
+        post = PostSnapshot(
+            title="风云A9",
+            content="车机卡顿",
+            image_urls=["https://example.test/first.jpg"],
+            video_urls=["https://example.test/first.mp4"],
+        )
+        local_before = sentiment_input_hash(post, "paddlenlp-local-text-nano-v1")
+        hosted_before = sentiment_input_hash(post, HOSTED_MODEL_CODE)
+        post.image_urls = ["https://example.test/second.jpg"]
+        post.video_urls = ["https://example.test/second.mp4"]
+        self.assertEqual(
+            local_before,
+            sentiment_input_hash(post, "paddlenlp-local-text-nano-v1"),
+        )
+        self.assertNotEqual(hosted_before, sentiment_input_hash(post, HOSTED_MODEL_CODE))
 
     def test_bootstrap_refreshes_available_adapter_version(self) -> None:
         with self.container.sessions.begin() as db:

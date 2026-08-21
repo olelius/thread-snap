@@ -113,21 +113,27 @@ class SentimentConfigUpdate(StrictModel):
     enabled: bool
     api_base_url: str = Field(max_length=2000)
     api_key: str | None = Field(default=None, min_length=8, max_length=4000)
-    model_code: Literal["qwen3.5-omni-plus-2026-03-15"]
+    model_code: Literal[
+        "qwen3.5-omni-plus-2026-03-15",
+        "paddlenlp-local-text-nano-v1",
+    ]
     subject: SentimentSubjectUpdate
 
 
 class ManualSentimentRevisionCreate(StrictModel):
     action: Literal["set_result", "restore_ai"]
     result: Literal["negative", "non_negative", "unrelated"] | None = None
-    primary_category: Literal[
-        "product_complaint",
-        "product_criticism",
-        "service_complaint",
-        "brand_criticism",
-        "competitor_attack",
-        "other",
-    ] | None = None
+    primary_category: (
+        Literal[
+            "product_complaint",
+            "product_criticism",
+            "service_complaint",
+            "brand_criticism",
+            "competitor_attack",
+            "other",
+        ]
+        | None
+    ) = None
     secondary_categories: list[
         Literal[
             "product_complaint",

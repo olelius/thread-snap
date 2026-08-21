@@ -31,6 +31,7 @@ from .db import build_engine, build_session_factory, migrate_database
 from .errors import DomainError, domain_error_handler
 from .events import EventBus
 from .ids import uuid7
+from .local_sentiment import LocalSentimentAnalyzer
 from .models import ValidationJob
 from .scheduler import SchedulerService
 from .schemas import (
@@ -76,6 +77,7 @@ class Container:
             self.sessions,
             self.session_store,
             event_publisher=self.events.publish,
+            local_analyzer=LocalSentimentAnalyzer(settings.paddlenlp_home),
         )
         self.worker = WorkerService(
             self.sessions,

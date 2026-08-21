@@ -88,6 +88,28 @@ async def main():
 
 asyncio.run(main())
 PY
+  check "local sentiment models run offline" runuser -u threadsnap -- env \
+    THREADSNAP_DATA_DIR="$(sed -n 's/^THREADSNAP_DATA_DIR=//p' "$ENV_FILE" | tail -n 1 | tr -d '\r')" \
+    /opt/threadsnap/current/venv/bin/python - <<'PY'
+import json
+import os
+from pathlib import Path
+
+from threadsnap.local_sentiment import LocalSentimentAnalyzer
+
+home = Path(os.environ["THREADSNAP_DATA_DIR"]) / "paddlenlp"
+analyzer = LocalSentimentAnalyzer(home)
+payload, raw, _duration_ms = analyzer.analyze(
+    title="风云A9车机太卡",
+    content="风云A9的车机太卡了，售后也一直不处理。",
+    image_count=1,
+    video_count=1,
+    subject={"brand": "奇瑞", "products": ["风云A9"], "supplement": ""},
+)
+native = json.loads(raw)
+assert payload["modalities"]["video_visual"]["status"] == "not_requested"
+assert native["uie_senta"] and native["utc_sentiment"] and native["utc_category"]
+PY
 fi
 
 if ((failures)); then

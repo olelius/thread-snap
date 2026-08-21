@@ -8,6 +8,7 @@ ThreadSnap 正式目标包为 `fully-offline`：
 - `wheelhouse/`：全部 Python 运行依赖 wheel；
 - `frontend/`：已经完成 Vite 生产构建的静态文件；
 - `browsers/`：与锁定 Patchright 版本匹配的 Linux Chromium；
+- `models/paddlenlp/`：已经下载并转换完成的 UIE-Senta-Nano 与 UTC-Nano 本地文字模型；
 - `rpms/`：Python、Nginx、Weston 和 Chromium 系统共享库及其 RPM 依赖，并包含本地仓库元数据；
 - `SYSTEM-PACKAGES.txt`：目标机向本地 RPM 仓库请求的顶层运行组件，避免强制安装全部递归 RPM；
 - `deploy/`：主机检查、安装、systemd、Nginx、验证、备份与回滚脚本；
@@ -30,7 +31,7 @@ bash deploy/inspect-host.sh /tmp/threadsnap-host-report.txt
 | 不可变程序版本 | `/opt/threadsnap/releases/` | 放系统盘即可，版本之间通过软链接切换 |
 | 当前版本 | `/opt/threadsnap/current` | 指向当前 release |
 | 配置和密钥 | `/etc/threadsnap/threadsnap.env` | `root:threadsnap`、`0640` |
-| SQLite、模板、导出、加密 Profile | `/var/lib/threadsnap` | 持续增长的数据；优先放空间充足的独立数据盘 |
+| SQLite、模板、导出、加密 Profile、本地模型 | `/var/lib/threadsnap` | 持续增长的数据与模型；优先放空间充足的独立数据盘 |
 | 浏览器运行时 | `/opt/threadsnap/browsers` | 随离线包安装，不写入用户 home 缓存 |
 | 备份 | `/var/backups/threadsnap` | 最终副本应复制到另一文件系统或备份主机 |
 | 服务日志 | systemd journal | 使用 `journalctl -u threadsnap` 查询 |
@@ -73,10 +74,11 @@ sudo bash deploy/assemble-offline-package.sh "$PWD/output"
 2. 为 CentOS Stream 10 制包阶段安装 EPEL 配置并启用 CRB，以解析 Weston 闭包；
 3. 下载并冻结 Python wheelhouse；
 4. 在临时虚拟环境中执行纯离线安装与 `pip check`；
-5. 下载锁定 Patchright 对应的完整 Linux Chromium，并跳过未使用的 headless shell；
-6. 使用 `dnf download --resolve --alldeps` 收集系统 RPM 闭包，并用 `createrepo_c` 生成包内本地仓库元数据；
-7. 记录顶层系统组件清单，让目标 DNF 复用已安装的兼容版本并只补齐缺失依赖；
-8. 生成新的逐文件校验清单和压缩包整体校验值；
+5. 使用离线安装后的 PaddleNLP 下载并转换 UIE-Senta-Nano 与 UTC-Nano，执行一次真实本地推理后写入 `models/paddlenlp/`；
+6. 下载锁定 Patchright 对应的完整 Linux Chromium，并跳过未使用的 headless shell；
+7. 使用 `dnf download --resolve --alldeps` 收集系统 RPM 闭包，并用 `createrepo_c` 生成包内本地仓库元数据；
+8. 记录顶层系统组件清单，让目标 DNF 复用已安装的兼容版本并只补齐缺失依赖；
+9. 生成新的逐文件校验清单和压缩包整体校验值；
 9. 输出 `*-centos-stream-10-x86_64-offline.tar.gz`。
 
 ## 5. 目标服务器纯离线安装
@@ -99,6 +101,7 @@ sudo bash deploy/install.sh --data-dir /var/lib/threadsnap --server-name HOST
 - 建立 `threadsnap` 系统账号；
 - 在新 release 中建立虚拟环境并从本地 wheelhouse 安装；
 - 从包内复制 Chromium；
+- 从包内复制已转换的 PaddleNLP 模型到持久数据目录，不在目标机联网下载；
 - 首次生成 Fernet 密钥，升级时保留原密钥；
 - 安装并启动 Weston 无头 Wayland、ThreadSnap 单进程和独立 `threadsnap-nginx` 服务；
 - 设置 SELinux 程序、静态文件、回环代理和非标准 HTTP 端口策略；
@@ -114,7 +117,7 @@ sudo systemctl status threadsnap threadsnap-wayland threadsnap-nginx --no-pager
 sudo journalctl -u threadsnap -n 200 --no-pager
 ```
 
-脚本检查 systemd、Nginx、SPA、API、`/internal/v1` 屏蔽、端口绑定、Fernet 配置和 Wayland 有头 Chromium 启动。此后仍需真实执行：
+脚本检查 systemd、Nginx、SPA、API、`/internal/v1` 屏蔽、端口绑定、Fernet 配置、Wayland 有头 Chromium启动，并在完整验证模式下以目标服务账号离线执行本地文字模型推理。此后仍需真实执行：
 
 1. 前端创建认证任务；
 2. Dialog 收到非空连续画面；

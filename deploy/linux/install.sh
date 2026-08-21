@@ -78,7 +78,7 @@ fi
   exit 2
 }
 
-for required in PACKAGE-MANIFEST.json SHA256SUMS SYSTEM-PACKAGES.txt backend frontend deploy wheelhouse browsers rpms; do
+for required in PACKAGE-MANIFEST.json SHA256SUMS SYSTEM-PACKAGES.txt backend frontend deploy wheelhouse browsers models rpms; do
   [[ -e "$PACKAGE_ROOT/$required" ]] || {
     echo "ERROR: deployment package is incomplete: $required" >&2
     exit 3
@@ -156,6 +156,7 @@ fi
 
 install -d -m 0755 "$APP_ROOT" "$RELEASES_DIR"
 install -d -o threadsnap -g threadsnap -m 0700 "$DATA_DIR" "$BROWSER_DIR" "$BACKUP_DIR"
+install -d -o threadsnap -g threadsnap -m 0700 "$DATA_DIR/paddlenlp"
 install -d -m 0750 -o root -g threadsnap "$CONFIG_DIR"
 
 if [[ -e "$RELEASE_DIR" ]]; then
@@ -181,8 +182,9 @@ APP_WHEEL="$(find "$STAGING_DIR/backend" -maxdepth 1 -type f -name 'threadsnap-*
 "$STAGING_DIR/venv/bin/python" -m pip install \
   --no-index --find-links "$PACKAGE_ROOT/wheelhouse" "$APP_WHEEL"
 cp -a "$PACKAGE_ROOT/browsers/." "$BROWSER_DIR/"
+cp -a "$PACKAGE_ROOT/models/paddlenlp/." "$DATA_DIR/paddlenlp/"
 "$STAGING_DIR/venv/bin/python" -m pip check
-chown -R threadsnap:threadsnap "$BROWSER_DIR"
+chown -R threadsnap:threadsnap "$BROWSER_DIR" "$DATA_DIR/paddlenlp"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   FERNET_KEY="$("$STAGING_DIR/venv/bin/python" - <<'PY'
