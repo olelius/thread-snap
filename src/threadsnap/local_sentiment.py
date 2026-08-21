@@ -7,6 +7,7 @@ import os
 import re
 import threading
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from time import monotonic
 from typing import Any
@@ -121,8 +122,18 @@ class LocalSentimentAnalyzer:
     def __init__(self, model_home: Path):
         self.model_home = model_home
         self._lock = threading.RLock()
+        # Paddle Predictor 不能跨创建线程复用；配置测试和后台 Worker 都统一投递到这里。
+        self._executor = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix="threadsnap-local-sentiment",
+        )
         self._senta_by_aspects: OrderedDict[tuple[str, ...], Any] = OrderedDict()
         self._category_model: Any | None = None
+
+    def close(self) -> None:
+        """停止专用推理线程；调用前应先停止舆情 Worker。"""
+
+        self._executor.shutdown(wait=True, cancel_futures=True)
 
     def _taskflow(self) -> Any:
         # PaddleNLP 在首次 import 时冻结缓存目录，因此必须先设置。
@@ -165,6 +176,11 @@ class LocalSentimentAnalyzer:
     def validate(self, subject: dict[str, Any]) -> int:
         """加载模型并执行一次本地最小推理，返回毫秒耗时。"""
 
+        return self._executor.submit(self._validate, subject).result()
+
+    def _validate(self, subject: dict[str, Any]) -> int:
+        """在固定推理线程内加载并验证两个任务模型。"""
+
         aspects = _subject_values(subject)
         if not aspects:
             raise ValueError("本地模型至少需要一个品牌或重点产品。")
@@ -193,6 +209,26 @@ class LocalSentimentAnalyzer:
         subject: dict[str, Any],
     ) -> tuple[dict[str, Any], str, int]:
         """只使用标题和正文，返回与在线模型一致的规范化结果。"""
+
+        return self._executor.submit(
+            self._analyze,
+            title=title,
+            content=content,
+            image_count=image_count,
+            video_count=video_count,
+            subject=subject,
+        ).result()
+
+    def _analyze(
+        self,
+        *,
+        title: str,
+        content: str,
+        image_count: int,
+        video_count: int,
+        subject: dict[str, Any],
+    ) -> tuple[dict[str, Any], str, int]:
+        """在固定推理线程内执行一次文字分析。"""
 
         aspects = _subject_values(subject)
         if not aspects:
