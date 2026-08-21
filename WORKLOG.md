@@ -16,6 +16,23 @@
 
 ---
 
+## 2026-08-21 — DeepSeek 云端纯文字舆情选项
+**总目标**：在既有舆情模型下拉栏增加 DeepSeek 云端文字分析，同时保持千问多模态、本地轻量模型和人工结论优先级不变。
+**状态**：✅ DeepSeek 独立连接、纯文字请求、结果归一化和配置界面均已实现。
+**干到哪里了**：
+- [x] 模型下拉新增 `deepseek-v4-flash`；选择后使用独立的 DeepSeek Base URL/API Key，不覆盖既有千问连接，密钥仍只进入加密存储。
+- [x] DeepSeek 请求只包含判定对象、标题和正文，固定关闭 thinking，启用 JSON Object、流式响应及流式用量；不解析或发送图片、视频 URL。
+- [x] 后端把未提交给模型的实际图片、视频画面和视频音频统一补为 `not_requested`，保留模型原始文字结论、中文总结、依据、用量和请求 ID。
+- [x] 输入指纹排除媒体变化；DeepSeek 继续复用云端 Worker、有界重试、失败审计、筛选和人工修正规则。
+- [x] Alembic 新迁移完成 `head → ab4d92e7c601 → head` 往返，验证既有千问连接保持不变；证据位于 `artifacts/runtime/deepseek-migration-20260821-134215/`。
+- [x] 87 项后端测试、Ruff、compileall、pip check、前端 TypeScript 检查与生产构建、`git diff --check` 均通过。
+- [x] 真实页面确认下拉栏同时展示千问、DeepSeek 和本地 Nano；切换 DeepSeek 后显示默认 `https://api.deepseek.com`、纯文字边界和独立 Key 输入，无控制台错误；后端与 Vite 代理 `/health` 为 HTTP 200。
+**下一步**：部署环境填入 DeepSeek Key 后执行一次显式连接测试，再由用户决定是否启用；本次不消耗真实 DeepSeek 额度。
+**边界**：DeepSeek 路径只分析标题和正文，详情媒体仍独立展示；本次不新增自由模型名、余额查询、额外 Worker 或媒体代理。
+**关联**：`docs/adr/0025-add-deepseek-cloud-text-sentiment-option.md`、`src/threadsnap/sentiment.py`、`src/threadsnap/models.py`、`src/threadsnap/migrations/versions/c6f1e2a93b47_deepseek_sentiment_connection.py`、`frontend/src/features/config/config-page.tsx`、`tests/test_backend.py`
+
+---
+
 ## 2026-08-21 — 本地舆情 Predictor 线程归属修复
 **总目标**：修复本地轻量模型在配置测试成功后由后台 Worker 分析时全批次进入“分析暂停”的问题，并恢复原暂停队列。
 **状态**：✅ Predictor 线程归属和失效期间任务状态均已修复，原批次 30 条全部恢复完成。

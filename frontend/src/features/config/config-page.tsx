@@ -605,6 +605,7 @@ function sentimentSignature(value?: SentimentConfig) {
 
 const sentimentModelNames: Record<string, string> = {
   'qwen3.5-omni-plus-2026-03-15': '千问 Omni Plus（云端多模态）',
+  'deepseek-v4-flash': 'DeepSeek V4 Flash（云端文字）',
   'paddlenlp-local-text-nano-v1': 'PaddleNLP 本地轻量文字分析（Nano）',
 }
 
@@ -614,6 +615,8 @@ function SentimentPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => 
   const [draft, setDraft] = useState<SentimentConfig>()
   const [apiKey, setApiKey] = useState('')
   const localModel = draft?.model_code === 'paddlenlp-local-text-nano-v1'
+  const deepSeekModel = draft?.model_code === 'deepseek-v4-flash'
+  const textOnlyModel = localModel || deepSeekModel
   useEffect(() => { if (query.data && !draft) setDraft(structuredClone(query.data)) }, [query.data, draft])
   const dirty = Boolean(draft && query.data) && (sentimentSignature(draft) !== sentimentSignature(query.data) || Boolean(apiKey.trim()))
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange])
@@ -632,23 +635,51 @@ function SentimentPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => 
   const connectionDirty = Boolean(apiKey.trim()) || draft.api_base_url !== query.data.api_base_url || draft.model_code !== query.data.model_code
   const validationLabel = draft.validation_status === 'valid' ? '已通过' : draft.validation_status === 'invalid' ? '未通过' : '待测试'
   const validationTarget = localModel ? '本地模型' : '连接'
+  const selectModel = (model_code: string) => {
+    const connection = draft.model_connections[model_code] ?? { api_base_url: '', api_key_configured: false }
+    setApiKey('')
+    setDraft({
+      ...draft,
+      enabled: false,
+      model_code,
+      api_base_url: connection.api_base_url,
+      api_key_configured: connection.api_key_configured,
+      validation_status: 'unverified',
+      validation_error: undefined,
+      validated_at: undefined,
+    })
+  }
+  const updateBaseUrl = (api_base_url: string) => setDraft({
+    ...draft,
+    enabled: false,
+    api_base_url,
+    model_connections: {
+      ...draft.model_connections,
+      [draft.model_code]: {
+        ...draft.model_connections[draft.model_code],
+        api_base_url,
+      },
+    },
+    validation_status: 'unverified',
+  })
   return <div className='space-y-5'>
-    <ConfigSectionToolbar icon={<BrainCircuit className='size-4.5' />} title='AI 舆情' summary={`${draft.enabled ? '已启用' : '已停用'} · ${validationTarget}${validationLabel}`} description={localModel ? '每条新入库帖子只在本机分析标题和正文；图片、视频不参与模型推理。' : '每条新入库帖子以一次在线多模态请求分析；保存配置本身不会调用模型。'}>
+    <ConfigSectionToolbar icon={<BrainCircuit className='size-4.5' />} title='AI 舆情' summary={`${draft.enabled ? '已启用' : '已停用'} · ${validationTarget}${validationLabel}`} description={localModel ? '每条新入库帖子只在本机分析标题和正文；图片、视频不参与模型推理。' : deepSeekModel ? '每条新入库帖子以一次 DeepSeek 云端文字请求分析标题和正文；媒体不发送给模型。' : '每条新入库帖子以一次千问在线多模态请求分析；保存配置本身不会调用模型。'}>
       <Button variant='outline' disabled={!dirty || save.isPending} onClick={discard}><RotateCcw className='size-4' />放弃修改</Button>
       <Button disabled={!dirty || save.isPending} onClick={() => save.mutate()}>{save.isPending ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}保存当前标签</Button>
     </ConfigSectionToolbar>
     <div className='grid gap-5 xl:grid-cols-2'>
       <Card><CardHeader><CardTitle>模型连接</CardTitle><CardDescription>{localModel ? '本地轻量模型随 ThreadSnap 运行，不使用 API Key，也不产生 Token 费用。' : '云端模型使用受控连接；API Key 只写入加密存储，页面不会再次读取明文。'}</CardDescription></CardHeader><CardContent className='space-y-5'>
         <div className='flex items-center justify-between rounded-lg border p-3'><div><div className='text-sm font-medium'>启用自动分析</div><div className='text-xs text-muted-foreground'>只影响后续新帖子；关闭时排队任务转为已禁用</div></div><Switch checked={draft.enabled} disabled={connectionDirty || draft.validation_status !== 'valid'} onCheckedChange={(enabled) => setDraft({ ...draft, enabled })} /></div>
-        <div><Label>模型</Label><Select value={draft.model_code} onValueChange={(model_code) => setDraft({ ...draft, enabled: false, model_code, validation_status: 'unverified' })}><SelectTrigger className='mt-2'><SelectValue /></SelectTrigger><SelectContent>{draft.available_models.map((model) => <SelectItem key={model} value={model}>{sentimentModelNames[model] ?? model}</SelectItem>)}</SelectContent></Select></div>
-        {localModel ? <Alert><BrainCircuit className='size-4' /><AlertTitle>仅文字分析</AlertTitle><AlertDescription>只读取标题和正文；不会刷新或提交图片、视频 URL。媒体仍保留在帖子详情中供人工查看。</AlertDescription></Alert> : <><div><Label htmlFor='sentiment-base-url'>OpenAI 兼容 Base URL</Label><Input id='sentiment-base-url' className='mt-2' value={draft.api_base_url} placeholder='https://HOST/compatible-mode/v1' onChange={(event) => setDraft({ ...draft, enabled: false, api_base_url: event.target.value, validation_status: 'unverified' })} /><p className='mt-1.5 text-xs text-muted-foreground'>仅支持公网 HTTPS。代理服务将接收 API Key、帖子文字和媒体 URL。</p></div><div><Label htmlFor='sentiment-api-key'>API Key</Label><Input id='sentiment-api-key' className='mt-2' type='password' autoComplete='new-password' value={apiKey} placeholder={draft.api_key_configured ? '已配置；留空表示不替换' : '请输入 API Key'} onChange={(event) => { setApiKey(event.target.value); setDraft({ ...draft, enabled: false, validation_status: 'unverified' }) }} /></div></>}
+        <div><Label>模型</Label><Select value={draft.model_code} onValueChange={selectModel}><SelectTrigger className='mt-2'><SelectValue /></SelectTrigger><SelectContent>{draft.available_models.map((model) => <SelectItem key={model} value={model}>{sentimentModelNames[model] ?? model}</SelectItem>)}</SelectContent></Select></div>
+        {textOnlyModel && <Alert><BrainCircuit className='size-4' /><AlertTitle>仅文字分析</AlertTitle><AlertDescription>{localModel ? '只在本机读取标题和正文；不会刷新或提交图片、视频 URL。' : '只向 DeepSeek 提交标题、正文和判定对象；不会刷新或提交图片、视频 URL。'}媒体仍保留在帖子详情中供人工查看。</AlertDescription></Alert>}
+        {!localModel && <><div><Label htmlFor='sentiment-base-url'>OpenAI 兼容 Base URL</Label><Input id='sentiment-base-url' className='mt-2' value={draft.api_base_url} placeholder={deepSeekModel ? 'https://api.deepseek.com' : 'https://HOST/compatible-mode/v1'} onChange={(event) => updateBaseUrl(event.target.value)} /><p className='mt-1.5 text-xs text-muted-foreground'>仅支持公网 HTTPS。{deepSeekModel ? 'DeepSeek 或其代理服务将接收 API Key、判定对象和帖子文字，不接收媒体 URL。' : '千问或其代理服务将接收 API Key、帖子文字和媒体 URL。'}</p></div><div><Label htmlFor='sentiment-api-key'>API Key</Label><Input id='sentiment-api-key' className='mt-2' type='password' autoComplete='new-password' value={apiKey} placeholder={draft.api_key_configured ? '已配置；留空表示不替换' : '请输入 API Key'} onChange={(event) => { setApiKey(event.target.value); setDraft({ ...draft, enabled: false, validation_status: 'unverified' }) }} /></div></>}
         <div className='flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3'><div><StatusBadge value={draft.validation_status === 'valid' ? 'success' : draft.validation_status === 'invalid' ? 'failed' : 'unknown'} label={`${validationTarget}${validationLabel}`} /><div className='mt-1 text-xs text-muted-foreground'>{draft.validated_at ? `最近测试：${formatDate(draft.validated_at)}` : '尚未测试'}{draft.validation_error ? ` · ${draft.validation_error}` : ''}</div></div><Button variant='outline' disabled={dirty || (!localModel && (!draft.api_base_url || !draft.api_key_configured)) || test.isPending} onClick={() => test.mutate()}>{test.isPending ? <Loader2 className='size-4 animate-spin' /> : <RefreshCw className='size-4' />}{localModel ? '测试本地模型' : '测试连接'}</Button></div>
       </CardContent></Card>
-      <Card><CardHeader><CardTitle>舆情判定对象</CardTitle><CardDescription>{localModel ? '本地模型优先识别已配置名称；必须覆盖的别名请逐行加入重点产品。' : '模型结合上下文识别常见别名、品牌服务及实际相关性，后端不做关键词重判。'}</CardDescription></CardHeader><CardContent className='space-y-5'>
+      <Card><CardHeader><CardTitle>舆情判定对象</CardTitle><CardDescription>{localModel ? '本地模型优先识别已配置名称；必须覆盖的别名请逐行加入重点产品。' : '云端模型结合文字上下文识别常见别名、品牌服务及实际相关性，后端不做关键词重判。'}</CardDescription></CardHeader><CardContent className='space-y-5'>
         <div><Label htmlFor='sentiment-brand'>品牌</Label><Input id='sentiment-brand' className='mt-2' value={draft.subject.brand} onChange={(event) => setDraft({ ...draft, subject: { ...draft.subject, brand: event.target.value } })} /></div>
         <div><Label htmlFor='sentiment-products'>重点产品（每行一个）</Label><Textarea id='sentiment-products' className='mt-2 min-h-52' value={draft.subject.products.join('\n')} onChange={(event) => setDraft({ ...draft, subject: { ...draft.subject, products: event.target.value.split(/\r?\n/).map((value) => value.trim()).filter(Boolean) } })} /></div>
         <div><Label htmlFor='sentiment-supplement'>补充说明（选填）</Label><Textarea id='sentiment-supplement' className='mt-2' value={draft.subject.supplement ?? ''} placeholder='例如需要纳入的服务、产品线或语境说明' onChange={(event) => setDraft({ ...draft, subject: { ...draft.subject, supplement: event.target.value } })} /></div>
-        <Alert><BrainCircuit className='size-4' /><AlertTitle>判定口径</AlertTitle><AlertDescription>{localModel ? '本地任务模型输出负面、非负面或不相关，提取文字依据并由系统生成中文模板总结；媒体明确标记为未参与分析。' : '模型输出负面、非负面或不相关，并提供中文总结及各模态事实依据；ThreadSnap 只校验结构与覆盖，不二次改写结论。'}</AlertDescription></Alert>
+        <Alert><BrainCircuit className='size-4' /><AlertTitle>判定口径</AlertTitle><AlertDescription>{localModel ? '本地任务模型输出负面、非负面或不相关，提取文字依据并由系统生成中文模板总结；媒体明确标记为未参与分析。' : deepSeekModel ? 'DeepSeek 输出负面、非负面或不相关，并提供中文总结和文字依据；媒体明确标记为未参与分析。' : '千问输出负面、非负面或不相关，并提供中文总结及各模态事实依据；ThreadSnap 只校验结构与覆盖，不二次改写结论。'}</AlertDescription></Alert>
       </CardContent></Card>
     </div>
   </div>

@@ -115,6 +115,7 @@ class SentimentConfigUpdate(StrictModel):
     api_key: str | None = Field(default=None, min_length=8, max_length=4000)
     model_code: Literal[
         "qwen3.5-omni-plus-2026-03-15",
+        "deepseek-v4-flash",
         "paddlenlp-local-text-nano-v1",
     ]
     subject: SentimentSubjectUpdate

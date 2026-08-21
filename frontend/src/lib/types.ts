@@ -161,6 +161,7 @@ export type SentimentConfig = {
   model_provider: 'hosted' | 'local'
   model_input_mode: 'multimodal' | 'text_only'
   available_models: string[]
+  model_connections: Record<string, { api_base_url: string; api_key_configured: boolean }>
   validation_status: 'unverified' | 'valid' | 'invalid'
   validation_error?: string
   validated_at?: string

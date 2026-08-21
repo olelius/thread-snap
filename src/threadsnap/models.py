@@ -320,6 +320,10 @@ class SentimentConfig(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     base_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
     encrypted_api_key: Mapped[bytes | None] = mapped_column(LargeBinary)
+    deepseek_base_url: Mapped[str] = mapped_column(
+        Text, nullable=False, default="https://api.deepseek.com"
+    )
+    deepseek_encrypted_api_key: Mapped[bytes | None] = mapped_column(LargeBinary)
     model_code: Mapped[str] = mapped_column(
         String(120), nullable=False, default="qwen3.5-omni-plus-2026-03-15"
     )
