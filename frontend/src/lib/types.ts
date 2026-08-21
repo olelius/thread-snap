@@ -157,6 +157,9 @@ export type SentimentConfig = {
   api_base_url: string
   api_key_configured: boolean
   model_code: string
+  model_name: string
+  model_provider: 'hosted' | 'local'
+  model_input_mode: 'multimodal' | 'text_only'
   available_models: string[]
   validation_status: 'unverified' | 'valid' | 'invalid'
   validation_error?: string

@@ -16,6 +16,23 @@
 
 ---
 
+## 2026-08-21 — 本地轻量文字舆情模型选项
+**总目标**：把无需外部 API、只分析标题与正文的轻量模型作为受控选项接入现有舆情闭环，并自动排除图片和视频分析。
+**状态**：✅ 本地轻量文字选项、离线部署链路和界面已实现并通过必要验证。
+**干到哪里了**：
+- [x] 模型下拉新增 `paddlenlp-local-text-nano-v1`；选择后隐藏云端 URL/Key，保留原加密连接配置，并要求本地模型显式测试成功后才能启用。
+- [x] 本地管线使用 UIE-Senta-Nano 抽取配置对象、观点和依据，UTC-Nano 执行情感与负面类型分类；保存两个模型原生 JSON，并生成统一结果与中文模板总结。
+- [x] 本地任务只读取标题和正文，不调用云端 API，不解析媒体播放地址，图片/视频覆盖统一为 `not_requested`，用量记录为零计费 Token。
+- [x] 详情页用中文展示本地模型与“未参与分析”，不展示空的媒体依据区；人工判定、筛选和既有状态优先级保持不变。
+- [x] Linux 完整离线包加入已转换模型的组装、安装和离线推理验证，目标服务器不从模型仓库下载。
+- [x] 项目虚拟环境使用 PaddlePaddle 3.3.1、PaddleNLP 3.0.0b4 和 aistudio-sdk 0.1.3 完成真实正负面推理；两条样本分别得到 `negative` / `non_negative`，媒体均为 `not_requested`，原始结果同时包含 UIE、UTC 情感与 UTC 分类输出。
+- [x] 83 项后端测试、Ruff、compileall、pip check、前端 TypeScript 检查与生产构建、`git diff --check` 均通过。
+**下一步**：无；进入 Git 自动收尾。
+**边界**：本地 Nano 不是生成式大模型；总结为固定模板，别名、隐含指代和复杂语境能力弱于云端 Omni Plus；本地推理进程内串行。
+**关联**：`docs/adr/0024-add-local-text-sentiment-option.md`、`src/threadsnap/local_sentiment.py`、`src/threadsnap/sentiment.py`、`frontend/src/features/config/config-page.tsx`、`frontend/src/features/runs/run-detail-page.tsx`、`deploy/linux/`
+
+---
+
 ## 2026-08-21 — 人工判定与人工修正文案区分
 **总目标**：让详情入口准确表达首次给出人工结论和修改已有结论两种不同操作。
 **状态**：✅ 动态文案已实现。

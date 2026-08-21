@@ -75,7 +75,7 @@ trap cleanup EXIT
 STAGE="$WORK_ROOT/$FINAL_NAME"
 cp -a "$PACKAGE_ROOT" "$STAGE"
 rm -f "$STAGE/SHA256SUMS"
-mkdir -p "$STAGE/wheelhouse" "$STAGE/browsers" "$STAGE/rpms"
+mkdir -p "$STAGE/wheelhouse" "$STAGE/browsers" "$STAGE/rpms" "$STAGE/models/paddlenlp"
 
 APP_WHEEL="$(find "$STAGE/backend" -maxdepth 1 -type f -name 'threadsnap-*.whl' -print -quit)"
 [[ -n "$APP_WHEEL" ]] || { echo "ERROR: ThreadSnap wheel missing" >&2; exit 4; }
@@ -85,6 +85,29 @@ python3 -m venv "$WORK_ROOT/verify-venv"
 "$WORK_ROOT/verify-venv/bin/python" -m pip install \
   --no-index --find-links "$STAGE/wheelhouse" "$APP_WHEEL"
 "$WORK_ROOT/verify-venv/bin/python" -m pip check
+
+# 在与目标机一致的 Linux/Python 环境内下载并生成本地文字模型的静态推理文件。
+# 最终服务器只复制该目录，不会在启用或分析时访问模型下载站。
+PPNLP_HOME="$STAGE/models/paddlenlp" \
+  "$WORK_ROOT/verify-venv/bin/python" - <<'PY'
+import json
+import os
+from pathlib import Path
+
+from threadsnap.local_sentiment import LocalSentimentAnalyzer
+
+analyzer = LocalSentimentAnalyzer(Path(os.environ["PPNLP_HOME"]))
+payload, raw, _duration_ms = analyzer.analyze(
+    title="风云A9车机太卡",
+    content="风云A9的车机太卡了，售后也一直不处理。",
+    image_count=1,
+    video_count=1,
+    subject={"brand": "奇瑞", "products": ["风云A9"], "supplement": ""},
+)
+native = json.loads(raw)
+assert payload["modalities"]["image"]["status"] == "not_requested"
+assert native["uie_senta"] and native["utc_sentiment"] and native["utc_category"]
+PY
 
 PLAYWRIGHT_BROWSERS_PATH="$STAGE/browsers" \
   "$WORK_ROOT/verify-venv/bin/patchright" install --no-shell chromium
@@ -111,6 +134,7 @@ manifest.update(
     package_role="offline-deployment",
     installable=True,
     dependency_mode="fully-offline",
+    local_sentiment_models=["uie-senta-nano", "utc-nano"],
     assembled_on={
         "platform": platform.platform(),
         "python": platform.python_version(),
@@ -142,6 +166,8 @@ grep -q "/browsers/" "$ARCHIVE_LIST"
 grep -q "/rpms/" "$ARCHIVE_LIST"
 grep -q "/rpms/repodata/" "$ARCHIVE_LIST"
 grep -q "/SYSTEM-PACKAGES.txt$" "$ARCHIVE_LIST"
+grep -q "/models/paddlenlp/taskflow/sentiment_analysis/uie-senta-nano/" "$ARCHIVE_LIST"
+grep -q "/models/paddlenlp/taskflow/zero_shot_text_classification/utc-nano/" "$ARCHIVE_LIST"
 
 echo "offline_archive=$ARCHIVE"
 echo "offline_sha256=$ARCHIVE.sha256"

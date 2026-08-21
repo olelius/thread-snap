@@ -41,6 +41,12 @@ class Settings(BaseSettings):
 
         return self.data_dir / "auth-profiles"
 
+    @property
+    def paddlenlp_home(self) -> Path:
+        """本地轻量文字模型与静态推理文件的持久目录。"""
+
+        return self.data_dir / "paddlenlp"
+
     def ensure_directories(self) -> None:
         """创建后端持久文件目录。"""
 
@@ -48,6 +54,7 @@ class Settings(BaseSettings):
         self.template_dir.mkdir(parents=True, exist_ok=True)
         self.export_dir.mkdir(parents=True, exist_ok=True)
         self.auth_profile_dir.mkdir(parents=True, exist_ok=True)
+        self.paddlenlp_home.mkdir(parents=True, exist_ok=True)
 
 
 @lru_cache(maxsize=1)

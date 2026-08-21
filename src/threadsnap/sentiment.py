@@ -18,6 +18,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from .errors import DomainError
+from .local_sentiment import LOCAL_MODEL_CODE, LOCAL_MODEL_NAME, LocalSentimentAnalyzer
 from .models import (
     ExtractionRun,
     ManualSentimentRevision,
@@ -34,8 +35,22 @@ from .poc.sentiment import (
 from .schemas import ManualSentimentRevisionCreate, SentimentConfigUpdate
 from .session_store import SessionStore
 
-MODEL_CODES = ("qwen3.5-omni-plus-2026-03-15",)
-PROMPT_VERSION = "v2"
+HOSTED_MODEL_CODE = "qwen3.5-omni-plus-2026-03-15"
+MODEL_CODES = (HOSTED_MODEL_CODE, LOCAL_MODEL_CODE)
+MODEL_PROFILES = {
+    HOSTED_MODEL_CODE: {
+        "name": "千问 Omni Plus（云端多模态）",
+        "provider": "hosted",
+        "input_mode": "multimodal",
+    },
+    LOCAL_MODEL_CODE: {
+        "name": LOCAL_MODEL_NAME,
+        "provider": "local",
+        "input_mode": "text_only",
+    },
+}
+HOSTED_PROMPT_VERSION = "v2"
+LOCAL_PIPELINE_VERSION = "local-v1"
 CATEGORIES = (
     "product_complaint",
     "product_criticism",
@@ -65,6 +80,21 @@ DEFAULT_PRODUCTS = [
 ]
 PROXY_FAKE_IP_NETWORK = ip_network("198.18.0.0/15")
 SENTIMENT_WORKER_CONCURRENCY = 2
+
+
+def model_profile(model_code: str) -> dict[str, str]:
+    try:
+        return MODEL_PROFILES[model_code]
+    except KeyError as exc:
+        raise ValueError(f"不支持的舆情模型：{model_code}") from exc
+
+
+def analysis_version(model_code: str) -> str:
+    return (
+        LOCAL_PIPELINE_VERSION
+        if model_profile(model_code)["provider"] == "local"
+        else HOSTED_PROMPT_VERSION
+    )
 
 
 class TextCoverage(BaseModel):
@@ -102,6 +132,10 @@ class MediaCoverage(BaseModel):
 
     @model_validator(mode="after")
     def validate_counts(self) -> "MediaCoverage":
+        if self.status == "not_requested":
+            if self.processed_count != 0 or self.items:
+                raise ValueError("未请求分析的媒体不得包含处理结果")
+            return self
         if len(self.items) != self.expected_count:
             raise ValueError("媒体 items 数量必须等于 expected_count")
         if self.processed_count > self.expected_count:
@@ -119,7 +153,14 @@ class MediaCoverage(BaseModel):
 
 
 class VisualCoverage(MediaCoverage):
-    status: Literal["absent", "processed", "inaccessible", "unrecognizable", "unprocessed"]
+    status: Literal[
+        "absent",
+        "processed",
+        "inaccessible",
+        "unrecognizable",
+        "unprocessed",
+        "not_requested",
+    ]
 
 
 class AudioCoverage(MediaCoverage):
@@ -132,6 +173,7 @@ class AudioCoverage(MediaCoverage):
         "inaccessible",
         "unrecognizable",
         "unprocessed",
+        "not_requested",
     ]
 
 
@@ -212,15 +254,20 @@ def deduplicate_media_urls(values: list[str] | None) -> list[str]:
     return output
 
 
-def sentiment_input_hash(post: PostSnapshot) -> str:
+def sentiment_input_hash(post: PostSnapshot, model_code: str) -> str:
     """只对实际模型输入计算稳定哈希，媒体签名查询不影响继承。"""
 
-    payload = {
+    payload: dict[str, Any] = {
         "title": post.title or "",
         "content": post.content or "",
-        "images": [stable_url_hash(value) for value in deduplicate_media_urls(post.image_urls)],
-        "videos": [stable_url_hash(value) for value in deduplicate_media_urls(post.video_urls)],
     }
+    if model_profile(model_code)["input_mode"] == "multimodal":
+        payload["images"] = [
+            stable_url_hash(value) for value in deduplicate_media_urls(post.image_urls)
+        ]
+        payload["videos"] = [
+            stable_url_hash(value) for value in deduplicate_media_urls(post.video_urls)
+        ]
     raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
@@ -244,6 +291,10 @@ def validate_modality_identity(feedback: SentimentFeedback, post: PostSnapshot) 
         coverage = getattr(feedback.modalities, name)
         if coverage.expected_count != len(hashes):
             raise ValueError(f"{name}.expected_count 与实际输入数量不一致")
+        if coverage.status == "not_requested":
+            if coverage.items or coverage.processed_count:
+                raise ValueError(f"{name} 未请求分析时不得包含处理结果")
+            continue
         observed = {item.input_index: item.url_hash for item in coverage.items}
         if set(observed) != set(range(len(hashes))):
             raise ValueError(f"{name}.items 的输入索引不完整或重复")
@@ -649,11 +700,13 @@ class SentimentService:
         secrets: SessionStore,
         event_publisher: Callable[..., Any] | None = None,
         client: SentimentModelClient | None = None,
+        local_analyzer: LocalSentimentAnalyzer | None = None,
     ):
         self.factory = factory
         self.secrets = secrets
         self.event_publisher = event_publisher
         self.client = client or SentimentModelClient()
+        self.local_analyzer = local_analyzer
 
     @staticmethod
     def ensure_default(db: Session) -> SentimentConfig:
@@ -677,6 +730,9 @@ class SentimentService:
             "api_key_configured": bool(config.encrypted_api_key),
             "model_code": config.model_code,
             "available_models": list(MODEL_CODES),
+            "model_name": model_profile(config.model_code)["name"],
+            "model_provider": model_profile(config.model_code)["provider"],
+            "model_input_mode": model_profile(config.model_code)["input_mode"],
             "validation_status": config.validation_status,
             "validation_error": config.validation_error,
             "validated_at": config.validated_at,
@@ -689,11 +745,10 @@ class SentimentService:
         }
 
     def update_config(self, value: SentimentConfigUpdate) -> dict[str, Any]:
-        base_url = (
-            validate_public_https_base_url(value.api_base_url, resolve=False)
-            if value.api_base_url
-            else ""
-        )
+        profile = model_profile(value.model_code)
+        base_url = value.api_base_url.strip().rstrip("/")
+        if profile["provider"] == "hosted" and base_url:
+            base_url = validate_public_https_base_url(base_url, resolve=False)
         with self.factory.begin() as db:
             config = self.ensure_default(db)
             if value.revision != config.revision:
@@ -718,8 +773,10 @@ class SentimentService:
                 and not connection_changed
                 and (
                     config.validation_status != "valid"
-                    or not config.encrypted_api_key
-                    or not base_url
+                    or (
+                        profile["provider"] == "hosted"
+                        and (not config.encrypted_api_key or not base_url)
+                    )
                 )
             ):
                 raise DomainError(
@@ -769,20 +826,35 @@ class SentimentService:
     def test_connection(self) -> dict[str, Any]:
         with self.factory() as db:
             config = self.ensure_default(db)
-            if not config.base_url or not config.encrypted_api_key:
+            profile = model_profile(config.model_code)
+            if profile["provider"] == "hosted" and (
+                not config.base_url or not config.encrypted_api_key
+            ):
                 raise DomainError(
                     "SENTIMENT_CONFIG_INCOMPLETE", "请先保存 API 地址和 API Key。", status_code=409
                 )
             config_id = config.id
             revision = config.revision
-            base_url = validate_public_https_base_url(config.base_url, resolve=True)
-            api_key = self.secrets.decrypt_secret(config.encrypted_api_key)
-            body = build_request(PostSnapshot(), config, tiny_test=True)
+            subject = {
+                "brand": config.brand,
+                "products": list(config.products),
+                "supplement": config.supplement or "",
+            }
+            if profile["provider"] == "hosted":
+                base_url = validate_public_https_base_url(config.base_url, resolve=True)
+                api_key = self.secrets.decrypt_secret(config.encrypted_api_key)
+                body = build_request(PostSnapshot(), config, tiny_test=True)
         try:
-            text, _usage, request_id, duration_ms = self.client.request(base_url, api_key, body)
-            parsed, _strict, _recovered = parse_feedback_text(text)
-            if parsed.get("ok") is not True:
-                raise ValueError("测试响应缺少 ok=true")
+            if profile["provider"] == "local":
+                if not self.local_analyzer:
+                    raise ValueError("本地文字模型运行器未初始化。")
+                duration_ms = self.local_analyzer.validate(subject)
+                request_id = None
+            else:
+                text, _usage, request_id, duration_ms = self.client.request(base_url, api_key, body)
+                parsed, _strict, _recovered = parse_feedback_text(text)
+                if parsed.get("ok") is not True:
+                    raise ValueError("测试响应缺少 ok=true")
         except (httpx.HTTPError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
             with self.factory.begin() as db:
                 config = db.get(SentimentConfig, config_id)
@@ -806,7 +878,7 @@ class SentimentService:
         """新帖子入库时决定禁用、继承、精确复用或排队。"""
 
         config = self.ensure_default(db)
-        input_hash = sentiment_input_hash(post)
+        input_hash = sentiment_input_hash(post, config.model_code)
         status = (
             "analysis_queued"
             if config.enabled and config.validation_status == "valid"
@@ -826,7 +898,7 @@ class SentimentService:
                 "supplement": config.supplement or "",
             },
             model_code=config.model_code,
-            prompt_version=PROMPT_VERSION,
+            prompt_version=analysis_version(config.model_code),
         )
         if status == "analysis_disabled":
             post.analysis_status = status
@@ -875,7 +947,7 @@ class SentimentService:
                     SentimentAnalysis.platform_post_id == post.platform_post_id,
                     SentimentAnalysis.input_hash == input_hash,
                     SentimentAnalysis.subject_version == config.subject_version,
-                    SentimentAnalysis.prompt_version == PROMPT_VERSION,
+                    SentimentAnalysis.prompt_version == analysis_version(config.model_code),
                     SentimentAnalysis.model_code == config.model_code,
                     SentimentAnalysis.status == "analysis_completed",
                     SentimentAnalysis.result.is_not(None),
@@ -1115,12 +1187,20 @@ class SentimentWorker:
                     return True
                 analysis.status = "analysis_running"
                 # 尚未成功请求的旧排队任务在领取时绑定当前提示词实现，避免记录版本失真。
-                analysis.prompt_version = PROMPT_VERSION
+                analysis.prompt_version = analysis_version(analysis.model_code)
                 analysis.started_at = utc_now()
                 post.analysis_status = analysis.status
                 analysis_id = analysis.id
                 post_id = post.id
                 attempt_failures = list(analysis.attempt_failures or [])
+        if model_profile(analysis.model_code)["provider"] == "local":
+            return self._process_local(
+                analysis_id,
+                post_id,
+                post,
+                analysis.subject_snapshot,
+                attempt_failures,
+            )
         try:
             base_url = validate_public_https_base_url(config.base_url, resolve=True)
             api_key = self.service.secrets.decrypt_secret(config.encrypted_api_key or b"")
@@ -1253,11 +1333,106 @@ class SentimentWorker:
             status = self._coverage_status(feedback)
             result = "unrelated" if not feedback.subject_relevance else feedback.sentiment
             break
+        self._store_success(
+            analysis_id=analysis_id,
+            post_id=post_id,
+            feedback=feedback,
+            status=status,
+            result=result,
+            raw=raw,
+            attempt_failures=attempt_failures,
+            locally_recovered=recovered or normalized,
+            request_id=request_id,
+            usage=usage,
+            retry_count=retry_count,
+            duration_ms=duration_ms,
+        )
+        return True
+
+    def _process_local(
+        self,
+        analysis_id: str,
+        post_id: str,
+        post: PostSnapshot,
+        subject_snapshot: dict[str, Any],
+        attempt_failures: list[dict[str, Any]],
+    ) -> bool:
+        """执行本地文字模型；媒体只计数，不解析、不刷新也不参与推理。"""
+
+        analyzer = self.service.local_analyzer
+        if not analyzer:
+            self._record_failure(
+                analysis_id,
+                post_id,
+                ModelRequestError("本地文字模型运行器未初始化。", config_error=True),
+            )
+            return True
+        try:
+            payload, raw, duration_ms = analyzer.analyze(
+                title=post.title or "",
+                content=post.content or "",
+                image_count=len(deduplicate_media_urls(post.image_urls)),
+                video_count=len(deduplicate_media_urls(post.video_urls)),
+                subject=subject_snapshot,
+            )
+        except Exception as exc:
+            self._record_failure(
+                analysis_id,
+                post_id,
+                ModelRequestError(f"本地文字模型执行失败：{exc}", config_error=True),
+            )
+            return True
+        try:
+            feedback = SentimentFeedback.model_validate(payload)
+            validate_modality_identity(feedback, post)
+        except (ValidationError, ValueError) as exc:
+            self._record_failure(
+                analysis_id,
+                post_id,
+                ValueError(f"本地文字模型结果校验失败：{exc}"),
+            )
+            return True
+        status = self._coverage_status(feedback)
+        result = "unrelated" if not feedback.subject_relevance else feedback.sentiment
+        self._store_success(
+            analysis_id=analysis_id,
+            post_id=post_id,
+            feedback=feedback,
+            status=status,
+            result=result,
+            raw=raw,
+            attempt_failures=attempt_failures,
+            locally_recovered=False,
+            request_id=None,
+            usage={"provider": "local", "billable_tokens": 0},
+            retry_count=0,
+            duration_ms=duration_ms,
+        )
+        return True
+
+    def _store_success(
+        self,
+        *,
+        analysis_id: str,
+        post_id: str,
+        feedback: SentimentFeedback,
+        status: str,
+        result: str | None,
+        raw: str,
+        attempt_failures: list[dict[str, Any]],
+        locally_recovered: bool,
+        request_id: str | None,
+        usage: dict[str, Any] | None,
+        retry_count: int,
+        duration_ms: int,
+    ) -> None:
+        """统一持久化在线或本地模型的完整结果。"""
+
         with self.service.factory.begin() as db:
             analysis = db.get(SentimentAnalysis, analysis_id)
             post = db.get(PostSnapshot, post_id)
             if not analysis or not post:
-                return True
+                return
             analysis.status = status
             analysis.result = result
             analysis.matched_subjects = feedback.matched_subjects
@@ -1267,7 +1442,7 @@ class SentimentWorker:
             analysis.modalities = feedback.modalities.model_dump()
             analysis.raw_response = raw
             analysis.attempt_failures = attempt_failures
-            analysis.locally_recovered = recovered or normalized
+            analysis.locally_recovered = locally_recovered
             analysis.provider_request_id = request_id
             analysis.usage = usage
             analysis.retry_count = retry_count
@@ -1280,24 +1455,32 @@ class SentimentWorker:
             post.sentiment_updated_at = utc_now()
         if self.service.event_publisher:
             self.service.event_publisher("sentiment.changed", post_id, status=status)
-        return True
 
     @staticmethod
     def _coverage_status(feedback: SentimentFeedback) -> str:
         modalities = feedback.modalities
         complete = modalities.text.status in {"absent", "processed"}
         complete = complete and all(
-            item.expected_count == item.processed_count
+            item.status == "not_requested" or item.expected_count == item.processed_count
             for item in (modalities.image, modalities.video_visual, modalities.video_audio)
         )
-        complete = complete and modalities.image.status in {"absent", "processed"}
-        complete = complete and modalities.video_visual.status in {"absent", "processed"}
+        complete = complete and modalities.image.status in {
+            "absent",
+            "processed",
+            "not_requested",
+        }
+        complete = complete and modalities.video_visual.status in {
+            "absent",
+            "processed",
+            "not_requested",
+        }
         complete = complete and modalities.video_audio.status in {
             "absent",
             "processed",
             "speech",
             "silent",
             "no_speech",
+            "not_requested",
         }
         return "analysis_completed" if complete else "analysis_partial"
 

@@ -32,3 +32,12 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## PaddlePaddle / PaddleNLP
+
+本地轻量文字舆情分析使用 PaddlePaddle、PaddleNLP、UIE-Senta-Nano 与
+UTC-Nano：
+
+- PaddlePaddle: <https://github.com/PaddlePaddle/Paddle>
+- PaddleNLP: <https://github.com/PaddlePaddle/PaddleNLP>
+- License: Apache License 2.0
