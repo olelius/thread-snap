@@ -16,6 +16,21 @@
 
 ---
 
+## 2026-08-21 — 舆情截断响应单次自动重试
+**总目标**：让模型流在 JSON 完成前中断时自动恢复一次，同时控制付费请求放大并保留首次失败证据。
+**状态**：✅ 截断识别、单次重试、失败审计和终态分类已实现。
+**干到哪里了**：
+- [x] SSE 聚合显式记录 `[DONE]` 和结束原因；缺少正常结束标志、以长度限制结束，或 JSON 命中未闭合字符串/容器尾部缺失时，Worker 延迟一秒完整重请求一次。
+- [x] 新增 `attempt_failures` 持久字段和迁移，保存首次失败的请求 ID、用量、耗时、原始响应和原因；第二次仍截断时以 `MODEL_STREAM_INCOMPLETE` 结束。
+- [x] 普通结构校验和媒体部分结果继续不重试；并发2、429共享冷却和其他传输重试规则不变。
+- [x] 10 项针对性测试通过，覆盖首次截断后成功、仅调用两次、审计留存、缺少 `[DONE]` 及截断/普通畸形区分；Ruff、编译和 `git diff --check` 通过。
+- [x] SQLite 迁移完成 `head → f2a9c41d7e30 → head` 往返，当前业务库版本为 `ab4d92e7c601` 且字段存在；后端重启后 `/health` 返回 HTTP 200。
+**下一步**：无；进入 Git 收尾。
+**边界**：截断重试最多一次且必须从完整输入重新请求，不能续写缺失 JSON；不增加前端重新分析按钮。
+**关联**：`src/threadsnap/sentiment.py`、`src/threadsnap/poc/sentiment.py`、`src/threadsnap/models.py`、`src/threadsnap/migrations/versions/ab4d92e7c601_sentiment_attempt_failures.py`、`tests/test_backend.py`、`tests/test_sentiment_poc.py`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/sentiment-analysis.md`
+
+---
+
 ## 2026-08-20 — 视频连续播放地址优先级修正
 **总目标**：解决详情视频在首段缓冲末尾持续等待的问题，同时保持浏览器 URL 直连和后端不代理媒体的边界。
 **状态**：✅ 播放地址选择已修正；按使用者要求不执行测试。

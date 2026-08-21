@@ -591,10 +591,21 @@ class ApiAndConfigTests(AppCase):
         """覆盖配置、单次分析、三态列表、详情依据和人工优先的组合路径。"""
 
         class FakeSentimentClient:
+            def __init__(self) -> None:
+                self.analysis_requests = 0
+
             def request(self, _base_url: str, _key: str, body: dict):
                 text = body["messages"][0]["content"][-1]["text"]
                 if "ok" in text:
                     return '{"ok":true}', None, "test-request", 5
+                self.analysis_requests += 1
+                if self.analysis_requests == 1:
+                    return (
+                        '{"subject_relevance":',
+                        {"total_tokens": 17},
+                        "truncated-request",
+                        7,
+                    )
                 feedback = {
                     "subject_relevance": True,
                     "matched_subjects": ["A9L"],
@@ -659,7 +670,8 @@ class ApiAndConfigTests(AppCase):
         )
         self.assertEqual(200, saved.status_code)
         self.assertNotIn("test-secret-key", saved.text)
-        self.container.sentiment.client = FakeSentimentClient()
+        fake_sentiment_client = FakeSentimentClient()
+        self.container.sentiment.client = fake_sentiment_client
         with patch(
             "threadsnap.sentiment.validate_public_https_base_url",
             side_effect=lambda value, resolve: value.rstrip("/"),
@@ -707,6 +719,16 @@ class ApiAndConfigTests(AppCase):
             side_effect=lambda value, resolve: value.rstrip("/"),
         ):
             self.assertTrue(self.container.sentiment_worker.process_once())
+        self.assertEqual(2, fake_sentiment_client.analysis_requests)
+        with self.container.sessions() as db:
+            retried_analysis = db.scalar(select(SentimentAnalysis))
+            assert retried_analysis is not None
+            self.assertEqual(1, retried_analysis.retry_count)
+            self.assertEqual(1, len(retried_analysis.attempt_failures))
+            self.assertEqual(
+                "MODEL_STREAM_INCOMPLETE",
+                retried_analysis.attempt_failures[0]["error_code"],
+            )
 
         listed = self.client.get(
             f"/api/v1/runs/{run['id']}/posts",

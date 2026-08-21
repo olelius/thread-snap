@@ -218,15 +218,26 @@ def parse_sse_lines(
 ) -> tuple[str, dict[str, Any] | None, list[dict[str, Any]]]:
     """聚合 OpenAI 兼容流式响应，同时保留可审计的 JSON 块。"""
 
+    content, usage, chunks, _done_seen = parse_sse_lines_with_completion(lines)
+    return content, usage, chunks
+
+
+def parse_sse_lines_with_completion(
+    lines: Iterable[str],
+) -> tuple[str, dict[str, Any] | None, list[dict[str, Any]], bool]:
+    """聚合 SSE，并显式返回是否收到提供方的 ``[DONE]`` 结束标志。"""
+
     content: list[str] = []
     usage: dict[str, Any] | None = None
     chunks: list[dict[str, Any]] = []
+    done_seen = False
     for raw_line in lines:
         line = raw_line.strip()
         if not line.startswith("data:"):
             continue
         data = line[5:].strip()
         if data == "[DONE]":
+            done_seen = True
             break
         chunk = json.loads(data)
         if not isinstance(chunk, dict):
@@ -242,7 +253,7 @@ def parse_sse_lines(
             value = delta.get("content") if isinstance(delta, dict) else None
             if isinstance(value, str):
                 content.append(value)
-    return "".join(content), usage, chunks
+    return "".join(content), usage, chunks, done_seen
 
 
 def parse_feedback_text(text: str) -> tuple[dict[str, Any], bool, bool]:
