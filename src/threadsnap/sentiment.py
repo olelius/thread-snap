@@ -879,11 +879,14 @@ class SentimentService:
 
         config = self.ensure_default(db)
         input_hash = sentiment_input_hash(post, config.model_code)
-        status = (
-            "analysis_queued"
-            if config.enabled and config.validation_status == "valid"
-            else "analysis_disabled"
-        )
+        if config.enabled and config.validation_status == "valid":
+            status = "analysis_queued"
+        elif config.validation_status == "invalid":
+            # 运行期间配置失效后，采集仍可能继续入库；这些任务应等待配置恢复，
+            # 不能混入用户主动关闭分析时产生的永久禁用任务。
+            status = "analysis_paused"
+        else:
+            status = "analysis_disabled"
         analysis = SentimentAnalysis(
             post_id=post.id,
             platform_code=platform_code,
@@ -900,7 +903,10 @@ class SentimentService:
             model_code=config.model_code,
             prompt_version=analysis_version(config.model_code),
         )
-        if status == "analysis_disabled":
+        if status in {"analysis_disabled", "analysis_paused"}:
+            if status == "analysis_paused":
+                analysis.error_code = "MODEL_CONFIG_ERROR"
+                analysis.error_message = "模型运行配置失效，等待重新测试。"
             post.analysis_status = status
             post.sentiment_updated_at = utc_now()
             db.add(analysis)

@@ -959,6 +959,39 @@ class ApiAndConfigTests(AppCase):
             self.assertEqual("analysis_disabled", second_analysis.status)
             self.assertIsNone(second_post.sentiment_result)
 
+        # 运行配置失效后继续入库的快照必须暂停，修复并启用后才能自动恢复；
+        # 不能把它们误记为用户主动关闭分析时产生的禁用任务。
+        with self.container.sessions.begin() as db:
+            invalid_config = self.container.sentiment.ensure_default(db)
+            invalid_config.validation_status = "invalid"
+            invalid_config.validation_error = "模拟运行期间配置失效"
+        third_run_response = self.client.post(
+            "/api/v1/runs/manual",
+            json={
+                "platform_code": "dongchedi",
+                "circle_ids": [circle.id],
+                "quantity": 1,
+                "idempotency_key": "sentiment-paused-run",
+            },
+        )
+        self.assertEqual(202, third_run_response.status_code)
+        third_run = third_run_response.json()
+        with self.container.sessions.begin() as db:
+            third_task = db.scalar(select(CircleTask).where(CircleTask.run_id == third_run["id"]))
+            assert third_task is not None
+            self.container.worker._store_records(db, third_task, [sample_record("sentiment-2")])
+            third_post = db.scalar(
+                select(PostSnapshot).where(PostSnapshot.run_id == third_run["id"])
+            )
+            assert third_post is not None
+            third_analysis = db.scalar(
+                select(SentimentAnalysis).where(SentimentAnalysis.post_id == third_post.id)
+            )
+            assert third_analysis is not None
+            self.assertEqual("analysis_paused", third_analysis.status)
+            self.assertEqual("MODEL_CONFIG_ERROR", third_analysis.error_code)
+            self.assertEqual("analysis_paused", third_post.analysis_status)
+
     def test_internal_api_rejects_non_loopback_client(self) -> None:
         request = SimpleNamespace(client=SimpleNamespace(host="10.20.30.40"))
         with self.assertRaises(DomainError) as raised:

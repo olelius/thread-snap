@@ -73,11 +73,12 @@ class Container:
         self.config = ConfigService(self.sessions)
         self.runs = RunService(self.sessions, settings.timezone)
         self.events = EventBus()
+        self.local_sentiment = LocalSentimentAnalyzer(settings.paddlenlp_home)
         self.sentiment = SentimentService(
             self.sessions,
             self.session_store,
             event_publisher=self.events.publish,
-            local_analyzer=LocalSentimentAnalyzer(settings.paddlenlp_home),
+            local_analyzer=self.local_sentiment,
         )
         self.worker = WorkerService(
             self.sessions,
@@ -115,6 +116,7 @@ class Container:
         self.scheduler.stop()
         self.sentiment_worker.stop()
         self.worker.stop()
+        self.local_sentiment.close()
         await self.auth.close_all()
         self.engine.dispose()
 

@@ -16,6 +16,25 @@
 
 ---
 
+## 2026-08-21 — 本地舆情 Predictor 线程归属修复
+**总目标**：修复本地轻量模型在配置测试成功后由后台 Worker 分析时全批次进入“分析暂停”的问题，并恢复原暂停队列。
+**状态**：✅ Predictor 线程归属和失效期间任务状态均已修复，原批次 30 条全部恢复完成。
+**干到哪里了**：
+- [x] 现场确认批次 `20260821-111121-001` 的 30 条任务均为 `analysis_paused`，配置被自动关闭并标记为 `invalid`，首个真实错误为 `本地文字模型执行失败：'paddle.base.libpaddle.DenseTensor' object has no attribute 'numpy'`。
+- [x] 同一模型目录在独立进程内可完成连接验证和负面样本分析，排除模型文件缺失、内容错误和外部额度问题；根因是配置测试在线程 A 创建并缓存 Paddle Predictor，后台 Worker 在线程 B 复用，而 Predictor 不能跨创建线程稳定使用。
+- [x] `LocalSentimentAnalyzer` 新增单消费者专用推理线程，配置测试、模型创建和 Worker 分析统一投递到该线程；应用关闭时先停止 Worker，再关闭推理线程。
+- [x] 新增调用线程不同但 Predictor 执行线程唯一的回归测试，目标测试与 Ruff 已通过。
+- [x] 运行配置失效期间继续入库的新任务由 `analysis_disabled` 修正为 `analysis_paused`，从而在重新测试并启用后与既有暂停任务一并恢复；用户主动关闭产生的禁用任务仍不回刷。
+- [x] 使用真实已下载 Paddle 模型验证“主调用线程测试 + 另一调用线程分析”成功，得到 `negative`、媒体 `not_requested`，未再出现 `DenseTensor.numpy` 错误。
+- [x] 后端重新测试得到 `valid` 并启用本地模型；对当次异常遗留的 20 条误标禁用任务，在精确限定批次、模型和 revision 后恢复排队，修复前数据库备份为 `artifacts/runtime/local-sentiment-thread-recovery-20260821-112227/threadsnap-before-recovery.db`（SHA-256 `0c4b05516bb14ec61dc44866fc89a92f2a79681903b2cfa6abb1630cae3705f4`）。
+- [x] 批次 `20260821-111121-001` 最终为 30/30 `analysis_completed`、0 暂停、0 禁用、0 失败；配置 revision 18 为 `enabled=true`、`validation_status=valid`，后端及前端代理 `/health` 均为 `ok`。
+- [x] 84 项后端测试、Ruff 和 compileall 通过。
+**下一步**：无；进入 Git 自动收尾。
+**边界**：本地模型仍为单路串行推理；本次不改变云端模型两个消费者的并发策略，也不扩大舆情任务范围。
+**关联**：`src/threadsnap/local_sentiment.py`、`src/threadsnap/app.py`、`tests/test_local_sentiment.py`、`docs/design/technical-route.md`、`docs/chains/sentiment-analysis.md`、`docs/adr/0024-add-local-text-sentiment-option.md`
+
+---
+
 ## 2026-08-21 — 本地轻量文字舆情模型选项
 **总目标**：把无需外部 API、只分析标题与正文的轻量模型作为受控选项接入现有舆情闭环，并自动排除图片和视频分析。
 **状态**：✅ 本地轻量文字选项、离线部署链路和界面已实现并通过必要验证。
