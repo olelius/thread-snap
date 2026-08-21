@@ -11,13 +11,25 @@ from threadsnap.poc.sentiment import (
     build_request,
     parse_feedback_text,
     parse_sse_lines,
+    parse_sse_lines_with_completion,
     reserve_api_call,
     stable_url_hash,
 )
-from threadsnap.sentiment import validate_public_https_base_url
+from threadsnap.sentiment import _is_truncated_json_error, validate_public_https_base_url
 
 
 class SentimentPocTests(unittest.TestCase):
+    def test_truncated_json_detection_requires_an_unclosed_tail(self) -> None:
+        for raw in ('{"summary":"未结束', '{"items":[{"value":1}'):
+            with self.assertRaises(json.JSONDecodeError) as caught:
+                json.loads(raw)
+            self.assertTrue(_is_truncated_json_error(caught.exception, raw))
+
+        malformed = '{"value":1,}'
+        with self.assertRaises(json.JSONDecodeError) as caught:
+            json.loads(malformed)
+        self.assertFalse(_is_truncated_json_error(caught.exception, malformed))
+
     def test_public_https_validation_accepts_proxy_fake_ip_only_for_domain(self) -> None:
         url = "https://workspace.example.test/compatible-mode/v1"
         fake_result = [(2, 1, 6, "", ("198.18.0.17", 443))]
@@ -69,6 +81,16 @@ class SentimentPocTests(unittest.TestCase):
         self.assertEqual('{"ok":true}', content)
         self.assertEqual({"total_tokens": 12}, usage)
         self.assertEqual(3, len(chunks))
+
+    def test_parse_sse_lines_reports_missing_done_marker(self) -> None:
+        content, usage, chunks, done_seen = parse_sse_lines_with_completion(
+            ['data: {"choices":[{"delta":{"content":"{\\"ok\\":"}}]}']
+        )
+
+        self.assertEqual('{"ok":', content)
+        self.assertIsNone(usage)
+        self.assertEqual(1, len(chunks))
+        self.assertFalse(done_seen)
 
     def test_parse_feedback_text_marks_trailing_fence_as_local_recovery(self) -> None:
         feedback, strict, recovered = parse_feedback_text('{"ok":true}\n```')

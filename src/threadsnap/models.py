@@ -367,6 +367,9 @@ class SentimentAnalysis(Base):
     summary: Mapped[str | None] = mapped_column(Text)
     modalities: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     raw_response: Mapped[str | None] = mapped_column(Text)
+    attempt_failures: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
     locally_recovered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     provider_request_id: Mapped[str | None] = mapped_column(String(200))
     usage: Mapped[dict[str, Any] | None] = mapped_column(JSON)

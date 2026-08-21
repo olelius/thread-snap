@@ -26,7 +26,11 @@ from .models import (
     SentimentConfig,
     utc_now,
 )
-from .poc.sentiment import parse_feedback_text, parse_sse_lines, stable_url_hash
+from .poc.sentiment import (
+    parse_feedback_text,
+    parse_sse_lines_with_completion,
+    stable_url_hash,
+)
 from .schemas import ManualSentimentRevisionCreate, SentimentConfigUpdate
 from .session_store import SessionStore
 
@@ -508,12 +512,46 @@ class SentimentModelClient:
                 request_id = response.headers.get("x-request-id") or response.headers.get(
                     "x-dashscope-request-id"
                 )
-                text, usage, _chunks = parse_sse_lines(response.iter_lines())
-        return text, usage, request_id, round((monotonic() - started) * 1000)
+                text, usage, chunks, done_seen = parse_sse_lines_with_completion(
+                    response.iter_lines()
+                )
+        duration_ms = round((monotonic() - started) * 1000)
+        finish_reasons: list[str] = []
+        for chunk in chunks:
+            choices = chunk.get("choices")
+            if not isinstance(choices, list):
+                continue
+            finish_reasons.extend(
+                str(choice["finish_reason"])
+                for choice in choices
+                if isinstance(choice, dict) and choice.get("finish_reason") is not None
+            )
+        if not done_seen or not finish_reasons:
+            raise ModelRequestError(
+                "模型流式响应在正常结束前中断。",
+                retryable=True,
+                response_incomplete=True,
+                raw_response=text,
+                usage=usage,
+                request_id=request_id,
+                duration_ms=duration_ms,
+            )
+        if finish_reasons[-1] != "stop":
+            response_incomplete = finish_reasons[-1] in {"length", "max_tokens"}
+            raise ModelRequestError(
+                f"模型流式响应异常结束：{finish_reasons[-1]}",
+                retryable=response_incomplete,
+                response_incomplete=response_incomplete,
+                raw_response=text,
+                usage=usage,
+                request_id=request_id,
+                duration_ms=duration_ms,
+            )
+        return text, usage, request_id, duration_ms
 
 
 class ModelRequestError(RuntimeError):
-    """模型传输错误的受控分类，不携带提供方响应正文。"""
+    """模型传输错误的受控分类；仅截断审计场景携带已生成正文。"""
 
     def __init__(
         self,
@@ -524,6 +562,11 @@ class ModelRequestError(RuntimeError):
         config_error: bool = False,
         input_too_large: bool = False,
         retry_after_seconds: float | None = None,
+        response_incomplete: bool = False,
+        raw_response: str = "",
+        usage: dict[str, Any] | None = None,
+        request_id: str | None = None,
+        duration_ms: int | None = None,
     ):
         super().__init__(message)
         self.status_code = status_code
@@ -531,6 +574,72 @@ class ModelRequestError(RuntimeError):
         self.config_error = config_error
         self.input_too_large = input_too_large
         self.retry_after_seconds = retry_after_seconds
+        self.response_incomplete = response_incomplete
+        self.raw_response = raw_response
+        self.usage = usage
+        self.request_id = request_id
+        self.duration_ms = duration_ms
+
+
+def _is_truncated_json_error(exc: Exception, raw_response: str) -> bool:
+    """只识别缺少响应尾部的 JSON，不把普通结构校验失败变成付费重试。"""
+
+    if not isinstance(exc, json.JSONDecodeError):
+        return False
+    stripped = raw_response.rstrip()
+    if not stripped:
+        return False
+    stack: list[str] = []
+    in_string = False
+    escaped = False
+    mismatched_delimiter = False
+    for character in stripped:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "[{":
+            stack.append(character)
+        elif character in "]}":
+            expected = "[" if character == "]" else "{"
+            if not stack or stack[-1] != expected:
+                mismatched_delimiter = True
+                break
+            stack.pop()
+    if mismatched_delimiter:
+        return False
+    if exc.msg.startswith("Unterminated string"):
+        return in_string
+    return exc.pos >= len(stripped) - 1 and bool(stack)
+
+
+def _failed_attempt(
+    *,
+    attempt: int,
+    exc: Exception,
+    raw_response: str,
+    request_id: str | None,
+    usage: dict[str, Any] | None,
+    duration_ms: int | None,
+) -> dict[str, Any]:
+    """形成不含凭证的单次失败审计记录。"""
+
+    return {
+        "attempt": attempt,
+        "error_code": "MODEL_STREAM_INCOMPLETE",
+        "error_message": f"{type(exc).__name__}: {exc}"[:2000],
+        "raw_response": raw_response or None,
+        "provider_request_id": request_id,
+        "usage": usage,
+        "duration_ms": duration_ms,
+        "recorded_at": utc_now().isoformat(),
+    }
 
 
 class SentimentService:
@@ -1011,6 +1120,7 @@ class SentimentWorker:
                 post.analysis_status = analysis.status
                 analysis_id = analysis.id
                 post_id = post.id
+                attempt_failures = list(analysis.attempt_failures or [])
         try:
             base_url = validate_public_https_base_url(config.base_url, resolve=True)
             api_key = self.service.secrets.decrypt_secret(config.encrypted_api_key or b"")
@@ -1045,6 +1155,7 @@ class SentimentWorker:
         raw = ""
         retry_count = 0
         transport_retries = 0
+        incomplete_retries = 0
         while True:
             if not self._wait_for_rate_limit():
                 return False
@@ -1053,6 +1164,33 @@ class SentimentWorker:
                     base_url, api_key, body
                 )
             except (httpx.HTTPError, RuntimeError) as exc:
+                if isinstance(exc, ModelRequestError) and exc.response_incomplete:
+                    raw = exc.raw_response
+                    if incomplete_retries < 1:
+                        attempt_failures.append(
+                            _failed_attempt(
+                                attempt=retry_count + 1,
+                                exc=exc,
+                                raw_response=raw,
+                                request_id=exc.request_id,
+                                usage=exc.usage,
+                                duration_ms=exc.duration_ms,
+                            )
+                        )
+                        incomplete_retries += 1
+                        retry_count += 1
+                        if self.stop_event.wait(1.0):
+                            return False
+                        continue
+                    self._record_failure(
+                        analysis_id,
+                        post_id,
+                        exc,
+                        raw_response=raw,
+                        retry_count=retry_count,
+                        attempt_failures=attempt_failures,
+                    )
+                    return True
                 retryable = isinstance(exc, httpx.HTTPError) or (
                     isinstance(exc, ModelRequestError) and exc.retryable
                 )
@@ -1077,6 +1215,7 @@ class SentimentWorker:
                     exc,
                     raw_response=raw,
                     retry_count=retry_count,
+                    attempt_failures=attempt_failures,
                 )
                 return True
             try:
@@ -1085,12 +1224,30 @@ class SentimentWorker:
                 feedback = SentimentFeedback.model_validate(payload)
                 validate_modality_identity(feedback, post)
             except (ValueError, json.JSONDecodeError, ValidationError) as exc:
+                if _is_truncated_json_error(exc, raw) and incomplete_retries < 1:
+                    attempt_failures.append(
+                        _failed_attempt(
+                            attempt=retry_count + 1,
+                            exc=exc,
+                            raw_response=raw,
+                            request_id=request_id,
+                            usage=usage,
+                            duration_ms=duration_ms,
+                        )
+                    )
+                    incomplete_retries += 1
+                    retry_count += 1
+                    if self.stop_event.wait(1.0):
+                        return False
+                    continue
                 self._record_failure(
                     analysis_id,
                     post_id,
                     exc,
                     raw_response=raw,
                     retry_count=retry_count,
+                    attempt_failures=attempt_failures,
+                    stream_incomplete=_is_truncated_json_error(exc, raw),
                 )
                 return True
             status = self._coverage_status(feedback)
@@ -1109,6 +1266,7 @@ class SentimentWorker:
             analysis.summary = feedback.summary
             analysis.modalities = feedback.modalities.model_dump()
             analysis.raw_response = raw
+            analysis.attempt_failures = attempt_failures
             analysis.locally_recovered = recovered or normalized
             analysis.provider_request_id = request_id
             analysis.usage = usage
@@ -1151,6 +1309,8 @@ class SentimentWorker:
         *,
         raw_response: str = "",
         retry_count: int = 0,
+        attempt_failures: list[dict[str, Any]] | None = None,
+        stream_incomplete: bool = False,
     ) -> None:
         config_error = isinstance(exc, httpx.HTTPError) or (
             isinstance(exc, ModelRequestError) and exc.config_error
@@ -1168,11 +1328,26 @@ class SentimentWorker:
             post = db.get(PostSnapshot, post_id)
             if analysis:
                 analysis.status = status
-                analysis.error_code = (
-                    "MODEL_CONFIG_ERROR" if config_error else "MODEL_RESPONSE_ERROR"
+                response_incomplete = stream_incomplete or (
+                    isinstance(exc, ModelRequestError) and exc.response_incomplete
                 )
+                if config_error:
+                    analysis.error_code = "MODEL_CONFIG_ERROR"
+                elif response_incomplete:
+                    analysis.error_code = "MODEL_STREAM_INCOMPLETE"
+                else:
+                    analysis.error_code = "MODEL_RESPONSE_ERROR"
                 analysis.error_message = f"{type(exc).__name__}: {exc}"[:2000]
-                analysis.raw_response = raw_response or None
+                analysis.raw_response = (
+                    raw_response
+                    or (exc.raw_response if isinstance(exc, ModelRequestError) else "")
+                    or None
+                )
+                analysis.attempt_failures = list(attempt_failures or [])
+                if isinstance(exc, ModelRequestError):
+                    analysis.provider_request_id = exc.request_id
+                    analysis.usage = exc.usage
+                    analysis.duration_ms = exc.duration_ms
                 analysis.retry_count = retry_count
                 analysis.finished_at = utc_now()
             if post:
