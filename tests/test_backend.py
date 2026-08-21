@@ -961,6 +961,41 @@ class ApiAndConfigTests(AppCase):
         self.assertEqual(1, normalized["modalities"]["image"]["expected_count"])
         self.assertEqual([], normalized["modalities"]["video_audio"]["items"])
 
+    def test_deepseek_prompt_requires_text_status_contract(self) -> None:
+        """DeepSeek 提示词必须给出文字状态枚举和完整 JSON 形状。"""
+
+        post = PostSnapshot(title="瑞虎8油耗", content="这油耗还可以吧。")
+        config = SimpleNamespace(
+            model_code=DEEPSEEK_MODEL_CODE,
+            brand="奇瑞",
+            products=["瑞虎8"],
+            supplement=None,
+        )
+        request = build_request(post, config)
+        prompt = request["messages"][0]["content"]
+
+        self.assertIn("absent、processed、unprocessed", prompt)
+        self.assertIn("禁止使用 analyzed、completed", prompt)
+        self.assertIn('"status":"processed"', prompt)
+        self.assertEqual({"type": "json_object"}, request["response_format"])
+
+    def test_deepseek_text_normalizes_observed_completed_synonyms(self) -> None:
+        """保留原始响应，同时兼容真实出现的已完成状态同义值。"""
+
+        post = PostSnapshot(title="瑞虎8油耗", content="这油耗还可以吧。")
+        for status in ("analyzed", "completed"):
+            with self.subTest(status=status):
+                normalized, changed = normalize_text_only_feedback_payload(
+                    {
+                        "modalities": {
+                            "text": {"status": status, "evidence": ["油耗表现可以。"]}
+                        }
+                    },
+                    post,
+                )
+                self.assertTrue(changed)
+                self.assertEqual("processed", normalized["modalities"]["text"]["status"])
+
     def test_bootstrap_refreshes_available_adapter_version(self) -> None:
         with self.container.sessions.begin() as db:
             platform = db.get(PlatformConfig, "dongchedi")
