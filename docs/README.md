@@ -116,6 +116,8 @@
 | `docs/adr/0021-persist-platform-neutral-export-keys.md` | XLSX 模板使用全平台统一的 10 位持久化来源键 |
 | `docs/adr/0022-use-hosted-multimodal-api-for-sentiment-feedback.md` | 舆情反馈使用在线多模态 API、URL 直传和异步持久任务 |
 | `docs/adr/0023-use-validated-runtime-config-for-sentiment-service.md` | 舆情模型服务使用加密、显式测试且受控端点的运行时配置 |
+| `docs/adr/0024-add-local-text-sentiment-option.md` | 舆情反馈增加随离线包部署的 PaddleNLP 本地轻量文字选项 |
+| `docs/adr/0025-add-deepseek-cloud-text-sentiment-option.md` | 舆情反馈增加独立凭证的 DeepSeek 云端纯文字选项 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 

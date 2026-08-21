@@ -48,11 +48,13 @@ from threadsnap.schemas import (
     ManualRunCreate,
 )
 from threadsnap.sentiment import (
+    DEEPSEEK_MODEL_CODE,
     HOSTED_MODEL_CODE,
     SentimentFeedback,
     build_request,
     deduplicate_media_urls,
     normalize_feedback_payload,
+    normalize_text_only_feedback_payload,
     sentiment_input_hash,
     validate_modality_identity,
 )
@@ -722,6 +724,242 @@ class ApiAndConfigTests(AppCase):
             sentiment_input_hash(post, "paddlenlp-local-text-nano-v1"),
         )
         self.assertNotEqual(hosted_before, sentiment_input_hash(post, HOSTED_MODEL_CODE))
+
+    def test_deepseek_text_model_uses_independent_connection_and_skips_media(self) -> None:
+        """验证 DeepSeek 使用独立凭证、纯文字请求和统一结果合同。"""
+
+        initial = self.client.get("/api/v1/sentiment/config").json()
+        qwen_saved = self.client.put(
+            "/api/v1/sentiment/config",
+            json={
+                "revision": initial["revision"],
+                "enabled": False,
+                "api_base_url": "https://qwen.example.test/compatible-mode/v1",
+                "api_key": "qwen-test-secret",
+                "model_code": HOSTED_MODEL_CODE,
+                "subject": {
+                    "brand": "奇瑞",
+                    "products": ["风云A9"],
+                    "supplement": "",
+                },
+            },
+        )
+        self.assertEqual(200, qwen_saved.status_code, qwen_saved.text)
+        self.assertTrue(
+            qwen_saved.json()["model_connections"][HOSTED_MODEL_CODE]["api_key_configured"]
+        )
+
+        deepseek_saved = self.client.put(
+            "/api/v1/sentiment/config",
+            json={
+                "revision": qwen_saved.json()["revision"],
+                "enabled": False,
+                "api_base_url": "https://api.deepseek.com",
+                "api_key": "deepseek-test-secret",
+                "model_code": DEEPSEEK_MODEL_CODE,
+                "subject": {
+                    "brand": "奇瑞",
+                    "products": ["风云A9"],
+                    "supplement": "",
+                },
+            },
+        )
+        self.assertEqual(200, deepseek_saved.status_code, deepseek_saved.text)
+        deepseek_config = deepseek_saved.json()
+        self.assertEqual("hosted", deepseek_config["model_provider"])
+        self.assertEqual("text_only", deepseek_config["model_input_mode"])
+        self.assertEqual("https://api.deepseek.com", deepseek_config["api_base_url"])
+        self.assertTrue(deepseek_config["api_key_configured"])
+        self.assertTrue(
+            deepseek_config["model_connections"][HOSTED_MODEL_CODE]["api_key_configured"]
+        )
+        self.assertNotIn("qwen-test-secret", deepseek_saved.text)
+        self.assertNotIn("deepseek-test-secret", deepseek_saved.text)
+
+        class FakeDeepSeekClient:
+            def __init__(self) -> None:
+                self.requests: list[dict] = []
+
+            def request(self, base_url: str, api_key: str, body: dict):
+                self.assert_connection = (base_url, api_key)
+                self.requests.append(body)
+                content = body["messages"][0]["content"]
+                if '"ok":true' in content:
+                    return '{"ok":true}', {"total_tokens": 4}, "deepseek-test", 6
+                payload = {
+                    "subject_relevance": True,
+                    "matched_subjects": ["风云A9"],
+                    "sentiment": "negative",
+                    "primary_category": "product_criticism",
+                    "secondary_categories": [],
+                    "modalities": {
+                        "text": {
+                            "status": "processed",
+                            "evidence": ["标题和正文反馈风云A9车机卡顿。"],
+                        },
+                        # 即使提供方声称处理了媒体，后端也必须按真实输入覆盖为未参与。
+                        "image": {
+                            "status": "processed",
+                            "expected_count": 1,
+                            "processed_count": 1,
+                            "items": [],
+                        },
+                        "video_visual": {
+                            "status": "processed",
+                            "expected_count": 1,
+                            "processed_count": 1,
+                            "items": [],
+                        },
+                        "video_audio": {
+                            "status": "speech",
+                            "expected_count": 1,
+                            "processed_count": 1,
+                            "items": [],
+                        },
+                    },
+                    "summary": "文字内容反馈风云A9车机卡顿，情感为负面。",
+                }
+                return (
+                    json.dumps(payload, ensure_ascii=False),
+                    {"prompt_tokens": 80, "completion_tokens": 60, "total_tokens": 140},
+                    "deepseek-analysis",
+                    16,
+                )
+
+        fake_client = FakeDeepSeekClient()
+        self.container.sentiment.client = fake_client
+        with patch(
+            "threadsnap.sentiment.validate_public_https_base_url",
+            side_effect=lambda value, resolve: value.rstrip("/"),
+        ):
+            tested = self.client.post("/api/v1/sentiment/config/test")
+        self.assertEqual(200, tested.status_code, tested.text)
+        self.assertEqual(
+            ("https://api.deepseek.com", "deepseek-test-secret"),
+            fake_client.assert_connection,
+        )
+        test_body = fake_client.requests[0]
+        self.assertIsInstance(test_body["messages"][0]["content"], str)
+        self.assertEqual({"type": "disabled"}, test_body["thinking"])
+        self.assertNotIn("modalities", test_body)
+
+        current = self.client.get("/api/v1/sentiment/config").json()
+        enabled = self.client.put(
+            "/api/v1/sentiment/config",
+            json={
+                "revision": current["revision"],
+                "enabled": True,
+                "api_base_url": current["api_base_url"],
+                "model_code": current["model_code"],
+                "subject": {
+                    "brand": current["subject"]["brand"],
+                    "products": current["subject"]["products"],
+                    "supplement": current["subject"]["supplement"],
+                },
+            },
+        )
+        self.assertEqual(200, enabled.status_code, enabled.text)
+        self.assertTrue(enabled.json()["enabled"])
+
+        circle = self.save_verified_circle(name="风云A9")
+        run = self.client.post(
+            "/api/v1/runs/manual",
+            json={
+                "platform_code": "dongchedi",
+                "circle_ids": [circle.id],
+                "quantity": 1,
+                "idempotency_key": "deepseek-text-sentiment-run",
+            },
+        ).json()
+        record = sample_record("deepseek-text-1")
+        record.update(
+            title="风云A9车机卡顿",
+            content="风云A9车机升级后依然卡顿。",
+            image_urls=["https://media.example.test/secret-image.jpg"],
+            video_urls=["https://media.example.test/secret-video.mp4"],
+        )
+        with self.container.sessions.begin() as db:
+            task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            assert task is not None
+            self.container.worker._store_records(db, task, [record])
+
+        def unexpected_media_resolution(*_args, **_kwargs):
+            raise AssertionError("DeepSeek 文字模型不应解析视频播放地址")
+
+        self.container.sentiment_worker.media_resolver = unexpected_media_resolution
+        with patch(
+            "threadsnap.sentiment.validate_public_https_base_url",
+            side_effect=lambda value, resolve: value.rstrip("/"),
+        ):
+            self.assertTrue(self.container.sentiment_worker.process_once())
+        analysis_body = fake_client.requests[-1]
+        text_input = analysis_body["messages"][0]["content"]
+        self.assertIsInstance(text_input, str)
+        self.assertNotIn("secret-image.jpg", text_input)
+        self.assertNotIn("secret-video.mp4", text_input)
+        self.assertNotIn("image_url", json.dumps(analysis_body))
+        self.assertNotIn("video_url", json.dumps(analysis_body))
+        with self.container.sessions() as db:
+            analysis = db.scalar(select(SentimentAnalysis))
+            assert analysis is not None
+            self.assertEqual("analysis_completed", analysis.status)
+            self.assertEqual("negative", analysis.result)
+            self.assertEqual("not_requested", analysis.modalities["image"]["status"])
+            self.assertEqual("not_requested", analysis.modalities["video_visual"]["status"])
+            self.assertEqual("not_requested", analysis.modalities["video_audio"]["status"])
+
+        latest = self.client.get("/api/v1/sentiment/config").json()
+        qwen_restored = self.client.put(
+            "/api/v1/sentiment/config",
+            json={
+                "revision": latest["revision"],
+                "enabled": False,
+                "api_base_url": latest["model_connections"][HOSTED_MODEL_CODE][
+                    "api_base_url"
+                ],
+                "model_code": HOSTED_MODEL_CODE,
+                "subject": {
+                    "brand": latest["subject"]["brand"],
+                    "products": latest["subject"]["products"],
+                    "supplement": latest["subject"]["supplement"],
+                },
+            },
+        )
+        self.assertEqual(200, qwen_restored.status_code, qwen_restored.text)
+        self.assertEqual(
+            "https://qwen.example.test/compatible-mode/v1",
+            qwen_restored.json()["api_base_url"],
+        )
+        self.assertTrue(qwen_restored.json()["api_key_configured"])
+
+    def test_deepseek_text_input_hash_excludes_media(self) -> None:
+        post = PostSnapshot(
+            title="风云A9",
+            content="车机卡顿",
+            image_urls=["https://example.test/first.jpg"],
+            video_urls=["https://example.test/first.mp4"],
+        )
+        before = sentiment_input_hash(post, DEEPSEEK_MODEL_CODE)
+        post.image_urls = ["https://example.test/second.jpg"]
+        post.video_urls = ["https://example.test/second.mp4"]
+        self.assertEqual(before, sentiment_input_hash(post, DEEPSEEK_MODEL_CODE))
+
+    def test_deepseek_text_normalization_marks_media_not_requested(self) -> None:
+        post = PostSnapshot(
+            title="风云A9",
+            image_urls=["https://example.test/a.jpg"],
+            video_urls=["https://example.test/a.mp4"],
+        )
+        payload = {
+            "modalities": {
+                "text": {"status": "processed", "evidence": ["标题提及风云A9。"]},
+            }
+        }
+        normalized, changed = normalize_text_only_feedback_payload(payload, post)
+        self.assertTrue(changed)
+        self.assertEqual("not_requested", normalized["modalities"]["image"]["status"])
+        self.assertEqual(1, normalized["modalities"]["image"]["expected_count"])
+        self.assertEqual([], normalized["modalities"]["video_audio"]["items"])
 
     def test_bootstrap_refreshes_available_adapter_version(self) -> None:
         with self.container.sessions.begin() as db:

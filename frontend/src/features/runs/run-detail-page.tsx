@@ -325,6 +325,7 @@ const sentimentSourceNames = { ai: 'AI', manual: '人工', inherited_manual: '�
 const categoryNames: Record<string, string> = { product_complaint: '产品客诉', product_criticism: '产品吐槽', service_complaint: '服务投诉', brand_criticism: '品牌吐槽', competitor_attack: '竞品攻击', other: '其他' }
 const sentimentModelNames: Record<string, string> = {
   'qwen3.5-omni-plus-2026-03-15': '千问 Omni Plus（云端多模态）',
+  'deepseek-v4-flash': 'DeepSeek V4 Flash（云端文字）',
   'paddlenlp-local-text-nano-v1': 'PaddleNLP 本地轻量文字分析（Nano）',
 }
 const modalityStatusNames: Record<string, string> = {

@@ -36,20 +36,30 @@ from .schemas import ManualSentimentRevisionCreate, SentimentConfigUpdate
 from .session_store import SessionStore
 
 HOSTED_MODEL_CODE = "qwen3.5-omni-plus-2026-03-15"
-MODEL_CODES = (HOSTED_MODEL_CODE, LOCAL_MODEL_CODE)
+DEEPSEEK_MODEL_CODE = "deepseek-v4-flash"
+MODEL_CODES = (HOSTED_MODEL_CODE, DEEPSEEK_MODEL_CODE, LOCAL_MODEL_CODE)
 MODEL_PROFILES = {
     HOSTED_MODEL_CODE: {
         "name": "千问 Omni Plus（云端多模态）",
         "provider": "hosted",
+        "service": "aliyun",
         "input_mode": "multimodal",
+    },
+    DEEPSEEK_MODEL_CODE: {
+        "name": "DeepSeek V4 Flash（云端文字）",
+        "provider": "hosted",
+        "service": "deepseek",
+        "input_mode": "text_only",
     },
     LOCAL_MODEL_CODE: {
         "name": LOCAL_MODEL_NAME,
         "provider": "local",
+        "service": "local",
         "input_mode": "text_only",
     },
 }
 HOSTED_PROMPT_VERSION = "v2"
+DEEPSEEK_PROMPT_VERSION = "deepseek-text-v1"
 LOCAL_PIPELINE_VERSION = "local-v1"
 CATEGORIES = (
     "product_complaint",
@@ -90,11 +100,43 @@ def model_profile(model_code: str) -> dict[str, str]:
 
 
 def analysis_version(model_code: str) -> str:
-    return (
-        LOCAL_PIPELINE_VERSION
-        if model_profile(model_code)["provider"] == "local"
-        else HOSTED_PROMPT_VERSION
-    )
+    profile = model_profile(model_code)
+    if profile["provider"] == "local":
+        return LOCAL_PIPELINE_VERSION
+    if profile["service"] == "deepseek":
+        return DEEPSEEK_PROMPT_VERSION
+    return HOSTED_PROMPT_VERSION
+
+
+def model_connection(
+    config: SentimentConfig, model_code: str
+) -> tuple[str, bytes | None]:
+    """读取指定受控模型的独立云端连接，本地模型返回空连接。"""
+
+    service = model_profile(model_code)["service"]
+    if service == "aliyun":
+        return config.base_url, config.encrypted_api_key
+    if service == "deepseek":
+        return config.deepseek_base_url, config.deepseek_encrypted_api_key
+    return "", None
+
+
+def set_model_connection(
+    config: SentimentConfig,
+    model_code: str,
+    *,
+    base_url: str,
+    encrypted_api_key: bytes | None,
+) -> None:
+    """只更新当前云端提供方的连接，不覆盖其他提供方凭证。"""
+
+    service = model_profile(model_code)["service"]
+    if service == "aliyun":
+        config.base_url = base_url
+        config.encrypted_api_key = encrypted_api_key
+    elif service == "deepseek":
+        config.deepseek_base_url = base_url
+        config.deepseek_encrypted_api_key = encrypted_api_key
 
 
 class TextCoverage(BaseModel):
@@ -405,6 +447,33 @@ def normalize_feedback_payload(
     return normalized, changed
 
 
+def normalize_text_only_feedback_payload(
+    payload: dict[str, Any], post: PostSnapshot
+) -> tuple[dict[str, Any], bool]:
+    """固定云端文字模型的媒体覆盖；模型未接收媒体，不能声称已经处理。"""
+
+    normalized, changed = normalize_feedback_payload(payload, post)
+    modalities = normalized.setdefault("modalities", {})
+    if not isinstance(modalities, dict):
+        return normalized, changed
+    counts = {
+        "image": len(deduplicate_media_urls(post.image_urls)),
+        "video_visual": len(deduplicate_media_urls(post.video_urls)),
+        "video_audio": len(deduplicate_media_urls(post.video_urls)),
+    }
+    for name, count in counts.items():
+        expected = {
+            "status": "not_requested" if count else "absent",
+            "expected_count": count,
+            "processed_count": 0,
+            "items": [],
+        }
+        if modalities.get(name) != expected:
+            modalities[name] = expected
+            changed = True
+    return normalized, changed
+
+
 def validate_public_https_base_url(value: str, *, resolve: bool) -> str:
     """限制模型入口为无凭证、无查询的公网 HTTPS 根地址。"""
 
@@ -486,6 +555,34 @@ modalities.text 包含 status/evidence；modalities.image、video_visual、video
 expected_count：image={len(images)}，video_visual={len(videos)}，video_audio={len(videos)}。"""
 
 
+def build_text_only_prompt(
+    post: PostSnapshot,
+    config: SentimentConfig,
+    subject_snapshot: dict[str, Any] | None = None,
+) -> str:
+    """构造云端文字模型提示词，不包含媒体 URL、哈希或媒体内容。"""
+
+    subject = subject_snapshot or {
+        "brand": config.brand,
+        "products": config.products,
+        "supplement": config.supplement or "",
+    }
+    return f"""只返回一个标准 JSON 对象，不使用 Markdown，不联网搜索。
+只根据标题和正文进行分析；图片、视频画面、视频音频均未提供给你，不得据此形成观点或依据。
+判定对象配置：{json.dumps(subject, ensure_ascii=False)}。
+请结合文字语境自行识别品牌、产品、服务和常见别名；内容与判定对象无关时 subject_relevance=false。
+对判定对象不利为 negative，中性或正面为 non_negative。负面主要类型仅允许：{json.dumps(CATEGORIES, ensure_ascii=False)}。
+
+标题：{post.title or ""}
+正文：{post.content or ""}
+
+返回字段：subject_relevance、matched_subjects、sentiment、primary_category、secondary_categories、modalities、summary。
+不相关时 sentiment 与 primary_category 为 null；负面必须有 primary_category；次要类型不得重复主要类型。
+modalities 只返回 text，包含 status 和中文 evidence；所有 evidence 必须是 JSON 字符串数组。
+不要生成 image、video_visual 或 video_audio 字段，ThreadSnap 会按未请求分析统一补全媒体覆盖。
+summary 使用中文概括文字内容、对象相关性和情感结论，不描述未提供的媒体。"""
+
+
 def build_request(
     post: PostSnapshot,
     config: SentimentConfig,
@@ -494,10 +591,15 @@ def build_request(
     subject_snapshot: dict[str, Any] | None = None,
     model_code: str | None = None,
 ) -> dict[str, Any]:
+    selected_model = model_code or config.model_code
+    profile = model_profile(selected_model)
     if tiny_test:
-        content: list[dict[str, Any]] = [
-            {"type": "text", "text": '只返回 JSON 对象：{"ok":true}。'}
-        ]
+        if profile["service"] == "deepseek":
+            content: str | list[dict[str, Any]] = '只返回 JSON 对象：{"ok":true}。'
+        else:
+            content = [{"type": "text", "text": '只返回 JSON 对象：{"ok":true}。'}]
+    elif profile["service"] == "deepseek":
+        content = build_text_only_prompt(post, config, subject_snapshot)
     else:
         image_urls = deduplicate_media_urls(post.image_urls)
         video_urls = deduplicate_media_urls(post.video_urls)
@@ -506,14 +608,24 @@ def build_request(
             *({"type": "video_url", "video_url": {"url": value}} for value in video_urls),
             {"type": "text", "text": build_prompt(post, config, subject_snapshot)},
         ]
-    return {
-        "model": model_code or config.model_code,
+    body = {
+        "model": selected_model,
         "messages": [{"role": "user", "content": content}],
-        "modalities": ["text"],
         "response_format": {"type": "json_object"},
         "stream": True,
         "stream_options": {"include_usage": True},
     }
+    if profile["service"] == "deepseek":
+        body.update(
+            {
+                "thinking": {"type": "disabled"},
+                "temperature": 0.1,
+                "max_tokens": 4096,
+            }
+        )
+    else:
+        body["modalities"] = ["text"]
+    return body
 
 
 class SentimentModelClient:
@@ -723,13 +835,22 @@ class SentimentService:
 
     @staticmethod
     def config_dict(config: SentimentConfig) -> dict[str, Any]:
+        active_base_url, active_key = model_connection(config, config.model_code)
+        model_connections = {}
+        for model_code in MODEL_CODES:
+            base_url, encrypted_key = model_connection(config, model_code)
+            model_connections[model_code] = {
+                "api_base_url": base_url,
+                "api_key_configured": bool(encrypted_key),
+            }
         return {
             "revision": config.revision,
             "enabled": config.enabled,
-            "api_base_url": config.base_url,
-            "api_key_configured": bool(config.encrypted_api_key),
+            "api_base_url": active_base_url,
+            "api_key_configured": bool(active_key),
             "model_code": config.model_code,
             "available_models": list(MODEL_CODES),
+            "model_connections": model_connections,
             "model_name": model_profile(config.model_code)["name"],
             "model_provider": model_profile(config.model_code)["provider"],
             "model_input_mode": model_profile(config.model_code)["input_mode"],
@@ -746,7 +867,7 @@ class SentimentService:
 
     def update_config(self, value: SentimentConfigUpdate) -> dict[str, Any]:
         profile = model_profile(value.model_code)
-        base_url = value.api_base_url.strip().rstrip("/")
+        base_url = value.api_base_url.strip().rstrip("/") if profile["provider"] == "hosted" else ""
         if profile["provider"] == "hosted" and base_url:
             base_url = validate_public_https_base_url(base_url, resolve=False)
         with self.factory.begin() as db:
@@ -757,17 +878,23 @@ class SentimentService:
                     "舆情配置已更新，请刷新后重试。",
                     status_code=409,
                 )
-            key_changed = value.api_key is not None
+            current_base_url, current_encrypted_key = model_connection(config, value.model_code)
+            encrypted_key = current_encrypted_key
+            key_changed = value.api_key is not None and profile["provider"] == "hosted"
+            if key_changed:
+                encrypted_key = self.secrets.encrypt_secret(value.api_key.strip())
             connection_changed = (
-                base_url != config.base_url or value.model_code != config.model_code or key_changed
+                value.model_code != config.model_code
+                or (
+                    profile["provider"] == "hosted"
+                    and (base_url != current_base_url or key_changed)
+                )
             )
             subject_changed = (
                 value.subject.brand.strip() != config.brand
                 or value.subject.products != config.products
                 or (value.subject.supplement or "").strip() != (config.supplement or "")
             )
-            if value.api_key is not None:
-                config.encrypted_api_key = self.secrets.encrypt_secret(value.api_key.strip())
             if (
                 value.enabled
                 and not connection_changed
@@ -775,7 +902,7 @@ class SentimentService:
                     config.validation_status != "valid"
                     or (
                         profile["provider"] == "hosted"
-                        and (not config.encrypted_api_key or not base_url)
+                        and (not encrypted_key or not base_url)
                     )
                 )
             ):
@@ -787,7 +914,13 @@ class SentimentService:
             was_enabled = config.enabled
             # 连接参数一旦变化，保存新值并自动关闭；新连接测试通过后再显式开启。
             config.enabled = value.enabled and not connection_changed
-            config.base_url = base_url
+            if profile["provider"] == "hosted":
+                set_model_connection(
+                    config,
+                    value.model_code,
+                    base_url=base_url,
+                    encrypted_api_key=encrypted_key,
+                )
             config.model_code = value.model_code
             config.brand = value.subject.brand.strip()
             config.products = value.subject.products
@@ -827,8 +960,9 @@ class SentimentService:
         with self.factory() as db:
             config = self.ensure_default(db)
             profile = model_profile(config.model_code)
+            configured_base_url, configured_key = model_connection(config, config.model_code)
             if profile["provider"] == "hosted" and (
-                not config.base_url or not config.encrypted_api_key
+                not configured_base_url or not configured_key
             ):
                 raise DomainError(
                     "SENTIMENT_CONFIG_INCOMPLETE", "请先保存 API 地址和 API Key。", status_code=409
@@ -841,8 +975,8 @@ class SentimentService:
                 "supplement": config.supplement or "",
             }
             if profile["provider"] == "hosted":
-                base_url = validate_public_https_base_url(config.base_url, resolve=True)
-                api_key = self.secrets.decrypt_secret(config.encrypted_api_key)
+                base_url = validate_public_https_base_url(configured_base_url, resolve=True)
+                api_key = self.secrets.decrypt_secret(configured_key)
                 body = build_request(PostSnapshot(), config, tiny_test=True)
         try:
             if profile["provider"] == "local":
@@ -1199,7 +1333,8 @@ class SentimentWorker:
                 analysis_id = analysis.id
                 post_id = post.id
                 attempt_failures = list(analysis.attempt_failures or [])
-        if model_profile(analysis.model_code)["provider"] == "local":
+        analysis_profile = model_profile(analysis.model_code)
+        if analysis_profile["provider"] == "local":
             return self._process_local(
                 analysis_id,
                 post_id,
@@ -1208,8 +1343,9 @@ class SentimentWorker:
                 attempt_failures,
             )
         try:
-            base_url = validate_public_https_base_url(config.base_url, resolve=True)
-            api_key = self.service.secrets.decrypt_secret(config.encrypted_api_key or b"")
+            configured_base_url, configured_key = model_connection(config, analysis.model_code)
+            base_url = validate_public_https_base_url(configured_base_url, resolve=True)
+            api_key = self.service.secrets.decrypt_secret(configured_key or b"")
         except Exception as exc:
             self._record_failure(
                 analysis_id,
@@ -1218,7 +1354,11 @@ class SentimentWorker:
             )
             return True
         try:
-            if self.media_resolver and deduplicate_media_urls(post.video_urls):
+            if (
+                analysis_profile["input_mode"] == "multimodal"
+                and self.media_resolver
+                and deduplicate_media_urls(post.video_urls)
+            ):
                 resolved = self.media_resolver(post.run_id, post.id)
                 fresh_video_urls = resolved.get("video_urls")
                 if not isinstance(fresh_video_urls, list) or not fresh_video_urls:
@@ -1306,7 +1446,10 @@ class SentimentWorker:
                 return True
             try:
                 payload, _strict, recovered = parse_feedback_text(raw)
-                payload, normalized = normalize_feedback_payload(payload, post)
+                if analysis_profile["input_mode"] == "text_only":
+                    payload, normalized = normalize_text_only_feedback_payload(payload, post)
+                else:
+                    payload, normalized = normalize_feedback_payload(payload, post)
                 feedback = SentimentFeedback.model_validate(payload)
                 validate_modality_identity(feedback, post)
             except (ValueError, json.JSONDecodeError, ValidationError) as exc:
