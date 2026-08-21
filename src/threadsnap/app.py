@@ -24,6 +24,7 @@ from fastapi import (
 )
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from sqlalchemy.exc import OperationalError
 
 from .auth import BrowserAuthManager
 from .config import Settings, get_settings
@@ -73,7 +74,10 @@ class Container:
         self.config = ConfigService(self.sessions)
         self.runs = RunService(self.sessions, settings.timezone)
         self.events = EventBus()
-        self.local_sentiment = LocalSentimentAnalyzer(settings.paddlenlp_home)
+        self.local_sentiment = LocalSentimentAnalyzer(
+            settings.paddlenlp_home,
+            num_threads=settings.local_sentiment_num_threads,
+        )
         self.sentiment = SentimentService(
             self.sessions,
             self.session_store,
@@ -600,6 +604,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "request_id": getattr(request.state, "request_id", ""),
             },
         )
+
+    @app.exception_handler(OperationalError)
+    async def database_operational_error(request: Request, exc: OperationalError) -> JSONResponse:
+        if "database is locked" in str(exc).casefold():
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "code": "DATABASE_BUSY",
+                    "message": "数据库正在处理其他写入，请稍后重试。",
+                    "details": [],
+                    "request_id": getattr(request.state, "request_id", ""),
+                },
+                headers={"Retry-After": "1"},
+            )
+        return await unexpected_error(request, exc)
 
     @app.exception_handler(Exception)
     async def unexpected_error(request: Request, exc: Exception) -> JSONResponse:

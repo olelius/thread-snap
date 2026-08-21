@@ -119,8 +119,9 @@ def _extract_opinions(
 class LocalSentimentAnalyzer:
     """进程内复用并串行调用两个 Nano 任务模型。"""
 
-    def __init__(self, model_home: Path):
+    def __init__(self, model_home: Path, *, num_threads: int = 2):
         self.model_home = model_home
+        self.num_threads = num_threads
         self._lock = threading.RLock()
         # Paddle Predictor 不能跨创建线程复用；配置测试和后台 Worker 都统一投递到这里。
         self._executor = ThreadPoolExecutor(
@@ -155,6 +156,7 @@ class LocalSentimentAnalyzer:
             aspects=aspects,
             split_sentence=True,
             batch_size=8,
+            num_threads=self.num_threads,
         )
         self._senta_by_aspects[key] = model
         while len(self._senta_by_aspects) > 4:
@@ -170,6 +172,7 @@ class LocalSentimentAnalyzer:
                 single_label=True,
                 pred_threshold=0.0,
                 batch_size=1,
+                num_threads=self.num_threads,
             )
         return self._category_model
 
