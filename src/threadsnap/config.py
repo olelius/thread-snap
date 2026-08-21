@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     timezone: str = "Asia/Shanghai"
     scheduler_poll_seconds: float = Field(default=15.0, gt=0)
     worker_poll_seconds: float = Field(default=1.0, gt=0)
+    local_sentiment_num_threads: int = Field(default=2, ge=1, le=4)
     start_background_services: bool = True
     platform_level_concurrency: int = Field(default=1, ge=1, le=1)
     dongchedi_storage_state: Path | None = None

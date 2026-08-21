@@ -14,6 +14,8 @@ from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 from sqlalchemy.types import TypeDecorator
 
+SQLITE_BUSY_TIMEOUT_MILLISECONDS = 15_000
+
 
 class Base(DeclarativeBase):
     """所有持久化模型的基类。"""
@@ -61,7 +63,14 @@ def migrate_database(database_url: str) -> None:
 def build_engine(database_url: str) -> Engine:
     """创建数据库引擎，并为 SQLite 启用外键和 WAL。"""
 
-    connect_args = {"check_same_thread": False} if database_url.startswith("sqlite") else {}
+    connect_args = (
+        {
+            "check_same_thread": False,
+            "timeout": SQLITE_BUSY_TIMEOUT_MILLISECONDS / 1000,
+        }
+        if database_url.startswith("sqlite")
+        else {}
+    )
     engine = create_engine(database_url, future=True, pool_pre_ping=True, connect_args=connect_args)
     if database_url.startswith("sqlite"):
 
@@ -70,6 +79,7 @@ def build_engine(database_url: str) -> Engine:
             cursor = dbapi_connection.cursor()  # type: ignore[attr-defined]
             cursor.execute("PRAGMA foreign_keys=ON")
             cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute(f"PRAGMA busy_timeout={SQLITE_BUSY_TIMEOUT_MILLISECONDS}")
             cursor.close()
 
     return engine

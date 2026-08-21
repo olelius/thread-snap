@@ -16,6 +16,23 @@
 
 ---
 
+## 2026-08-21 — 本地舆情推理期间页面响应性修复
+**总目标**：消除本地 PaddleNLP 初始化/推理挤占页面 API、SQLite 短写竞争以及运行批次首次空响应长期停留造成的列表加载缓慢和假空状态。
+**状态**：✅ CPU 预算、SQLite 争用、数据版本刷新和页面加载反馈均已完成。
+**干到哪里了**：
+- [x] 现场证据确认 PaddleNLP 默认按主机一半核心数创建 CPU 推理线程；同一时段舆情配置写入出现 `sqlite3.OperationalError: database is locked`，批次详情首次取得 0 条后又缺少运行期刷新。
+- [x] UIE-Senta 与 UTC Taskflow 继续复用同一专用 Predictor 线程，但各自显式限制为 2 个 CPU 数学线程；环境只允许在 1～4 范围内覆盖。
+- [x] SQLite 保持 WAL，增加 15 秒有界 `busy_timeout`；短写竞争等待释放，达到边界时页面 API 返回 `503 DATABASE_BUSY` 与 `Retry-After: 1`。
+- [x] 帖子查询键纳入批次 `summary_version`，运行批次即使首屏为空也每 3 秒刷新；批次和帖子读取超过 20 秒后结束加载并显示中文错误与重试，不再把待响应状态显示为 0 条。
+- [x] 2 线程真实组合基准：本地模型验证 5.25 秒，同时 23 次批次列表读取 23/23 成功，P50 19.6 ms、P95 81.5 ms、最大 1.357 s；证据为 `artifacts/runtime/local-sentiment-responsiveness-20260821/benchmark.json`，SHA-256 `7ecb7d9a4395d2fbcaeb343472157bed7071f9cd79a77908a58a0f9dc82542ca`。
+- [x] 90 项后端测试、Ruff、compileall、pip check、前端 TypeScript 与生产构建、`git diff --check` 均通过；真实浏览器确认列表显示 20 个批次、详情显示 230 条/5 页且控制台 0 错误。
+- [x] 最新后端已在 `127.0.0.1:8000` 重启，后端 `/health`、前端 `5173` 代理 `/health` 均为 HTTP 200，代理批次列表 20 条、实测 39.1 ms。
+**下一步**：无；进入 Git 自动收尾。
+**边界**：仍采用已接受的单进程、单 Predictor 线程和 SQLite 架构；本次不增加第二后端、消息中间件或用户可见性能配置。
+**关联**：`src/threadsnap/local_sentiment.py`、`src/threadsnap/db.py`、`frontend/src/features/runs/runs-page.tsx`、`frontend/src/features/runs/run-detail-page.tsx`、`docs/adr/0024-add-local-text-sentiment-option.md`、`docs/chains/sentiment-analysis.md`
+
+---
+
 ## 2026-08-21 — DeepSeek 云端纯文字舆情选项
 **总目标**：在既有舆情模型下拉栏增加 DeepSeek 云端文字分析，同时保持千问多模态、本地轻量模型和人工结论优先级不变。
 **状态**：✅ DeepSeek 独立连接、纯文字请求、结果归一化和配置界面均已实现。

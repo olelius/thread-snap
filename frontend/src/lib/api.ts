@@ -20,23 +20,46 @@ export function queryString(values: Record<string, unknown>) {
   return text ? `?${text}` : ''
 }
 
-export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api/v1${path}`, {
-    ...init,
-    headers: {
-      ...(init?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
-      ...init?.headers,
-    },
-  })
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => ({
-      code: 'HTTP_ERROR',
-      message: `请求失败（${response.status}）`,
-    }))) as ApiErrorPayload
-    throw new ApiError(response.status, payload)
+export async function api<T>(path: string, init?: RequestInit, timeoutMs?: number): Promise<T> {
+  const controller = new AbortController()
+  let timedOut = false
+  const abort = () => controller.abort()
+  if (init?.signal?.aborted) controller.abort()
+  else init?.signal?.addEventListener('abort', abort, { once: true })
+  const timeout = timeoutMs === undefined ? undefined : globalThis.setTimeout(() => {
+    timedOut = true
+    controller.abort()
+  }, timeoutMs)
+  try {
+    const response = await fetch(`/api/v1${path}`, {
+      ...init,
+      signal: controller.signal,
+      headers: {
+        ...(init?.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+        ...init?.headers,
+      },
+    })
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => ({
+        code: 'HTTP_ERROR',
+        message: `请求失败（${response.status}）`,
+      }))) as ApiErrorPayload
+      throw new ApiError(response.status, payload)
+    }
+    if (response.status === 204) return undefined as T
+    return await response.json() as T
+  } catch (error) {
+    if (timedOut) {
+      throw new ApiError(408, {
+        code: 'REQUEST_TIMEOUT',
+        message: `请求超过 ${Math.ceil((timeoutMs ?? 0) / 1000)} 秒，请重试。`,
+      })
+    }
+    throw error
+  } finally {
+    if (timeout !== undefined) globalThis.clearTimeout(timeout)
+    init?.signal?.removeEventListener('abort', abort)
   }
-  if (response.status === 204) return undefined as T
-  return response.json() as Promise<T>
 }
 
 export function errorMessage(error: unknown) {

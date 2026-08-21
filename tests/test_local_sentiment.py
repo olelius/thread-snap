@@ -52,7 +52,34 @@ class _ThreadBoundAnalyzer(LocalSentimentAnalyzer):
         return self.utc
 
 
+class _CapturingAnalyzer(LocalSentimentAnalyzer):
+    def __init__(self, model_home: Path, *, num_threads: int) -> None:
+        super().__init__(model_home, num_threads=num_threads)
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def _taskflow(self) -> Any:
+        def create(task: str, **kwargs: Any) -> _ThreadBoundCallable:
+            self.calls.append((task, kwargs))
+            return _ThreadBoundCallable(utc=task == "zero_shot_text_classification")
+
+        return create
+
+
 class LocalSentimentThreadTests(unittest.TestCase):
+    def test_taskflows_use_controlled_cpu_thread_budget(self) -> None:
+        """两个 Paddle Taskflow 都使用后端限定的 CPU 线程数。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            analyzer = _CapturingAnalyzer(Path(directory), num_threads=2)
+            try:
+                analyzer._senta(["风云A9"])
+                analyzer._utc()
+            finally:
+                analyzer.close()
+
+        self.assertEqual(2, len(analyzer.calls))
+        self.assertEqual([2, 2], [kwargs["num_threads"] for _, kwargs in analyzer.calls])
+
     def test_validate_and_worker_analysis_share_one_inference_thread(self) -> None:
         """配置测试和后台分析必须在同一专用线程使用 Predictor。"""
 

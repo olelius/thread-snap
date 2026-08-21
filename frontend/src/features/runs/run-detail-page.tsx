@@ -60,15 +60,15 @@ export function RunDetailPage() {
   const debouncedCircle = useDebouncedValue(search.circle)
   const run = useQuery({
     queryKey: ['run', runId],
-    queryFn: () => api<Run>(`/runs/${runId}`),
+    queryFn: () => api<Run>(`/runs/${runId}`, undefined, 20_000),
     refetchInterval: (current) => isActiveRun(current.state.data) ? 3_000 : 60_000,
   })
   const postQueryValues = { title: debouncedTitle, circle: debouncedCircle, visibility: search.visibility, sentiment_result: search.sentiment, analysis_status: search.analysisStatus, sort_by: search.sort, sort_direction: search.direction }
   const posts = useQuery({
-    queryKey: ['posts', runId, { page: search.page, pageSize: search.pageSize, ...postQueryValues }],
-    queryFn: () => api<PageResult<Post>>(`/runs/${runId}/posts${queryString({ offset: ((search.page ?? 1) - 1) * (search.pageSize ?? 50), limit: search.pageSize, ...postQueryValues })}`),
+    queryKey: ['posts', runId, run.data?.summary_version ?? 0, { page: search.page, pageSize: search.pageSize, ...postQueryValues }],
+    queryFn: () => api<PageResult<Post>>(`/runs/${runId}/posts${queryString({ offset: ((search.page ?? 1) - 1) * (search.pageSize ?? 50), limit: search.pageSize, ...postQueryValues })}`, undefined, 20_000),
     placeholderData: keepPreviousData,
-    refetchInterval: (current) => current.state.data?.items.some((post) => ['analysis_queued', 'analysis_running'].includes(post.analysis_status ?? '')) ? 3_000 : false,
+    refetchInterval: (current) => isActiveRun(run.data) || current.state.data?.items.some((post) => ['analysis_queued', 'analysis_running'].includes(post.analysis_status ?? '')) ? 3_000 : false,
   })
   const templates = useQuery({ queryKey: ['templates'], queryFn: () => api<Template[]>('/templates') })
   const detail = useQuery({
@@ -229,7 +229,7 @@ export function RunDetailPage() {
           <Table className='min-w-[1050px]'>
             <TableHeader><TableRow className='bg-muted/35'><TableHead className='w-16 text-center'>序号</TableHead><TableHead>标题</TableHead><TableHead>来源</TableHead><TableHead>作者</TableHead><TableHead>发布时间</TableHead><TableHead>可见状态</TableHead><TableHead>舆情结果</TableHead><TableHead className='text-right'>评论数</TableHead><TableHead className='text-right'>点赞数</TableHead><TableHead className='text-right'>操作</TableHead></TableRow></TableHeader>
             <TableBody>
-              {posts.isLoading ? Array.from({ length: 6 }).map((_, index) => <TableRow key={index}>{Array.from({ length: 10 }).map((__, cell) => <TableCell key={cell}><Skeleton className='h-6 w-full' /></TableCell>)}</TableRow>) : posts.data?.items.length ? posts.data.items.map((post, index) => {
+              {posts.isLoading ? Array.from({ length: 6 }).map((_, index) => <TableRow key={index}>{Array.from({ length: 10 }).map((__, cell) => <TableCell key={cell}><Skeleton className='h-6 w-full' /></TableCell>)}</TableRow>) : posts.isError ? <TableRow><TableCell colSpan={10} className='h-56 text-center'><CircleAlert className='mx-auto mb-2 size-5 text-destructive' /><div className='text-sm font-medium'>帖子列表加载失败</div><div className='mt-1 text-xs text-muted-foreground'>{errorMessage(posts.error)}</div><Button className='mt-3' variant='outline' size='sm' onClick={() => posts.refetch()}><RefreshCw className='size-4' />重新加载</Button></TableCell></TableRow> : posts.data?.items.length ? posts.data.items.map((post, index) => {
                 const isCurrentPost = post.id === search.post
                 const isLastViewedPost = !search.post && post.id === lastViewedPostId
                 const isHighlightedPost = isCurrentPost || isLastViewedPost
@@ -267,7 +267,7 @@ export function RunDetailPage() {
             </TableBody>
           </Table>
         </div>
-        <div className='flex shrink-0 flex-col gap-3 border-t bg-card/95 p-4 sm:flex-row sm:items-center sm:justify-between' data-list-footer='run-posts'><div className='text-sm text-muted-foreground'>共 {posts.data?.total ?? 0} 条，第 {search.page} / {totalPages} 页</div><div className='flex gap-2'><Select value={String(search.pageSize)} onValueChange={(value) => patch({ pageSize: Number(value) as 20 | 50 | 100, page: 1 })}><SelectTrigger className='w-28'><SelectValue /></SelectTrigger><SelectContent><SelectItem value='20'>每页 20</SelectItem><SelectItem value='50'>每页 50</SelectItem><SelectItem value='100'>每页 100</SelectItem></SelectContent></Select><Button variant='outline' size='icon' disabled={(search.page ?? 1) <= 1} onClick={() => patch({ page: (search.page ?? 1) - 1 })}><ChevronLeft className='size-4' /></Button><Button variant='outline' size='icon' disabled={(search.page ?? 1) >= totalPages} onClick={() => patch({ page: (search.page ?? 1) + 1 })}><ChevronRight className='size-4' /></Button></div></div>
+        <div className='flex shrink-0 flex-col gap-3 border-t bg-card/95 p-4 sm:flex-row sm:items-center sm:justify-between' data-list-footer='run-posts'><div className='text-sm text-muted-foreground'>{posts.isLoading ? '正在加载帖子…' : posts.isError ? '帖子加载失败' : `共 ${posts.data?.total ?? 0} 条，第 ${search.page} / ${totalPages} 页`}</div><div className='flex gap-2'><Select value={String(search.pageSize)} onValueChange={(value) => patch({ pageSize: Number(value) as 20 | 50 | 100, page: 1 })}><SelectTrigger className='w-28'><SelectValue /></SelectTrigger><SelectContent><SelectItem value='20'>每页 20</SelectItem><SelectItem value='50'>每页 50</SelectItem><SelectItem value='100'>每页 100</SelectItem></SelectContent></Select><Button variant='outline' size='icon' disabled={(search.page ?? 1) <= 1} onClick={() => patch({ page: (search.page ?? 1) - 1 })}><ChevronLeft className='size-4' /></Button><Button variant='outline' size='icon' disabled={(search.page ?? 1) >= totalPages} onClick={() => patch({ page: (search.page ?? 1) + 1 })}><ChevronRight className='size-4' /></Button></div></div>
       </div>
       </div>
       <TaskDialog open={tasksOpen} onOpenChange={setTasksOpen} tasks={run.data?.tasks ?? []} />
