@@ -1400,11 +1400,28 @@ class RunService:
             platform_code = next(iter(platform_codes))
             snapshot = []
             for task in selected:
+                completed_rows = db.execute(
+                    select(PostSnapshot.platform_post_id, PostSnapshot.url).where(
+                        PostSnapshot.circle_task_id == task.id
+                    )
+                ).all()
+                completed_post_ids = {
+                    row.platform_post_id for row in completed_rows if row.platform_post_id
+                }
+                completed_urls = {row.url for row in completed_rows if row.url}
+                remaining_count = max(0, task.target_count - len(completed_post_ids))
+                if remaining_count == 0:
+                    continue
                 failed_urls = []
                 source_indexes: dict[str, int] = {}
                 for failure in (task.checkpoint or {}).get("failed_urls", []):
                     url = failure.get("url") if isinstance(failure, dict) else None
-                    if isinstance(url, str) and url and url not in failed_urls:
+                    if (
+                        isinstance(url, str)
+                        and url
+                        and url not in completed_urls
+                        and url not in failed_urls
+                    ):
                         failed_urls.append(url)
                         source_indexes[url] = int(failure.get("source_index", len(source_indexes)))
                 if failed_urls:
@@ -1414,6 +1431,7 @@ class RunService:
                             "external_id": task.external_id,
                             "url": task.circle_url,
                             "name": task.circle_name,
+                            "section": task.section,
                             "list_order": task.list_order,
                             "target_count": len(failed_urls),
                             "source_position": task.source_position,
@@ -1425,10 +1443,64 @@ class RunService:
                             },
                         }
                     )
+                    continue
+
+                original_known_urls = [
+                    url
+                    for url in (task.config_snapshot or {}).get("known_post_urls", [])
+                    if isinstance(url, str) and url and url not in completed_urls
+                ]
+                if original_known_urls:
+                    unresolved_urls = list(dict.fromkeys(original_known_urls))[:remaining_count]
+                    original_indexes = (task.config_snapshot or {}).get("source_indexes", {})
+                    snapshot.append(
+                        {
+                            "circle_id": task.circle_id,
+                            "external_id": task.external_id,
+                            "url": task.circle_url,
+                            "name": task.circle_name,
+                            "section": task.section,
+                            "list_order": task.list_order,
+                            "target_count": len(unresolved_urls),
+                            "source_position": task.source_position,
+                            "config_snapshot": {
+                                **(task.config_snapshot or {}),
+                                "known_post_urls": unresolved_urls,
+                                "source_indexes": {
+                                    url: int(original_indexes.get(url, index))
+                                    for index, url in enumerate(unresolved_urls)
+                                },
+                                "retry_of_task_id": task.id,
+                            },
+                        }
+                    )
+                    continue
+
+                if task.circle_url:
+                    retry_config = {
+                        **(task.config_snapshot or {}),
+                        "retry_of_task_id": task.id,
+                        "skip_post_ids": sorted(completed_post_ids),
+                    }
+                    retry_config.pop("known_post_urls", None)
+                    retry_config.pop("source_indexes", None)
+                    snapshot.append(
+                        {
+                            "circle_id": task.circle_id,
+                            "external_id": task.external_id,
+                            "url": task.circle_url,
+                            "name": task.circle_name,
+                            "section": task.section,
+                            "list_order": task.list_order,
+                            "target_count": remaining_count,
+                            "source_position": task.source_position,
+                            "config_snapshot": retry_config,
+                        }
+                    )
             if not snapshot:
                 raise DomainError(
                     "RUN_RETRY_URL_EMPTY",
-                    "该批次没有可供手动补提的失败 URL。",
+                    "该批次没有仍缺失且可重新提取的内容。",
                     status_code=409,
                 )
         request_hash = canonical_hash({"original_run_id": run_id, "tasks": snapshot})
@@ -1467,6 +1539,7 @@ class RunService:
                     external_id=item["external_id"],
                     circle_name=item["name"],
                     circle_url=item["url"],
+                    section=item["section"],
                     list_order=item["list_order"],
                     target_count=item["target_count"],
                     queue_sequence=sequence,
