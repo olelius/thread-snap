@@ -25,6 +25,7 @@
 | 采集框架 PoC 样本、阶段、指标和结果格式 | `docs/research/collector-stack-poc-plan.md` |
 | 舆情反馈 PoC 样本、模态覆盖、失败边界和结果格式 | `docs/research/sentiment-analysis-poc-plan.md` |
 | 舆情反馈 PoC 的真实 URL、模型用量和结构结果 | `docs/research/sentiment-analysis-poc-results.md` |
+| 圈子页面证据、成果合成、分片和资源门禁 PoC | `docs/research/circle-screenshot-poc-plan.md` |
 | 第一版后端安装、配置、启动和验证 | `docs/deployment/backend-v1.md` |
 | 第一版前端安装、开发、构建和同源发布 | `docs/deployment/frontend-v1.md` |
 | 第一版 Linux 离线制包、目录、安装、验证、备份和回滚 | `docs/deployment/linux-v1.md` |
@@ -89,6 +90,18 @@
 5. `docs/research/sentiment-analysis-poc-plan.md`；
 6. 执行 PoC 时读取 Git 外的 `artifacts/poc/inputs/sentiment-analysis/` 真实样本。
 
+### 3.6 圈子页面证据与关联截图成果设计、PoC 或实现
+
+必须读取：
+
+1. 技术实现任务要求的全部文件；
+2. `docs/chains/circle-screenshot-artifacts.md`；
+3. `docs/chains/first-platform-delivery.md`；
+4. `docs/chains/sentiment-analysis.md`；
+5. `docs/adr/0026-use-synchronized-page-evidence-and-related-screenshot-artifacts.md`；
+6. `docs/research/circle-screenshot-poc-plan.md`；
+7. 执行 PoC 时读取 Git 外的 `artifacts/poc/inputs/circle-screenshot/` 真实样本。
+
 ## 4. 已接受 ADR
 
 | ADR | 决策 |
@@ -118,6 +131,7 @@
 | `docs/adr/0023-use-validated-runtime-config-for-sentiment-service.md` | 舆情模型服务使用加密、显式测试且受控端点的运行时配置 |
 | `docs/adr/0024-add-local-text-sentiment-option.md` | 舆情反馈增加随离线包部署的 PaddleNLP 本地轻量文字选项 |
 | `docs/adr/0025-add-deepseek-cloud-text-sentiment-option.md` | 舆情反馈增加独立凭证的 DeepSeek 云端纯文字选项 |
+| `docs/adr/0026-use-synchronized-page-evidence-and-related-screenshot-artifacts.md` | 用同一冻结页面清单生成原始证据，并按关联圈子成果组合成版本化截图成果 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 
@@ -147,6 +161,8 @@ artifacts/poc/
 
 舆情反馈 PoC 使用 `inputs/sentiment-analysis/`、`results/sentiment-qwen3-5-omni-plus/<round-id>/` 和 `results/sentiment-qwen3-5-omni-plus-image-text/<round-id>/`；完整签名 URL、原始模型响应和 API 配置只保存在 Git 外本地产物中。
 
+圈子页面截图 PoC 使用 `inputs/circle-screenshot/` 和 `results/circle-screenshot/<round-id>/`；原始全页图片、卡片裁剪、合成分片、浏览器追踪和资源指标均保存在 Git 外。
+
 ## 6. 文档维护规则
 
 - 动代码时更新 `WORKLOG.md` 最新条目；纯文档或只读任务不为凑流程追加账本。
@@ -154,6 +170,7 @@ artifacts/poc/
 - 修改技术决策时，同步更新技术路线、相关 ADR 和相关链档。
 - 修改采集框架 PoC 阶段、指标、输入或结果结构时，同步更新采集 PoC 计划、模板说明和 `docs/chains/first-platform-delivery.md`。
 - 修改舆情反馈 PoC 阶段、输入、模态覆盖或结果结构时，同步更新舆情 PoC 计划和 `docs/chains/sentiment-analysis.md`。
+- 修改圈子页面证据、关联成果合成、分片或资源门禁时，同步更新截图 PoC 计划和 `docs/chains/circle-screenshot-artifacts.md`，并核对首个平台与舆情工作线。
 - 详细执行过程和长日志写入被忽略的 `artifacts/runtime/`，账本只保留恢复所需证据入口。
 - 调研结论成为正式决策前，必须经过真实样本或环境验证并写入技术路线或 ADR。
 - 项目记忆只记录已发生、可复用的根因、坑和杠杆，不记录普通提交历史。
