@@ -26,6 +26,7 @@
 | 舆情反馈 PoC 样本、模态覆盖、失败边界和结果格式 | `docs/research/sentiment-analysis-poc-plan.md` |
 | 舆情反馈 PoC 的真实 URL、模型用量和结构结果 | `docs/research/sentiment-analysis-poc-results.md` |
 | 圈子页面证据、成果合成、分片和资源门禁 PoC | `docs/research/circle-screenshot-poc-plan.md` |
+| 圈子页面证据与关联截图成果 PoC 的事实结果 | `docs/research/circle-screenshot-poc-results.md` |
 | 第一版后端安装、配置、启动和验证 | `docs/deployment/backend-v1.md` |
 | 第一版前端安装、开发、构建和同源发布 | `docs/deployment/frontend-v1.md` |
 | 第一版 Linux 离线制包、目录、安装、验证、备份和回滚 | `docs/deployment/linux-v1.md` |
@@ -100,7 +101,8 @@
 4. `docs/chains/sentiment-analysis.md`；
 5. `docs/adr/0026-use-synchronized-page-evidence-and-related-screenshot-artifacts.md`；
 6. `docs/research/circle-screenshot-poc-plan.md`；
-7. 执行 PoC 时读取 Git 外的 `artifacts/poc/inputs/circle-screenshot/` 真实样本。
+7. `docs/research/circle-screenshot-poc-results.md`；
+8. 执行 PoC 时读取 Git 外的 `artifacts/poc/inputs/circle-screenshot/` 真实样本。
 
 ## 4. 已接受 ADR
 
