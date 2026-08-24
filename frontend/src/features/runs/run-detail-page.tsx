@@ -2,24 +2,26 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ArrowLeft, BrainCircuit, CircleAlert, CircleCheckBig, CircleStop, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, Eye, Gauge, Images, KeyRound, Layers3, Link2, ListTree, LoaderCircle, PencilLine, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowLeft, BrainCircuit, Check, CircleAlert, CircleCheckBig, CircleStop, ChevronLeft, ChevronRight, ChevronsUpDown, Copy, Download, ExternalLink, Eye, Gauge, Images, KeyRound, Layers3, Link2, ListTree, LoaderCircle, PencilLine, RefreshCw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AuthDialog } from '@/features/auth/auth-dialog'
 import { useDebouncedValue } from '@/hooks/use-debounced-value'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
 import { api, errorMessage, formatDate, platformName, queryString } from '@/lib/api'
-import type { AnalysisStatus, PageResult, Post, PostNavigation, Run, RunTask, ScreenshotGroup, SentimentResult, Template } from '@/lib/types'
+import type { AnalysisStatus, PageResult, Post, PostNavigation, Run, RunSourceOption, RunTask, ScreenshotGroup, SentimentResult, Template } from '@/lib/types'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -28,7 +30,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 
-type SearchState = { view?: 'links' | 'screenshots'; page?: number; pageSize?: 20 | 50 | 100; title?: string; circle?: string; visibility?: 'visible' | 'hidden' | 'unknown'; sentiment?: SentimentResult; analysisStatus?: AnalysisStatus; sort?: 'source' | 'published_at' | 'reply_count' | 'like_count'; direction?: 'asc' | 'desc'; post?: string }
+type SearchState = { view?: 'links' | 'screenshots'; page?: number; pageSize?: 20 | 50 | 100; title?: string; sources?: string; visibility?: 'visible' | 'hidden' | 'unknown'; sentiment?: SentimentResult; analysisStatus?: AnalysisStatus; sort?: 'source' | 'published_at' | 'reply_count' | 'like_count'; direction?: 'asc' | 'desc'; post?: string }
 type PostSwitch = { id: string; direction: 'previous' | 'next' }
 
 export function RunDetailPage() {
@@ -57,13 +59,13 @@ export function RunDetailPage() {
   const closeHighlightTimer = useRef<number | undefined>(undefined)
   const closeFocusFrame = useRef<number | undefined>(undefined)
   const debouncedTitle = useDebouncedValue(search.title)
-  const debouncedCircle = useDebouncedValue(search.circle)
+  const selectedSourceKeys = (search.sources ?? '').split(',').filter(Boolean)
   const run = useQuery({
     queryKey: ['run', runId],
     queryFn: () => api<Run>(`/runs/${runId}`, undefined, 20_000),
     refetchInterval: (current) => isActiveRun(current.state.data) ? 3_000 : 60_000,
   })
-  const postQueryValues = { title: debouncedTitle, circle: debouncedCircle, visibility: search.visibility, sentiment_result: search.sentiment, analysis_status: search.analysisStatus, sort_by: search.sort, sort_direction: search.direction }
+  const postQueryValues = { title: debouncedTitle, source_key: selectedSourceKeys, visibility: search.visibility, sentiment_result: search.sentiment, analysis_status: search.analysisStatus, sort_by: search.sort, sort_direction: search.direction }
   const posts = useQuery({
     queryKey: ['posts', runId, run.data?.summary_version ?? 0, { page: search.page, pageSize: search.pageSize, ...postQueryValues }],
     queryFn: () => api<PageResult<Post>>(`/runs/${runId}/posts${queryString({ offset: ((search.page ?? 1) - 1) * (search.pageSize ?? 50), limit: search.pageSize, ...postQueryValues })}`, undefined, 20_000),
@@ -228,7 +230,7 @@ export function RunDetailPage() {
       {run.data?.waiting_reason && <Alert><KeyRound className='size-4' /><AlertTitle>等待平台认证</AlertTitle><AlertDescription>{run.data.waiting_reason}</AlertDescription></Alert>}
       {run.data?.error_message && <Alert variant='destructive'><AlertTitle>批次错误</AlertTitle><AlertDescription>{run.data.error_message}</AlertDescription></Alert>}
         <div className='flex w-fit rounded-lg border bg-muted/25 p-1' role='tablist' aria-label='批次结果视图'><Button role='tab' aria-selected={search.view !== 'screenshots'} variant={search.view !== 'screenshots' ? 'secondary' : 'ghost'} size='sm' onClick={() => patch({ view: 'links' })}><Link2 className='size-4' />链接结果</Button><Button role='tab' aria-selected={search.view === 'screenshots'} variant={search.view === 'screenshots' ? 'secondary' : 'ghost'} size='sm' onClick={() => patch({ view: 'screenshots' })}><Images className='size-4' />页面截图</Button></div>
-        {search.view !== 'screenshots' && <Card className='border-border/70 bg-card/88 py-0'><CardContent className='grid gap-2 p-3 [&>[data-slot=select-trigger]]:w-full [&>[data-slot=select-trigger]]:min-w-0 [&>[data-slot=select-trigger]]:gap-1 [&>[data-slot=select-trigger]]:px-2 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-[minmax(180px,1fr)_135px_125px_130px_130px_100px_88px_auto] [@media(min-width:2000px)]:grid-cols-[minmax(180px,360px)_135px_125px_130px_130px_100px_88px_minmax(0,1fr)_auto]'><Input placeholder='搜索帖子标题' aria-label='搜索帖子标题' value={search.title ?? ''} onChange={(event) => patch({ title: event.target.value || undefined, page: 1 })} /><Input placeholder='搜索圈子' aria-label='搜索圈子' value={search.circle ?? ''} onChange={(event) => patch({ circle: event.target.value || undefined, page: 1 })} /><Select value={search.visibility ?? 'all'} onValueChange={(value) => patch({ visibility: value === 'all' ? undefined : value as SearchState['visibility'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部可见状态</SelectItem><SelectItem value='visible'>可见</SelectItem><SelectItem value='hidden'>不可见</SelectItem><SelectItem value='unknown'>未知</SelectItem></SelectContent></Select><Select value={search.sentiment ?? 'all'} onValueChange={(value) => patch({ sentiment: value === 'all' ? undefined : value as SentimentResult, page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部舆情结果</SelectItem><SelectItem value='negative'>负面</SelectItem><SelectItem value='non_negative'>非负面</SelectItem><SelectItem value='unrelated'>不相关</SelectItem></SelectContent></Select><Select value={search.analysisStatus ?? 'all'} onValueChange={(value) => patch({ analysisStatus: value === 'all' ? undefined : value as AnalysisStatus, page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部分析状态</SelectItem>{Object.entries(analysisStatusNames).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select><Select value={search.sort} onValueChange={(value) => patch({ sort: value as SearchState['sort'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='source'>来源顺序</SelectItem><SelectItem value='published_at'>发布时间</SelectItem><SelectItem value='reply_count'>评论数</SelectItem><SelectItem value='like_count'>点赞数</SelectItem></SelectContent></Select><Select value={search.direction} onValueChange={(value) => patch({ direction: value as SearchState['direction'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='asc'>正序</SelectItem><SelectItem value='desc'>倒序</SelectItem></SelectContent></Select><div className='flex min-w-0 items-center justify-end gap-2 [@media(min-width:2000px)]:col-start-9'><Button className='shrink-0' variant='outline' onClick={copyAll}><Copy className='size-4' />复制全部</Button><Select onValueChange={(value) => exportRun.mutate(value)} disabled={!templates.data?.length || exportRun.isPending}><SelectTrigger className='w-36'><Download className='size-4' /><SelectValue placeholder={templates.data?.length ? '导出 Excel' : '暂无模板'} /></SelectTrigger><SelectContent>{templates.data?.map((item) => item.versions[0] && <SelectItem key={item.versions[0].version_id} value={item.versions[0].version_id}>{item.name}</SelectItem>)}</SelectContent></Select></div></CardContent></Card>}
+        {search.view !== 'screenshots' && <Card className='border-border/70 bg-card/88 py-0'><CardContent className='grid gap-2 p-3 [&>[data-slot=select-trigger]]:w-full [&>[data-slot=select-trigger]]:min-w-0 [&>[data-slot=select-trigger]]:gap-1 [&>[data-slot=select-trigger]]:px-2 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-[minmax(180px,1fr)_190px_125px_130px_130px_100px_88px_auto] [@media(min-width:2000px)]:grid-cols-[minmax(180px,360px)_210px_125px_130px_130px_100px_88px_minmax(0,1fr)_auto]'><Input placeholder='搜索帖子标题' aria-label='搜索帖子标题' value={search.title ?? ''} onChange={(event) => patch({ title: event.target.value || undefined, page: 1 })} /><SourceMultiSelect options={posts.data?.source_options ?? []} values={selectedSourceKeys} onChange={(values) => patch({ sources: values.length ? values.join(',') : undefined, page: 1 })} /><Select value={search.visibility ?? 'all'} onValueChange={(value) => patch({ visibility: value === 'all' ? undefined : value as SearchState['visibility'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部可见状态</SelectItem><SelectItem value='visible'>可见</SelectItem><SelectItem value='hidden'>不可见</SelectItem><SelectItem value='unknown'>未知</SelectItem></SelectContent></Select><Select value={search.sentiment ?? 'all'} onValueChange={(value) => patch({ sentiment: value === 'all' ? undefined : value as SentimentResult, page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部舆情结果</SelectItem><SelectItem value='negative'>负面</SelectItem><SelectItem value='non_negative'>非负面</SelectItem><SelectItem value='unrelated'>不相关</SelectItem></SelectContent></Select><Select value={search.analysisStatus ?? 'all'} onValueChange={(value) => patch({ analysisStatus: value === 'all' ? undefined : value as AnalysisStatus, page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部分析状态</SelectItem>{Object.entries(analysisStatusNames).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select><Select value={search.sort} onValueChange={(value) => patch({ sort: value as SearchState['sort'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='source'>来源顺序</SelectItem><SelectItem value='published_at'>发布时间</SelectItem><SelectItem value='reply_count'>评论数</SelectItem><SelectItem value='like_count'>点赞数</SelectItem></SelectContent></Select><Select value={search.direction} onValueChange={(value) => patch({ direction: value as SearchState['direction'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='asc'>正序</SelectItem><SelectItem value='desc'>倒序</SelectItem></SelectContent></Select><div className='flex min-w-0 items-center justify-end gap-2 [@media(min-width:2000px)]:col-start-9'><Button className='shrink-0' variant='outline' onClick={copyAll}><Copy className='size-4' />复制全部</Button><Select onValueChange={(value) => exportRun.mutate(value)} disabled={!templates.data?.length || exportRun.isPending}><SelectTrigger className='w-36'><Download className='size-4' /><SelectValue placeholder={templates.data?.length ? '导出 Excel' : '暂无模板'} /></SelectTrigger><SelectContent>{templates.data?.map((item) => item.versions[0] && <SelectItem key={item.versions[0].version_id} value={item.versions[0].version_id}>{item.name}</SelectItem>)}</SelectContent></Select></div></CardContent></Card>}
       </div>
       <div className='min-h-[360px] flex-1 xl:min-h-0'>
         {search.view === 'screenshots' ? <ScreenshotPanel groups={screenshots.data?.items} loading={screenshots.isLoading} error={screenshots.error} onRetry={() => screenshots.refetch()} /> :
@@ -333,6 +335,18 @@ function screenshotArtifactSummary(group: ScreenshotGroup) {
   const last = captured[captured.length - 1]
   const range = first ? first === last ? formatDate(first) : `${formatDate(first)} 至 ${formatDate(last)}` : '—'
   return `当前版本 v${group.current_version}，共 ${group.item_count} 条、负面 ${group.negative_count} 条；贡献批次 ${runCount} 个，捕获时间 ${range}。`
+}
+
+function SourceMultiSelect({ options, values, onChange }: { options: RunSourceOption[]; values: string[]; onChange: (values: string[]) => void }) {
+  const [open, setOpen] = useState(false)
+  const selected = options.filter((option) => values.includes(option.key))
+  const label = values.length === 0 ? '全部来源' : selected.length === 1 && values.length === 1 ? `${selected[0].source_name} · ${selected[0].list_order_name}` : `已选 ${values.length} 个来源`
+  return <Popover open={open} onOpenChange={setOpen}>
+    <PopoverTrigger asChild><Button type='button' variant='outline' role='combobox' aria-expanded={open} aria-label={`筛选来源，当前${label}`} className='w-full min-w-0 justify-between px-2 font-normal'><span className='truncate'>{label}</span><ChevronsUpDown className='size-4 shrink-0 text-muted-foreground' /></Button></PopoverTrigger>
+    <PopoverContent align='start' className='w-[var(--radix-popover-trigger-width)] min-w-80 p-0'>
+      <Command><CommandInput placeholder='搜索来源名称或圈子' /><CommandList><CommandEmpty>当前批次没有匹配来源。</CommandEmpty><CommandGroup>{options.map((option) => { const checked = values.includes(option.key); return <CommandItem key={option.key} value={`${option.source_name} ${option.circle_name} ${option.external_id} ${option.list_order_name}`} onSelect={() => onChange(checked ? values.filter((key) => key !== option.key) : [...values, option.key])}><Check className={cn('size-4', checked ? 'opacity-100' : 'opacity-0')} /><div className='min-w-0 flex-1'><div className='truncate text-sm font-medium'>{option.source_name}</div><div className='mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground'><span className='truncate'>{option.circle_name}</span><Badge variant='outline' className='h-5 shrink-0 px-1.5 text-[11px] font-normal'>{option.list_order_name}</Badge></div></div></CommandItem> })}</CommandGroup></CommandList>{values.length > 0 && <div className='border-t p-1.5'><Button type='button' variant='ghost' size='sm' className='w-full' onClick={() => onChange([])}>清除选择</Button></div>}</Command>
+    </PopoverContent>
+  </Popover>
 }
 
 function ScreenshotPanel({ groups, loading, error, onRetry }: { groups?: ScreenshotGroup[]; loading: boolean; error: unknown; onRetry: () => void }) {

@@ -27,7 +27,7 @@ const runDetailRoute = createRoute({
     page: optionalPositiveInteger(search.page),
     pageSize: oneOfNumber(search.pageSize, [20, 50, 100] as const),
     title: text(search.title),
-    circle: text(search.circle),
+    sources: text(search.sources),
     visibility: oneOf(search.visibility, ['visible', 'hidden', 'unknown'] as const),
     sentiment: oneOf(search.sentiment, ['negative', 'non_negative', 'unrelated'] as const),
     analysisStatus: oneOf(search.analysisStatus, ['analysis_queued', 'analysis_running', 'analysis_completed', 'analysis_partial', 'analysis_failed', 'analysis_paused', 'analysis_disabled'] as const),

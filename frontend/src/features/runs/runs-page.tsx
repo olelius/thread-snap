@@ -122,7 +122,7 @@ export function RunsPage() {
 }
 
 const emptyRunsSearch = { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }
-const emptyDetailSearch = { view: undefined, page: undefined, pageSize: undefined, title: undefined, circle: undefined, visibility: undefined, sentiment: undefined, analysisStatus: undefined, sort: undefined, direction: undefined, post: undefined }
+const emptyDetailSearch = { view: undefined, page: undefined, pageSize: undefined, title: undefined, sources: undefined, visibility: undefined, sentiment: undefined, analysisStatus: undefined, sort: undefined, direction: undefined, post: undefined }
 
 const runScreenshotStatusNames: Record<string, string> = { evidence_pending: '待采集', evidence_running: '采集中', waiting_for_sentiment: '待判定', rendering: '生成中', ready: '已就绪', empty: '空成果', failed: '失败', not_collected: '历史未采集' }
 
