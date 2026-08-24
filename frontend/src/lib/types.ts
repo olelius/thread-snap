@@ -198,6 +198,101 @@ export type SentimentDetail = {
 
 export type SentimentMediaCoverage = { status: string; expected_count: number; processed_count: number; items: Array<{ input_index: number; url_hash: string; status: string; evidence: string[] }> }
 
+export type ReputationMetric = {
+  raw?: string
+  value?: string
+  baseline_raw?: string
+  baseline_value?: string
+  delta?: string
+  direction: 'up' | 'down' | 'same' | 'none'
+  tone: 'positive' | 'negative' | 'neutral'
+  comparison_status: string
+}
+
+export type ReputationEvidence = {
+  id: string
+  full_page_url: string
+  metric_region_url: string
+  full_page_sha256: string
+  metric_region_sha256: string
+}
+
+export type ReputationResult = {
+  id: string
+  vehicle_id: string
+  series_name: string
+  vehicle_name: string
+  role: 'focus' | 'competitor'
+  role_position: number
+  vehicle_position: number
+  platform_code: string
+  platform_name: string
+  status: string
+  metrics: Record<'score' | 'rank' | 'volume', ReputationMetric>
+  evidence_required: boolean
+  error_code?: string
+  error_message?: string
+  collected_at: string
+  evidence?: ReputationEvidence
+}
+
+export type ReputationRun = {
+  id: string
+  number: string
+  source_type: 'synthetic' | 'scheduled'
+  scenario_id?: string
+  run_type: 'baseline_initialization' | 'daily' | 'month_end'
+  planned_date: string
+  status: string
+  platform_codes: string[]
+  planned_count: number
+  completed_count: number
+  failed_count: number
+  required_evidence_count: number
+  complete_evidence_count: number
+  report_status: string
+  report_text?: string
+  created_at: string
+  started_at?: string
+  finished_at?: string
+  results?: ReputationResult[]
+  downloads?: { txt: string; xlsx: string; evidence_zip: string }
+}
+
+export type ReputationCapabilities = {
+  reputation_synthetic_runs: boolean
+  real_adapter_status: 'not_configured' | 'available'
+  real_adapter_message: string
+  scenarios: Array<{ id: string; name: string; description: string }>
+}
+
+export type ReputationScopeMapping = {
+  platform_vehicle_id: string
+  platform_url: string
+  platform_display_name: string
+  validation_status: 'unverified' | 'verified' | 'failed'
+}
+
+export type ReputationScopeVehicle = {
+  id: string
+  series_name: string
+  vehicle_name: string
+  role: 'focus' | 'competitor'
+  role_order: number
+  enabled: boolean
+  mappings: Record<string, ReputationScopeMapping>
+}
+
+export type ReputationScope = {
+  initialized: boolean
+  revision: number
+  vehicles: ReputationScopeVehicle[]
+  published_version?: { id: string; version: number; published_at: string }
+  source_sha256?: string
+  updated_at?: string
+  message?: string
+}
+
 export type RunSourceOption = {
   key: string
   platform_code: string

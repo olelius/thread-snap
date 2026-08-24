@@ -22,13 +22,24 @@ def main() -> None:
     )
     import_session.add_argument("--platform", default="dongchedi")
     import_session.add_argument("--file", type=Path, required=True)
+    reputation_init = sub.add_parser(
+        "reputation-init", help="从UTF-8 CSV一次性初始化27款口碑车型范围"
+    )
+    reputation_init.add_argument("--file", type=Path, required=True)
     args = parser.parse_args()
     if args.command == "serve":
         uvicorn.run("threadsnap.app:app", host=args.host, port=args.port, reload=False)
-    else:
+    elif args.command == "import-session":
         container = Container(get_settings())
         container.session_store.import_file(args.platform, args.file)
         print("平台会话已加密导入。")
+    else:
+        container = Container(get_settings())
+        result = container.reputation.initialize_scope_csv(args.file)
+        print(
+            f"口碑范围已初始化：{len(result['vehicles'])} 款车型，"
+            f"修订号 {result['revision']}。"
+        )
 
 
 if __name__ == "__main__":

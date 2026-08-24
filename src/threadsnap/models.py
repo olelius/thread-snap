@@ -697,3 +697,111 @@ class ScheduleEvent(Base):
         ForeignKey("extraction_runs.id", ondelete="SET NULL")
     )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+
+
+class ReputationScopeDraft(Base):
+    """口碑巡检唯一服务端草稿。"""
+
+    __tablename__ = "reputation_scope_drafts"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default="current")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    data: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    published_version_id: Mapped[str | None] = mapped_column(String(36))
+    source_sha256: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
+
+
+class ReputationScopeVersion(Base):
+    """已经发布且不可变的口碑巡检范围版本。"""
+
+    __tablename__ = "reputation_scope_versions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    source_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    published_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+
+
+class ReputationRun(Base):
+    """与帖子提取批次隔离的口碑巡检运行。"""
+
+    __tablename__ = "reputation_runs"
+    __table_args__ = (
+        Index("ix_reputation_runs_created", "source_type", "created_at"),
+        Index("ix_reputation_runs_status", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    number: Mapped[str] = mapped_column(String(40), nullable=False, unique=True)
+    source_type: Mapped[str] = mapped_column(String(24), nullable=False)
+    scenario_id: Mapped[str | None] = mapped_column(String(48))
+    fixture_version: Mapped[str | None] = mapped_column(String(32))
+    input_hash: Mapped[str | None] = mapped_column(String(64))
+    run_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    planned_date: Mapped[str] = mapped_column(String(10), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
+    platform_codes: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    planned_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    required_evidence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    complete_evidence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    report_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    report_text: Mapped[str | None] = mapped_column(Text)
+    report_path: Mapped[str | None] = mapped_column(Text)
+    xlsx_path: Mapped[str | None] = mapped_column(Text)
+    evidence_zip_path: Mapped[str | None] = mapped_column(Text)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    started_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class ReputationResult(Base):
+    """一次运行中一个车型平台组合的完整结果。"""
+
+    __tablename__ = "reputation_results"
+    __table_args__ = (
+        UniqueConstraint("run_id", "vehicle_id", "platform_code", name="uq_reputation_result"),
+        Index("ix_reputation_results_run_order", "run_id", "role_position", "vehicle_position"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("reputation_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    vehicle_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    series_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    vehicle_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    role: Mapped[str] = mapped_column(String(24), nullable=False)
+    role_position: Mapped[int] = mapped_column(Integer, nullable=False)
+    vehicle_position: Mapped[int] = mapped_column(Integer, nullable=False)
+    platform_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    platform_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    evidence_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    collected_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+
+
+class ReputationEvidence(Base):
+    """一个车型平台组合的完整原页和同源指标区域证据。"""
+
+    __tablename__ = "reputation_evidence"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    result_id: Mapped[str] = mapped_column(
+        ForeignKey("reputation_results.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    full_page_path: Mapped[str] = mapped_column(Text, nullable=False)
+    metric_region_path: Mapped[str] = mapped_column(Text, nullable=False)
+    full_page_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    metric_region_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    width: Mapped[int] = mapped_column(Integer, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)

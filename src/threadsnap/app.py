@@ -34,6 +34,12 @@ from .events import EventBus
 from .ids import uuid7
 from .local_sentiment import LocalSentimentAnalyzer
 from .models import ValidationJob
+from .reputation import (
+    MappingPasteRequest,
+    ReputationService,
+    ScopePublishRequest,
+    SyntheticRunCreate,
+)
 from .scheduler import SchedulerService
 from .schemas import (
     CircleBatchUpdate,
@@ -75,6 +81,11 @@ class Container:
         self.config = ConfigService(self.sessions)
         self.runs = RunService(self.sessions, settings.timezone)
         self.events = EventBus()
+        self.reputation = ReputationService(
+            self.sessions,
+            settings,
+            event_publisher=self.events.publish,
+        )
         self.local_sentiment = LocalSentimentAnalyzer(
             settings.paddlenlp_home,
             num_threads=settings.local_sentiment_num_threads,
@@ -158,6 +169,91 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
     @router.get("/platforms")
     def list_platforms(request: Request) -> list[dict[str, Any]]:
         return _container(request).config.list_platforms()
+
+    @router.get("/reputation/capabilities")
+    def reputation_capabilities(request: Request) -> dict[str, Any]:
+        return _container(request).reputation.capabilities()
+
+    @router.get("/reputation/runs")
+    def list_reputation_runs(
+        request: Request,
+        offset: int = Query(0, ge=0),
+        limit: int = Query(50, ge=1, le=200),
+    ) -> dict[str, Any]:
+        return _container(request).reputation.list_runs(offset, limit)
+
+    @router.post("/reputation/test-runs", status_code=202)
+    def create_reputation_test_run(
+        value: SyntheticRunCreate,
+        request: Request,
+    ) -> dict[str, Any]:
+        return _container(request).reputation.create_synthetic(value.scenario_id)
+
+    @router.get("/reputation/runs/{run_id}")
+    def get_reputation_run(run_id: str, request: Request) -> dict[str, Any]:
+        return _container(request).reputation.get_run(run_id, prefix)
+
+    @router.delete("/reputation/test-runs/{run_id}")
+    def delete_reputation_test_run(run_id: str, request: Request) -> dict[str, Any]:
+        return _container(request).reputation.delete_synthetic(run_id)
+
+    @router.get("/reputation/runs/{run_id}/report.txt")
+    def download_reputation_report(run_id: str, request: Request) -> FileResponse:
+        path = _container(request).reputation.get_file(run_id, "txt")
+        return FileResponse(path, filename=path.name, media_type="text/plain; charset=utf-8")
+
+    @router.get("/reputation/runs/{run_id}/export.xlsx")
+    def download_reputation_xlsx(run_id: str, request: Request) -> FileResponse:
+        path = _container(request).reputation.get_file(run_id, "xlsx")
+        return FileResponse(
+            path,
+            filename=path.name,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    @router.get("/reputation/runs/{run_id}/evidence.zip")
+    def download_reputation_evidence(run_id: str, request: Request) -> FileResponse:
+        path = _container(request).reputation.evidence_zip(run_id)
+        return FileResponse(path, filename=path.name, media_type="application/zip")
+
+    @router.get("/reputation/evidence/{evidence_id}/full")
+    def view_reputation_full_evidence(evidence_id: str, request: Request) -> FileResponse:
+        path = _container(request).reputation.get_evidence_file(evidence_id, "full")
+        return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private"})
+
+    @router.get("/reputation/evidence/{evidence_id}/metric")
+    def view_reputation_metric_evidence(evidence_id: str, request: Request) -> FileResponse:
+        path = _container(request).reputation.get_evidence_file(evidence_id, "metric")
+        return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private"})
+
+    @router.get("/reputation/scope")
+    def get_reputation_scope(request: Request) -> dict[str, Any]:
+        return _container(request).reputation.get_scope()
+
+    @router.post("/reputation/scope/mappings/preview")
+    def preview_reputation_mappings(
+        value: MappingPasteRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        return _container(request).reputation.preview_mappings(value)
+
+    @router.put("/reputation/scope/mappings")
+    def save_reputation_mappings(
+        value: MappingPasteRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        return _container(request).reputation.save_mappings(value)
+
+    @router.get("/reputation/scope/publish-preview")
+    def preview_reputation_scope_publish(request: Request) -> dict[str, Any]:
+        return _container(request).reputation.publish_preview()
+
+    @router.post("/reputation/scope/publish")
+    def publish_reputation_scope(
+        value: ScopePublishRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        return _container(request).reputation.publish_scope(value)
 
     @router.get("/sentiment/config")
     def get_sentiment_config(request: Request) -> dict[str, Any]:

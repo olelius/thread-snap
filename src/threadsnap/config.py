@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # 懂车帝当前会对无头浏览器返回 HTTP 200 零字节文档；认证浏览器默认使用
     # 完整 Chromium 的有头模式，Linux 由 Weston 提供无头 Wayland 显示。
     auth_browser_headless: bool = False
+    runtime_mode: str = "production"
+    enable_reputation_synthetic_runs: bool = False
+    reputation_test_database: bool = False
 
     @property
     def template_dir(self) -> Path:
@@ -57,6 +60,12 @@ class Settings(BaseSettings):
         return self.screenshot_dir / "artifacts"
 
     @property
+    def reputation_dir(self) -> Path:
+        """口碑巡检证据与交付文件根目录。"""
+
+        return self.data_dir / "reputation"
+
+    @property
     def paddlenlp_home(self) -> Path:
         """本地轻量文字模型与静态推理文件的持久目录。"""
 
@@ -71,6 +80,7 @@ class Settings(BaseSettings):
         self.auth_profile_dir.mkdir(parents=True, exist_ok=True)
         self.screenshot_evidence_dir.mkdir(parents=True, exist_ok=True)
         self.screenshot_artifact_dir.mkdir(parents=True, exist_ok=True)
+        self.reputation_dir.mkdir(parents=True, exist_ok=True)
         self.paddlenlp_home.mkdir(parents=True, exist_ok=True)
 
 
