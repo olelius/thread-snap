@@ -198,7 +198,17 @@ export type SentimentDetail = {
 
 export type SentimentMediaCoverage = { status: string; expected_count: number; processed_count: number; items: Array<{ input_index: number; url_hash: string; status: string; evidence: string[] }> }
 
-export type PageResult<T> = { items: T[]; total: number; offset: number; limit: number }
+export type RunSourceOption = {
+  key: string
+  platform_code: string
+  external_id: string
+  circle_name: string
+  source_name: string
+  list_order: 'latest_reply' | 'latest_publish'
+  list_order_name: string
+}
+
+export type PageResult<T> = { items: T[]; total: number; offset: number; limit: number; source_options?: RunSourceOption[] }
 
 export type PostNavigation = {
   previous_id?: string

@@ -374,6 +374,88 @@ class ApiAndConfigTests(AppCase):
         self.assertEqual("latest_reply", posts[0]["list_order"])
         self.assertEqual("最新回复", posts[0]["list_order_name"])
 
+    def test_run_posts_expose_actual_sources_and_filter_multiple_source_keys(self) -> None:
+        """批次来源选项必须区分顺序，并让列表、复制和导航共用精确多选。"""
+
+        reply = self.save_verified_circle(external_id="24729", name="A9L")
+        publish = self.save_verified_circle(external_id="24730", name="QQ3 EV")
+        with self.container.sessions.begin() as db:
+            stored_publish = db.get(Circle, publish.id)
+            assert stored_publish is not None
+            stored_publish.list_order = "latest_publish"
+            stored_publish.url = "https://www.dongchedi.com/community/24730/dongtai-release"
+        run = self.container.runs.create_manual(
+            ManualRunCreate(
+                platform_code="dongchedi",
+                circle_ids=[reply.id, publish.id],
+                quantity=1,
+            ),
+            scope="api",
+            header_key="source-multiselect-test-0001",
+        )
+        with self.container.sessions.begin() as db:
+            tasks = list(
+                db.scalars(
+                    select(CircleTask)
+                    .where(CircleTask.run_id == run["id"])
+                    .order_by(CircleTask.source_position)
+                )
+            )
+            self.assertEqual(2, len(tasks))
+            for index, task in enumerate(tasks, start=1):
+                db.add(
+                    PostSnapshot(
+                        run_id=run["id"],
+                        circle_task_id=task.id,
+                        platform_post_id=f"source-filter-{index}",
+                        url=f"https://www.dongchedi.com/ugc/article/source-filter-{index}",
+                        title=f"来源筛选帖子 {index}",
+                        visibility="visible",
+                        order_index=0,
+                    )
+                )
+
+        unfiltered = self.client.get(f"/api/v1/runs/{run['id']}/posts").json()
+        self.assertEqual(2, unfiltered["total"])
+        self.assertEqual(
+            [("A9L", "最新回复"), ("QQ3 EV", "最新发布")],
+            [
+                (option["source_name"], option["list_order_name"])
+                for option in unfiltered["source_options"]
+            ],
+        )
+        reply_key, publish_key = [option["key"] for option in unfiltered["source_options"]]
+
+        reply_only = self.client.get(
+            f"/api/v1/runs/{run['id']}/posts", params={"source_key": reply_key}
+        ).json()
+        self.assertEqual(1, reply_only["total"])
+        self.assertEqual("A9L", reply_only["items"][0]["source_name"])
+        self.assertEqual("最新回复", reply_only["items"][0]["list_order_name"])
+
+        selected_both = self.client.get(
+            f"/api/v1/runs/{run['id']}/posts",
+            params=[("source_key", reply_key), ("source_key", publish_key)],
+        ).json()
+        self.assertEqual(2, selected_both["total"])
+        self.assertEqual(2, len(selected_both["source_options"]))
+
+        copied = self.client.get(
+            f"/api/v1/runs/{run['id']}/posts/urls",
+            params={"source_key": publish_key},
+        ).json()
+        self.assertEqual(1, copied["total"])
+        self.assertIn("source-filter-2", copied["urls"][0])
+
+        reply_post_id = reply_only["items"][0]["id"]
+        navigation = self.client.get(
+            f"/api/v1/runs/{run['id']}/posts/{reply_post_id}/navigation",
+            params={"source_key": reply_key},
+        ).json()
+        self.assertEqual(1, navigation["total"])
+        self.assertIsNone(navigation["previous_id"])
+        self.assertIsNone(navigation["next_id"])
+
     def test_media_resolve_returns_fresh_deduplicated_urls_without_mutating_snapshot(self) -> None:
         """按需刷新只返回临时 URL；路径签名不同的同一视频只保留一条。"""
 

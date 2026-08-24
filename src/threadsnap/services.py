@@ -1704,6 +1704,7 @@ class RunService:
         *,
         title: str | None = None,
         circle: str | None = None,
+        source_keys: list[str] | None = None,
         visibility: str | None = None,
         sentiment_result: str | None = None,
         analysis_status: str | None = None,
@@ -1717,6 +1718,16 @@ class RunService:
             conditions.append(
                 or_(CircleTask.circle_name.ilike(text), CircleTask.external_id.ilike(text))
             )
+        if source_keys:
+            selected = set(source_keys)
+            task_ids = [
+                task.id
+                for task in db.scalars(
+                    select(CircleTask).where(CircleTask.run_id.in_(run_ids))
+                )
+                if task_source_key(task) in selected
+            ]
+            conditions.append(CircleTask.id.in_(task_ids))
         if visibility:
             conditions.append(PostSnapshot.visibility == visibility)
         if sentiment_result:
@@ -1758,6 +1769,7 @@ class RunService:
         *,
         title: str | None = None,
         circle: str | None = None,
+        source_keys: list[str] | None = None,
         visibility: str | None = None,
         sentiment_result: str | None = None,
         analysis_status: str | None = None,
@@ -1769,6 +1781,7 @@ class RunService:
             run_id,
             title=title,
             circle=circle,
+            source_keys=source_keys,
             visibility=visibility,
             sentiment_result=sentiment_result,
             analysis_status=analysis_status,
@@ -1806,6 +1819,7 @@ class RunService:
         *,
         title: str | None = None,
         circle: str | None = None,
+        source_keys: list[str] | None = None,
         visibility: str | None = None,
         sentiment_result: str | None = None,
         analysis_status: str | None = None,
@@ -1820,6 +1834,7 @@ class RunService:
                 run_id,
                 title=title,
                 circle=circle,
+                source_keys=source_keys,
                 visibility=visibility,
                 sentiment_result=sentiment_result,
                 analysis_status=analysis_status,
@@ -1865,6 +1880,7 @@ class RunService:
                 "total": total,
                 "offset": offset,
                 "limit": limit,
+                "source_options": related_source_options(db, run_id),
             }
 
     def post_detail(self, run_id: str, post_id: str) -> dict[str, Any]:
@@ -2176,6 +2192,48 @@ def task_source_name(
     base = task.circle_name or task.external_id
     order = "最新发布" if task.list_order == "latest_publish" else "最新回复"
     return f"{base} · {order}"
+
+
+def task_source_key(task: CircleTask) -> str:
+    """形成跨补提稳定且不受来源改名影响的筛选身份。"""
+
+    return canonical_hash(
+        [task.platform_code, task.external_id, task.section, task.list_order]
+    )
+
+
+def related_source_options(db: Session, run_id: str) -> list[dict[str, Any]]:
+    """返回关联批次真实任务中的去重来源，供结果页精确多选。"""
+
+    tasks = list(
+        db.scalars(
+            select(CircleTask)
+            .where(CircleTask.run_id.in_(related_run_ids(db, run_id)))
+            .order_by(CircleTask.source_position, CircleTask.created_at, CircleTask.id)
+        )
+    )
+    live_source_names = current_source_names(db, tasks)
+    options: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for task in tasks:
+        key = task_source_key(task)
+        if key in seen:
+            continue
+        seen.add(key)
+        options.append(
+            {
+                "key": key,
+                "platform_code": task.platform_code,
+                "external_id": task.external_id,
+                "circle_name": task.circle_name or task.external_id,
+                "source_name": task_source_name(task, live_source_names),
+                "list_order": task.list_order,
+                "list_order_name": (
+                    "最新发布" if task.list_order == "latest_publish" else "最新回复"
+                ),
+            }
+        )
+    return options
 
 
 def comment_dict(item: CommentSnapshot) -> dict[str, Any]:
