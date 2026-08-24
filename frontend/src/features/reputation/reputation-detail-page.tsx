@@ -40,7 +40,7 @@ export function ReputationDetailPage() {
       title={run.number}
       description={`${runTypeName(run.run_type)} · ${run.planned_date} · ${run.platform_codes.length} 个平台 · ${run.planned_count} 款车型`}
       eyebrow={<Button variant='ghost' size='sm' className='-ml-2 mb-1 h-7 text-xs text-muted-foreground' onClick={() => navigate({ to: '/reputation', search: { tab: 'runs' } })}><ArrowLeft className='size-3.5' />返回口碑巡检</Button>}
-      actions={<><StatusBadge value={run.status} label={statusName(run.status)} />{run.source_type === 'synthetic' && <Badge variant='outline' className='border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300'>合成测试</Badge>}</>}
+      actions={<><StatusBadge value={run.status} label={statusName(run.status)} />{run.source_type === 'synthetic' && <Badge variant='outline' className='border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300'>合成测试</Badge>}{run.source_type === 'real_acceptance' && <Badge variant='outline' className='border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'>真实验收</Badge>}</>}
     />
     <div className='grid shrink-0 gap-3 sm:grid-cols-2 xl:grid-cols-4'>
       <Kpi label='处理完成' value={`${done}/${run.planned_count}`} hint={`${completion}% 已结束`} icon={Check} tone='cyan'><Progress value={completion} className='mt-2 h-1.5' /></Kpi>

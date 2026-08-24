@@ -326,6 +326,13 @@ class ReputationInspectionTest(unittest.TestCase):
         )
         self.assertEqual(publish.status_code, 200, publish.text)
         self.assertEqual(publish.json()["published_version"]["version"], 1)
+        acceptance = self.client.app.state.container.reputation.create_real_acceptance(
+            [validation["id"]]
+        )
+        self.assertEqual(acceptance["source_type"], "real_acceptance")
+        self.assertEqual(acceptance["status"], "success")
+        self.assertEqual(len(acceptance["results"]), 27)
+        self.assertEqual(acceptance["complete_evidence_count"], 27)
 
     def test_dongchedi_reputation_url_requires_matching_stable_id(self) -> None:
         url = "https://www.dongchedi.com/auto/series/score/24729-x-x-x-x-x"

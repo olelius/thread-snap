@@ -501,6 +501,181 @@ class ReputationService:
             self.event_publisher("reputation.run.changed", run_id, status=run.status)
         return self.get_run(run_id)
 
+    def create_real_acceptance(self, validation_run_ids: list[str]) -> dict[str, Any]:
+        """把已完成的真实映射验证结果冻结为一次可见的基线验收批次。"""
+
+        run_ids = list(dict.fromkeys(item.strip() for item in validation_run_ids if item.strip()))
+        if not run_ids:
+            raise DomainError("REPUTATION_VALIDATION_RUNS_REQUIRED", "请提供真实映射验证运行编号。")
+        with self.sessions() as db:
+            draft = db.get(ReputationScopeDraft, "current")
+            version = db.get(ReputationScopeVersion, draft.published_version_id) if draft else None
+            if not version:
+                raise DomainError("REPUTATION_SCOPE_NOT_PUBLISHED", "请先发布口碑巡检范围。")
+            validation_runs = [db.get(ReputationMappingValidationRun, item) for item in run_ids]
+            if any(item is None for item in validation_runs):
+                raise DomainError("REPUTATION_VALIDATION_RUN_NOT_FOUND", "存在无效的验证运行编号。")
+            attempts = db.scalars(
+                select(ReputationMappingValidationAttempt)
+                .where(
+                    ReputationMappingValidationAttempt.run_id.in_(run_ids),
+                    ReputationMappingValidationAttempt.status == "success",
+                )
+                .order_by(ReputationMappingValidationAttempt.finished_at)
+            ).all()
+            snapshot = json.loads(json.dumps(version.snapshot, ensure_ascii=False))
+            vehicles = snapshot.get("vehicles", [])
+            by_vehicle = {item.vehicle_id: item for item in attempts}
+            missing = [item["id"] for item in vehicles if item["id"] not in by_vehicle]
+            if missing:
+                raise DomainError(
+                    "REPUTATION_ACCEPTANCE_INCOMPLETE",
+                    "真实验证结果尚未覆盖全部已发布车型。",
+                    details=[{"vehicle_id": item, "reason": "缺少成功结果"} for item in missing],
+                )
+            for vehicle in vehicles:
+                mapping = vehicle.get("mappings", {}).get(PLATFORM_CODE) or {}
+                attempt = by_vehicle[vehicle["id"]]
+                if attempt.mapping_hash != _mapping_hash(vehicle["id"], mapping):
+                    raise DomainError(
+                        "REPUTATION_ACCEPTANCE_MAPPING_CHANGED",
+                        f"车型{vehicle['id']}的成功结果不属于当前已发布映射。",
+                    )
+                for raw, digest in (
+                    (attempt.full_page_path, attempt.full_page_sha256),
+                    (attempt.metric_region_path, attempt.metric_region_sha256),
+                ):
+                    if not raw or not digest or not Path(raw).is_file() or _sha256(Path(raw)) != digest:
+                        raise DomainError(
+                            "REPUTATION_ACCEPTANCE_EVIDENCE_INVALID",
+                            f"车型{vehicle['id']}的真实页面证据缺失或校验失败。",
+                        )
+            input_hash = _text_hash(
+                {
+                    "scope_version_id": version.id,
+                    "validation_run_ids": run_ids,
+                    "attempt_ids": [by_vehicle[item["id"]].id for item in vehicles],
+                }
+            )
+            existing = db.scalar(
+                select(ReputationRun).where(
+                    ReputationRun.source_type == "real_acceptance",
+                    ReputationRun.input_hash == input_hash,
+                )
+            )
+            if existing:
+                return self.get_run(existing.id)
+            started_at = min(item.started_at for item in validation_runs if item is not None)
+            finished_at = max(item.finished_at for item in validation_runs if item and item.finished_at)
+
+        now = datetime.now(timezone.utc)
+        run_id = uuid7()
+        run_number = f"RP-A-{now:%Y%m%d-%H%M%S}-{run_id[-4:].upper()}"
+        run_dir = self.settings.reputation_dir / run_id
+        run_dir.mkdir(parents=True, exist_ok=False)
+        run = ReputationRun(
+            id=run_id,
+            number=run_number,
+            source_type="real_acceptance",
+            scenario_id="real_validation_acceptance",
+            input_hash=input_hash,
+            run_type="baseline_initialization",
+            planned_date=now.astimezone(ZoneInfo(self.settings.timezone)).date().isoformat(),
+            status="success",
+            platform_codes=[PLATFORM_CODE],
+            planned_count=len(vehicles),
+            completed_count=len(vehicles),
+            failed_count=0,
+            required_evidence_count=len(vehicles),
+            complete_evidence_count=len(vehicles),
+            report_status="success",
+            created_at=now,
+            started_at=started_at,
+            finished_at=finished_at,
+        )
+
+        def metric(raw: str | None, *, inverse: bool = False) -> dict[str, Any]:
+            return (
+                _metric(Decimal(raw), None, inverse=inverse, raw=raw)
+                if raw is not None
+                else _metric(None, None, inverse=inverse, state="not_available")
+            )
+
+        try:
+            with self.sessions.begin() as db:
+                db.add(run)
+                db.flush()
+                for vehicle in vehicles:
+                    attempt = by_vehicle[vehicle["id"]]
+                    result = ReputationResult(
+                        run_id=run_id,
+                        vehicle_id=vehicle["id"],
+                        series_name=vehicle["series_name"],
+                        vehicle_name=vehicle["vehicle_name"],
+                        role=vehicle["role"],
+                        role_position=0 if vehicle["role"] == "focus" else 1,
+                        vehicle_position=int(vehicle["role_order"]),
+                        platform_code=PLATFORM_CODE,
+                        platform_name=PLATFORM_NAME,
+                        status="success",
+                        metrics={
+                            "score": metric(attempt.metrics.get("score")),
+                            "rank": metric(attempt.metrics.get("rank"), inverse=True),
+                            "volume": metric(attempt.metrics.get("volume")),
+                        },
+                        evidence_required=True,
+                        collected_at=attempt.finished_at,
+                    )
+                    db.add(result)
+                    db.flush()
+                    evidence_dir = run_dir / "evidence" / vehicle["id"]
+                    evidence_dir.mkdir(parents=True, exist_ok=True)
+                    full_path = evidence_dir / "full.png"
+                    metric_path = evidence_dir / "metric.png"
+                    shutil.copy2(attempt.full_page_path, full_path)
+                    shutil.copy2(attempt.metric_region_path, metric_path)
+                    with Image.open(full_path) as source:
+                        width, height = source.size
+                    db.add(
+                        ReputationEvidence(
+                            result_id=result.id,
+                            full_page_path=str(full_path),
+                            metric_region_path=str(metric_path),
+                            full_page_sha256=attempt.full_page_sha256,
+                            metric_region_sha256=attempt.metric_region_sha256,
+                            width=width,
+                            height=height,
+                        )
+                    )
+                db.flush()
+                stored_results = db.scalars(
+                    select(ReputationResult)
+                    .where(ReputationResult.run_id == run_id)
+                    .order_by(ReputationResult.role_position, ReputationResult.vehicle_position)
+                ).all()
+                evidence_by_result = {
+                    item.result_id: item
+                    for item in db.scalars(
+                        select(ReputationEvidence).where(
+                            ReputationEvidence.result_id.in_([row.id for row in stored_results])
+                        )
+                    ).all()
+                }
+                report = self._render_report(run, stored_results)
+                report_path = run_dir / f"{run_number}.txt"
+                report_path.write_text(report, encoding="utf-8")
+                xlsx_path = run_dir / f"{run_number}.xlsx"
+                self._create_xlsx(run, stored_results, evidence_by_result, xlsx_path)
+                run.report_text = report
+                run.report_path = str(report_path)
+                run.xlsx_path = str(xlsx_path)
+        except Exception:
+            shutil.rmtree(run_dir, ignore_errors=True)
+            raise
+        if self.event_publisher:
+            self.event_publisher("reputation.run.changed", run_id, status=run.status)
+        return self.get_run(run_id)
+
     def delete_synthetic(self, run_id: str) -> dict[str, Any]:
         self._require_synthetic()
         with self.sessions.begin() as db:
