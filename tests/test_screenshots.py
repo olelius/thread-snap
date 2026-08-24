@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import tempfile
@@ -11,13 +12,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageChops, ImageDraw
 from sqlalchemy import select
 
 from threadsnap.collectors.dongchedi import DongchediCollector
 from threadsnap.config import Settings
 from threadsnap.db import build_engine, build_session_factory, migrate_database
 from threadsnap.models import (
+    CirclePageEvidence,
     CircleTask,
     ExtractionRun,
     PostSnapshot,
@@ -200,6 +202,11 @@ class ScreenshotArtifactTests(unittest.TestCase):
         self.service.persist_page(task_id, self.evidence_payload())
         loaded = self.service.load_page(task_id, 1)
         self.assertTrue(loaded and loaded["persisted"])
+        with self.factory() as db:
+            evidence = db.scalar(select(CirclePageEvidence))
+            assert evidence is not None
+            original_path = Path(evidence.screenshot_path)
+        original_bytes = original_path.read_bytes()
         self.add_posts(task_id)
         self.service.mark_task_complete(task_id)
         self.assertTrue(self.service.process_once())
@@ -209,8 +216,14 @@ class ScreenshotArtifactTests(unittest.TestCase):
         self.assertEqual((group["status"], group["item_count"], group["negative_count"]), ("ready", 2, 1))
         self.assertEqual(len(group["artifact"]["tiles"]), 1)
         tile_path = self.service.artifact_file(group["id"], 0)
-        with Image.open(tile_path) as tile:
-            self.assertEqual(tile.getpixel((2, 76)), (239, 68, 68))
+        with Image.open(original_path) as original, Image.open(tile_path) as tile:
+            self.assertEqual(tile.size, original.size)
+            self.assertEqual(tile.getpixel((22, 42)), (239, 68, 68))
+            self.assertEqual(tile.getpixel((10, 10)), original.getpixel((10, 10)))
+            self.assertEqual(tile.getpixel((30, 230)), original.getpixel((30, 230)))
+            difference = ImageChops.difference(original.convert("RGB"), tile.convert("RGB"))
+            self.assertEqual(difference.getbbox(), (22, 42, 519, 179))
+        self.assertEqual(original_bytes, original_path.read_bytes())
         package = self.service.artifact_file(group["id"])
         with zipfile.ZipFile(package) as archive:
             self.assertEqual(set(archive.namelist()), {"manifest.json", "tile-0001.png"})
@@ -342,19 +355,33 @@ class ScreenshotArtifactTests(unittest.TestCase):
         self.assertEqual((20, 180, 230, 320), _recover_card_crop_box(source, second))
         source.close()
 
-    def test_renderer_splits_only_between_cards_below_height_limit(self) -> None:
-        source_path = Path(self.temporary.name) / "source.png"
-        Image.new("RGB", (500, 350), "white").save(source_path)
-        evidence = SimpleNamespace(screenshot_path=str(source_path))
+    def test_renderer_keeps_each_original_page_as_a_full_size_tile(self) -> None:
+        source_paths = [
+            Path(self.temporary.name) / "source-one.png",
+            Path(self.temporary.name) / "source-two.png",
+        ]
+        Image.new("RGB", (500, 350), "white").save(source_paths[0])
+        Image.new("RGB", (640, 480), "#e2e8f0").save(source_paths[1])
+        evidences = [
+            SimpleNamespace(
+                id=f"evidence-{index}",
+                screenshot_path=str(path),
+                screenshot_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+                run_id=f"run-{index}",
+                page_number=index,
+                captured_at=datetime(2026, 8, 23, tzinfo=timezone.utc),
+            )
+            for index, path in enumerate(source_paths, start=1)
+        ]
         selected = []
         inputs = []
-        for index in range(100):
-            item = SimpleNamespace(x=0, y=0, width=500, height=350)
+        for index, evidence in enumerate(evidences):
+            item = SimpleNamespace(x=20, y=40, width=200, height=100)
             post = SimpleNamespace(
                 id=f"post-{index}",
                 platform_post_id=f"platform-{index}",
                 title=f"帖子 {index}",
-                sentiment_result="negative" if index % 10 == 0 else "non_negative",
+                sentiment_result="negative" if index == 0 else "non_negative",
             )
             selected.append((item, post, evidence))
             inputs.append(
@@ -374,25 +401,28 @@ class ScreenshotArtifactTests(unittest.TestCase):
             selected,
             inputs,
         )
-        self.assertGreater(len(rendered["tiles"]), 1)
-        self.assertTrue(all(tile["height"] <= 30_000 for tile in rendered["tiles"]))
-        self.assertEqual(len(rendered["items"]), 100)
+        self.assertEqual([(tile["width"], tile["height"]) for tile in rendered["tiles"]], [(500, 350), (640, 480)])
+        self.assertEqual(len(rendered["items"]), 2)
         self.assertEqual(
             sum(1 for item in rendered["items"] if item["sentiment_result"] == "negative"),
-            10,
+            1,
         )
         first_item = rendered["items"][0]
-        self.assertEqual(350, first_item["height"])
+        self.assertEqual(100, first_item["height"])
+        self.assertEqual(40, first_item["y"])
         self.assertEqual("20260823-SPLIT-001", first_item["run_number"])
         self.assertEqual("2026-08-23T00:00:00+00:00", first_item["captured_at"])
         with Image.open(rendered["tiles"][0]["path"]) as tile:
-            # 卡片顶部直接使用原始像素，不再插入 28px 的逐卡溯源条。
-            self.assertEqual((255, 255, 255), tile.getpixel((20, first_item["y"] + 10)))
-            # 负面标记仍只叠加在原始卡片边界内。
-            self.assertEqual((239, 68, 68), tile.getpixel((2, first_item["y"] + 2)))
+            self.assertEqual((500, 350), tile.size)
+            self.assertEqual((255, 255, 255), tile.getpixel((10, 10)))
+            self.assertEqual((239, 68, 68), tile.getpixel((22, 42)))
+        with Image.open(rendered["tiles"][1]["path"]) as tile:
+            self.assertEqual((640, 480), tile.size)
+            self.assertEqual((226, 232, 240), tile.getpixel((22, 42)))
         with zipfile.ZipFile(rendered["package_path"]) as archive:
             manifest = json.loads(archive.read("manifest.json"))
-        self.assertEqual("v3-pixel-aligned-card-boundaries", manifest["renderer_version"])
+        self.assertEqual("threadsnap.screenshot-artifact.v2", manifest["schema"])
+        self.assertEqual("v4-full-page-evidence-background", manifest["renderer_version"])
 
 
 if __name__ == "__main__":

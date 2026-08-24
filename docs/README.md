@@ -102,9 +102,10 @@
 3. `docs/chains/first-platform-delivery.md`；
 4. `docs/chains/sentiment-analysis.md`；
 5. `docs/adr/0026-use-synchronized-page-evidence-and-related-screenshot-artifacts.md`；
-6. `docs/research/circle-screenshot-poc-plan.md`；
-7. `docs/research/circle-screenshot-poc-results.md`；
-8. 执行 PoC 时读取 Git 外的 `artifacts/poc/inputs/circle-screenshot/` 真实样本。
+6. `docs/adr/0031-render-negative-artifacts-on-full-page-evidence.md`；
+7. `docs/research/circle-screenshot-poc-plan.md`；
+8. `docs/research/circle-screenshot-poc-results.md`；
+9. 执行 PoC 时读取 Git 外的 `artifacts/poc/inputs/circle-screenshot/` 真实样本。
 
 ## 4. 已接受 ADR
 
@@ -137,6 +138,7 @@
 | `docs/adr/0025-add-deepseek-cloud-text-sentiment-option.md` | 舆情反馈增加独立凭证的 DeepSeek 云端纯文字选项 |
 | `docs/adr/0026-use-synchronized-page-evidence-and-related-screenshot-artifacts.md` | 用同一冻结页面清单生成原始证据，并按关联圈子成果组合成版本化截图成果 |
 | `docs/adr/0027-use-bounded-clean-correction-and-structural-recovery.md` | 云端舆情使用干净纠正上下文，并只恢复可唯一证明的单括号结构错误 |
+| `docs/adr/0031-render-negative-artifacts-on-full-page-evidence.md` | 关联截图在完整原始页面副本上沿用负面框选，不再裁片拼接 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 
@@ -166,7 +168,7 @@ artifacts/poc/
 
 舆情反馈 PoC 使用 `inputs/sentiment-analysis/`、`results/sentiment-qwen3-5-omni-plus/<round-id>/` 和 `results/sentiment-qwen3-5-omni-plus-image-text/<round-id>/`；完整签名 URL、原始模型响应和 API 配置只保存在 Git 外本地产物中。
 
-圈子页面截图 PoC 使用 `inputs/circle-screenshot/` 和 `results/circle-screenshot/<round-id>/`；原始全页图片、卡片裁剪、合成分片、浏览器追踪和资源指标均保存在 Git 外。
+圈子页面截图 PoC 使用 `inputs/circle-screenshot/` 和 `results/circle-screenshot/<round-id>/`；原始全页图片、完整标注页、浏览器追踪和资源指标均保存在 Git 外；历史轮次的卡片裁剪与合成分片继续作为冻结证据保留。
 
 ## 6. 文档维护规则
 

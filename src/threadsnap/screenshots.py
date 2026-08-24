@@ -37,9 +37,7 @@ from .models import (
 from .services import related_run_ids
 
 TERMINAL_TASK_STATUSES = {"success", "partial_success", "failed"}
-MAX_TILE_HEIGHT = 30_000
-HEADER_HEIGHT = 74
-RENDERER_VERSION = "v3-pixel-aligned-card-boundaries"
+RENDERER_VERSION = "v4-full-page-evidence-background"
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -515,7 +513,9 @@ class ScreenshotService:
                     group.error_message = "圈子任务没有取得可生成成果的有效页面条目。"
                 return True
             run_numbers = {
-                evidence.run_id: (db.get(ExtractionRun, evidence.run_id).number if db.get(ExtractionRun, evidence.run_id) else evidence.run_id)
+                evidence.run_id: (
+                    run.number if (run := db.get(ExtractionRun, evidence.run_id)) else evidence.run_id
+                )
                 for _item, _post, evidence in selected
             }
             inputs = [
@@ -526,7 +526,10 @@ class ScreenshotService:
                     "sentiment_updated_at": (
                         post.sentiment_updated_at.isoformat() if post.sentiment_updated_at else None
                     ),
+                    "evidence_id": evidence.id,
                     "evidence_sha256": evidence.screenshot_sha256,
+                    "evidence_run_id": evidence.run_id,
+                    "evidence_page_number": evidence.page_number,
                     "run_number": run_numbers[evidence.run_id],
                     "captured_at": evidence.captured_at.isoformat(),
                     "rect": [item.x, item.y, item.width, item.height],
@@ -639,102 +642,59 @@ class ScreenshotService:
     ) -> dict[str, Any]:
         output_dir = self.settings.screenshot_artifact_dir / group["id"] / f"v{version:04d}"
         output_dir.mkdir(parents=True, exist_ok=False)
-        render_cards: list[tuple[int, Any, Any, Any, tuple[int, int, int, int]]] = []
-        geometry_source: Image.Image | None = None
-        geometry_source_path: str | None = None
+
+        # 一个成果 tile 对应一张实际参与去重结果的原始页面证据。页面顺序仍由
+        # selected 的既有顺序决定，帖子去重、判定和框选边界逻辑均不改变。
+        page_specs: OrderedDict[
+            str,
+            tuple[Any, list[tuple[int, Any, Any]]],
+        ] = OrderedDict()
         for selected_index, (item, post, evidence) in enumerate(selected):
-            if geometry_source_path != evidence.screenshot_path:
-                if geometry_source is not None:
-                    geometry_source.close()
-                geometry_source_path = evidence.screenshot_path
-                geometry_source = Image.open(geometry_source_path)
-            assert geometry_source is not None
-            render_cards.append(
-                (
-                    selected_index,
-                    item,
-                    post,
-                    evidence,
-                    _recover_card_crop_box(geometry_source, item),
-                )
-            )
-        if geometry_source is not None:
-            geometry_source.close()
-        width = max([box[2] - box[0] for *_values, box in render_cards] or [1440])
-        tile_specs: list[list[tuple[int, Any, Any, Any, tuple[int, int, int, int]]]] = []
-        current: list[tuple[int, Any, Any, Any, tuple[int, int, int, int]]] = []
-        current_height = HEADER_HEIGHT
-        for selected_index, item, post, evidence, box in render_cards:
-            card_height = box[3] - box[1]
-            if current and current_height + card_height > MAX_TILE_HEIGHT:
-                tile_specs.append(current)
-                current = []
-                current_height = HEADER_HEIGHT
-            current.append((selected_index, item, post, evidence, box))
-            current_height += card_height
-        if current or not tile_specs:
-            tile_specs.append(current)
+            evidence_key = str(getattr(evidence, "id", None) or evidence.screenshot_path)
+            page = page_specs.get(evidence_key)
+            if page is None:
+                page = (evidence, [])
+                page_specs[evidence_key] = page
+            page[1].append((selected_index, item, post))
+
         tiles: list[dict[str, Any]] = []
         artifact_items: list[dict[str, Any]] = []
-        for tile_index, tile_cards in enumerate(tile_specs):
-            height = HEADER_HEIGHT + sum(
-                box[3] - box[1] for _index, _item, _post, _evidence, box in tile_cards
-            )
-            canvas = Image.new("RGB", (width, max(height, 240)), "#ffffff")
-            draw = ImageDraw.Draw(canvas)
-            title = group["circle_name"] or group["external_id"]
-            draw.text(
-                (20, 12),
-                f"{title} · {group['list_order']} · 成果 v{version}",
-                fill="#111827",
-                font=_font(24),
-            )
-            draw.text(
-                (20, 44),
-                f"第 {tile_index + 1}/{len(tile_specs)} 片 · 原始页面证据裁片 · 红框为负面",
-                fill="#64748b",
-                font=_font(15),
-            )
-            y = HEADER_HEIGHT
-            if not tile_cards:
-                draw.text((20, 110), "本次圈子页面有效条目为 0。", fill="#475569", font=_font(20))
-            source: Image.Image | None = None
-            source_path: str | None = None
-            for selected_index, item, post, evidence, box in tile_cards:
-                if source_path != evidence.screenshot_path:
-                    if source is not None:
-                        source.close()
-                    source_path = evidence.screenshot_path
-                    source = Image.open(source_path)
-                assert source is not None
-                left, top, right, bottom = box
-                card = source.crop((left, top, right, bottom)).convert("RGB")
-                card_draw = ImageDraw.Draw(card)
-                if post.sentiment_result == "negative":
-                    card_draw.rectangle(
-                        (2, 2, card.width - 3, card.height - 3),
-                        outline="#ef4444",
-                        width=5,
+        for tile_index, (evidence, page_cards) in enumerate(page_specs.values()):
+            source_path = Path(evidence.screenshot_path)
+            actual_sha256 = _sha256_file(source_path)
+            expected_sha256 = getattr(evidence, "screenshot_sha256", actual_sha256)
+            if actual_sha256 != expected_sha256:
+                raise RuntimeError(f"原始页面证据校验失败：{source_path}")
+            with Image.open(source_path) as source:
+                canvas = source.convert("RGB")
+                draw = ImageDraw.Draw(canvas)
+                for selected_index, item, post in page_cards:
+                    left, top, right, bottom = _recover_card_crop_box(source, item)
+                    if post.sentiment_result == "negative":
+                        draw.rectangle(
+                            (
+                                left + 2,
+                                top + 2,
+                                max(left + 2, right - 3),
+                                max(top + 2, bottom - 3),
+                            ),
+                            outline="#ef4444",
+                            width=5,
+                        )
+                    artifact_items.append(
+                        {
+                            "post_id": post.id,
+                            "platform_post_id": post.platform_post_id,
+                            "title": post.title,
+                            "sentiment_result": post.sentiment_result,
+                            "run_number": inputs[selected_index]["run_number"],
+                            "captured_at": inputs[selected_index]["captured_at"],
+                            "tile_index": tile_index,
+                            "y": top,
+                            "height": bottom - top,
+                            "source_rect": [left, top, right - left, bottom - top],
+                        }
                     )
-                canvas.paste(card, (0, y))
-                artifact_items.append(
-                    {
-                        "post_id": post.id,
-                        "platform_post_id": post.platform_post_id,
-                        "title": post.title,
-                        "sentiment_result": post.sentiment_result,
-                        "run_number": inputs[selected_index]["run_number"],
-                        "captured_at": inputs[selected_index]["captured_at"],
-                        "tile_index": tile_index,
-                        "y": y,
-                        "height": card.height,
-                        "source_rect": [left, top, card.width, card.height],
-                    }
-                )
-                y += card.height
-                card.close()
-            if source is not None:
-                source.close()
             tile_path = output_dir / f"tile-{tile_index + 1:04d}.png"
             canvas.save(tile_path, format="PNG", optimize=True)
             tiles.append(
@@ -744,11 +704,40 @@ class ScreenshotService:
                     "sha256": _sha256_file(tile_path),
                     "width": canvas.width,
                     "height": canvas.height,
+                    "source_evidence_id": getattr(evidence, "id", None),
+                    "source_sha256": getattr(evidence, "screenshot_sha256", None),
+                    "source_run_id": getattr(evidence, "run_id", None),
+                    "source_page_number": getattr(evidence, "page_number", None),
+                    "captured_at": (
+                        evidence.captured_at.isoformat()
+                        if getattr(evidence, "captured_at", None)
+                        else None
+                    ),
+                }
+            )
+            canvas.close()
+
+        # 兼容没有原始页面证据的历史“成功但 0 条”任务；真实证据一旦存在，
+        # 成果始终使用完整原图，不进入此占位分支。
+        if not tiles:
+            canvas = Image.new("RGB", (1440, 240), "#ffffff")
+            draw = ImageDraw.Draw(canvas)
+            draw.text((20, 100), "本次圈子页面有效条目为 0。", fill="#475569", font=_font(20))
+            tile_path = output_dir / "tile-0001.png"
+            canvas.save(tile_path, format="PNG", optimize=True)
+            tiles.append(
+                {
+                    "index": 0,
+                    "path": str(tile_path.resolve()),
+                    "sha256": _sha256_file(tile_path),
+                    "width": canvas.width,
+                    "height": canvas.height,
+                    "synthetic_empty": True,
                 }
             )
             canvas.close()
         manifest = {
-            "schema": "threadsnap.screenshot-artifact.v1",
+            "schema": "threadsnap.screenshot-artifact.v2",
             "renderer_version": RENDERER_VERSION,
             "group": group,
             "version": version,
