@@ -16,6 +16,23 @@
 
 ---
 
+## 2026-08-24 — 垂媒口碑巡检隔离纵切实现
+**总目标**：在现有应用外壳中实现独立口碑巡检前后端、车型范围草稿和可重复的合成验收链，并保持真实平台未验证边界可见。
+**状态**：✅ 数据库、双API、范围初始化/映射、三场景合成运行、排名/证据/汇报UI及真实浏览器验收已完成；⏳ 真实平台适配器、映射验证、10:00正式调度与真实首跑等待页面合同和27款页面样本。
+**干到哪里了**：
+- [x] 新增 Alembic `e1f7a9c4d203` 及范围草稿/版本、巡检运行、车型平台结果、逻辑证据模型；迁移 `upgrade → downgrade → upgrade` 往返通过。
+- [x] 新增 `/api/v1/reputation/*` 与 `/internal/v1/reputation/*` 能力、列表、详情、三因子隔离测试、证据、TXT/XLSX/ZIP下载、范围、映射预览/原子保存及发布门禁接口；真实适配器能力明确返回 `not_configured`。
+- [x] `threadsnap reputation-init --file` 原子校验27款、14/13角色分母、唯一键和连续顺序；仓库增加空CSV模板与Schema。后续映射按单平台四列Tab数据预览，错误行零写入。
+- [x] 三个确定性场景均真实生成27项：基线与月末证据27/27，日常混合证据6/6；网页和XLSX按业务方向红绿并辅以箭头文字，TXT保持纯文本，证据ZIP包含原始PNG、manifest和SHA256SUMS。
+- [x] 前端新增顶级“口碑巡检”，内部分为“巡检批次 / 车型与映射”，详情分为“排名数据 / 页面证据 / 汇报结果”；复用现有密度、色板、卡片、表格和深链，并加入180～300ms克制动效与减少动态效果支持。
+- [x] 完整115项后端测试、Ruff、Python编译、`pip check`、前端TypeScript/生产构建（2467 modules）和 `git diff --check` 通过；隔离后端、Vite与代理健康均为`ok`。
+- [x] Patchright在1600×1000真实触发日常混合测试并检查列表、排名、证据、汇报、范围和错误预览，页面无脚本异常；证据位于 `artifacts/runtime/reputation-ui/verification.json`，SHA-256 `5a8963df2ffb74299b90ca25ce327bde272a192548de6897f53c4e78c554093d`。
+**下一步**：取得当前平台真实口碑页面合同和27款可复核样本后，实现映射三门禁验证、受控并发真实适配器、10:00/10:30调度、失败项补跑与首个27/27真实基线验收；不得用本次合成结果替代该门禁。
+**边界**：测试手动按钮只由后端三因子能力开放，不访问平台、不写帖子提取批次或正式基线；当前未猜测页面选择器，也未声称正式调度和真实首跑完成。
+**关联**：`src/threadsnap/reputation.py`、`frontend/src/features/reputation/`、`tests/test_reputation.py`、`docs/templates/reputation-scope-v1.*`、`docs/adr/0032-separate-reputation-inspection-from-post-extraction.md`、`docs/adr/0036-isolate-synthetic-reputation-test-runs.md`、`docs/chains/reputation-inspection.md`
+
+---
+
 ## 2026-08-24 — 垂媒口碑巡检需求澄清与领域建模
 **总目标**：在不污染现有帖子提取批次语义的前提下，逐项确认垂媒口碑日检、月检、跨期比较、页面证据和汇报规则，形成可实现、可验收的产品与技术设计。
 **状态**：✅ 核心需求访谈、领域建模、产品与技术合同、ADR及整体冲突检查已完成；尚未进入功能实现。

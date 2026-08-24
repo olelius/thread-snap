@@ -42,8 +42,20 @@ const configRoute = createRoute({
   component: lazyRouteComponent(() => import('@/features/config/config-page'), 'ConfigPage'),
   validateSearch: (search: Record<string, unknown>) => ({ tab: oneOf(search.tab, ['plan', 'rules', 'schedule', 'platforms', 'circles', 'history', 'templates', 'sentiment'] as const) ?? 'rules' }),
 })
+const reputationRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/reputation',
+  component: lazyRouteComponent(() => import('@/features/reputation/reputation-page'), 'ReputationPage'),
+  validateSearch: (search: Record<string, unknown>) => ({ tab: oneOf(search.tab, ['runs', 'scope'] as const) ?? 'runs' }),
+})
+const reputationDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/reputation/runs/$runId',
+  component: lazyRouteComponent(() => import('@/features/reputation/reputation-detail-page'), 'ReputationDetailPage'),
+  validateSearch: (search: Record<string, unknown>) => ({ view: oneOf(search.view, ['ranking', 'evidence', 'report'] as const) ?? 'ranking' }),
+})
 
-const routeTree = rootRoute.addChildren([indexRoute, runsRoute, runDetailRoute, configRoute])
+const routeTree = rootRoute.addChildren([indexRoute, runsRoute, runDetailRoute, configRoute, reputationRoute, reputationDetailRoute])
 export const router = createRouter({ routeTree, defaultPreload: 'intent', scrollRestoration: true })
 
 declare module '@tanstack/react-router' {
