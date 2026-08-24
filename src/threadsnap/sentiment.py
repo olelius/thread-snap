@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import socket
 import threading
@@ -99,6 +100,10 @@ SENTIMENT_CLOUD_CONCURRENCY_MIN = 1
 SENTIMENT_CLOUD_CONCURRENCY_MAX = 64
 SENTIMENT_CLOUD_CONCURRENCY_DEFAULT = 8
 DEEPSEEK_READ_TIMEOUT_SECONDS = 30.0
+DEEPSEEK_TOTAL_TIMEOUT_SECONDS = 60.0
+SENTIMENT_WATCHDOG_INTERVAL_SECONDS = 5.0
+
+logger = logging.getLogger(__name__)
 
 
 def model_profile(model_code: str) -> dict[str, str]:
@@ -1008,9 +1013,15 @@ class SentimentModelClient:
             request_id = response.headers.get("x-request-id") or response.headers.get(
                 "x-dashscope-request-id"
             )
-            text, usage, chunks, done_seen = parse_sse_lines_with_completion(
-                response.iter_lines()
-            )
+            lines = response.iter_lines()
+            if tool_name:
+                lines = _iter_sse_lines_with_deadline(
+                    lines,
+                    started=started,
+                    timeout_seconds=DEEPSEEK_TOTAL_TIMEOUT_SECONDS,
+                    request_id=request_id,
+                )
+            text, usage, chunks, done_seen = parse_sse_lines_with_completion(lines)
         duration_ms = round((monotonic() - started) * 1000)
         finish_reasons: list[str] = []
         for chunk in chunks:
@@ -1087,6 +1098,27 @@ class ModelRequestError(RuntimeError):
         self.usage = usage
         self.request_id = request_id
         self.duration_ms = duration_ms
+
+
+def _iter_sse_lines_with_deadline(
+    lines,
+    *,
+    started: float,
+    timeout_seconds: float,
+    request_id: str | None,
+):
+    """在逐块读取超时之外，为 DeepSeek 流增加不可被心跳绕过的总时限。"""
+
+    for line in lines:
+        elapsed = monotonic() - started
+        if elapsed > timeout_seconds:
+            raise ModelRequestError(
+                f"模型流式响应超过 {timeout_seconds:g} 秒总时限。",
+                retryable=True,
+                request_id=request_id,
+                duration_ms=round(elapsed * 1000),
+            )
+        yield line
 
 
 def _is_truncated_json_error(exc: Exception, raw_response: str) -> bool:
@@ -1629,8 +1661,11 @@ class SentimentWorker:
         self.state_condition = threading.Condition(threading.RLock())
         self.started = False
         self.claim_lock = threading.Lock()
+        self.active_claims_lock = threading.Lock()
+        self.active_claims: dict[int, tuple[str, str]] = {}
         self.rate_limit_lock = threading.Lock()
         self.rate_limit_until = 0.0
+        self.next_watchdog_at = 0.0
 
     def start(self) -> None:
         with self.state_condition:
@@ -1694,17 +1729,9 @@ class SentimentWorker:
             thread.start()
 
     def recover_interrupted(self) -> None:
-        with self.service.factory.begin() as db:
-            db.execute(
-                update(SentimentAnalysis)
-                .where(SentimentAnalysis.status == "analysis_running")
-                .values(status="analysis_queued", started_at=None)
-            )
-            db.execute(
-                update(PostSnapshot)
-                .where(PostSnapshot.analysis_status == "analysis_running")
-                .values(analysis_status="analysis_queued")
-            )
+        """启动时沿用同一有界孤儿恢复规则，避免反复重启无限重排。"""
+
+        self.recover_orphaned()
 
     def _loop(self, slot: int) -> None:
         while not self.stop_event.is_set():
@@ -1714,11 +1741,69 @@ class SentimentWorker:
             if self.stop_event.is_set():
                 return
             try:
+                if slot == 0 and monotonic() >= self.next_watchdog_at:
+                    self.recover_orphaned()
+                    self.next_watchdog_at = monotonic() + SENTIMENT_WATCHDOG_INTERVAL_SECONDS
                 progressed = self.process_once(slot)
             except Exception:
+                logger.exception("舆情 Worker 循环执行失败，slot=%s", slot)
                 progressed = False
             if not progressed:
                 self.stop_event.wait(self.poll_seconds)
+
+    def recover_orphaned(self) -> int:
+        """恢复本进程中已无执行线程持有的运行任务，并限制为一次自动恢复。"""
+
+        with self.claim_lock:
+            with self.active_claims_lock:
+                active_ids = {analysis_id for analysis_id, _post_id in self.active_claims.values()}
+            recovered = 0
+            with self.service.factory.begin() as db:
+                analyses = db.scalars(
+                    select(SentimentAnalysis).where(
+                        SentimentAnalysis.status == "analysis_running"
+                    )
+                ).all()
+                for analysis in analyses:
+                    if analysis.id in active_ids:
+                        continue
+                    post = db.get(PostSnapshot, analysis.post_id)
+                    attempt_failures = list(analysis.attempt_failures or [])
+                    orphaned_before = any(
+                        item.get("error_code") == "ANALYSIS_WORKER_ORPHANED"
+                        for item in attempt_failures
+                    )
+                    if orphaned_before:
+                        analysis.status = "analysis_failed"
+                        analysis.error_code = "ANALYSIS_WORKER_ORPHANED"
+                        analysis.error_message = "舆情任务连续两次失去执行线程，已停止自动恢复。"
+                        analysis.finished_at = utc_now()
+                        if post:
+                            post.analysis_status = "analysis_failed"
+                            post.sentiment_updated_at = utc_now()
+                    else:
+                        attempt_failures.append(
+                            _failed_attempt(
+                                attempt=analysis.retry_count + 1,
+                                exc=RuntimeError("舆情任务失去执行线程"),
+                                error_code="ANALYSIS_WORKER_ORPHANED",
+                                raw_response="",
+                                request_id=None,
+                                usage=None,
+                                duration_ms=None,
+                            )
+                        )
+                        analysis.status = "analysis_queued"
+                        analysis.started_at = None
+                        analysis.finished_at = None
+                        analysis.error_code = None
+                        analysis.error_message = None
+                        analysis.attempt_failures = attempt_failures
+                        if post:
+                            post.analysis_status = "analysis_queued"
+                            post.sentiment_updated_at = utc_now()
+                    recovered += 1
+            return recovered
 
     def _wait_for_rate_limit(self) -> bool:
         """让两个消费者共享提供方 429 冷却窗口。"""
@@ -1737,6 +1822,36 @@ class SentimentWorker:
             self.rate_limit_until = max(self.rate_limit_until, monotonic() + delay)
 
     def process_once(self, slot: int | None = None) -> bool:
+        """处理一条任务；未预期异常也必须结束当前运行态并留下诊断。"""
+
+        thread_id = threading.get_ident()
+        try:
+            return self._process_once(slot)
+        except Exception as exc:
+            with self.active_claims_lock:
+                claim = self.active_claims.get(thread_id)
+            logger.exception(
+                "舆情 Worker 未预期异常，analysis_id=%s post_id=%s exception=%s",
+                claim[0] if claim else None,
+                claim[1] if claim else None,
+                type(exc).__name__,
+            )
+            if claim:
+                try:
+                    self._record_internal_failure(claim[0], claim[1], exc)
+                except Exception:
+                    logger.exception(
+                        "舆情 Worker 未预期异常落库失败，analysis_id=%s post_id=%s",
+                        claim[0],
+                        claim[1],
+                    )
+                return True
+            return False
+        finally:
+            with self.active_claims_lock:
+                self.active_claims.pop(thread_id, None)
+
+    def _process_once(self, slot: int | None = None) -> bool:
         # SQLite 不支持 SKIP LOCKED；只串行化很短的领取事务，模型请求仍可并发执行。
         with self.claim_lock:
             if slot is not None:
@@ -1767,6 +1882,8 @@ class SentimentWorker:
                 analysis_id = analysis.id
                 post_id = post.id
                 attempt_failures = list(analysis.attempt_failures or [])
+                with self.active_claims_lock:
+                    self.active_claims[threading.get_ident()] = (analysis_id, post_id)
         analysis_profile = model_profile(analysis.model_code)
         if analysis_profile["provider"] == "local":
             return self._process_local(
@@ -1970,6 +2087,31 @@ class SentimentWorker:
             duration_ms=duration_ms,
         )
         return True
+
+    def _record_internal_failure(
+        self,
+        analysis_id: str,
+        post_id: str,
+        exc: Exception,
+    ) -> None:
+        """保存框架未预期异常；不把它误判成模型格式错误或配置错误。"""
+
+        message = f"舆情任务内部处理异常（{type(exc).__name__}）：{exc}"[:2000]
+        with self.service.factory.begin() as db:
+            analysis = db.get(SentimentAnalysis, analysis_id)
+            post = db.get(PostSnapshot, post_id)
+            if analysis:
+                analysis.status = "analysis_failed"
+                analysis.error_code = "ANALYSIS_INTERNAL_ERROR"
+                analysis.error_message = message
+                analysis.finished_at = utc_now()
+            if post:
+                post.analysis_status = "analysis_failed"
+                post.sentiment_updated_at = utc_now()
+        if self.service.event_publisher:
+            self.service.event_publisher(
+                "sentiment.changed", post_id, status="analysis_failed"
+            )
 
     def _process_local(
         self,

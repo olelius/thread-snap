@@ -51,8 +51,10 @@ from threadsnap.schemas import (
 )
 from threadsnap.sentiment import (
     DEEPSEEK_MODEL_CODE,
+    DEEPSEEK_TOTAL_TIMEOUT_SECONDS,
     HOSTED_MODEL_CODE,
     LOCAL_MODEL_CODE,
+    ModelRequestError,
     SentimentFeedback,
     SentimentModelClient,
     build_output_correction_request,
@@ -340,6 +342,40 @@ class AppCase(unittest.TestCase):
             db.add(circle)
             db.flush()
             return circle
+
+    def queue_deepseek_sentiment(self, post_suffix: str) -> tuple[str, str]:
+        """创建一条不访问公网的 DeepSeek 排队任务，供 Worker 状态回归测试复用。"""
+
+        with self.container.sessions.begin() as db:
+            config = self.container.sentiment.ensure_default(db)
+            config.enabled = True
+            config.validation_status = "valid"
+            config.model_code = DEEPSEEK_MODEL_CODE
+            config.deepseek_base_url = "https://api.deepseek.com"
+            config.deepseek_encrypted_api_key = self.container.session_store.encrypt_secret(
+                "deepseek-test-secret"
+            )
+        circle = self.save_verified_circle(external_id=f"sentiment-{post_suffix}")
+        run = self.container.runs.create_manual(
+            ManualRunCreate(platform_code="dongchedi", circle_ids=[circle.id], quantity=1),
+            scope="api",
+            header_key=f"sentiment-{post_suffix}",
+        )
+        with self.container.sessions.begin() as db:
+            task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            assert task is not None
+            self.container.worker._store_records(
+                db,
+                task,
+                [sample_record(f"sentiment-{post_suffix}")],
+            )
+            post = db.scalar(select(PostSnapshot).where(PostSnapshot.run_id == run["id"]))
+            assert post is not None
+            analysis = db.scalar(
+                select(SentimentAnalysis).where(SentimentAnalysis.post_id == post.id)
+            )
+            assert analysis is not None
+            return analysis.id, analysis.post_id
 
 
 class ApiAndConfigTests(AppCase):
@@ -795,6 +831,130 @@ class ApiAndConfigTests(AppCase):
         self.assertEqual("https://api.deepseek.com/beta/chat/completions", str(observed[0].url))
         self.assertEqual('{"ok":true}', raw)
         self.assertEqual({"total_tokens": 9}, usage)
+
+    def test_deepseek_stream_has_absolute_total_deadline(self) -> None:
+        """持续有流数据也不能绕过 DeepSeek 单次请求的绝对总时限。"""
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                text='data: {"choices":[]}\n\ndata: [DONE]\n\n',
+                headers={"x-request-id": "deadline-test"},
+            )
+
+        body = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {"name": "submit_probe", "strict": True, "parameters": {}},
+                }
+            ],
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "submit_probe"},
+            },
+        }
+        model_client = SentimentModelClient(
+            httpx.Client(transport=httpx.MockTransport(handler))
+        )
+        try:
+            with (
+                patch(
+                    "threadsnap.sentiment.monotonic",
+                    side_effect=[0.0, DEEPSEEK_TOTAL_TIMEOUT_SECONDS + 1.0],
+                ),
+                self.assertRaises(ModelRequestError) as raised,
+            ):
+                model_client.request("https://api.deepseek.com", "test-key", body)
+        finally:
+            model_client.close()
+        self.assertTrue(raised.exception.retryable)
+        self.assertEqual("deadline-test", raised.exception.request_id)
+        self.assertEqual(61_000, raised.exception.duration_ms)
+
+    def test_sentiment_worker_persists_unexpected_postprocessing_failure(self) -> None:
+        """解析、修正或落库阶段的未预期异常不得遗留假运行状态。"""
+
+        analysis_id, post_id = self.queue_deepseek_sentiment("internal-error")
+
+        class SuccessfulTransportClient:
+            def request(self, *_args, **_kwargs):
+                return "{}", {"total_tokens": 8}, "internal-error-test", 12
+
+        self.container.sentiment.client = SuccessfulTransportClient()
+        with (
+            self.assertLogs("threadsnap.sentiment", level="ERROR") as logged,
+            patch(
+                "threadsnap.sentiment.validate_public_https_base_url",
+                side_effect=lambda value, resolve: value.rstrip("/"),
+            ),
+            patch(
+                "threadsnap.sentiment.complete_deepseek_tool_payload",
+                side_effect=KeyError("unexpected-postprocessing-shape"),
+            ),
+        ):
+            self.assertTrue(self.container.sentiment_worker.process_once())
+        self.assertIn("exception=KeyError", "\n".join(logged.output))
+        with self.container.sessions() as db:
+            analysis = db.get(SentimentAnalysis, analysis_id)
+            post = db.get(PostSnapshot, post_id)
+            assert analysis is not None and post is not None
+            self.assertEqual("analysis_failed", analysis.status)
+            self.assertEqual("ANALYSIS_INTERNAL_ERROR", analysis.error_code)
+            self.assertIn("KeyError", analysis.error_message)
+            self.assertIsNotNone(analysis.finished_at)
+            self.assertEqual("analysis_failed", post.analysis_status)
+
+    def test_sentiment_watchdog_recovers_orphan_once_then_fails_closed(self) -> None:
+        """运行任务失去执行线程后自动排队一次，重复失联则停止自动放大调用。"""
+
+        analysis_id, post_id = self.queue_deepseek_sentiment("orphan-watchdog")
+        with self.container.sessions.begin() as db:
+            analysis = db.get(SentimentAnalysis, analysis_id)
+            post = db.get(PostSnapshot, post_id)
+            assert analysis is not None and post is not None
+            analysis.status = "analysis_running"
+            analysis.started_at = datetime.now(timezone.utc)
+            post.analysis_status = "analysis_running"
+        with self.container.sentiment_worker.active_claims_lock:
+            self.container.sentiment_worker.active_claims[-1] = (analysis_id, post_id)
+        self.assertEqual(0, self.container.sentiment_worker.recover_orphaned())
+        with self.container.sessions() as db:
+            analysis = db.get(SentimentAnalysis, analysis_id)
+            assert analysis is not None
+            self.assertEqual("analysis_running", analysis.status)
+        with self.container.sentiment_worker.active_claims_lock:
+            self.container.sentiment_worker.active_claims.pop(-1)
+        self.container.sentiment_worker.recover_interrupted()
+        with self.container.sessions() as db:
+            analysis = db.get(SentimentAnalysis, analysis_id)
+            post = db.get(PostSnapshot, post_id)
+            assert analysis is not None and post is not None
+            self.assertEqual("analysis_queued", analysis.status)
+            self.assertIsNone(analysis.error_code)
+            self.assertIsNone(analysis.started_at)
+            self.assertEqual(
+                "ANALYSIS_WORKER_ORPHANED",
+                analysis.attempt_failures[-1]["error_code"],
+            )
+            self.assertEqual("analysis_queued", post.analysis_status)
+
+        with self.container.sessions.begin() as db:
+            analysis = db.get(SentimentAnalysis, analysis_id)
+            post = db.get(PostSnapshot, post_id)
+            assert analysis is not None and post is not None
+            analysis.status = "analysis_running"
+            analysis.started_at = datetime.now(timezone.utc)
+            post.analysis_status = "analysis_running"
+        self.assertEqual(1, self.container.sentiment_worker.recover_orphaned())
+        with self.container.sessions() as db:
+            analysis = db.get(SentimentAnalysis, analysis_id)
+            post = db.get(PostSnapshot, post_id)
+            assert analysis is not None and post is not None
+            self.assertEqual("analysis_failed", analysis.status)
+            self.assertEqual("ANALYSIS_WORKER_ORPHANED", analysis.error_code)
+            self.assertIsNotNone(analysis.finished_at)
+            self.assertEqual("analysis_failed", post.analysis_status)
 
     def test_local_text_sentiment_skips_cloud_and_media_resolution(self) -> None:
         """验证本地模型可无密钥启用，且只消费标题和正文。"""
