@@ -26,6 +26,16 @@ def main() -> None:
         "reputation-init", help="从UTF-8 CSV一次性初始化27款口碑车型范围"
     )
     reputation_init.add_argument("--file", type=Path, required=True)
+    reputation_acceptance = sub.add_parser(
+        "reputation-real-acceptance",
+        help="把已完成的真实映射验证冻结为一次基线验收批次",
+    )
+    reputation_acceptance.add_argument(
+        "--validation-run",
+        action="append",
+        required=True,
+        help="可重复提供，后提供的成功项覆盖同车型较早结果",
+    )
     args = parser.parse_args()
     if args.command == "serve":
         uvicorn.run("threadsnap.app:app", host=args.host, port=args.port, reload=False)
@@ -33,12 +43,19 @@ def main() -> None:
         container = Container(get_settings())
         container.session_store.import_file(args.platform, args.file)
         print("平台会话已加密导入。")
-    else:
+    elif args.command == "reputation-init":
         container = Container(get_settings())
         result = container.reputation.initialize_scope_csv(args.file)
         print(
             f"口碑范围已初始化：{len(result['vehicles'])} 款车型，"
             f"修订号 {result['revision']}。"
+        )
+    else:
+        container = Container(get_settings())
+        result = container.reputation.create_real_acceptance(args.validation_run)
+        print(
+            f"真实口碑验收批次已创建：{result['number']}，"
+            f"{result['completed_count']}/{result['planned_count']} 项成功。"
         )
 
 

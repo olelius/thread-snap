@@ -239,7 +239,7 @@ export type ReputationResult = {
 export type ReputationRun = {
   id: string
   number: string
-  source_type: 'synthetic' | 'scheduled'
+  source_type: 'synthetic' | 'scheduled' | 'real_acceptance'
   scenario_id?: string
   run_type: 'baseline_initialization' | 'daily' | 'month_end'
   planned_date: string

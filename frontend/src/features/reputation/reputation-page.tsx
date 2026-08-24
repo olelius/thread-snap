@@ -129,7 +129,7 @@ function RunsPanel({ query, onOpen }: { query: ReturnType<typeof useQuery<PageRe
               const percent = run.planned_count ? Math.round(done / run.planned_count * 100) : 0
               return <TableRow key={run.id} className='cursor-pointer transition-colors hover:bg-primary/[0.035]' onClick={() => onOpen(run.id)}>
                 <TableCell><div className='font-medium'>{run.number}</div><div className='mt-1 text-xs text-muted-foreground'>{run.planned_date}</div></TableCell>
-                <TableCell><Badge variant='secondary'>{runTypeName(run.run_type)}</Badge>{run.source_type === 'synthetic' && <div className='mt-1 text-[11px] text-violet-600 dark:text-violet-300'>合成测试</div>}</TableCell>
+                <TableCell><Badge variant='secondary'>{runTypeName(run.run_type)}</Badge>{run.source_type === 'synthetic' && <div className='mt-1 text-[11px] text-violet-600 dark:text-violet-300'>合成测试</div>}{run.source_type === 'real_acceptance' && <div className='mt-1 text-[11px] text-emerald-600 dark:text-emerald-300'>真实验收</div>}</TableCell>
                 <TableCell><div className='text-sm'>{run.platform_codes.map(platformName).join('、')}</div><div className='mt-1 text-xs text-muted-foreground'>{run.planned_count} 款车型</div></TableCell>
                 <TableCell><StatusBadge value={run.status} label={statusName(run.status)} /></TableCell>
                 <TableCell><div className='w-36 space-y-1.5'><div className='flex justify-between text-xs'><span>{done}/{run.planned_count}</span><span className='text-muted-foreground'>{percent}%</span></div><Progress value={percent} className='h-1.5' />{run.failed_count > 0 && <div className='text-[11px] text-red-600 dark:text-red-300'>{run.failed_count} 项异常</div>}</div></TableCell>
