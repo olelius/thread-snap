@@ -16,6 +16,22 @@
 
 ---
 
+## 2026-08-24 — 负面截图使用完整原图底图
+**总目标**：保留现有帖子去重、卡片边界恢复和负面红框逻辑，只把关联截图成果底图从卡片裁片拼接改为完整原始页面证据。
+**状态**：✅ v4 渲染、版本合同、真实批次重建、像素级验证和前后端检查均已完成；目标 Linux 发布门禁保持未决。
+**干到哪里了**：
+- [x] 渲染器升级为 `v4-full-page-evidence-background`：按关联结果首次引用证据的稳定顺序，一张原始物理分页生成一张同宽高成果页；不裁切、缩放、重排或增加标题栏，既有 5 px 负面红框和卡片边界恢复不变。
+- [x] 渲染前校验原图 SHA-256；成果清单升级为 v2 并记录来源证据、来源批次、物理页码、捕获时间和原图哈希。渲染器及页面身份进入输入哈希，旧成果保留，新规则生成不可变新版本。
+- [x] 新增完整原页、多物理页、框外像素一致和原图不变回归；全部 111 项后端测试、Ruff、Python 编译、`pip check`、后端 wheel、前端 TypeScript 检查、生产构建（2465 modules）和 `git diff --check` 通过。
+- [x] 重建前以 SQLite 在线备份保存 `artifacts/runtime/full-page-negative-screenshots-20260824-153130/threadsnap-before-full-page-rebuild.db`，SHA-256 `13f866f3eb54b84e1a80f433c41bcb2253080dd67d9ab6c85c827f9ad7be94e4`。
+- [x] 最新批次 `20260824-150229-001` 的 14/14 成果组均从 v1 升为 v2，覆盖 420 条帖子、85 个负面框和 14 张完整原页；页面均宽 1440 px、高 9,752～12,576 px。逐页重新生成期望图后确认成果像素精确等于“完整原图 + 现有红框”，原图哈希全部保持不变。
+- [x] 脱敏验证记录为 `artifacts/runtime/full-page-negative-screenshots-20260824-153130/verification.json`，SHA-256 `1db794669d7a8c93322582fb432553c76d6cdb88ea85453c0382ff40873df8e9`；wheel SHA-256 `31454c2bcc8ee145575670ab66f4cbe5f01650a4ef9a1f55155a3ace1b27f214`，后端与 Vite 代理健康均为 `ok`。
+**下一步**：在目标 CentOS Stream 10 离线环境复跑最大原页编码/解码、连续查看、成果包、备份恢复和 Pillow wheel 门禁；v3 的 30,000 px 裁片候选值不沿用为当前规则。
+**边界**：一个成果组仍只有一个逻辑当前成果；被当前去重结果引用的每张物理分页各形成一张完整成果页。没有页面证据的历史“成功但零条”任务继续使用兼容占位，真实原页存在时不进入占位路径。
+**关联**：`src/threadsnap/screenshots.py`、`tests/test_screenshots.py`、`docs/adr/0031-render-negative-artifacts-on-full-page-evidence.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/circle-screenshot-artifacts.md`
+
+---
+
 ## 2026-08-24 — 舆情假运行状态防护
 **总目标**：消除模型返回后解析、结构修正或落库异常被 Worker 静默吞掉而永久停留“分析中”的状态，并限制流式请求和自动恢复的调用放大。
 **状态**：✅ 异常终态、DeepSeek 绝对总时限、有界孤儿恢复、owner 文档、完整验证和现场单条恢复均已完成。
