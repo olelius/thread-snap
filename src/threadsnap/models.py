@@ -514,6 +514,7 @@ class SentimentConfig(Base):
     model_code: Mapped[str] = mapped_column(
         String(120), nullable=False, default="qwen3.5-omni-plus-2026-03-15"
     )
+    cloud_concurrency: Mapped[int] = mapped_column(Integer, nullable=False, default=8)
     validation_status: Mapped[str] = mapped_column(
         String(32), nullable=False, default="unverified"
     )

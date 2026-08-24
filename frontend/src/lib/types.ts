@@ -161,6 +161,8 @@ export type SentimentConfig = {
   model_name: string
   model_provider: 'hosted' | 'local'
   model_input_mode: 'multimodal' | 'text_only'
+  cloud_concurrency: number
+  cloud_concurrency_range: { min: number; max: number }
   available_models: string[]
   model_connections: Record<string, { api_base_url: string; api_key_configured: boolean }>
   validation_status: 'unverified' | 'valid' | 'invalid'

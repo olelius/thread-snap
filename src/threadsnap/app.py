@@ -123,6 +123,7 @@ class Container:
         self.scheduler.stop()
         self.sentiment_worker.stop()
         self.worker.stop()
+        self.sentiment.close()
         self.local_sentiment.close()
         await self.auth.close_all()
         self.engine.dispose()
@@ -180,6 +181,9 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
                 )
         container = _container(request)
         result = container.sentiment.update_config(value)
+        container.sentiment_worker.apply_runtime_config(
+            result["model_code"], result["cloud_concurrency"]
+        )
         container.events.publish("sentiment.config.changed", "sentiment-config")
         return result
 

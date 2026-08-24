@@ -16,6 +16,22 @@
 
 ---
 
+## 2026-08-24 — AI 云端同时分析任务数与共享连接池
+**总目标**：把固定 2 路的云端 AI 分析改成部署后可调的有界并发，并避免高并发下为每条请求重复建立 HTTP 客户端。
+**状态**：✅ 数据库、后端 Worker、共享连接池、配置 API、前端控件、正式实例升级和验证均已完成；当前 DeepSeek 云端并发为 16。
+**干到哪里了**：
+- [x] `sentiment_configs.cloud_concurrency` 持久化为 1～64、默认 8；配置 API 返回范围，旧调用省略字段时保留当前值。单独修改并发不关闭分析、不使连接验证失效，也不增加判定对象版本。
+- [x] Worker 在保存后动态增加任务槽位或暂停超出新值的槽位，后续领取立即服从新值，已发出的请求继续完成；本地 PaddleNLP 无论云端保存值为何仍固定一个推理槽位。
+- [x] 云端请求改为复用线程安全的 `httpx.Client`，总连接与保活连接上限均为 64；全部槽位继续共享既有 429 冷却和有界重试。
+- [x] “AI 舆情”页面增加“同时分析任务数”数值输入和 4/8/16/32 快捷值，明确显示 1～64 范围；真实页面显示当前值 16，浏览器控制台页面错误为 0，截图为 `artifacts/runtime/ai-concurrency-20260824/config-page.png`。
+- [x] 正式数据库从 `a2d7e9f103bc` 升级到 `d4e8f6a1b203`，升级前备份 SHA-256 为 `9e28fd34b126ecc11e699ecf553ba4dae817868cbd2c5f949fa553bbc5485aec`；隔离数据库完成 `upgrade → downgrade → upgrade`，验证新增列和回退删除列。
+- [x] 全部 104 项后端测试、`ruff check src tests`、Python 编译、`pip check`、前端 TypeScript 检查与生产构建（2465 modules）及 `git diff --check` 通过；后端和 Vite 代理健康均为 `ok`，当前数据库分析失败为 0。脱敏验证记录为 `artifacts/runtime/ai-concurrency-20260824/verification.json`，SHA-256 `abe040ec757ce0ad7ee0aa7cc0ca9680cbd7cfd0a0fdd6bbd1243c2a21ffc3fa`。
+**下一步**：使用下一次同规模真实批次记录 16 并发下的 AI 总耗时、P50/P95、429、重试和最终失败分布；只有同分母证据表明仍有净收益时再提高到 32。
+**边界**：本次没有为性能测试额外创建帖子或调用付费模型；64 是 ThreadSnap 单进程、线程 Worker 和 SQLite 架构的应用保护上限，不代表提供方账号上限，也不承诺耗时线性下降。
+**关联**：`src/threadsnap/sentiment.py`、`src/threadsnap/migrations/versions/d4e8f6a1b203_add_sentiment_cloud_concurrency.py`、`frontend/src/features/config/config-page.tsx`、`docs/adr/0028-configure-bounded-sentiment-cloud-concurrency.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/sentiment-analysis.md`
+
+---
+
 ## 2026-08-24 — DeepSeek 重复坏 JSON 有界恢复与存量失败清零
 **总目标**：消除 DeepSeek 正常结束流中稳定复现的单括号 JSON 错误，同时保证持续错误不会形成无限模型循环或无限用量。
 **状态**：✅ 代码、真实存量恢复、截图成果重建与完整验证均已完成；当前数据库持久分析失败为 0。
