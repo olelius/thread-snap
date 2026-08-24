@@ -16,7 +16,7 @@ from PIL import Image
 
 from .browser_runtime import browser_launch_args
 
-ADAPTER_VERSION = "dongchedi-reputation-v1"
+ADAPTER_VERSION = "dongchedi-reputation-v2-region-only"
 VALIDATION_CONTRACT_VERSION = "dongchedi-reputation-mapping-v1"
 VIEWPORT = {"width": 1440, "height": 1000}
 SERIES_URL_RE = re.compile(
@@ -302,25 +302,31 @@ class DongchediReputationAdapter:
             metric_rect = _metric_rect(current)
             target_dir = output_dir / target.vehicle_id
             target_dir.mkdir(parents=True, exist_ok=False)
-            full_path = target_dir / "full.png"
-            metric_path = target_dir / "metric.png"
-            await page.screenshot(path=str(full_path), full_page=True, animations="disabled")
-            with Image.open(full_path) as source:
-                left = max(0, int(metric_rect["x"]))
-                top = max(0, int(metric_rect["y"]))
-                right = min(source.width, int(metric_rect["x"] + metric_rect["width"] + 0.999))
-                bottom = min(source.height, int(metric_rect["y"] + metric_rect["height"] + 0.999))
-                if right <= left or bottom <= top:
-                    raise ReputationAdapterError(
-                        "REPUTATION_EVIDENCE_CROP_INVALID",
-                        "指标区域超出完整原页截图边界。",
-                    )
-                source.crop((left, top, right, bottom)).save(metric_path, "PNG")
+            document_width = float(current.get("document_width") or 0)
+            document_height = float(current.get("document_height") or 0)
+            if (
+                metric_rect["x"] < 0
+                or metric_rect["y"] < 0
+                or metric_rect["x"] + metric_rect["width"] > document_width
+                or metric_rect["y"] + metric_rect["height"] > document_height
+            ):
+                raise ReputationAdapterError(
+                    "REPUTATION_EVIDENCE_REGION_INVALID",
+                    "指标区域超出页面边界。",
+                )
+            metric_path = target_dir / "region.png"
+            await page.screenshot(
+                path=str(metric_path),
+                clip=metric_rect,
+                animations="disabled",
+            )
+            with Image.open(metric_path) as source:
                 width, height = source.size
-            if not full_path.is_file() or not metric_path.is_file():
+            if not metric_path.is_file():
                 raise ReputationAdapterError(
                     "REPUTATION_EVIDENCE_WRITE_FAILED", "真实页面证据写入失败。"
                 )
+            digest = _sha256(metric_path)
             return ReputationPageResult(
                 vehicle_id=target.vehicle_id,
                 platform_vehicle_id=target.platform_vehicle_id,
@@ -332,10 +338,10 @@ class DongchediReputationAdapter:
                 volume_raw=volume_raw,
                 rank_scope=str(current.get("rank_scope") or "同级车评分"),
                 measurements=measurements,
-                full_page_path=full_path,
+                full_page_path=metric_path,
                 metric_region_path=metric_path,
-                full_page_sha256=_sha256(full_path),
-                metric_region_sha256=_sha256(metric_path),
+                full_page_sha256=digest,
+                metric_region_sha256=digest,
                 width=width,
                 height=height,
                 metric_rect=metric_rect,

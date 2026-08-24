@@ -324,7 +324,7 @@ class ReputationService:
             "real_adapter_status": "available",
             "real_adapter_message": (
                 f"懂车帝真实页面适配器 {REAL_ADAPTER_VERSION} 已接入；"
-                "映射验证读取实时页面并保存完整原页与指标区域证据。"
+                "映射验证读取实时页面并只保存车型口碑指标区域截图。"
             ),
             "scenarios": [
                 {"id": key, **value} for key, value in SCENARIOS.items()
@@ -541,15 +541,13 @@ class ReputationService:
                         "REPUTATION_ACCEPTANCE_MAPPING_CHANGED",
                         f"车型{vehicle['id']}的成功结果不属于当前已发布映射。",
                     )
-                for raw, digest in (
-                    (attempt.full_page_path, attempt.full_page_sha256),
-                    (attempt.metric_region_path, attempt.metric_region_sha256),
-                ):
-                    if not raw or not digest or not Path(raw).is_file() or _sha256(Path(raw)) != digest:
-                        raise DomainError(
-                            "REPUTATION_ACCEPTANCE_EVIDENCE_INVALID",
-                            f"车型{vehicle['id']}的真实页面证据缺失或校验失败。",
-                        )
+                raw = attempt.metric_region_path
+                digest = attempt.metric_region_sha256
+                if not raw or not digest or not Path(raw).is_file() or _sha256(Path(raw)) != digest:
+                    raise DomainError(
+                        "REPUTATION_ACCEPTANCE_EVIDENCE_INVALID",
+                        f"车型{vehicle['id']}的真实页面证据缺失或校验失败。",
+                    )
             input_hash = _text_hash(
                 {
                     "scope_version_id": version.id,
@@ -630,18 +628,16 @@ class ReputationService:
                     db.flush()
                     evidence_dir = run_dir / "evidence" / vehicle["id"]
                     evidence_dir.mkdir(parents=True, exist_ok=True)
-                    full_path = evidence_dir / "full.png"
-                    metric_path = evidence_dir / "metric.png"
-                    shutil.copy2(attempt.full_page_path, full_path)
+                    metric_path = evidence_dir / "region.png"
                     shutil.copy2(attempt.metric_region_path, metric_path)
-                    with Image.open(full_path) as source:
+                    with Image.open(metric_path) as source:
                         width, height = source.size
                     db.add(
                         ReputationEvidence(
                             result_id=result.id,
-                            full_page_path=str(full_path),
+                            full_page_path=str(metric_path),
                             metric_region_path=str(metric_path),
-                            full_page_sha256=attempt.full_page_sha256,
+                            full_page_sha256=attempt.metric_region_sha256,
                             metric_region_sha256=attempt.metric_region_sha256,
                             width=width,
                             height=height,
@@ -698,6 +694,71 @@ class ReputationService:
             if raw:
                 Path(raw).unlink(missing_ok=True)
         return {"deleted": True}
+
+    def compact_region_evidence(self) -> dict[str, int]:
+        """把历史双截图证据收敛为单张指标区域图，并移除未再引用的长截图。"""
+
+        obsolete: set[Path] = set()
+        zip_paths: set[Path] = set()
+        attempt_count = 0
+        evidence_count = 0
+        with self.sessions.begin() as db:
+            attempts = db.scalars(
+                select(ReputationMappingValidationAttempt).where(
+                    ReputationMappingValidationAttempt.status == "success"
+                )
+            ).all()
+            for item in attempts:
+                region = Path(item.metric_region_path) if item.metric_region_path else None
+                if (
+                    not region
+                    or not item.metric_region_sha256
+                    or not region.is_file()
+                    or _sha256(region) != item.metric_region_sha256
+                ):
+                    continue
+                old = Path(item.full_page_path) if item.full_page_path else None
+                if old and old != region:
+                    obsolete.add(old)
+                item.full_page_path = str(region)
+                item.full_page_sha256 = item.metric_region_sha256
+                attempt_count += 1
+            evidence_rows = db.scalars(select(ReputationEvidence)).all()
+            for item in evidence_rows:
+                region = Path(item.metric_region_path)
+                if not region.is_file() or _sha256(region) != item.metric_region_sha256:
+                    continue
+                old = Path(item.full_page_path)
+                if old != region:
+                    obsolete.add(old)
+                item.full_page_path = str(region)
+                item.full_page_sha256 = item.metric_region_sha256
+                with Image.open(region) as source:
+                    item.width, item.height = source.size
+                evidence_count += 1
+            for run in db.scalars(select(ReputationRun)).all():
+                if run.evidence_zip_path:
+                    zip_paths.add(Path(run.evidence_zip_path))
+                    run.evidence_zip_path = None
+        root = self.settings.reputation_dir.resolve()
+        referenced = {
+            Path(raw).resolve()
+            for raw in [
+                *[item.metric_region_path for item in attempts if item.metric_region_path],
+                *[item.metric_region_path for item in evidence_rows],
+            ]
+        }
+        removed = 0
+        for path in obsolete | zip_paths:
+            resolved = path.resolve()
+            if resolved.is_relative_to(root) and resolved not in referenced and resolved.is_file():
+                resolved.unlink()
+                removed += 1
+        return {
+            "validation_attempts": attempt_count,
+            "run_evidence": evidence_count,
+            "removed_files": removed,
+        }
 
     def get_file(self, run_id: str, kind: str) -> Path:
         with self.sessions() as db:
@@ -759,27 +820,23 @@ class ReputationService:
             with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as archive:
                 for item in evidence:
                     result = result_by_id[item.result_id]
-                    for label, raw_path, digest in (
-                        ("full", item.full_page_path, item.full_page_sha256),
-                        ("metric", item.metric_region_path, item.metric_region_sha256),
-                    ):
-                        name = f"{result.platform_code}/{result.vehicle_id}/{label}.png"
-                        archive.write(raw_path, name)
-                        checksums.append(f"{digest}  {name}")
+                    name = f"{result.platform_code}/{result.vehicle_id}/region.png"
+                    archive.write(item.metric_region_path, name)
+                    checksums.append(f"{item.metric_region_sha256}  {name}")
                     manifest.append(
                         {
                             "evidence_id": item.id,
                             "result_id": result.id,
                             "vehicle_id": result.vehicle_id,
                             "platform_code": result.platform_code,
-                            "full_page_sha256": item.full_page_sha256,
-                            "metric_region_sha256": item.metric_region_sha256,
+                            "region_path": name,
+                            "region_sha256": item.metric_region_sha256,
                         }
                     )
                 archive.writestr(
                     "manifest.json",
                     json.dumps(
-                        {"schema_version": "reputation-evidence-v1", "items": manifest},
+                        {"schema_version": "reputation-evidence-region-v1", "items": manifest},
                         ensure_ascii=False,
                         indent=2,
                     ),
@@ -1183,7 +1240,11 @@ class ReputationService:
                     "measurements": result.measurements,
                     "metric_rect": result.metric_rect,
                     "viewport": VIEWPORT,
-                    "document": {"width": result.width, "height": result.height},
+                    "document": {
+                        "width": result.measurements[-1].get("document_width"),
+                        "height": result.measurements[-1].get("document_height"),
+                    },
+                    "region": {"width": result.width, "height": result.height},
                 },
                 full_page_path=str(result.full_page_path),
                 metric_region_path=str(result.metric_region_path),
@@ -1360,19 +1421,18 @@ class ReputationService:
         evidence_id = uuid7()
         evidence_dir = run_dir / "evidence" / result.vehicle_id
         evidence_dir.mkdir(parents=True, exist_ok=True)
-        full_path = evidence_dir / "full.png"
-        metric_path = evidence_dir / "metric.png"
-        self._draw_fixture(full_path, result, metrics, size=(1200, 720), compact=False)
+        metric_path = evidence_dir / "region.png"
         self._draw_fixture(metric_path, result, metrics, size=(980, 220), compact=True)
+        digest = _sha256(metric_path)
         return ReputationEvidence(
             id=evidence_id,
             result_id=result.id,
-            full_page_path=str(full_path),
+            full_page_path=str(metric_path),
             metric_region_path=str(metric_path),
-            full_page_sha256=_sha256(full_path),
-            metric_region_sha256=_sha256(metric_path),
-            width=1200,
-            height=720,
+            full_page_sha256=digest,
+            metric_region_sha256=digest,
+            width=980,
+            height=220,
         )
 
     @staticmethod

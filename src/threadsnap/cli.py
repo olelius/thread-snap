@@ -36,6 +36,10 @@ def main() -> None:
         required=True,
         help="可重复提供，后提供的成功项覆盖同车型较早结果",
     )
+    sub.add_parser(
+        "reputation-compact-evidence",
+        help="把历史口碑证据收敛为单张指标区域截图并移除长截图",
+    )
     args = parser.parse_args()
     if args.command == "serve":
         uvicorn.run("threadsnap.app:app", host=args.host, port=args.port, reload=False)
@@ -50,12 +54,19 @@ def main() -> None:
             f"口碑范围已初始化：{len(result['vehicles'])} 款车型，"
             f"修订号 {result['revision']}。"
         )
-    else:
+    elif args.command == "reputation-real-acceptance":
         container = Container(get_settings())
         result = container.reputation.create_real_acceptance(args.validation_run)
         print(
             f"真实口碑验收批次已创建：{result['number']}，"
             f"{result['completed_count']}/{result['planned_count']} 项成功。"
+        )
+    else:
+        container = Container(get_settings())
+        result = container.reputation.compact_region_evidence()
+        print(
+            f"口碑证据已收敛：验证尝试{result['validation_attempts']}项，"
+            f"巡检证据{result['run_evidence']}项，移除文件{result['removed_files']}个。"
         )
 
 
