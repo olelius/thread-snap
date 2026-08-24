@@ -36,6 +36,7 @@ from .local_sentiment import LocalSentimentAnalyzer
 from .models import ValidationJob
 from .reputation import (
     MappingPasteRequest,
+    MappingValidationRequest,
     ReputationService,
     ScopePublishRequest,
     SyntheticRunCreate,
@@ -84,6 +85,7 @@ class Container:
         self.reputation = ReputationService(
             self.sessions,
             settings,
+            session_store=self.session_store,
             event_publisher=self.events.publish,
         )
         self.local_sentiment = LocalSentimentAnalyzer(
@@ -243,6 +245,29 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
         request: Request,
     ) -> dict[str, Any]:
         return _container(request).reputation.save_mappings(value)
+
+    @router.post("/reputation/scope/mapping-validations")
+    def validate_reputation_mappings(
+        value: MappingValidationRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        return _container(request).reputation.validate_mappings(value)
+
+    @router.get("/reputation/scope/mapping-validations/{run_id}")
+    def get_reputation_mapping_validation(run_id: str, request: Request) -> dict[str, Any]:
+        return _container(request).reputation.get_mapping_validation(run_id, prefix)
+
+    @router.get("/reputation/mapping-validations/attempts/{attempt_id}/full")
+    def view_reputation_mapping_validation_full(attempt_id: str, request: Request) -> FileResponse:
+        path = _container(request).reputation.get_mapping_validation_evidence(attempt_id, "full")
+        return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private"})
+
+    @router.get("/reputation/mapping-validations/attempts/{attempt_id}/metric")
+    def view_reputation_mapping_validation_metric(
+        attempt_id: str, request: Request
+    ) -> FileResponse:
+        path = _container(request).reputation.get_mapping_validation_evidence(attempt_id, "metric")
+        return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private"})
 
     @router.get("/reputation/scope/publish-preview")
     def preview_reputation_scope_publish(request: Request) -> dict[str, Any]:

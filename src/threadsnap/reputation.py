@@ -28,12 +28,28 @@ from .config import Settings
 from .errors import DomainError
 from .ids import uuid7
 from .models import (
+    PlatformConfig,
     ReputationEvidence,
+    ReputationMappingValidationAttempt,
+    ReputationMappingValidationRun,
     ReputationResult,
     ReputationRun,
     ReputationScopeDraft,
     ReputationScopeVersion,
 )
+from .reputation_dongchedi import (
+    ADAPTER_VERSION as REAL_ADAPTER_VERSION,
+)
+from .reputation_dongchedi import (
+    VALIDATION_CONTRACT_VERSION,
+    VIEWPORT,
+    DongchediReputationAdapter,
+    ReputationAdapterError,
+    ReputationMappingTarget,
+    ReputationPageResult,
+    normalize_series_url,
+)
+from .session_store import SessionStore
 
 FIXTURE_VERSION = "reputation-synthetic-v1"
 PLATFORM_CODE = "dongchedi"
@@ -83,6 +99,11 @@ class ScopePublishRequest(BaseModel):
     initial_review_acknowledged: bool = False
 
 
+class MappingValidationRequest(BaseModel):
+    revision: int
+    vehicle_ids: list[str] | None = None
+
+
 @dataclass(frozen=True)
 class SyntheticVehicle:
     vehicle_id: str
@@ -104,6 +125,20 @@ def _sha256(path: Path) -> str:
 def _text_hash(value: Any) -> str:
     payload = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _mapping_hash(vehicle_id: str, mapping: dict[str, Any]) -> str:
+    """绑定内部车型与全部身份关键映射字段。"""
+
+    return _text_hash(
+        {
+            "vehicle_id": vehicle_id,
+            "platform_code": PLATFORM_CODE,
+            "platform_vehicle_id": mapping.get("platform_vehicle_id"),
+            "platform_url": mapping.get("platform_url"),
+            "platform_display_name": mapping.get("platform_display_name"),
+        }
+    )
 
 
 def _metric(
@@ -265,11 +300,15 @@ class ReputationService:
         sessions: sessionmaker[Session],
         settings: Settings,
         *,
+        session_store: SessionStore | None = None,
         event_publisher=None,
+        adapter_factory=None,
     ) -> None:
         self.sessions = sessions
         self.settings = settings
+        self.session_store = session_store
         self.event_publisher = event_publisher
+        self.adapter_factory = adapter_factory or DongchediReputationAdapter
 
     @property
     def synthetic_enabled(self) -> bool:
@@ -282,8 +321,11 @@ class ReputationService:
     def capabilities(self) -> dict[str, Any]:
         return {
             "reputation_synthetic_runs": self.synthetic_enabled,
-            "real_adapter_status": "not_configured",
-            "real_adapter_message": "真实口碑页面合同尚未提供，当前不以猜测选择器访问平台。",
+            "real_adapter_status": "available",
+            "real_adapter_message": (
+                f"懂车帝真实页面适配器 {REAL_ADAPTER_VERSION} 已接入；"
+                "映射验证读取实时页面并保存完整原页与指标区域证据。"
+            ),
             "scenarios": [
                 {"id": key, **value} for key, value in SCENARIOS.items()
             ]
@@ -623,6 +665,12 @@ class ReputationService:
             if row["platform_code"] != PLATFORM_CODE:
                 raise DomainError("REPUTATION_SCOPE_PLATFORM", "当前初始化只接受已接入平台映射。")
             try:
+                normalized_url = normalize_series_url(
+                    row["platform_url"], row["platform_vehicle_id"]
+                )
+            except ReputationAdapterError as error:
+                raise DomainError(error.code, error.message) from error
+            try:
                 role_order = int(row["role_order"])
             except ValueError as error:
                 raise DomainError("REPUTATION_SCOPE_ORDER", "角色内顺序必须是整数。") from error
@@ -637,7 +685,7 @@ class ReputationService:
                     "mappings": {
                         PLATFORM_CODE: {
                             "platform_vehicle_id": row["platform_vehicle_id"],
-                            "platform_url": row["platform_url"],
+                            "platform_url": normalized_url,
                             "platform_display_name": row["platform_display_name"],
                             "validation_status": "unverified",
                         }
@@ -690,8 +738,10 @@ class ReputationService:
                 errors.append({"row": str(index), "reason": "内部车型ID重复"})
             if row.platform_vehicle_id in seen_platform:
                 errors.append({"row": str(index), "reason": "平台车型ID重复"})
-            if not row.platform_url.startswith(("https://", "http://")):
-                errors.append({"row": str(index), "reason": "页面URL格式错误"})
+            try:
+                normalize_series_url(row.platform_url, row.platform_vehicle_id)
+            except ReputationAdapterError as error:
+                errors.append({"row": str(index), "reason": error.message})
             if not row.platform_vehicle_id.strip():
                 errors.append({"row": str(index), "reason": "平台车型ID不能为空"})
             if not row.platform_display_name.strip():
@@ -737,17 +787,327 @@ class ReputationService:
             draft.revision += 1
         return self.get_scope()
 
+    def validate_mappings(self, value: MappingValidationRequest) -> dict[str, Any]:
+        """并发验证当前草稿映射，并把单次三门禁结果绑定回草稿。"""
+
+        scope = self.get_scope()
+        if not scope["initialized"]:
+            raise DomainError("REPUTATION_SCOPE_UNINITIALIZED", "请先初始化口碑车型范围。")
+        if value.revision != scope["revision"]:
+            raise DomainError(
+                "REPUTATION_SCOPE_CONFLICT",
+                "范围草稿已经变化，请刷新后重试。",
+                status_code=409,
+            )
+        requested_ids = value.vehicle_ids or [row["id"] for row in scope["vehicles"]]
+        if not requested_ids or len(set(requested_ids)) != len(requested_ids):
+            raise DomainError("REPUTATION_VALIDATION_TARGETS", "验证车型不能为空或重复。")
+        by_id = {row["id"]: row for row in scope["vehicles"]}
+        unknown = [item for item in requested_ids if item not in by_id]
+        if unknown:
+            raise DomainError(
+                "REPUTATION_VALIDATION_TARGETS",
+                "验证请求包含不存在的内部车型ID。",
+                details=[{"vehicle_id": item, "reason": "内部车型ID不存在"} for item in unknown],
+            )
+        if not self.session_store:
+            raise DomainError(
+                "REPUTATION_SESSION_STORE_MISSING", "真实口碑适配器未连接共享Session。"
+            )
+        storage_state = self.session_store.get_state(PLATFORM_CODE)
+        if not storage_state:
+            raise DomainError("AUTH_REQUIRED", "请先在平台配置完成懂车帝认证。", status_code=409)
+        targets: list[ReputationMappingTarget] = []
+        for vehicle_id in requested_ids:
+            mapping = by_id[vehicle_id].get("mappings", {}).get(PLATFORM_CODE)
+            if not mapping:
+                raise DomainError("REPUTATION_MAPPING_MISSING", f"车型{vehicle_id}缺少懂车帝映射。")
+            try:
+                normalized_url = normalize_series_url(
+                    str(mapping.get("platform_url") or ""),
+                    str(mapping.get("platform_vehicle_id") or ""),
+                )
+            except ReputationAdapterError as error:
+                raise DomainError(error.code, error.message) from error
+            targets.append(
+                ReputationMappingTarget(
+                    vehicle_id=vehicle_id,
+                    platform_vehicle_id=str(mapping["platform_vehicle_id"]),
+                    platform_url=normalized_url,
+                    platform_display_name=str(mapping["platform_display_name"]),
+                    mapping_hash=_mapping_hash(vehicle_id, mapping),
+                )
+            )
+        with self.sessions() as db:
+            platform = db.get(PlatformConfig, PLATFORM_CODE)
+            concurrency = max(1, min(int(platform.internal_concurrency if platform else 2), 8))
+        run_id = uuid7()
+        input_hash = _text_hash(
+            [{"vehicle_id": item.vehicle_id, "mapping_hash": item.mapping_hash} for item in targets]
+        )
+        now = datetime.now(timezone.utc)
+        with self.sessions.begin() as db:
+            db.add(
+                ReputationMappingValidationRun(
+                    id=run_id,
+                    platform_code=PLATFORM_CODE,
+                    status="running",
+                    input_hash=input_hash,
+                    concurrency=concurrency,
+                    requested_count=len(targets),
+                    started_at=now,
+                )
+            )
+        adapter = self.adapter_factory(
+            storage_state,
+            concurrency=concurrency,
+            headless=self.settings.auth_browser_headless,
+            timeout_seconds=90,
+        )
+        root = self.settings.reputation_dir / "mapping-validations" / run_id
+        try:
+            first = adapter.validate_sync(targets, root / "attempt-1")
+            retry_indexes = [
+                index
+                for index, result in enumerate(first)
+                if isinstance(result, ReputationAdapterError) and result.retryable
+            ]
+            retry_results: dict[int, ReputationPageResult | Exception] = {}
+            if retry_indexes:
+                retried = adapter.validate_sync(
+                    [targets[index] for index in retry_indexes], root / "attempt-2"
+                )
+                retry_results = dict(zip(retry_indexes, retried, strict=True))
+        except Exception as error:
+            finished = datetime.now(timezone.utc)
+            with self.sessions.begin() as db:
+                failed_run = db.get(ReputationMappingValidationRun, run_id)
+                if failed_run:
+                    failed_run.status = "failed"
+                    failed_run.failed_count = len(targets)
+                    failed_run.finished_at = finished
+            raise DomainError(
+                "REPUTATION_VALIDATION_RUNTIME_FAILED",
+                f"真实页面验证运行失败：{type(error).__name__}",
+                status_code=503,
+            ) from error
+        final_results = [retry_results.get(index, result) for index, result in enumerate(first)]
+        finished = datetime.now(timezone.utc)
+        succeeded = sum(isinstance(item, ReputationPageResult) for item in final_results)
+        with self.sessions.begin() as db:
+            run = db.get(ReputationMappingValidationRun, run_id)
+            if not run:
+                raise RuntimeError("映射验证运行记录丢失")
+            draft = db.get(ReputationScopeDraft, "current")
+            if not draft:
+                raise RuntimeError("口碑范围草稿丢失")
+            current_data = json.loads(json.dumps(draft.data, ensure_ascii=False))
+            current_by_id = {row["id"]: row for row in current_data["vehicles"]}
+            for index, (target, first_result, final_result) in enumerate(
+                zip(targets, first, final_results, strict=True)
+            ):
+                attempts = [first_result]
+                if index in retry_results:
+                    attempts.append(retry_results[index])
+                attempt_records: list[ReputationMappingValidationAttempt] = []
+                for attempt_number, result in enumerate(attempts, start=1):
+                    record = self._validation_attempt_record(
+                        run_id, target, attempt_number, result, finished
+                    )
+                    attempt_records.append(record)
+                    db.add(record)
+                mapping = current_by_id[target.vehicle_id]["mappings"][PLATFORM_CODE]
+                if _mapping_hash(target.vehicle_id, mapping) != target.mapping_hash:
+                    continue
+                if isinstance(final_result, ReputationPageResult):
+                    final_attempt_number = 2 if index in retry_results else 1
+                    mapping.update(
+                        {
+                            "validation_status": "verified",
+                            "validation_run_id": run_id,
+                            "validation_attempt_number": final_attempt_number,
+                            "validation_attempt_id": attempt_records[-1].id,
+                            "validation_contract_version": VALIDATION_CONTRACT_VERSION,
+                            "validated_mapping_hash": target.mapping_hash,
+                            "validated_at": finished.isoformat(),
+                            "actual_name": final_result.actual_name,
+                            "latest_metrics": {
+                                "score": final_result.score_raw,
+                                "rank": final_result.rank_raw,
+                                "volume": final_result.volume_raw,
+                                "rank_scope": final_result.rank_scope,
+                            },
+                            "validation_error": None,
+                        }
+                    )
+                elif mapping.get("validation_status") != "verified":
+                    error = self._validation_error(final_result)
+                    mapping.update(
+                        {
+                            "validation_status": "failed",
+                            "validation_run_id": run_id,
+                            "validation_attempt_number": len(attempts),
+                            "validation_error": error["message"],
+                        }
+                    )
+            draft.data = current_data
+            draft.revision += 1
+            run.status = (
+                "success"
+                if succeeded == len(targets)
+                else "partial_success"
+                if succeeded
+                else "failed"
+            )
+            run.succeeded_count = succeeded
+            run.failed_count = len(targets) - succeeded
+            run.finished_at = finished
+        if self.event_publisher:
+            self.event_publisher("reputation.scope.changed", "current", status="validated")
+        return self.get_mapping_validation(run_id)
+
+    @staticmethod
+    def _validation_error(error: Exception) -> dict[str, str]:
+        if isinstance(error, ReputationAdapterError):
+            return {"code": error.code, "message": error.message}
+        return {
+            "code": "REPUTATION_VALIDATION_INTERNAL_ERROR",
+            "message": f"真实页面验证异常：{type(error).__name__}",
+        }
+
+    def _validation_attempt_record(
+        self,
+        run_id: str,
+        target: ReputationMappingTarget,
+        attempt_number: int,
+        result: ReputationPageResult | Exception,
+        finished: datetime,
+    ) -> ReputationMappingValidationAttempt:
+        if isinstance(result, ReputationPageResult):
+            return ReputationMappingValidationAttempt(
+                id=uuid7(),
+                run_id=run_id,
+                vehicle_id=target.vehicle_id,
+                attempt_number=attempt_number,
+                mapping_hash=target.mapping_hash,
+                contract_version=VALIDATION_CONTRACT_VERSION,
+                adapter_version=REAL_ADAPTER_VERSION,
+                status="success",
+                actual_name=result.actual_name,
+                final_url=result.final_url,
+                metrics={
+                    "score": result.score_raw,
+                    "rank": result.rank_raw,
+                    "volume": result.volume_raw,
+                    "rank_scope": result.rank_scope,
+                },
+                gate_results={
+                    "identity": "passed",
+                    "metrics": "passed",
+                    "evidence": "passed",
+                    "measurements": result.measurements,
+                    "metric_rect": result.metric_rect,
+                    "viewport": VIEWPORT,
+                    "document": {"width": result.width, "height": result.height},
+                },
+                full_page_path=str(result.full_page_path),
+                metric_region_path=str(result.metric_region_path),
+                full_page_sha256=result.full_page_sha256,
+                metric_region_sha256=result.metric_region_sha256,
+                duration_ms=result.duration_ms,
+                finished_at=finished,
+            )
+        error = self._validation_error(result)
+        return ReputationMappingValidationAttempt(
+            id=uuid7(),
+            run_id=run_id,
+            vehicle_id=target.vehicle_id,
+            attempt_number=attempt_number,
+            mapping_hash=target.mapping_hash,
+            contract_version=VALIDATION_CONTRACT_VERSION,
+            adapter_version=REAL_ADAPTER_VERSION,
+            status="failed",
+            metrics={},
+            gate_results={},
+            error_code=error["code"],
+            error_message=error["message"],
+            finished_at=finished,
+        )
+
+    def get_mapping_validation(self, run_id: str, prefix: str = "/api/v1") -> dict[str, Any]:
+        with self.sessions() as db:
+            run = db.get(ReputationMappingValidationRun, run_id)
+            if not run:
+                raise DomainError(
+                    "REPUTATION_VALIDATION_NOT_FOUND", "映射验证运行不存在。", status_code=404
+                )
+            attempts = db.scalars(
+                select(ReputationMappingValidationAttempt)
+                .where(ReputationMappingValidationAttempt.run_id == run_id)
+                .order_by(
+                    ReputationMappingValidationAttempt.vehicle_id,
+                    ReputationMappingValidationAttempt.attempt_number,
+                )
+            ).all()
+            return {
+                "id": run.id,
+                "platform_code": run.platform_code,
+                "status": run.status,
+                "requested_count": run.requested_count,
+                "succeeded_count": run.succeeded_count,
+                "failed_count": run.failed_count,
+                "concurrency": run.concurrency,
+                "started_at": run.started_at.isoformat(),
+                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+                "attempts": [
+                    {
+                        "id": item.id,
+                        "vehicle_id": item.vehicle_id,
+                        "attempt_number": item.attempt_number,
+                        "status": item.status,
+                        "actual_name": item.actual_name,
+                        "metrics": item.metrics,
+                        "error_code": item.error_code,
+                        "error_message": item.error_message,
+                        "duration_ms": item.duration_ms,
+                        "full_page_url": f"{prefix}/reputation/mapping-validations/attempts/{item.id}/full"
+                        if item.full_page_path
+                        else None,
+                        "metric_region_url": f"{prefix}/reputation/mapping-validations/attempts/{item.id}/metric"
+                        if item.metric_region_path
+                        else None,
+                    }
+                    for item in attempts
+                ],
+                "scope": self.get_scope(),
+            }
+
+    def get_mapping_validation_evidence(self, attempt_id: str, kind: str) -> Path:
+        with self.sessions() as db:
+            attempt = db.get(ReputationMappingValidationAttempt, attempt_id)
+            if not attempt:
+                raise DomainError(
+                    "REPUTATION_VALIDATION_ATTEMPT_NOT_FOUND",
+                    "映射验证尝试不存在。",
+                    status_code=404,
+                )
+            raw = attempt.full_page_path if kind == "full" else attempt.metric_region_path
+            path = Path(raw) if raw else None
+            expected = attempt.full_page_sha256 if kind == "full" else attempt.metric_region_sha256
+        if not path or not path.is_file() or _sha256(path) != expected:
+            raise DomainError(
+                "REPUTATION_VALIDATION_EVIDENCE_MISSING",
+                "映射验证证据不存在或校验失败。",
+                status_code=404,
+            )
+        return path
+
     def publish_preview(self) -> dict[str, Any]:
         scope = self.get_scope()
         if not scope["initialized"]:
             raise DomainError("REPUTATION_SCOPE_UNINITIALIZED", "请先初始化口碑车型范围。")
         vehicles = scope["vehicles"]
-        verified = sum(
-            1
-            for vehicle in vehicles
-            if vehicle.get("mappings", {}).get(PLATFORM_CODE, {}).get("validation_status")
-            == "verified"
-        )
+        verified = sum(1 for vehicle in vehicles if self._mapping_is_verified(vehicle))
         return {
             "revision": scope["revision"],
             "initial_publish": scope["published_version"] is None,
@@ -761,6 +1121,16 @@ class ReputationService:
             if verified == len(vehicles)
             else "真实页面验证尚未全部完成，当前不会开放发布。",
         }
+
+    @staticmethod
+    def _mapping_is_verified(vehicle: dict[str, Any]) -> bool:
+        mapping = vehicle.get("mappings", {}).get(PLATFORM_CODE, {})
+        return (
+            mapping.get("validation_status") == "verified"
+            and mapping.get("validation_contract_version") == VALIDATION_CONTRACT_VERSION
+            and mapping.get("validated_mapping_hash")
+            == _mapping_hash(str(vehicle.get("id") or ""), mapping)
+        )
 
     def publish_scope(self, value: ScopePublishRequest) -> dict[str, Any]:
         preview = self.publish_preview()
