@@ -31,6 +31,7 @@
 - [x] 新增 `dongchedi-reputation-v1` 有头Patchright适配器、URL/稳定ID/展示名身份门禁、三次指标与矩形稳定测量、完整原页和同源指标裁图、SHA-256、映射验证运行/尝试迁移、失败项有界重试和前端“验证全部真实页面”入口；生产映射首轮23/27后只重试4个失败项，最终草稿27/27验证通过。
 - [x] 生产真实验证运行 `01a03446-63cf-733e-95dc-f60b1fa0826b` 在并发8下61秒完成23项，修正懒加载文档高度误判后运行 `01a03448-08bf-7817-9a28-489560b9669d` 仅重验4项并在10秒内4/4成功；响应证据位于 `artifacts/runtime/reputation-real-adapter-20260824/`，数据库草稿revision为4。
 - [x] 当前27项完整原页与指标图文件均按数据库SHA-256复核通过，汇总 `evidence-verification.json` SHA-256 为 `327ec1522095c18ad9de2fe0ce6835c7cfc9c2335d2092d5e3d999f642cde79c`；1600×1000真实UI显示27/27、实时指标、证据入口和首发全量复核框，控制台0错误，截图SHA-256分别为 `534c694ec32e87ab768f622f3e7a7324d063a6928181c341489d4c9880e8f096` 与 `418e1634b3373e8a8bf4ea2e54d529b21ea864a146d4031f8911096bdf7c5e41`。
+- [x] 首发确认框明确表述为“供后续10:00正式巡检按计划时点冻结使用”，避免把尚待实现的正式调度误报为已经生效；前端TypeScript与生产构建再次通过。
 **下一步**：用户在“车型与映射”逐项查看实时三指标与指标证据后点击“发布首个范围”；随后实现并验收10:00正式调度、10:30汇报/固定XLSX/证据ZIP和首个27/27真实基线，不以映射验证或合成测试替代正式首跑。
 **边界**：测试手动按钮仍只由后端三因子能力开放且不访问平台；真实映射验证不创建正式巡检批次、不建立前日基线、不触发10:30汇报。当前27款仅覆盖懂车帝，其他平台全部接入后的完整映射门禁仍为届时第一优先级。
 **关联**：`src/threadsnap/reputation.py`、`frontend/src/features/reputation/`、`tests/test_reputation.py`、`docs/templates/reputation-scope-v1.*`、`docs/adr/0032-separate-reputation-inspection-from-post-extraction.md`、`docs/adr/0036-isolate-synthetic-reputation-test-runs.md`、`docs/chains/reputation-inspection.md`
