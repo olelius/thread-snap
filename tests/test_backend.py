@@ -17,6 +17,7 @@ import httpx
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
 from patchright.async_api import Error as PlaywrightError
+from pydantic import ValidationError
 from sqlalchemy import select
 
 from threadsnap.app import create_app, require_internal_loopback
@@ -54,8 +55,9 @@ from threadsnap.sentiment import (
     LOCAL_MODEL_CODE,
     SentimentFeedback,
     SentimentModelClient,
+    build_output_correction_request,
     build_request,
-    complete_text_only_feedback_payload,
+    complete_deepseek_tool_payload,
     deduplicate_media_urls,
     sentiment_input_hash,
     validate_modality_identity,
@@ -744,6 +746,53 @@ class ApiAndConfigTests(AppCase):
         self.assertEqual("shared-pool", first[2])
         self.assertEqual("shared-pool", second[2])
 
+    def test_deepseek_strict_tool_uses_beta_and_aggregates_stream_arguments(self) -> None:
+        """DeepSeek 独占 Beta 严格工具路径，其他云端模型仍走普通正文。"""
+
+        observed: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            observed.append(request)
+            content = "\n\n".join(
+                [
+                    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"submit_probe","arguments":"{\\"ok\\":"}}]},"finish_reason":null}]}',
+                    'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"true}"}}]},"finish_reason":null}]}',
+                    'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+                    'data: {"choices":[],"usage":{"total_tokens":9}}',
+                    "data: [DONE]",
+                    "",
+                ]
+            )
+            return httpx.Response(200, text=content)
+
+        http_client = httpx.Client(transport=httpx.MockTransport(handler))
+        model_client = SentimentModelClient(http_client)
+        body = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "submit_probe",
+                        "strict": True,
+                        "parameters": {},
+                    },
+                }
+            ],
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "submit_probe"},
+            },
+        }
+        try:
+            raw, usage, _request_id, _duration = model_client.request(
+                "https://api.deepseek.com", "test-key", body
+            )
+        finally:
+            model_client.close()
+        self.assertEqual("https://api.deepseek.com/beta/chat/completions", str(observed[0].url))
+        self.assertEqual('{"ok":true}', raw)
+        self.assertEqual({"total_tokens": 9}, usage)
+
     def test_local_text_sentiment_skips_cloud_and_media_resolution(self) -> None:
         """验证本地模型可无密钥启用，且只消费标题和正文。"""
 
@@ -951,8 +1000,8 @@ class ApiAndConfigTests(AppCase):
             def request(self, base_url: str, api_key: str, body: dict):
                 self.assert_connection = (base_url, api_key)
                 self.requests.append(body)
-                content = body["messages"][0]["content"]
-                if '"ok":true' in content:
+                function_name = body["tools"][0]["function"]["name"]
+                if function_name == "submit_connection_test":
                     return '{"ok":true}', {"total_tokens": 4}, "deepseek-test", 6
                 self.analysis_attempts += 1
                 payload = {
@@ -961,18 +1010,10 @@ class ApiAndConfigTests(AppCase):
                     "sentiment": "negative",
                     "primary_category": "product_criticism",
                     "secondary_categories": [],
-                    "modalities": {
-                        "text": {
-                            "status": "processed",
-                            "evidence": ["标题和正文反馈风云A9车机卡顿。"],
-                        }
-                    },
+                    "evidence": ["标题和正文反馈风云A9车机卡顿。"],
                     "summary": "文字内容反馈风云A9车机卡顿，情感为负面。",
                 }
                 response_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-                # 复现真实故障：首次与纠正响应逐字相同，modalities 少一个结束括号，
-                # summary 被嵌入其中。Worker 必须在两次调用的硬上限后结束。
-                response_text = response_text.replace('}},"summary"', '},"summary"', 1)
                 return (
                     response_text,
                     {"prompt_tokens": 80, "completion_tokens": 60, "total_tokens": 140},
@@ -996,6 +1037,11 @@ class ApiAndConfigTests(AppCase):
         self.assertIsInstance(test_body["messages"][0]["content"], str)
         self.assertEqual({"type": "disabled"}, test_body["thinking"])
         self.assertNotIn("modalities", test_body)
+        self.assertNotIn("response_format", test_body)
+        self.assertEqual(
+            "submit_connection_test", test_body["tools"][0]["function"]["name"]
+        )
+        self.assertTrue(test_body["tools"][0]["function"]["strict"])
 
         current = self.client.get("/api/v1/sentiment/config").json()
         enabled = self.client.put(
@@ -1053,11 +1099,14 @@ class ApiAndConfigTests(AppCase):
         self.assertNotIn("secret-video.mp4", text_input)
         self.assertNotIn("image_url", json.dumps(analysis_body))
         self.assertNotIn("video_url", json.dumps(analysis_body))
-        self.assertEqual(2, fake_client.analysis_attempts)
-        self.assertEqual(2, len(analysis_body["messages"]))
-        self.assertEqual("user", analysis_body["messages"][1]["role"])
-        self.assertIn("JSONDecodeError", analysis_body["messages"][1]["content"])
-        self.assertNotIn('{"subject_relevance":', analysis_body["messages"][1]["content"])
+        self.assertEqual(1, fake_client.analysis_attempts)
+        self.assertEqual(1, len(analysis_body["messages"]))
+        self.assertNotIn("response_format", analysis_body)
+        self.assertEqual(
+            "submit_sentiment_feedback",
+            analysis_body["tools"][0]["function"]["name"],
+        )
+        self.assertTrue(analysis_body["tools"][0]["function"]["strict"])
         with self.container.sessions() as db:
             analysis = db.scalar(select(SentimentAnalysis))
             assert analysis is not None
@@ -1066,10 +1115,9 @@ class ApiAndConfigTests(AppCase):
             self.assertEqual("not_requested", analysis.modalities["image"]["status"])
             self.assertEqual("not_requested", analysis.modalities["video_visual"]["status"])
             self.assertEqual("not_requested", analysis.modalities["video_audio"]["status"])
-            self.assertEqual(1, analysis.retry_count)
-            self.assertTrue(analysis.locally_recovered)
-            self.assertEqual(2, len(analysis.attempt_failures))
-            self.assertEqual("MODEL_RESPONSE_ERROR", analysis.attempt_failures[0]["error_code"])
+            self.assertEqual(0, analysis.retry_count)
+            self.assertFalse(analysis.locally_recovered)
+            self.assertEqual([], analysis.attempt_failures)
 
         latest = self.client.get("/api/v1/sentiment/config").json()
         qwen_restored = self.client.put(
@@ -1119,25 +1167,23 @@ class ApiAndConfigTests(AppCase):
             "sentiment": "non_negative",
             "primary_category": None,
             "secondary_categories": [],
-            "modalities": {
-                "text": {"status": "processed", "evidence": ["标题提及风云A9。"]},
-            },
+            "evidence": ["标题提及风云A9。"],
             "summary": "文字内容提及风云A9。",
         }
-        completed = complete_text_only_feedback_payload(payload, post)
+        completed = complete_deepseek_tool_payload(payload, post)
         feedback = SentimentFeedback.model_validate(completed)
         validate_modality_identity(feedback, post)
+        self.assertEqual("processed", completed["modalities"]["text"]["status"])
         self.assertEqual("not_requested", completed["modalities"]["image"]["status"])
         self.assertEqual(1, completed["modalities"]["image"]["expected_count"])
         self.assertEqual([], completed["modalities"]["video_audio"]["items"])
-        self.assertEqual({"text"}, set(payload["modalities"]))
         invalid = json.loads(json.dumps(payload, ensure_ascii=False))
-        invalid["modalities"]["image"] = completed["modalities"]["image"]
-        with self.assertRaisesRegex(ValueError, "只允许 text"):
-            complete_text_only_feedback_payload(invalid, post)
+        invalid["modalities"] = {"text": {"status": "processed"}}
+        with self.assertRaises(ValidationError):
+            complete_deepseek_tool_payload(invalid, post)
 
-    def test_deepseek_prompt_requires_text_status_contract(self) -> None:
-        """DeepSeek 提示词必须给出文字状态枚举和完整 JSON 形状。"""
+    def test_deepseek_uses_minimal_strict_tool_without_json_object(self) -> None:
+        """DeepSeek 独占最小严格工具；千问 JSON Object 合同不受影响。"""
 
         post = PostSnapshot(title="瑞虎8油耗", content="这油耗还可以吧。")
         config = SimpleNamespace(
@@ -1149,13 +1195,40 @@ class ApiAndConfigTests(AppCase):
         request = build_request(post, config)
         prompt = request["messages"][0]["content"]
 
-        self.assertIn("absent、processed、unprocessed", prompt)
-        self.assertIn("禁止使用 analyzed、completed", prompt)
-        self.assertIn('"status":"processed"', prompt)
-        self.assertEqual({"type": "json_object"}, request["response_format"])
+        self.assertIn("submit_sentiment_feedback", prompt)
+        self.assertNotIn('"status":"processed"', prompt)
+        self.assertNotIn("response_format", request)
+        function = request["tools"][0]["function"]
+        self.assertTrue(function["strict"])
+        self.assertEqual("submit_sentiment_feedback", function["name"])
+        properties = function["parameters"]["properties"]
+        self.assertEqual(
+            {
+                "subject_relevance",
+                "matched_subjects",
+                "sentiment",
+                "primary_category",
+                "secondary_categories",
+                "evidence",
+                "summary",
+            },
+            set(properties),
+        )
+        self.assertNotIn("modalities", properties)
+        self.assertFalse(function["parameters"]["additionalProperties"])
 
-    def test_deepseek_text_rejects_non_contract_status_synonyms(self) -> None:
-        """文字状态同义值属于模型违约，由纠错请求处理。"""
+        qwen_config = SimpleNamespace(
+            model_code=HOSTED_MODEL_CODE,
+            brand="奇瑞",
+            products=["瑞虎8"],
+            supplement=None,
+        )
+        qwen_request = build_request(post, qwen_config)
+        self.assertEqual({"type": "json_object"}, qwen_request["response_format"])
+        self.assertNotIn("tools", qwen_request)
+
+    def test_deepseek_minimal_contract_rejects_model_supplied_status(self) -> None:
+        """文字覆盖状态是后端事实，不允许 DeepSeek 重复提供。"""
 
         post = PostSnapshot(title="瑞虎8油耗", content="这油耗还可以吧。")
         for status in ("analyzed", "completed"):
@@ -1166,14 +1239,39 @@ class ApiAndConfigTests(AppCase):
                     "sentiment": "non_negative",
                     "primary_category": None,
                     "secondary_categories": [],
-                    "modalities": {
-                        "text": {"status": status, "evidence": ["油耗表现可以。"]}
-                    },
+                    "evidence": ["油耗表现可以。"],
                     "summary": "文字评价瑞虎8油耗。",
+                    "status": status,
                 }
-                completed = complete_text_only_feedback_payload(payload, post)
-                with self.assertRaises(ValueError):
-                    SentimentFeedback.model_validate(completed)
+                with self.assertRaises(ValidationError):
+                    complete_deepseek_tool_payload(payload, post)
+
+    def test_deepseek_strict_tool_correction_keeps_schema_and_compact_error(self) -> None:
+        """关系纠正继续复用严格工具，不回退到 JSON Object 或错误候选正文。"""
+
+        post = PostSnapshot(title="瑞虎8油耗", content="这油耗还可以吧。")
+        config = SimpleNamespace(
+            model_code=DEEPSEEK_MODEL_CODE,
+            brand="奇瑞",
+            products=["瑞虎8"],
+            supplement=None,
+        )
+        request = build_request(post, config)
+        raw = '{"subject_relevance":true,"sentiment":null}'
+        correction = build_output_correction_request(
+            request,
+            raw,
+            ValueError("相关结果必须包含 sentiment"),
+            input_mode="text_only",
+        )
+        self.assertEqual(request["tools"], correction["tools"])
+        self.assertEqual(request["tool_choice"], correction["tool_choice"])
+        self.assertNotIn("response_format", correction)
+        self.assertEqual(2, len(correction["messages"]))
+        message = correction["messages"][1]["content"]
+        self.assertIn("函数参数", message)
+        self.assertIn("相关结果必须包含 sentiment", message)
+        self.assertNotIn(raw, message)
 
     def test_bootstrap_refreshes_available_adapter_version(self) -> None:
         with self.container.sessions.begin() as db:

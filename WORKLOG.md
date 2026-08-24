@@ -16,6 +16,22 @@
 
 ---
 
+## 2026-08-24 — DeepSeek 专属 Strict Tool 结构化输出
+**总目标**：在不改变千问和本地模型协议的前提下，为 DeepSeek 采用生成侧严格结构约束、最小模型字段与后端确定性补齐，消除反复坏 JSON 导致的分析失败和重复 Token。
+**状态**：✅ 模型专属适配、正式能力探测、真实失败恢复、owner 文档和完整验证均已完成；当前目标批次 60/60 分析完成，数据库持久分析失败为 0。
+**干到哪里了**：
+- [x] 正式配置 `https://api.deepseek.com` / `deepseek-v4-flash` 的能力探测确认普通 `response_format=json_schema` 返回 HTTP 400；Beta Strict Tool 会拒绝非法 Schema，7/7 次有效调用通过，覆盖非流式、流式和完整舆情字段。探测记录为 `artifacts/runtime/deepseek-strict-schema-probe-20260824/result.json`，SHA-256 `d18c5fa13061449087b1cf2851861e4188f1417426f03ab479955691c17da074`。
+- [x] 结构化输出按模型独立适配：千问继续 JSON Object 与完整多模态合同，本地继续 UIE-Senta/UTC 管线；只有 DeepSeek 改走 `/beta/chat/completions`、`strict=true` 的单一强制函数和 `finish_reason=tool_calls`，不支持该协议的代理在连接测试阶段失败且不静默降级。
+- [x] DeepSeek 原生参数收缩为相关性、命中对象、情感、分类、文字依据和总结七个语义字段；文字状态与图片/视频数量及 `not_requested` 由后端按实际输入补齐。Strict Tool 通过后仍执行 Pydantic 和业务关系校验，关系违约最多纠正一次，不进行第三次调用或永久重排队；旧单括号候选恢复退出 DeepSeek 当前生产路径。
+- [x] 正式配置测试通过且 revision 保持 23，当前 DeepSeek 已启用、验证状态 `valid`、云端并发 32。原失败分析 `01a031e8-aa72-78b8-a2bf-12781c4e5f10` 使用新协议一次完成，`retry_count=0`、`locally_recovered=false`，原生响应无 `modalities` 且后端补齐完整统一合同；历史两次失败候选继续保留。
+- [x] 现场批次 `20260824-115511-001` 复核为 60/60 `analysis_completed`、0 失败；全库为 542 条完成、419 条禁用、0 条失败。旧失败链两次共 2923 Token，新严格工具单次 1423 Token，该失败样本总 Token 减少约 51.3%。重试前数据库备份 SHA-256 为 `f45ba37167cd62cbfb302262ee00e0e709ba722f7ec3fa1fcf968c38d0afe574`。
+- [x] 全部 107 项后端测试、DeepSeek 专项 7 项、`ruff check src tests`、Python 编译、`pip check`、前端 TypeScript 检查与生产构建（2465 modules）及 `git diff --check` 通过；后端和 Vite 代理健康均为 HTTP 200。脱敏验证记录为 `artifacts/runtime/deepseek-strict-tool-migration-20260824/verification.json`，SHA-256 `a3a33f9a289dd214f94513aef7bb145d05660667730b46ac602d1a5f345a8f82`。
+**下一步**：后续真实 DeepSeek 批次按首次 Schema 拒绝、业务关系纠正、传输重试和最终失败分别统计；新增受控模型先做能力探测，再增加自己的 `output_mode`，不复用未经验证的 DeepSeek 协议。
+**边界**：本次只改变 DeepSeek 输出传输与其最小原生合同，千问和本地模型行为保持原样；Strict Tool 消除已见的括号、层级、类型和额外字段错误，但网络、限流、内容策略和业务关系仍按现有有界失败语义留痕，不把“当前失败为 0”误写成外部服务永久零故障保证。
+**关联**：`src/threadsnap/sentiment.py`、`tests/test_backend.py`、`docs/adr/0029-use-model-specific-strict-output-adapters.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/sentiment-analysis.md`
+
+---
+
 ## 2026-08-24 — 批次结果按实际来源精确多选
 **总目标**：把批次详情中的圈子自由输入改为当前批次实际来源下拉，并明确区分最新回复与最新发布，支持多来源组合筛选。
 **状态**：✅ 后端来源身份、三个结果接口、前端多选、文档、真实页面与完整验证均已完成。
