@@ -16,6 +16,23 @@
 
 ---
 
+## 2026-08-24 — DeepSeek Strict 尾部坏 JSON 通用结构门禁
+**总目标**：纠正“提供方 Strict Tool 足以保证结构正确”的错误假设，用不改变模型语义的通用结构恢复覆盖同类 JSON 错误族，并恢复现场 420 条批次。
+**状态**：✅ 根因、通用结构门禁、DeepSeek 独立超时、现场恢复、owner 文档、依赖许可和完整验证均已完成；目标批次 420/420 分析完成，全库持久分析失败为 0。
+**干到哪里了**：
+- [x] 批次 `20260824-132715-001` 使用 `deepseek-text-v5-strict-tool`，首轮完成的 419 条中 1 条失败（0.239%）；两次付费调用都正常结束并把字符串枚举输出为未加引号的 `non_negative`，均在第 70 列触发 `JSONDecodeError`。这不是旧 JSON Object 路径；提供方官方 Strict 声明与正式批量结果不一致，7/7 小样本能力探测不足以外推零尾部错误。当前没有证据把该错误归因于 32 并发。
+- [x] DeepSeek 保留 Beta Strict Tool 和最小七字段作为上游降错层；标准解析失败后由固定 `json-repair==0.62.0` 生成通用候选，并在错误点附近枚举有界单结构字符编辑。候选相对原参数只允许增删 JSON 标点、引号、转义符和空白；中文、英文、数字等任一语义字符变化立即拒绝。
+- [x] 候选必须唯一通过无重复字段、精确七字段、禁止额外字段、Pydantic 类型/枚举、业务关系、后端模态补齐和输入身份校验。缺引号、缺逗号、缺数组闭合、尾逗号、未加引号字段名均有回归覆盖；前后说明、重复字段、Schema 外枚举、缺字段、语义改写或多个有效结果仍进入一次有界模型纠正，不按错误形状继续加替换规则。
+- [x] 可无损恢复的首个参数直接形成结果，保存原始坏参数和解析错误、标记 `locally_recovered=true`，不增加付费调用；成功持久化统一清除旧错误码和错误正文。DeepSeek 文字流读取边界从共享 600 秒独立收紧为 30 秒，千问多模态仍保持 600 秒。
+- [x] 原失败分析 `01a0323d-8824-750c-9263-ec1e1df85250` 从保存的第二次坏参数无付费恢复为 `analysis_completed/non_negative`，两次失败审计继续保留；另一个超过 15 分钟的运行项在 Worker 重启后 2.438 秒完成。批次最终 420/420 `analysis_completed`，全库 962 完成、419 禁用、0 失败，14/14 截图成果组均 `ready`。
+- [x] 恢复前使用 SQLite 在线备份生成 `artifacts/runtime/deepseek-strict-regression-20260824/threadsnap-before-general-recovery.db`，SHA-256 `4cb93860ed413f1409c8a713a96e57be417f1630dc1da45da0994186aeecc283`；`json-repair` 版本和 MIT 许可已进入项目依赖与第三方声明，后端 wheel 构建通过。
+- [x] 全部 108 项后端测试、DeepSeek 专项 5 项、`ruff check src tests`、Python 编译、`pip check`、后端 wheel、前端 TypeScript 检查与生产构建（2465 modules）及 `git diff --check` 通过；后端与 Vite 代理健康均为 HTTP 200。脱敏验证记录为 `artifacts/runtime/deepseek-strict-regression-20260824/verification.json`，SHA-256 `5029ed2ba49199034e27453973a937d20c1b04afbd19fecb0d8432fb8464e55c`。
+**下一步**：后续批次分别统计提供方原生合法、唯一无损本地恢复、模型关系纠正、传输重试和最终失败的分母；若出现无法在不改变语义字符的前提下形成唯一完整合同的错误，保留失败证据后按新的错误层级决策，不放宽为猜测式业务修正。
+**边界**：本次新增的通用结构恢复只用于 DeepSeek Strict Tool 参数，千问和本地模型协议未改；它可以把可证明的纯结构问题从最终失败中吸收，但不伪造不可恢复的观点、分类或依据，也不承诺外部服务、网络、限流和内容策略永久零故障。
+**关联**：`src/threadsnap/sentiment.py`、`pyproject.toml`、`THIRD_PARTY_NOTICES.md`、`tests/test_backend.py`、`docs/adr/0030-treat-provider-strict-output-as-untrusted.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/sentiment-analysis.md`
+
+---
+
 ## 2026-08-24 — DeepSeek 专属 Strict Tool 结构化输出
 **总目标**：在不改变千问和本地模型协议的前提下，为 DeepSeek 采用生成侧严格结构约束、最小模型字段与后端确定性补齐，消除反复坏 JSON 导致的分析失败和重复 Token。
 **状态**：✅ 模型专属适配、正式能力探测、真实失败恢复、owner 文档和完整验证均已完成；当前目标批次 60/60 分析完成，数据库持久分析失败为 0。

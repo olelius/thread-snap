@@ -8,12 +8,14 @@ import re
 import socket
 import threading
 from copy import deepcopy
+from difflib import SequenceMatcher
 from ipaddress import ip_address, ip_network
 from time import monotonic
 from typing import Any, Callable, Literal
 from urllib.parse import urlsplit
 
 import httpx
+from json_repair import repair_json
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
@@ -96,6 +98,7 @@ PROXY_FAKE_IP_NETWORK = ip_network("198.18.0.0/15")
 SENTIMENT_CLOUD_CONCURRENCY_MIN = 1
 SENTIMENT_CLOUD_CONCURRENCY_MAX = 64
 SENTIMENT_CLOUD_CONCURRENCY_DEFAULT = 8
+DEEPSEEK_READ_TIMEOUT_SECONDS = 30.0
 
 
 def model_profile(model_code: str) -> dict[str, str]:
@@ -749,6 +752,121 @@ def repair_missing_modalities_closure(raw_response: str) -> dict[str, Any]:
     return payload
 
 
+def _load_json_object_without_duplicates(value: str) -> dict[str, Any]:
+    """解析 JSON 对象并拒绝重复字段。"""
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in result:
+                raise ValueError(f"JSON 修复候选包含重复字段：{key}")
+            result[key] = item
+        return result
+
+    payload = json.loads(value, object_pairs_hook=reject_duplicate_keys)
+    if not isinstance(payload, dict):
+        raise ValueError("JSON 修复候选根节点不是对象")
+    return payload
+
+
+def repair_deepseek_tool_json(raw_response: str) -> dict[str, Any]:
+    """生成一个只改变 JSON 结构字符的通用 DeepSeek 工具参数候选。"""
+
+    repaired = repair_json(
+        raw_response,
+        ensure_ascii=False,
+        skip_json_loads=True,
+    )
+    if not isinstance(repaired, str) or not repaired:
+        raise ValueError("DeepSeek 工具参数未形成 JSON 修复候选")
+    allowed_changes = frozenset("{}[],:\\\"' \t\r\n")
+    matcher = SequenceMatcher(a=raw_response, b=repaired, autojunk=False)
+    changed = False
+    for operation, old_start, old_end, new_start, new_end in matcher.get_opcodes():
+        if operation == "equal":
+            continue
+        changed = True
+        old_fragment = raw_response[old_start:old_end]
+        new_fragment = repaired[new_start:new_end]
+        if any(char not in allowed_changes for char in old_fragment + new_fragment):
+            raise ValueError("JSON 修复候选改变了模型语义字符")
+    if not changed:
+        raise ValueError("DeepSeek 工具参数没有可证明的结构变化")
+
+    return _load_json_object_without_duplicates(repaired)
+
+
+def recover_deepseek_tool_payload(
+    raw_response: str,
+    post: PostSnapshot,
+    error_position: int,
+) -> dict[str, Any]:
+    """从通用修复器与错误点单结构编辑中选出唯一完整合同候选。"""
+
+    serialized_candidates: set[str] = set()
+    try:
+        repaired = repair_deepseek_tool_json(raw_response)
+    except (ValueError, json.JSONDecodeError):
+        pass
+    else:
+        serialized_candidates.add(
+            json.dumps(repaired, ensure_ascii=False, separators=(",", ":"))
+        )
+
+    structural = "{}[],:\\\"'"
+    positions = {
+        max(0, min(len(raw_response), value))
+        for value in (
+            error_position - 2,
+            error_position - 1,
+            error_position,
+            error_position + 1,
+            error_position + 2,
+            len(raw_response),
+        )
+    }
+    edit_candidates: set[str] = set()
+    for position in positions:
+        for char in structural:
+            edit_candidates.add(raw_response[:position] + char + raw_response[position:])
+        if position < len(raw_response) and raw_response[position] in structural:
+            edit_candidates.add(raw_response[:position] + raw_response[position + 1 :])
+            for char in structural:
+                edit_candidates.add(
+                    raw_response[:position] + char + raw_response[position + 1 :]
+                )
+    for candidate in edit_candidates:
+        try:
+            payload = _load_json_object_without_duplicates(candidate)
+        except (ValueError, json.JSONDecodeError):
+            continue
+        serialized_candidates.add(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        )
+
+    valid_candidates: dict[str, dict[str, Any]] = {}
+    for serialized in serialized_candidates:
+        try:
+            native = _load_json_object_without_duplicates(serialized)
+            completed = complete_deepseek_tool_payload(native, post)
+            feedback = SentimentFeedback.model_validate(completed)
+            validate_modality_identity(feedback, post)
+        except (ValueError, json.JSONDecodeError, ValidationError):
+            continue
+        canonical = json.dumps(
+            completed,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        valid_candidates[canonical] = completed
+    if len(valid_candidates) != 1:
+        raise ValueError(
+            f"DeepSeek 工具参数结构修复没有唯一完整合同候选：{len(valid_candidates)}"
+        )
+    return next(iter(valid_candidates.values()))
+
+
 def strict_tool_name(body: dict[str, Any]) -> str | None:
     """识别当前请求是否为单一强制严格工具输出。"""
 
@@ -845,12 +963,19 @@ class SentimentModelClient:
             if tool_name
             else normalized_base + "/chat/completions"
         )
+        request_timeout = httpx.Timeout(
+            connect=20.0,
+            read=DEEPSEEK_READ_TIMEOUT_SECONDS if tool_name else 600.0,
+            write=60.0,
+            pool=20.0,
+        )
         started = monotonic()
         with self.client.stream(
             "POST",
             endpoint,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json=body,
+            timeout=request_timeout,
         ) as response:
             if 300 <= response.status_code < 400:
                 raise ModelRequestError(
@@ -1756,11 +1881,33 @@ class SentimentWorker:
                 )
                 return True
             try:
-                payload, _strict, recovered = parse_feedback_text(raw)
-                if analysis_profile["output_mode"] == "strict_tool":
+                structural_error: json.JSONDecodeError | None = None
+                payload_completed = False
+                try:
+                    payload, _strict, recovered = parse_feedback_text(raw)
+                except json.JSONDecodeError as exc:
+                    if analysis_profile["output_mode"] != "strict_tool":
+                        raise
+                    payload = recover_deepseek_tool_payload(raw, post, exc.pos)
+                    recovered = True
+                    structural_error = exc
+                    payload_completed = True
+                if analysis_profile["output_mode"] == "strict_tool" and not payload_completed:
                     payload = complete_deepseek_tool_payload(payload, post)
                 feedback = SentimentFeedback.model_validate(payload)
                 validate_modality_identity(feedback, post)
+                if structural_error is not None:
+                    attempt_failures.append(
+                        _failed_attempt(
+                            attempt=retry_count + 1,
+                            exc=structural_error,
+                            error_code="MODEL_RESPONSE_ERROR",
+                            raw_response=raw,
+                            request_id=request_id,
+                            usage=usage,
+                            duration_ms=duration_ms,
+                        )
+                    )
             except (ValueError, json.JSONDecodeError, ValidationError) as exc:
                 if output_correction_retries < 1:
                     attempt_failures.append(
@@ -1922,6 +2069,8 @@ class SentimentWorker:
             analysis.usage = usage
             analysis.retry_count = retry_count
             analysis.duration_ms = duration_ms
+            analysis.error_code = None
+            analysis.error_message = None
             analysis.finished_at = utc_now()
             post.analysis_status = status
             if status == "analysis_completed":
