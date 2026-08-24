@@ -107,6 +107,19 @@
 8. `docs/research/circle-screenshot-poc-results.md`；
 9. 执行 PoC 时读取 Git 外的 `artifacts/poc/inputs/circle-screenshot/` 真实样本。
 
+### 3.7 垂媒口碑巡检设计、PoC 或实现
+
+必须读取：
+
+1. 需求、功能或技术任务要求的全部文件；
+2. `docs/chains/reputation-inspection.md`；
+3. `docs/adr/0032-separate-reputation-inspection-from-post-extraction.md`；
+4. `docs/adr/0033-preserve-full-reputation-page-and-derived-metric-region.md`；
+5. `docs/adr/0034-use-quarantined-two-phase-deletion-for-reputation-batches.md`；
+6. `docs/adr/0035-prioritize-official-reputation-runs-without-preemption.md`；
+7. `docs/adr/0036-isolate-synthetic-reputation-test-runs.md`；
+8. 执行平台适配或页面证据 PoC 时读取该工作线约定的 Git 外真实样本。
+
 ## 4. 已接受 ADR
 
 | ADR | 决策 |
@@ -139,6 +152,11 @@
 | `docs/adr/0026-use-synchronized-page-evidence-and-related-screenshot-artifacts.md` | 用同一冻结页面清单生成原始证据，并按关联圈子成果组合成版本化截图成果 |
 | `docs/adr/0027-use-bounded-clean-correction-and-structural-recovery.md` | 云端舆情使用干净纠正上下文，并只恢复可唯一证明的单括号结构错误 |
 | `docs/adr/0031-render-negative-artifacts-on-full-page-evidence.md` | 关联截图在完整原始页面副本上沿用负面框选，不再裁片拼接 |
+| `docs/adr/0032-separate-reputation-inspection-from-post-extraction.md` | 垂媒口碑巡检使用独立业务模块和批次，不作为帖子提取批次的附属结果 |
+| `docs/adr/0033-preserve-full-reputation-page-and-derived-metric-region.md` | 口碑巡检保留不可变完整原页，并从同一原页派生可嵌入表格的指标区域证据 |
+| `docs/adr/0034-use-quarantined-two-phase-deletion-for-reputation-batches.md` | 口碑巡检批次使用删除清单、同盘隔离区和数据库提交边界完成可恢复删除 |
+| `docs/adr/0035-prioritize-official-reputation-runs-without-preemption.md` | 每日正式口碑巡检在平台容量队列中非抢占优先，补跑和其他任务保持普通FIFO |
+| `docs/adr/0036-isolate-synthetic-reputation-test-runs.md` | 手动合成口碑运行只存在于隔离测试环境，复用正式处理链但不污染正式批次、基线或调度 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 
@@ -178,6 +196,7 @@ artifacts/poc/
 - 修改采集框架 PoC 阶段、指标、输入或结果结构时，同步更新采集 PoC 计划、模板说明和 `docs/chains/first-platform-delivery.md`。
 - 修改舆情反馈 PoC 阶段、输入、模态覆盖或结果结构时，同步更新舆情 PoC 计划和 `docs/chains/sentiment-analysis.md`。
 - 修改圈子页面证据、关联成果合成、分片或资源门禁时，同步更新截图 PoC 计划和 `docs/chains/circle-screenshot-artifacts.md`，并核对首个平台与舆情工作线。
+- 修改垂媒口碑巡检范围、阶段门、比较、证据或汇报规则时，同步更新 `docs/chains/reputation-inspection.md`。
 - 详细执行过程和长日志写入被忽略的 `artifacts/runtime/`，账本只保留恢复所需证据入口。
 - 调研结论成为正式决策前，必须经过真实样本或环境验证并写入技术路线或 ADR。
 - 项目记忆只记录已发生、可复用的根因、坑和杠杆，不记录普通提交历史。
