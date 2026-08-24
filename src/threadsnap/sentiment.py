@@ -45,22 +45,25 @@ MODEL_PROFILES = {
         "provider": "hosted",
         "service": "aliyun",
         "input_mode": "multimodal",
+        "output_mode": "json_object",
     },
     DEEPSEEK_MODEL_CODE: {
         "name": "DeepSeek V4 Flash（云端文字）",
         "provider": "hosted",
         "service": "deepseek",
         "input_mode": "text_only",
+        "output_mode": "strict_tool",
     },
     LOCAL_MODEL_CODE: {
         "name": LOCAL_MODEL_NAME,
         "provider": "local",
         "service": "local",
         "input_mode": "text_only",
+        "output_mode": "local",
     },
 }
 HOSTED_PROMPT_VERSION = "v4-clean-correction"
-DEEPSEEK_PROMPT_VERSION = "deepseek-text-v4-bounded-recovery"
+DEEPSEEK_PROMPT_VERSION = "deepseek-text-v5-strict-tool"
 LOCAL_PIPELINE_VERSION = "local-v1"
 CATEGORIES = (
     "product_complaint",
@@ -285,6 +288,39 @@ class SentimentFeedback(BaseModel):
         return self
 
 
+class DeepSeekTextFeedback(BaseModel):
+    """DeepSeek 严格工具只返回需要模型判断的最小文字字段。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    subject_relevance: bool
+    matched_subjects: list[str]
+    sentiment: Literal["negative", "non_negative"] | None
+    primary_category: (
+        Literal[
+            "product_complaint",
+            "product_criticism",
+            "service_complaint",
+            "brand_criticism",
+            "competitor_attack",
+            "other",
+        ]
+        | None
+    )
+    secondary_categories: list[
+        Literal[
+            "product_complaint",
+            "product_criticism",
+            "service_complaint",
+            "brand_criticism",
+            "competitor_attack",
+            "other",
+        ]
+    ]
+    evidence: list[str]
+    summary: str = Field(min_length=1)
+
+
 def deduplicate_media_urls(values: list[str] | None) -> list[str]:
     """按忽略查询及已知路径签名的稳定媒体身份去重，并保留首个 URL。"""
 
@@ -350,7 +386,7 @@ def validate_modality_identity(feedback: SentimentFeedback, post: PostSnapshot) 
 def complete_text_only_feedback_payload(
     payload: dict[str, Any], post: PostSnapshot
 ) -> dict[str, Any]:
-    """严格校验文字模型负责的形状，再补充后端掌握的未请求媒体事实。"""
+    """补齐旧版文字合同；仅供历史响应恢复与兼容测试使用。"""
 
     expected_root = set(SentimentFeedback.model_fields)
     if set(payload) != expected_root:
@@ -377,6 +413,94 @@ def complete_text_only_feedback_payload(
             "items": [],
         }
     return completed
+
+
+def complete_deepseek_tool_payload(
+    payload: dict[str, Any], post: PostSnapshot
+) -> dict[str, Any]:
+    """把 DeepSeek 最小严格工具参数补成统一舆情合同。"""
+
+    native = DeepSeekTextFeedback.model_validate(payload)
+    has_text = bool((post.title or "").strip() or (post.content or "").strip())
+    completed: dict[str, Any] = {
+        "subject_relevance": native.subject_relevance,
+        "matched_subjects": native.matched_subjects,
+        "sentiment": native.sentiment,
+        "primary_category": native.primary_category,
+        "secondary_categories": native.secondary_categories,
+        "modalities": {
+            "text": {
+                "status": "processed" if has_text else "absent",
+                "evidence": native.evidence,
+            }
+        },
+        "summary": native.summary,
+    }
+    counts = {
+        "image": len(deduplicate_media_urls(post.image_urls)),
+        "video_visual": len(deduplicate_media_urls(post.video_urls)),
+        "video_audio": len(deduplicate_media_urls(post.video_urls)),
+    }
+    for name, count in counts.items():
+        completed["modalities"][name] = {
+            "status": "not_requested" if count else "absent",
+            "expected_count": count,
+            "processed_count": 0,
+            "items": [],
+        }
+    return completed
+
+
+def deepseek_strict_tool(model_test: bool = False) -> dict[str, Any]:
+    """返回 DeepSeek Beta Strict Tool 定义，不影响其他模型输出协议。"""
+
+    if model_test:
+        name = "submit_connection_test"
+        schema = {
+            "type": "object",
+            "properties": {"ok": {"type": "boolean", "enum": [True]}},
+            "required": ["ok"],
+            "additionalProperties": False,
+        }
+    else:
+        name = "submit_sentiment_feedback"
+        category = {"type": "string", "enum": list(CATEGORIES)}
+        schema = {
+            "type": "object",
+            "properties": {
+                "subject_relevance": {"type": "boolean"},
+                "matched_subjects": {"type": "array", "items": {"type": "string"}},
+                "sentiment": {
+                    "anyOf": [
+                        {"type": "string", "enum": ["negative", "non_negative"]},
+                        {"type": "null"},
+                    ]
+                },
+                "primary_category": {"anyOf": [category, {"type": "null"}]},
+                "secondary_categories": {"type": "array", "items": category},
+                "evidence": {"type": "array", "items": {"type": "string"}},
+                "summary": {"type": "string"},
+            },
+            "required": [
+                "subject_relevance",
+                "matched_subjects",
+                "sentiment",
+                "primary_category",
+                "secondary_categories",
+                "evidence",
+                "summary",
+            ],
+            "additionalProperties": False,
+        }
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": "提交结构化舆情结果" if not model_test else "提交连接测试结果",
+            "strict": True,
+            "parameters": schema,
+        },
+    }
 
 
 def validate_public_https_base_url(value: str, *, resolve: bool) -> str:
@@ -472,28 +596,17 @@ def build_text_only_prompt(
         "products": config.products,
         "supplement": config.supplement or "",
     }
-    prompt = f"""只返回一个标准 JSON 对象，不使用 Markdown，不联网搜索。
-只根据标题和正文进行分析；图片、视频画面、视频音频均未提供给你，不得据此形成观点或依据。
+    return f"""只根据标题和正文进行舆情分析，不联网搜索；图片、视频画面、视频音频均未提供，不得据此形成观点或依据。
 判定对象配置：{json.dumps(subject, ensure_ascii=False)}。
 请结合文字语境自行识别品牌、产品、服务和常见别名；内容与判定对象无关时 subject_relevance=false。
-对判定对象不利为 negative，中性或正面为 non_negative。负面主要类型仅允许：{json.dumps(CATEGORIES, ensure_ascii=False)}。
+对判定对象不利为 negative，中性或正面为 non_negative；负面时选择函数 Schema 中最符合语义的主要类型。
 
 标题：{post.title or ""}
 正文：{post.content or ""}
 
-返回字段：subject_relevance、matched_subjects、sentiment、primary_category、secondary_categories、modalities、summary。
 不相关时 sentiment 与 primary_category 为 null；负面必须有 primary_category；次要类型不得重复主要类型。
-modalities 只返回 text，包含 status 和中文 evidence；所有 evidence 必须是 JSON 字符串数组。
-modalities.text.status 只允许以下三个英文值：absent、processed、unprocessed。
-标题或正文至少一项非空且你已完成分析时必须返回 processed；标题和正文都为空时返回 absent；文字存在但未完成分析时返回 unprocessed。
-禁止使用 analyzed、completed、present、skipped 或其他状态值。
-不要生成 image、video_visual 或 video_audio 字段，ThreadSnap 会按未请求分析统一补全媒体覆盖。
-summary 使用中文概括文字内容、对象相关性和情感结论，不描述未提供的媒体。"""
-
-    return prompt + """
-
-严格遵循以下 JSON 形状；示例值只用于说明格式，实际值必须依据本帖文字生成：
-{"subject_relevance":true,"matched_subjects":["示例对象"],"sentiment":"non_negative","primary_category":null,"secondary_categories":[],"modalities":{"text":{"status":"processed","evidence":["示例依据"]}},"summary":"示例中文总结"}"""
+evidence 只保留一至三条简短中文事实，不复述整篇正文；summary 用不超过一百二十个汉字概括内容、相关性和情感结论。
+必须调用 submit_sentiment_feedback 提交结果，不在普通消息正文中解释。"""
 
 
 def build_request(
@@ -507,11 +620,13 @@ def build_request(
     selected_model = model_code or config.model_code
     profile = model_profile(selected_model)
     if tiny_test:
-        if profile["service"] == "deepseek":
-            content: str | list[dict[str, Any]] = '只返回 JSON 对象：{"ok":true}。'
+        if profile["output_mode"] == "strict_tool":
+            content: str | list[dict[str, Any]] = (
+                "调用 submit_connection_test，并提交 ok=true。"
+            )
         else:
             content = [{"type": "text", "text": '只返回 JSON 对象：{"ok":true}。'}]
-    elif profile["service"] == "deepseek":
+    elif profile["output_mode"] == "strict_tool":
         content = build_text_only_prompt(post, config, subject_snapshot)
     else:
         image_urls = deduplicate_media_urls(post.image_urls)
@@ -521,22 +636,28 @@ def build_request(
             *({"type": "video_url", "video_url": {"url": value}} for value in video_urls),
             {"type": "text", "text": build_prompt(post, config, subject_snapshot)},
         ]
-    body = {
+    body: dict[str, Any] = {
         "model": selected_model,
         "messages": [{"role": "user", "content": content}],
-        "response_format": {"type": "json_object"},
         "stream": True,
         "stream_options": {"include_usage": True},
     }
-    if profile["service"] == "deepseek":
+    if profile["output_mode"] == "strict_tool":
+        tool = deepseek_strict_tool(model_test=tiny_test)
         body.update(
             {
+                "tools": [tool],
+                "tool_choice": {
+                    "type": "function",
+                    "function": {"name": tool["function"]["name"]},
+                },
                 "thinking": {"type": "disabled"},
                 "temperature": 0.1,
                 "max_tokens": 4096,
             }
         )
     else:
+        body["response_format"] = {"type": "json_object"}
         body["modalities"] = ["text"]
     return body
 
@@ -559,7 +680,8 @@ def build_output_correction_request(
         )
     else:
         detail = f"{type(exc).__name__}: {exc}"
-    if contract is None:
+    strict_tool = bool(body.get("tools"))
+    if contract is None and not strict_tool:
         modality_contract = (
             "modalities 只能包含 text；text 只能包含 status 和 evidence"
             if input_mode == "text_only"
@@ -574,19 +696,28 @@ def build_output_correction_request(
     # 这种对话历史会逐字复现同一坏 JSON；这里只保留候选哈希供审计关联。
     response_hash = hashlib.sha256(raw_response.encode("utf-8")).hexdigest()
     correction = deepcopy(body)
+    if strict_tool:
+        correction_text = (
+            "上一次函数参数未通过本地业务关系校验，请根据最初输入重新调用同一函数。\n"
+            f"错误候选 SHA-256：{response_hash}\n"
+            f"具体错误：{detail[:2000]}\n"
+            "不要解释错误；只提交满足函数 JSON Schema 和业务关系的新参数。"
+        )
+    else:
+        correction_text = (
+            "上一次响应未通过严格 JSON Schema 校验，请从最初输入重新生成。\n"
+            f"错误候选 SHA-256：{response_hash}\n"
+            f"具体错误：{detail[:4000]}\n"
+            "不要复述或续写错误候选，不要解释错误，不要使用 Markdown，不要添加任何额外字段。\n"
+            f"{contract}\n"
+            "所有字段、层级、类型、枚举、数组和媒体身份必须严格满足最初给出的合同。"
+            "只返回一个完整、可直接解析的标准 JSON 对象。"
+        )
     correction["messages"] = [
         *list(body.get("messages") or []),
         {
             "role": "user",
-            "content": (
-                "上一次响应未通过严格 JSON Schema 校验，请从最初输入重新生成。\n"
-                f"错误候选 SHA-256：{response_hash}\n"
-                f"具体错误：{detail[:4000]}\n"
-                "不要复述或续写错误候选，不要解释错误，不要使用 Markdown，不要添加任何额外字段。\n"
-                f"{contract}\n"
-                "所有字段、层级、类型、枚举、数组和媒体身份必须严格满足最初给出的合同。"
-                "只返回一个完整、可直接解析的标准 JSON 对象。"
-            ),
+            "content": correction_text,
         },
     ]
     return correction
@@ -618,6 +749,70 @@ def repair_missing_modalities_closure(raw_response: str) -> dict[str, Any]:
     return payload
 
 
+def strict_tool_name(body: dict[str, Any]) -> str | None:
+    """识别当前请求是否为单一强制严格工具输出。"""
+
+    tools = body.get("tools")
+    if not isinstance(tools, list) or len(tools) != 1:
+        return None
+    function = tools[0].get("function") if isinstance(tools[0], dict) else None
+    if not isinstance(function, dict) or function.get("strict") is not True:
+        return None
+    name = function.get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    tool_choice = body.get("tool_choice")
+    if not isinstance(tool_choice, dict) or tool_choice.get("type") != "function":
+        return None
+    choice_function = tool_choice.get("function")
+    if not isinstance(choice_function, dict) or choice_function.get("name") != name:
+        return None
+    return name
+
+
+def aggregate_strict_tool_arguments(
+    chunks: list[dict[str, Any]], expected_name: str
+) -> str:
+    """聚合唯一强制工具的流式参数，不接受普通正文或多个调用。"""
+
+    names: dict[int, list[str]] = {}
+    arguments: dict[int, list[str]] = {}
+    for chunk in chunks:
+        choices = chunk.get("choices")
+        if not isinstance(choices, list):
+            continue
+        for choice in choices:
+            delta = choice.get("delta") if isinstance(choice, dict) else None
+            calls = delta.get("tool_calls") if isinstance(delta, dict) else None
+            if not isinstance(calls, list):
+                continue
+            for call in calls:
+                if not isinstance(call, dict):
+                    continue
+                index = call.get("index", 0)
+                if not isinstance(index, int):
+                    raise ValueError("严格工具调用索引不是整数")
+                function = call.get("function")
+                if not isinstance(function, dict):
+                    continue
+                name = function.get("name")
+                value = function.get("arguments")
+                if isinstance(name, str):
+                    names.setdefault(index, []).append(name)
+                if isinstance(value, str):
+                    arguments.setdefault(index, []).append(value)
+    indexes = set(names) | set(arguments)
+    if indexes != {0}:
+        raise ValueError(f"严格工具调用数量或索引异常：{sorted(indexes)}")
+    observed_name = "".join(names.get(0, []))
+    if observed_name != expected_name:
+        raise ValueError(f"严格工具调用名称异常：{observed_name or 'missing'}")
+    raw = "".join(arguments.get(0, []))
+    if not raw:
+        raise ValueError("严格工具调用缺少 arguments")
+    return raw
+
+
 class SentimentModelClient:
     """窄 OpenAI 兼容客户端：不跟随重定向，不自动重试。"""
 
@@ -641,7 +836,15 @@ class SentimentModelClient:
     def request(
         self, base_url: str, api_key: str, body: dict[str, Any]
     ) -> tuple[str, dict[str, Any] | None, str | None, int]:
-        endpoint = base_url.rstrip("/") + "/chat/completions"
+        tool_name = strict_tool_name(body)
+        normalized_base = base_url.rstrip("/")
+        endpoint = (
+            normalized_base + "/chat/completions"
+            if tool_name and normalized_base.endswith("/beta")
+            else normalized_base + "/beta/chat/completions"
+            if tool_name
+            else normalized_base + "/chat/completions"
+        )
         started = monotonic()
         with self.client.stream(
             "POST",
@@ -704,7 +907,8 @@ class SentimentModelClient:
                 request_id=request_id,
                 duration_ms=duration_ms,
             )
-        if finish_reasons[-1] != "stop":
+        expected_finish = "tool_calls" if tool_name else "stop"
+        if finish_reasons[-1] != expected_finish:
             response_incomplete = finish_reasons[-1] in {"length", "max_tokens"}
             raise ModelRequestError(
                 f"模型流式响应异常结束：{finish_reasons[-1]}",
@@ -715,6 +919,17 @@ class SentimentModelClient:
                 request_id=request_id,
                 duration_ms=duration_ms,
             )
+        if tool_name:
+            try:
+                text = aggregate_strict_tool_arguments(chunks, tool_name)
+            except ValueError as exc:
+                raise ModelRequestError(
+                    str(exc),
+                    raw_response=text,
+                    usage=usage,
+                    request_id=request_id,
+                    duration_ms=duration_ms,
+                ) from exc
         return text, usage, request_id, duration_ms
 
 
@@ -1542,8 +1757,8 @@ class SentimentWorker:
                 return True
             try:
                 payload, _strict, recovered = parse_feedback_text(raw)
-                if analysis_profile["input_mode"] == "text_only":
-                    payload = complete_text_only_feedback_payload(payload, post)
+                if analysis_profile["output_mode"] == "strict_tool":
+                    payload = complete_deepseek_tool_payload(payload, post)
                 feedback = SentimentFeedback.model_validate(payload)
                 validate_modality_identity(feedback, post)
             except (ValueError, json.JSONDecodeError, ValidationError) as exc:
@@ -1581,21 +1796,6 @@ class SentimentWorker:
                         duration_ms=duration_ms,
                     )
                 )
-                if analysis_profile["input_mode"] == "text_only":
-                    try:
-                        payload = repair_missing_modalities_closure(raw)
-                        payload = complete_text_only_feedback_payload(payload, post)
-                        feedback = SentimentFeedback.model_validate(payload)
-                        validate_modality_identity(feedback, post)
-                    except (ValueError, json.JSONDecodeError, ValidationError):
-                        pass
-                    else:
-                        recovered = True
-                        status = self._coverage_status(feedback)
-                        result = (
-                            "unrelated" if not feedback.subject_relevance else feedback.sentiment
-                        )
-                        break
                 self._record_failure(
                     analysis_id,
                     post_id,
