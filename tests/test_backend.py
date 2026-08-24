@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import httpx
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
 from patchright.async_api import Error as PlaywrightError
@@ -50,7 +51,9 @@ from threadsnap.schemas import (
 from threadsnap.sentiment import (
     DEEPSEEK_MODEL_CODE,
     HOSTED_MODEL_CODE,
+    LOCAL_MODEL_CODE,
     SentimentFeedback,
+    SentimentModelClient,
     build_request,
     complete_text_only_feedback_payload,
     deduplicate_media_urls,
@@ -547,15 +550,117 @@ class ApiAndConfigTests(AppCase):
         with self.assertRaises(ValueError):
             SentimentFeedback.model_validate(payload)
 
-    def test_sentiment_worker_starts_two_bounded_consumers(self) -> None:
+    def test_sentiment_worker_applies_dynamic_cloud_and_local_concurrency(self) -> None:
         worker = self.container.sentiment_worker
         worker.start()
         try:
-            self.assertEqual(2, worker.concurrency)
-            self.assertEqual(2, len(worker.threads))
+            self.assertEqual(8, worker.concurrency)
+            self.assertEqual(8, len(worker.threads))
             self.assertTrue(all(thread.is_alive() for thread in worker.threads))
+            worker.apply_runtime_config(HOSTED_MODEL_CODE, 16)
+            self.assertEqual(16, worker.concurrency)
+            self.assertEqual(16, len(worker.threads))
+            worker.apply_runtime_config(LOCAL_MODEL_CODE, 32)
+            self.assertEqual(1, worker.concurrency)
+            self.assertEqual(32, worker.cloud_concurrency)
+            worker.apply_runtime_config(DEEPSEEK_MODEL_CODE, 12)
+            self.assertEqual(12, worker.concurrency)
+            self.assertEqual(16, len(worker.threads))
         finally:
             worker.stop()
+
+    def test_sentiment_config_persists_cloud_concurrency_without_connection_reset(self) -> None:
+        initial = self.client.get("/api/v1/sentiment/config").json()
+        self.assertEqual(8, initial["cloud_concurrency"])
+        self.assertEqual({"min": 1, "max": 64}, initial["cloud_concurrency_range"])
+        with self.container.sessions.begin() as db:
+            config = self.container.sentiment.ensure_default(db)
+            config.base_url = "https://qwen.example.test/compatible-mode/v1"
+            config.encrypted_api_key = self.container.session_store.encrypt_secret(
+                "concurrency-test-secret"
+            )
+            config.validation_status = "valid"
+            config.validated_at = datetime(2026, 8, 24, tzinfo=timezone.utc)
+            config.enabled = True
+        initial = self.client.get("/api/v1/sentiment/config").json()
+        saved = self.client.put(
+            "/api/v1/sentiment/config",
+            json={
+                "revision": initial["revision"],
+                "enabled": initial["enabled"],
+                "api_base_url": initial["api_base_url"],
+                "model_code": initial["model_code"],
+                "cloud_concurrency": 16,
+                "subject": {
+                    "brand": initial["subject"]["brand"],
+                    "products": initial["subject"]["products"],
+                    "supplement": initial["subject"]["supplement"],
+                },
+            },
+        )
+        self.assertEqual(200, saved.status_code, saved.text)
+        self.assertEqual(16, saved.json()["cloud_concurrency"])
+        self.assertTrue(saved.json()["enabled"])
+        self.assertEqual("valid", saved.json()["validation_status"])
+        self.assertEqual(initial["validated_at"], saved.json()["validated_at"])
+        self.assertEqual(initial["subject"]["version"], saved.json()["subject"]["version"])
+        self.assertEqual(16, self.container.sentiment_worker.concurrency)
+
+        retained = self.client.put(
+            "/api/v1/sentiment/config",
+            json={
+                "revision": saved.json()["revision"],
+                "enabled": saved.json()["enabled"],
+                "api_base_url": saved.json()["api_base_url"],
+                "model_code": saved.json()["model_code"],
+                "subject": {
+                    "brand": saved.json()["subject"]["brand"],
+                    "products": saved.json()["subject"]["products"],
+                    "supplement": saved.json()["subject"]["supplement"],
+                },
+            },
+        )
+        self.assertEqual(200, retained.status_code, retained.text)
+        self.assertEqual(16, retained.json()["cloud_concurrency"])
+
+        invalid = self.client.put(
+            "/api/v1/sentiment/config",
+            json={
+                "revision": retained.json()["revision"],
+                "enabled": retained.json()["enabled"],
+                "api_base_url": retained.json()["api_base_url"],
+                "model_code": retained.json()["model_code"],
+                "cloud_concurrency": 65,
+                "subject": {
+                    "brand": retained.json()["subject"]["brand"],
+                    "products": retained.json()["subject"]["products"],
+                    "supplement": retained.json()["subject"]["supplement"],
+                },
+            },
+        )
+        self.assertEqual(422, invalid.status_code, invalid.text)
+
+    def test_sentiment_model_client_reuses_injected_connection_pool(self) -> None:
+        calls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(str(request.url))
+            content = (
+                'data: {"choices":[{"delta":{"content":"{\\"ok\\":true}"},'
+                '"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n'
+            )
+            return httpx.Response(200, text=content, headers={"x-request-id": "shared-pool"})
+
+        http_client = httpx.Client(transport=httpx.MockTransport(handler))
+        model_client = SentimentModelClient(http_client)
+        try:
+            first = model_client.request("https://model.example.test", "test-key", {})
+            second = model_client.request("https://model.example.test", "test-key", {})
+        finally:
+            model_client.close()
+        self.assertEqual(2, len(calls))
+        self.assertEqual("shared-pool", first[2])
+        self.assertEqual("shared-pool", second[2])
 
     def test_local_text_sentiment_skips_cloud_and_media_resolution(self) -> None:
         """验证本地模型可无密钥启用，且只消费标题和正文。"""

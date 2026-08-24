@@ -90,7 +90,9 @@ DEFAULT_PRODUCTS = [
     "风云T7",
 ]
 PROXY_FAKE_IP_NETWORK = ip_network("198.18.0.0/15")
-SENTIMENT_WORKER_CONCURRENCY = 2
+SENTIMENT_CLOUD_CONCURRENCY_MIN = 1
+SENTIMENT_CLOUD_CONCURRENCY_MAX = 64
+SENTIMENT_CLOUD_CONCURRENCY_DEFAULT = 8
 
 
 def model_profile(model_code: str) -> dict[str, str]:
@@ -619,53 +621,68 @@ def repair_missing_modalities_closure(raw_response: str) -> dict[str, Any]:
 class SentimentModelClient:
     """窄 OpenAI 兼容客户端：不跟随重定向，不自动重试。"""
 
+    def __init__(self, client: httpx.Client | None = None):
+        timeout = httpx.Timeout(connect=20.0, read=600.0, write=60.0, pool=20.0)
+        self.client = client or httpx.Client(
+            timeout=timeout,
+            follow_redirects=False,
+            limits=httpx.Limits(
+                max_connections=SENTIMENT_CLOUD_CONCURRENCY_MAX,
+                max_keepalive_connections=SENTIMENT_CLOUD_CONCURRENCY_MAX,
+                keepalive_expiry=30.0,
+            ),
+        )
+
+    def close(self) -> None:
+        """关闭共享连接池；应用停止时调用。"""
+
+        self.client.close()
+
     def request(
         self, base_url: str, api_key: str, body: dict[str, Any]
     ) -> tuple[str, dict[str, Any] | None, str | None, int]:
         endpoint = base_url.rstrip("/") + "/chat/completions"
         started = monotonic()
-        timeout = httpx.Timeout(connect=20.0, read=600.0, write=60.0, pool=20.0)
-        with httpx.Client(timeout=timeout, follow_redirects=False) as client:
-            with client.stream(
-                "POST",
-                endpoint,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                json=body,
-            ) as response:
-                if 300 <= response.status_code < 400:
-                    raise ModelRequestError(
-                        "模型入口返回重定向，已阻止跨地址发送凭证。",
-                        status_code=response.status_code,
-                        config_error=True,
-                    )
-                if response.status_code >= 400:
-                    response_text = response.read().decode("utf-8", errors="replace")[:2000].lower()
-                    model_error = response.status_code in {400, 404} and "model" in response_text
-                    input_too_large = response.status_code in {400, 413} and any(
-                        marker in response_text
-                        for marker in ("limit", "length", "too large", "too long")
-                    )
-                    retry_after = response.headers.get("retry-after")
-                    try:
-                        retry_after_seconds = (
-                            max(1.0, min(float(retry_after), 300.0)) if retry_after else None
-                        )
-                    except ValueError:
-                        retry_after_seconds = None
-                    raise ModelRequestError(
-                        f"模型接口返回 HTTP {response.status_code}",
-                        status_code=response.status_code,
-                        retryable=response.status_code == 429 or response.status_code >= 500,
-                        config_error=response.status_code in {401, 403} or model_error,
-                        input_too_large=input_too_large,
-                        retry_after_seconds=retry_after_seconds,
-                    )
-                request_id = response.headers.get("x-request-id") or response.headers.get(
-                    "x-dashscope-request-id"
+        with self.client.stream(
+            "POST",
+            endpoint,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=body,
+        ) as response:
+            if 300 <= response.status_code < 400:
+                raise ModelRequestError(
+                    "模型入口返回重定向，已阻止跨地址发送凭证。",
+                    status_code=response.status_code,
+                    config_error=True,
                 )
-                text, usage, chunks, done_seen = parse_sse_lines_with_completion(
-                    response.iter_lines()
+            if response.status_code >= 400:
+                response_text = response.read().decode("utf-8", errors="replace")[:2000].lower()
+                model_error = response.status_code in {400, 404} and "model" in response_text
+                input_too_large = response.status_code in {400, 413} and any(
+                    marker in response_text
+                    for marker in ("limit", "length", "too large", "too long")
                 )
+                retry_after = response.headers.get("retry-after")
+                try:
+                    retry_after_seconds = (
+                        max(1.0, min(float(retry_after), 300.0)) if retry_after else None
+                    )
+                except ValueError:
+                    retry_after_seconds = None
+                raise ModelRequestError(
+                    f"模型接口返回 HTTP {response.status_code}",
+                    status_code=response.status_code,
+                    retryable=response.status_code == 429 or response.status_code >= 500,
+                    config_error=response.status_code in {401, 403} or model_error,
+                    input_too_large=input_too_large,
+                    retry_after_seconds=retry_after_seconds,
+                )
+            request_id = response.headers.get("x-request-id") or response.headers.get(
+                "x-dashscope-request-id"
+            )
+            text, usage, chunks, done_seen = parse_sse_lines_with_completion(
+                response.iter_lines()
+            )
         duration_ms = round((monotonic() - started) * 1000)
         finish_reasons: list[str] = []
         for chunk in chunks:
@@ -809,6 +826,13 @@ class SentimentService:
         self.client = client or SentimentModelClient()
         self.local_analyzer = local_analyzer
 
+    def close(self) -> None:
+        """释放模型客户端持有的共享连接池。"""
+
+        close = getattr(self.client, "close", None)
+        if callable(close):
+            close()
+
     @staticmethod
     def ensure_default(db: Session) -> SentimentConfig:
         config = db.get(SentimentConfig, 1)
@@ -843,6 +867,11 @@ class SentimentService:
             "model_name": model_profile(config.model_code)["name"],
             "model_provider": model_profile(config.model_code)["provider"],
             "model_input_mode": model_profile(config.model_code)["input_mode"],
+            "cloud_concurrency": config.cloud_concurrency,
+            "cloud_concurrency_range": {
+                "min": SENTIMENT_CLOUD_CONCURRENCY_MIN,
+                "max": SENTIMENT_CLOUD_CONCURRENCY_MAX,
+            },
             "validation_status": config.validation_status,
             "validation_error": config.validation_error,
             "validated_at": config.validated_at,
@@ -884,6 +913,11 @@ class SentimentService:
                 or value.subject.products != config.products
                 or (value.subject.supplement or "").strip() != (config.supplement or "")
             )
+            cloud_concurrency = (
+                value.cloud_concurrency
+                if value.cloud_concurrency is not None
+                else config.cloud_concurrency
+            )
             if (
                 value.enabled
                 and not connection_changed
@@ -911,6 +945,7 @@ class SentimentService:
                     encrypted_api_key=encrypted_key,
                 )
             config.model_code = value.model_code
+            config.cloud_concurrency = cloud_concurrency
             config.brand = value.subject.brand.strip()
             config.products = value.subject.products
             config.supplement = (value.subject.supplement or "").strip() or None
@@ -1232,45 +1267,91 @@ class SentimentService:
 
 
 class SentimentWorker:
-    """与提取 Worker 分离、固定小并发的持久任务执行器。"""
+    """与提取 Worker 分离、支持运行时调节云端并发的持久任务执行器。"""
 
     def __init__(
         self,
         service: SentimentService,
         poll_seconds: float = 1.0,
-        concurrency: int = SENTIMENT_WORKER_CONCURRENCY,
+        concurrency: int | None = None,
         media_resolver: Callable[[str, str], dict[str, Any]] | None = None,
     ):
         self.service = service
         self.poll_seconds = poll_seconds
-        self.concurrency = max(1, min(concurrency, SENTIMENT_WORKER_CONCURRENCY))
+        self.cloud_concurrency = self._bounded_concurrency(
+            concurrency if concurrency is not None else SENTIMENT_CLOUD_CONCURRENCY_DEFAULT
+        )
+        self.model_code = HOSTED_MODEL_CODE
+        self.concurrency = self.cloud_concurrency
         self.media_resolver = media_resolver
         self.stop_event = threading.Event()
         self.threads: list[threading.Thread] = []
+        self.state_condition = threading.Condition(threading.RLock())
+        self.started = False
         self.claim_lock = threading.Lock()
         self.rate_limit_lock = threading.Lock()
         self.rate_limit_until = 0.0
 
     def start(self) -> None:
-        if any(thread.is_alive() for thread in self.threads):
-            return
+        with self.state_condition:
+            if self.started:
+                return
         self.recover_interrupted()
-        self.stop_event.clear()
-        self.threads = [
-            threading.Thread(
-                target=self._loop,
-                name=f"threadsnap-sentiment-{index + 1}",
-                daemon=True,
+        config = self.service.get_config()
+        with self.state_condition:
+            if self.started:
+                return
+            self.stop_event.clear()
+            self.started = True
+            self._apply_runtime_config_locked(
+                config["model_code"], config["cloud_concurrency"]
             )
-            for index in range(self.concurrency)
-        ]
-        for thread in self.threads:
-            thread.start()
+            self._ensure_threads_locked()
 
     def stop(self) -> None:
         self.stop_event.set()
-        for thread in self.threads:
+        with self.state_condition:
+            self.state_condition.notify_all()
+            threads = list(self.threads)
+        for thread in threads:
             thread.join(timeout=10)
+        with self.state_condition:
+            self.threads.clear()
+            self.started = False
+
+    @staticmethod
+    def _bounded_concurrency(value: int) -> int:
+        return max(
+            SENTIMENT_CLOUD_CONCURRENCY_MIN,
+            min(value, SENTIMENT_CLOUD_CONCURRENCY_MAX),
+        )
+
+    def apply_runtime_config(self, model_code: str, cloud_concurrency: int) -> None:
+        """保存配置后立即调整后续任务槽位，不中断已经发出的请求。"""
+
+        with self.state_condition:
+            self._apply_runtime_config_locked(model_code, cloud_concurrency)
+            if self.started:
+                self._ensure_threads_locked()
+            self.state_condition.notify_all()
+
+    def _apply_runtime_config_locked(self, model_code: str, cloud_concurrency: int) -> None:
+        self.model_code = model_code
+        self.cloud_concurrency = self._bounded_concurrency(cloud_concurrency)
+        self.concurrency = (
+            1 if model_profile(model_code)["provider"] == "local" else self.cloud_concurrency
+        )
+
+    def _ensure_threads_locked(self) -> None:
+        for index in range(len(self.threads), self.concurrency):
+            thread = threading.Thread(
+                target=self._loop,
+                args=(index,),
+                name=f"threadsnap-sentiment-{index + 1}",
+                daemon=True,
+            )
+            self.threads.append(thread)
+            thread.start()
 
     def recover_interrupted(self) -> None:
         with self.service.factory.begin() as db:
@@ -1285,10 +1366,15 @@ class SentimentWorker:
                 .values(analysis_status="analysis_queued")
             )
 
-    def _loop(self) -> None:
+    def _loop(self, slot: int) -> None:
         while not self.stop_event.is_set():
+            with self.state_condition:
+                while slot >= self.concurrency and not self.stop_event.is_set():
+                    self.state_condition.wait(timeout=self.poll_seconds)
+            if self.stop_event.is_set():
+                return
             try:
-                progressed = self.process_once()
+                progressed = self.process_once(slot)
             except Exception:
                 progressed = False
             if not progressed:
@@ -1310,9 +1396,13 @@ class SentimentWorker:
         with self.rate_limit_lock:
             self.rate_limit_until = max(self.rate_limit_until, monotonic() + delay)
 
-    def process_once(self) -> bool:
+    def process_once(self, slot: int | None = None) -> bool:
         # SQLite 不支持 SKIP LOCKED；只串行化很短的领取事务，模型请求仍可并发执行。
         with self.claim_lock:
+            if slot is not None:
+                with self.state_condition:
+                    if slot >= self.concurrency:
+                        return False
             with self.service.factory.begin() as db:
                 config = self.service.ensure_default(db)
                 if not config.enabled or config.validation_status != "valid":

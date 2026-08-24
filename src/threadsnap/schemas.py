@@ -118,6 +118,7 @@ class SentimentConfigUpdate(StrictModel):
         "deepseek-v4-flash",
         "paddlenlp-local-text-nano-v1",
     ]
+    cloud_concurrency: int | None = Field(default=None, ge=1, le=64)
     subject: SentimentSubjectUpdate
 
 
