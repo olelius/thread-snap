@@ -18,7 +18,7 @@
 
 ## 2026-08-24 — 舆情假运行状态防护
 **总目标**：消除模型返回后解析、结构修正或落库异常被 Worker 静默吞掉而永久停留“分析中”的状态，并限制流式请求和自动恢复的调用放大。
-**状态**：✅ 异常终态、DeepSeek 绝对总时限、有界孤儿恢复、owner 文档和完整验证均已完成；现场卡住任务尚未触发付费重跑。
+**状态**：✅ 异常终态、DeepSeek 绝对总时限、有界孤儿恢复、owner 文档、完整验证和现场单条恢复均已完成。
 **干到哪里了**：
 - [x] 现场批次 `20260824-142552-001` 的 420 条提取全部成功，419 条舆情完成、1 条长期 `analysis_running`；目标分析没有结束时间、错误、用量、请求 ID 或原始响应，进程 32 个舆情线程均空闲。证据只能确认异常已逸出且被循环静默吞掉，不能把具体根因确定为提供方格式；既有格式纠正本身最多执行一次。
 - [x] Worker 在领取事务内登记线程持有的分析 ID；解析、纠正、结果保存等阶段的未预期异常统一记录堆栈并持久化为 `analysis_failed / ANALYSIS_INTERNAL_ERROR`，不再遗留假运行状态。
@@ -26,7 +26,9 @@
 - [x] 五秒看门狗只处理数据库为运行中但已无本进程线程持有的孤儿任务；真实活跃请求不重排，孤儿首次恢复排队、重复失联转为失败，避免重复付费无限放大。
 - [x] 新增回归验证绝对总时限、后处理 `KeyError` 明确落库、活跃任务不被看门狗误收、进程内与重启恢复共用一次上限；完整 111 项自动化测试、Ruff、Python 编译、`pip check`、`git diff --check` 和后端 wheel 构建通过。
 - [x] 脱敏验证记录为 `artifacts/runtime/sentiment-running-watchdog-20260824/verification.json`，SHA-256 `9ae660cc0ad1231df9cfda76eeeb87cc38e4ecff1492a50bcd4b0eefe8407094`；wheel SHA-256 为 `7c9faaa66e9872d8fdea4c019719189b09fdc4cab63cff1f7a93659df7af3518`，两者均位于 Git 忽略目录。
-**下一步**：无当前代码缺口；部署或重启新版 Worker 会把现场孤儿任务按首次恢复规则重新排队并新增一次 DeepSeek 调用，因此本次只完成代码与交付收尾，不隐式重启或重跑。
+- [x] 经使用者明确要求，先用 SQLite 在线备份保存 `artifacts/runtime/rerun-t9l-20260824-145608/threadsnap-before-rerun.db`（SHA-256 `006eb5b055aaff30ea9ae15704bbfe83f21ba392d43972a3fba531a82fe6734b`），再重启当前 `main` 后端；唯一孤儿分析以 1 次 DeepSeek 调用完成，`retry_count=0`、无格式纠正、无传输重试、无本地结构恢复，耗时 2468 毫秒、总计 1583 Token，结果为 `negative / product_complaint`，目标批次最终 420/420 `analysis_completed`。
+- [x] 重跑脱敏证据为 `artifacts/runtime/rerun-t9l-20260824-145608/verification.json`，SHA-256 `8084fa58658b5ae6dcc549c8a0c260e62c107e78c1ac9e26bdebbc5a32adafdf`；后端和 Vite 代理健康均为 `ok`，前端代理详情已返回 AI 负面结果且无错误码。
+**下一步**：无当前代码或运行状态缺口；继续观察后续批次是否出现 `ANALYSIS_INTERNAL_ERROR` 或重复孤儿标记，以真实堆栈区分解析、结构修正和落库异常。
 **边界**：60 秒是单次 DeepSeek 请求上限，不是整条任务含退避和重试的总时长；看门狗不抢占仍被执行线程持有的请求，也不把未证实的现场异常伪装成已确认的 JSON 格式问题。
 **关联**：`src/threadsnap/sentiment.py`、`tests/test_backend.py`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/sentiment-analysis.md`、`artifacts/runtime/sentiment-stuck-20260824-142552-pyspy.txt`
 
