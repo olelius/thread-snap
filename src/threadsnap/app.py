@@ -46,6 +46,7 @@ from .schemas import (
     SentimentConfigUpdate,
     SessionImport,
 )
+from .screenshots import ScreenshotService
 from .sentiment import SentimentService, SentimentWorker
 from .services import ConfigService, RunService, bootstrap_database, validation_job_dict
 from .session_store import SessionStore
@@ -84,12 +85,14 @@ class Container:
             event_publisher=self.events.publish,
             local_analyzer=self.local_sentiment,
         )
+        self.screenshots = ScreenshotService(self.sessions, settings)
         self.worker = WorkerService(
             self.sessions,
             self.session_store,
             settings.worker_poll_seconds,
             event_publisher=self.events.publish,
             sentiment_service=self.sentiment,
+            screenshot_service=self.screenshots,
         )
         self.sentiment_worker = SentimentWorker(
             self.sentiment,
@@ -367,11 +370,47 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
 
     @router.delete("/runs/{run_id}")
     def delete_run(run_id: str, request: Request) -> dict[str, Any]:
-        paths = _container(request).runs.delete_run(run_id)
-        for raw in paths:
+        container = _container(request)
+        evidence_paths, group_ids = container.screenshots.prepare_run_delete(run_id)
+        paths = container.runs.delete_run(run_id)
+        for raw in [*paths, *evidence_paths]:
             Path(raw).unlink(missing_ok=True)
-        _container(request).events.publish("run.deleted", run_id)
+        container.screenshots.reconcile_after_run_delete(group_ids)
+        container.events.publish("run.deleted", run_id)
         return {"message": "提取批次及其关联数据已永久删除。"}
+
+    @router.get("/runs/{run_id}/screenshots")
+    def list_run_screenshots(run_id: str, request: Request) -> dict[str, Any]:
+        return _container(request).screenshots.list_for_run(run_id, prefix)
+
+    @router.get("/page-evidence/{evidence_id}/image")
+    def view_page_evidence(evidence_id: str, request: Request) -> FileResponse:
+        path = _container(request).screenshots.evidence_path(evidence_id)
+        return FileResponse(path, media_type="image/png", headers={"Cache-Control": "private"})
+
+    @router.get("/page-evidence/{evidence_id}/download")
+    def download_page_evidence(evidence_id: str, request: Request) -> FileResponse:
+        path = _container(request).screenshots.evidence_path(evidence_id)
+        return FileResponse(path, media_type="image/png", filename=path.name)
+
+    @router.get("/screenshot-groups/{group_id}/tiles/{tile_index}")
+    def view_artifact_tile(group_id: str, tile_index: int, request: Request) -> FileResponse:
+        path = _container(request).screenshots.artifact_file(group_id, tile_index)
+        return FileResponse(
+            path,
+            media_type="image/png",
+            headers={"Cache-Control": "private, max-age=31536000, immutable"},
+        )
+
+    @router.get("/screenshot-groups/{group_id}/download")
+    def download_artifact(group_id: str, request: Request) -> FileResponse:
+        path = _container(request).screenshots.artifact_file(group_id)
+        return FileResponse(path, media_type="application/zip", filename=path.name)
+
+    @router.post("/screenshot-groups/{group_id}/rebuild")
+    def rebuild_artifact(group_id: str, request: Request) -> dict[str, Any]:
+        rebuilt = _container(request).screenshots.rebuild(group_id, reason="manual_rebuild")
+        return {"rebuilt": rebuilt}
 
     @router.get("/runs/{run_id}/posts")
     def list_posts(
@@ -458,6 +497,7 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
         request: Request,
     ) -> dict[str, Any]:
         result = _container(request).sentiment.manual_revision(run_id, post_id, value)
+        _container(request).screenshots.mark_all_dirty_for_post(post_id)
         _container(request).events.publish(
             "sentiment.changed", post_id, status=result["analysis_status"]
         )

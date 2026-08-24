@@ -35,6 +35,7 @@ from .models import (
     ScheduleEvent,
     ScheduleNode,
     ScheduleNodeRule,
+    ScreenshotArtifactGroup,
     ValidationJob,
     Vehicle,
     utc_now,
@@ -1626,8 +1627,7 @@ class RunService:
                     .order_by(CircleTask.platform_code, CircleTask.queue_sequence)
                 )
             )
-            return {
-                "items": [
+            items = [
                     run_dict_from_tasks(
                         item,
                         grouped.get(item.id, []),
@@ -1635,7 +1635,11 @@ class RunService:
                         live_source_names,
                     )
                     for item in runs
-                ],
+                ]
+            for item, run in zip(items, runs, strict=True):
+                item["screenshot_summary"] = screenshot_summary(db, run)
+            return {
+                "items": items,
                 "total": total,
                 "offset": offset,
                 "limit": limit,
@@ -2027,10 +2031,49 @@ def run_dict(db: Session, run: ExtractionRun, include_tasks: bool = False) -> di
         ) + 1
     live_source_names = current_source_names(db, tasks)
     result = run_dict_from_tasks(run, tasks, live_source_names=live_source_names)
+    result["screenshot_summary"] = screenshot_summary(db, run)
     result["queue_position"] = queue_position
     if include_tasks:
         result["tasks"] = [task_dict(task, live_source_names) for task in tasks]
     return result
+
+
+def screenshot_summary(db: Session, run: ExtractionRun) -> dict[str, Any]:
+    """返回批次列表使用的紧凑截图成果状态，不暴露文件路径。"""
+
+    if run.input_mode == "url_list":
+        return {"status": "not_applicable", "group_count": 0, "ready_count": 0}
+    chain_ids = related_run_ids(db, run.id)
+    root_id = chain_ids[0] if chain_ids else run.id
+    groups = list(
+        db.scalars(
+            select(ScreenshotArtifactGroup).where(
+                ScreenshotArtifactGroup.chain_root_run_id == root_id
+            )
+        )
+    )
+    if not groups:
+        return {
+            "status": "not_collected" if run.status in TERMINAL_STATUSES else "evidence_pending",
+            "group_count": 0,
+            "ready_count": 0,
+        }
+    statuses = {group.status for group in groups}
+    priority = (
+        "failed",
+        "evidence_running",
+        "rendering",
+        "waiting_for_sentiment",
+        "evidence_pending",
+    )
+    status = next((value for value in priority if value in statuses), "ready")
+    return {
+        "status": status,
+        "group_count": len(groups),
+        "ready_count": sum(group.status in {"ready", "empty"} for group in groups),
+        "item_count": sum(group.item_count for group in groups),
+        "negative_count": sum(group.negative_count for group in groups),
+    }
 
 
 def task_dict(item: CircleTask, live_source_names: dict[str, str] | None = None) -> dict[str, Any]:

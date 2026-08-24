@@ -43,6 +43,20 @@ class Settings(BaseSettings):
         return self.data_dir / "auth-profiles"
 
     @property
+    def screenshot_dir(self) -> Path:
+        """圈子页面原始证据与派生成果的持久目录。"""
+
+        return self.data_dir / "screenshots"
+
+    @property
+    def screenshot_evidence_dir(self) -> Path:
+        return self.screenshot_dir / "evidence"
+
+    @property
+    def screenshot_artifact_dir(self) -> Path:
+        return self.screenshot_dir / "artifacts"
+
+    @property
     def paddlenlp_home(self) -> Path:
         """本地轻量文字模型与静态推理文件的持久目录。"""
 
@@ -55,6 +69,8 @@ class Settings(BaseSettings):
         self.template_dir.mkdir(parents=True, exist_ok=True)
         self.export_dir.mkdir(parents=True, exist_ok=True)
         self.auth_profile_dir.mkdir(parents=True, exist_ok=True)
+        self.screenshot_evidence_dir.mkdir(parents=True, exist_ok=True)
+        self.screenshot_artifact_dir.mkdir(parents=True, exist_ok=True)
         self.paddlenlp_home.mkdir(parents=True, exist_ok=True)
 
 

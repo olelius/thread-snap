@@ -88,8 +88,10 @@
 2. `docs/chains/sentiment-analysis.md`；
 3. `docs/adr/0022-use-hosted-multimodal-api-for-sentiment-feedback.md`；
 4. `docs/adr/0023-use-validated-runtime-config-for-sentiment-service.md`；
-5. `docs/research/sentiment-analysis-poc-plan.md`；
-6. 执行 PoC 时读取 Git 外的 `artifacts/poc/inputs/sentiment-analysis/` 真实样本。
+5. `docs/adr/0025-add-deepseek-cloud-text-sentiment-option.md`；
+6. `docs/adr/0027-use-bounded-clean-correction-and-structural-recovery.md`；
+7. `docs/research/sentiment-analysis-poc-plan.md`；
+8. 执行 PoC 时读取 Git 外的 `artifacts/poc/inputs/sentiment-analysis/` 真实样本。
 
 ### 3.6 圈子页面证据与关联截图成果设计、PoC 或实现
 
@@ -134,6 +136,7 @@
 | `docs/adr/0024-add-local-text-sentiment-option.md` | 舆情反馈增加随离线包部署的 PaddleNLP 本地轻量文字选项 |
 | `docs/adr/0025-add-deepseek-cloud-text-sentiment-option.md` | 舆情反馈增加独立凭证的 DeepSeek 云端纯文字选项 |
 | `docs/adr/0026-use-synchronized-page-evidence-and-related-screenshot-artifacts.md` | 用同一冻结页面清单生成原始证据，并按关联圈子成果组合成版本化截图成果 |
+| `docs/adr/0027-use-bounded-clean-correction-and-structural-recovery.md` | 云端舆情使用干净纠正上下文，并只恢复可唯一证明的单括号结构错误 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 

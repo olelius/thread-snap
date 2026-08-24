@@ -310,6 +310,193 @@ class PostSnapshot(Base):
     )
 
 
+class CirclePageEvidence(Base):
+    """圈子列表页的不可变原始页面证据。"""
+
+    __tablename__ = "circle_page_evidence"
+    __table_args__ = (
+        UniqueConstraint("circle_task_id", "page_number", name="uq_circle_page_evidence_task_page"),
+        Index("ix_circle_page_evidence_run", "run_id", "circle_task_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("extraction_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    circle_task_id: Mapped[str] = mapped_column(
+        ForeignKey("circle_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    page_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    exact_url: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ready")
+    adapter_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    browser_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    list_schema_version: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="circle-page-v1"
+    )
+    device_scale_factor: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    viewport_width: Mapped[int] = mapped_column(Integer, nullable=False)
+    viewport_height: Mapped[int] = mapped_column(Integer, nullable=False)
+    document_width: Mapped[int] = mapped_column(Integer, nullable=False)
+    document_height: Mapped[int] = mapped_column(Integer, nullable=False)
+    screenshot_path: Mapped[str] = mapped_column(Text, nullable=False)
+    screenshot_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    manifest_path: Mapped[str] = mapped_column(Text, nullable=False)
+    manifest_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+
+class CirclePageEvidenceItem(Base):
+    """同一冻结 DOM 中帖子卡片的位置和身份清单。"""
+
+    __tablename__ = "circle_page_evidence_items"
+    __table_args__ = (
+        UniqueConstraint("evidence_id", "platform_post_id", name="uq_evidence_post"),
+        Index("ix_evidence_item_task_post", "circle_task_id", "platform_post_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    evidence_id: Mapped[str] = mapped_column(
+        ForeignKey("circle_page_evidence.id", ondelete="CASCADE"), nullable=False
+    )
+    circle_task_id: Mapped[str] = mapped_column(
+        ForeignKey("circle_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    post_snapshot_id: Mapped[str | None] = mapped_column(
+        ForeignKey("post_snapshots.id", ondelete="SET NULL")
+    )
+    platform_post_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    source_position: Mapped[int] = mapped_column(Integer, nullable=False)
+    x: Mapped[int] = mapped_column(Integer, nullable=False)
+    y: Mapped[int] = mapped_column(Integer, nullable=False)
+    width: Mapped[int] = mapped_column(Integer, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, nullable=False)
+    text_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    image_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class ScreenshotArtifactGroup(Base):
+    """同一原始批次链、同一圈子来源的稳定成果组。"""
+
+    __tablename__ = "screenshot_artifact_groups"
+    __table_args__ = (
+        UniqueConstraint(
+            "chain_root_run_id",
+            "platform_code",
+            "external_id",
+            "section",
+            "list_order",
+            name="uq_screenshot_artifact_source",
+        ),
+        Index("ix_screenshot_artifact_group_status", "status", "updated_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    chain_root_run_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    platform_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    external_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    circle_name: Mapped[str | None] = mapped_column(String(200))
+    section: Mapped[str] = mapped_column(String(32), nullable=False)
+    list_order: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="evidence_pending")
+    current_version: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    item_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    negative_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    dirty: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
+
+
+class ScreenshotArtifactContribution(Base):
+    """成果组与原始/补提任务之间的贡献关系。"""
+
+    __tablename__ = "screenshot_artifact_contributions"
+    __table_args__ = (UniqueConstraint("group_id", "circle_task_id", name="uq_group_task"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    group_id: Mapped[str] = mapped_column(
+        ForeignKey("screenshot_artifact_groups.id", ondelete="CASCADE"), nullable=False
+    )
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("extraction_runs.id", ondelete="CASCADE"), nullable=False
+    )
+    circle_task_id: Mapped[str] = mapped_column(
+        ForeignKey("circle_tasks.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+
+
+class ScreenshotArtifactVersion(Base):
+    """基于当前有效帖子与舆情结论生成的不可变成果版本。"""
+
+    __tablename__ = "screenshot_artifact_versions"
+    __table_args__ = (
+        UniqueConstraint("group_id", "version", name="uq_screenshot_artifact_version"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    group_id: Mapped[str] = mapped_column(
+        ForeignKey("screenshot_artifact_groups.id", ondelete="CASCADE"), nullable=False
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="ready")
+    reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    item_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    negative_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    tiles: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    items: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    package_path: Mapped[str] = mapped_column(Text, nullable=False)
+    package_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    error_message: Mapped[str | None] = mapped_column(Text)
+
+
+class ScreenshotArtifactTile(Base):
+    """成果版本的有序无损 PNG 分片。"""
+
+    __tablename__ = "screenshot_artifact_tiles"
+    __table_args__ = (UniqueConstraint("version_id", "tile_index", name="uq_version_tile"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    version_id: Mapped[str] = mapped_column(
+        ForeignKey("screenshot_artifact_versions.id", ondelete="CASCADE"), nullable=False
+    )
+    tile_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    file_path: Mapped[str] = mapped_column(Text, nullable=False)
+    file_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    width: Mapped[int] = mapped_column(Integer, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class ScreenshotArtifactItem(Base):
+    """成果版本内每个卡片的审计位置、来源和有效结论。"""
+
+    __tablename__ = "screenshot_artifact_items"
+    __table_args__ = (
+        UniqueConstraint("version_id", "platform_post_id", name="uq_version_artifact_post"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    version_id: Mapped[str] = mapped_column(
+        ForeignKey("screenshot_artifact_versions.id", ondelete="CASCADE"), nullable=False
+    )
+    post_snapshot_id: Mapped[str | None] = mapped_column(
+        ForeignKey("post_snapshots.id", ondelete="SET NULL")
+    )
+    platform_post_id: Mapped[str] = mapped_column(String(80), nullable=False)
+    title: Mapped[str | None] = mapped_column(Text)
+    sentiment_result: Mapped[str] = mapped_column(String(32), nullable=False)
+    contribution_run_number: Mapped[str] = mapped_column(String(32), nullable=False)
+    captured_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    tile_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    y: Mapped[int] = mapped_column(Integer, nullable=False)
+    height: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class SentimentConfig(Base):
     """舆情模型的单例运行配置；密钥只保存密文。"""
 

@@ -87,6 +87,7 @@ export type Run = {
   started_at?: string
   finished_at?: string
   tasks?: RunTask[]
+  screenshot_summary?: { status: ScreenshotGroup['status']; group_count: number; ready_count: number; item_count?: number; negative_count?: number }
 }
 
 export type RunTask = {
@@ -202,6 +203,38 @@ export type PostNavigation = {
   next_id?: string
   position: number
   total: number
+}
+
+export type ScreenshotTile = {
+  index: number
+  sha256: string
+  width: number
+  height: number
+  image_url: string
+}
+
+export type ScreenshotArtifact = {
+  version: number
+  created_at: string
+  package_sha256: string
+  download_url: string
+  tiles: ScreenshotTile[]
+  items: Array<{ post_id: string; platform_post_id: string; title?: string; sentiment_result: SentimentResult; run_number: string; captured_at: string; tile_index: number; y: number; height: number }>
+}
+
+export type ScreenshotGroup = {
+  id?: string
+  circle_name?: string
+  external_id: string
+  section: string
+  list_order: 'latest_reply' | 'latest_publish'
+  status: 'evidence_pending' | 'evidence_running' | 'waiting_for_sentiment' | 'rendering' | 'ready' | 'empty' | 'failed' | 'not_collected' | 'not_applicable'
+  current_version: number
+  item_count: number
+  negative_count: number
+  error_message?: string
+  evidence: Array<{ id: string; page_number: number; exact_url: string; captured_at: string; sha256: string; adapter_version: string; browser_version: string; device_scale_factor: number; width: number; height: number; image_url: string; download_url: string }>
+  artifact?: ScreenshotArtifact
 }
 
 export type SessionStatus = {

@@ -2,14 +2,14 @@ import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { ArrowLeft, BrainCircuit, CircleAlert, CircleCheckBig, CircleStop, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, Gauge, KeyRound, Layers3, ListTree, LoaderCircle, PencilLine, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowLeft, BrainCircuit, CircleAlert, CircleCheckBig, CircleStop, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, Eye, Gauge, Images, KeyRound, Layers3, Link2, ListTree, LoaderCircle, PencilLine, RefreshCw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { AuthDialog } from '@/features/auth/auth-dialog'
 import { useDebouncedValue } from '@/hooks/use-debounced-value'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
 import { api, errorMessage, formatDate, platformName, queryString } from '@/lib/api'
-import type { AnalysisStatus, PageResult, Post, PostNavigation, Run, RunTask, SentimentResult, Template } from '@/lib/types'
+import type { AnalysisStatus, PageResult, Post, PostNavigation, Run, RunTask, ScreenshotGroup, SentimentResult, Template } from '@/lib/types'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
@@ -28,7 +28,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 
-type SearchState = { page?: number; pageSize?: 20 | 50 | 100; title?: string; circle?: string; visibility?: 'visible' | 'hidden' | 'unknown'; sentiment?: SentimentResult; analysisStatus?: AnalysisStatus; sort?: 'source' | 'published_at' | 'reply_count' | 'like_count'; direction?: 'asc' | 'desc'; post?: string }
+type SearchState = { view?: 'links' | 'screenshots'; page?: number; pageSize?: 20 | 50 | 100; title?: string; circle?: string; visibility?: 'visible' | 'hidden' | 'unknown'; sentiment?: SentimentResult; analysisStatus?: AnalysisStatus; sort?: 'source' | 'published_at' | 'reply_count' | 'like_count'; direction?: 'asc' | 'desc'; post?: string }
 type PostSwitch = { id: string; direction: 'previous' | 'next' }
 
 export function RunDetailPage() {
@@ -69,6 +69,12 @@ export function RunDetailPage() {
     queryFn: () => api<PageResult<Post>>(`/runs/${runId}/posts${queryString({ offset: ((search.page ?? 1) - 1) * (search.pageSize ?? 50), limit: search.pageSize, ...postQueryValues })}`, undefined, 20_000),
     placeholderData: keepPreviousData,
     refetchInterval: (current) => isActiveRun(run.data) || current.state.data?.items.some((post) => ['analysis_queued', 'analysis_running'].includes(post.analysis_status ?? '')) ? 3_000 : false,
+  })
+  const screenshots = useQuery({
+    queryKey: ['run-screenshots', runId, run.data?.summary_version ?? 0],
+    queryFn: () => api<{ items: ScreenshotGroup[] }>(`/runs/${runId}/screenshots`, undefined, 20_000),
+    enabled: search.view === 'screenshots',
+    refetchInterval: (current) => current.state.data?.items.some((item) => ['evidence_pending', 'evidence_running', 'waiting_for_sentiment', 'rendering'].includes(item.status)) ? 3_000 : false,
   })
   const templates = useQuery({ queryKey: ['templates'], queryFn: () => api<Template[]>('/templates') })
   const detail = useQuery({
@@ -221,9 +227,11 @@ export function RunDetailPage() {
       ].map(([label, value]) => <Card key={String(label)} className='border-border/70 bg-card/88 py-0'><CardContent className='p-3'><div className='text-xs text-muted-foreground'>{label}</div><div className='mt-1 text-sm font-semibold'>{value}</div></CardContent></Card>)}</div>}
       {run.data?.waiting_reason && <Alert><KeyRound className='size-4' /><AlertTitle>等待平台认证</AlertTitle><AlertDescription>{run.data.waiting_reason}</AlertDescription></Alert>}
       {run.data?.error_message && <Alert variant='destructive'><AlertTitle>批次错误</AlertTitle><AlertDescription>{run.data.error_message}</AlertDescription></Alert>}
-        <Card className='border-border/70 bg-card/88 py-0'><CardContent className='grid gap-2 p-3 [&>[data-slot=select-trigger]]:w-full [&>[data-slot=select-trigger]]:min-w-0 [&>[data-slot=select-trigger]]:gap-1 [&>[data-slot=select-trigger]]:px-2 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-[minmax(180px,1fr)_135px_125px_130px_130px_100px_88px_auto] [@media(min-width:2000px)]:grid-cols-[minmax(180px,360px)_135px_125px_130px_130px_100px_88px_minmax(0,1fr)_auto]'><Input placeholder='搜索帖子标题' aria-label='搜索帖子标题' value={search.title ?? ''} onChange={(event) => patch({ title: event.target.value || undefined, page: 1 })} /><Input placeholder='搜索圈子' aria-label='搜索圈子' value={search.circle ?? ''} onChange={(event) => patch({ circle: event.target.value || undefined, page: 1 })} /><Select value={search.visibility ?? 'all'} onValueChange={(value) => patch({ visibility: value === 'all' ? undefined : value as SearchState['visibility'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部可见状态</SelectItem><SelectItem value='visible'>可见</SelectItem><SelectItem value='hidden'>不可见</SelectItem><SelectItem value='unknown'>未知</SelectItem></SelectContent></Select><Select value={search.sentiment ?? 'all'} onValueChange={(value) => patch({ sentiment: value === 'all' ? undefined : value as SentimentResult, page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部舆情结果</SelectItem><SelectItem value='negative'>负面</SelectItem><SelectItem value='non_negative'>非负面</SelectItem><SelectItem value='unrelated'>不相关</SelectItem></SelectContent></Select><Select value={search.analysisStatus ?? 'all'} onValueChange={(value) => patch({ analysisStatus: value === 'all' ? undefined : value as AnalysisStatus, page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部分析状态</SelectItem>{Object.entries(analysisStatusNames).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select><Select value={search.sort} onValueChange={(value) => patch({ sort: value as SearchState['sort'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='source'>来源顺序</SelectItem><SelectItem value='published_at'>发布时间</SelectItem><SelectItem value='reply_count'>评论数</SelectItem><SelectItem value='like_count'>点赞数</SelectItem></SelectContent></Select><Select value={search.direction} onValueChange={(value) => patch({ direction: value as SearchState['direction'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='asc'>正序</SelectItem><SelectItem value='desc'>倒序</SelectItem></SelectContent></Select><div className='flex min-w-0 items-center justify-end gap-2 [@media(min-width:2000px)]:col-start-9'><Button className='shrink-0' variant='outline' onClick={copyAll}><Copy className='size-4' />复制全部</Button><Select onValueChange={(value) => exportRun.mutate(value)} disabled={!templates.data?.length || exportRun.isPending}><SelectTrigger className='w-36'><Download className='size-4' /><SelectValue placeholder={templates.data?.length ? '导出 Excel' : '暂无模板'} /></SelectTrigger><SelectContent>{templates.data?.map((item) => item.versions[0] && <SelectItem key={item.versions[0].version_id} value={item.versions[0].version_id}>{item.name}</SelectItem>)}</SelectContent></Select></div></CardContent></Card>
+        <div className='flex w-fit rounded-lg border bg-muted/25 p-1' role='tablist' aria-label='批次结果视图'><Button role='tab' aria-selected={search.view !== 'screenshots'} variant={search.view !== 'screenshots' ? 'secondary' : 'ghost'} size='sm' onClick={() => patch({ view: 'links' })}><Link2 className='size-4' />链接结果</Button><Button role='tab' aria-selected={search.view === 'screenshots'} variant={search.view === 'screenshots' ? 'secondary' : 'ghost'} size='sm' onClick={() => patch({ view: 'screenshots' })}><Images className='size-4' />页面截图</Button></div>
+        {search.view !== 'screenshots' && <Card className='border-border/70 bg-card/88 py-0'><CardContent className='grid gap-2 p-3 [&>[data-slot=select-trigger]]:w-full [&>[data-slot=select-trigger]]:min-w-0 [&>[data-slot=select-trigger]]:gap-1 [&>[data-slot=select-trigger]]:px-2 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-[minmax(180px,1fr)_135px_125px_130px_130px_100px_88px_auto] [@media(min-width:2000px)]:grid-cols-[minmax(180px,360px)_135px_125px_130px_130px_100px_88px_minmax(0,1fr)_auto]'><Input placeholder='搜索帖子标题' aria-label='搜索帖子标题' value={search.title ?? ''} onChange={(event) => patch({ title: event.target.value || undefined, page: 1 })} /><Input placeholder='搜索圈子' aria-label='搜索圈子' value={search.circle ?? ''} onChange={(event) => patch({ circle: event.target.value || undefined, page: 1 })} /><Select value={search.visibility ?? 'all'} onValueChange={(value) => patch({ visibility: value === 'all' ? undefined : value as SearchState['visibility'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部可见状态</SelectItem><SelectItem value='visible'>可见</SelectItem><SelectItem value='hidden'>不可见</SelectItem><SelectItem value='unknown'>未知</SelectItem></SelectContent></Select><Select value={search.sentiment ?? 'all'} onValueChange={(value) => patch({ sentiment: value === 'all' ? undefined : value as SentimentResult, page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部舆情结果</SelectItem><SelectItem value='negative'>负面</SelectItem><SelectItem value='non_negative'>非负面</SelectItem><SelectItem value='unrelated'>不相关</SelectItem></SelectContent></Select><Select value={search.analysisStatus ?? 'all'} onValueChange={(value) => patch({ analysisStatus: value === 'all' ? undefined : value as AnalysisStatus, page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部分析状态</SelectItem>{Object.entries(analysisStatusNames).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select><Select value={search.sort} onValueChange={(value) => patch({ sort: value as SearchState['sort'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='source'>来源顺序</SelectItem><SelectItem value='published_at'>发布时间</SelectItem><SelectItem value='reply_count'>评论数</SelectItem><SelectItem value='like_count'>点赞数</SelectItem></SelectContent></Select><Select value={search.direction} onValueChange={(value) => patch({ direction: value as SearchState['direction'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='asc'>正序</SelectItem><SelectItem value='desc'>倒序</SelectItem></SelectContent></Select><div className='flex min-w-0 items-center justify-end gap-2 [@media(min-width:2000px)]:col-start-9'><Button className='shrink-0' variant='outline' onClick={copyAll}><Copy className='size-4' />复制全部</Button><Select onValueChange={(value) => exportRun.mutate(value)} disabled={!templates.data?.length || exportRun.isPending}><SelectTrigger className='w-36'><Download className='size-4' /><SelectValue placeholder={templates.data?.length ? '导出 Excel' : '暂无模板'} /></SelectTrigger><SelectContent>{templates.data?.map((item) => item.versions[0] && <SelectItem key={item.versions[0].version_id} value={item.versions[0].version_id}>{item.name}</SelectItem>)}</SelectContent></Select></div></CardContent></Card>}
       </div>
       <div className='min-h-[360px] flex-1 xl:min-h-0'>
+        {search.view === 'screenshots' ? <ScreenshotPanel groups={screenshots.data?.items} loading={screenshots.isLoading} error={screenshots.error} onRetry={() => screenshots.refetch()} /> :
         <div className='flex h-[min(65svh,640px)] min-h-[360px] flex-col overflow-hidden rounded-xl border border-border/70 bg-card/90 xl:h-full xl:min-h-0'>
         <div className='min-h-0 flex-1 overflow-auto' data-list-viewport='run-posts'>
           <Table className='min-w-[1050px]'>
@@ -268,7 +276,7 @@ export function RunDetailPage() {
           </Table>
         </div>
         <div className='flex shrink-0 flex-col gap-3 border-t bg-card/95 p-4 sm:flex-row sm:items-center sm:justify-between' data-list-footer='run-posts'><div className='text-sm text-muted-foreground'>{posts.isLoading ? '正在加载帖子…' : posts.isError ? '帖子加载失败' : `共 ${posts.data?.total ?? 0} 条，第 ${search.page} / ${totalPages} 页`}</div><div className='flex gap-2'><Select value={String(search.pageSize)} onValueChange={(value) => patch({ pageSize: Number(value) as 20 | 50 | 100, page: 1 })}><SelectTrigger className='w-28'><SelectValue /></SelectTrigger><SelectContent><SelectItem value='20'>每页 20</SelectItem><SelectItem value='50'>每页 50</SelectItem><SelectItem value='100'>每页 100</SelectItem></SelectContent></Select><Button variant='outline' size='icon' disabled={(search.page ?? 1) <= 1} onClick={() => patch({ page: (search.page ?? 1) - 1 })}><ChevronLeft className='size-4' /></Button><Button variant='outline' size='icon' disabled={(search.page ?? 1) >= totalPages} onClick={() => patch({ page: (search.page ?? 1) + 1 })}><ChevronRight className='size-4' /></Button></div></div>
-      </div>
+      </div>}
       </div>
       <TaskDialog open={tasksOpen} onOpenChange={setTasksOpen} tasks={run.data?.tasks ?? []} />
       <Sheet open={Boolean(search.post)} onOpenChange={(open) => { if (!open) closePostDetail() }}>
@@ -315,6 +323,47 @@ export function RunDetailPage() {
       <AuthDialog open={authOpen} onOpenChange={setAuthOpen} runId={runId} freshOnOpen />
     </div>
   )
+}
+
+function screenshotArtifactSummary(group: ScreenshotGroup) {
+  const items = group.artifact?.items ?? []
+  const runCount = new Set(items.map((item) => item.run_number)).size
+  const captured = items.map((item) => item.captured_at).filter(Boolean).sort()
+  const first = captured[0]
+  const last = captured[captured.length - 1]
+  const range = first ? first === last ? formatDate(first) : `${formatDate(first)} 至 ${formatDate(last)}` : '—'
+  return `当前版本 v${group.current_version}，共 ${group.item_count} 条、负面 ${group.negative_count} 条；贡献批次 ${runCount} 个，捕获时间 ${range}。`
+}
+
+function ScreenshotPanel({ groups, loading, error, onRetry }: { groups?: ScreenshotGroup[]; loading: boolean; error: unknown; onRetry: () => void }) {
+  const [viewer, setViewer] = useState<{ group: ScreenshotGroup; mode: 'artifact' | 'evidence'; evidenceIndex: number }>()
+  if (loading) return <div className='grid gap-3 md:grid-cols-2'>{Array.from({ length: 4 }).map((_, index) => <Skeleton key={index} className='h-48 rounded-xl' />)}</div>
+  if (error) return <div className='flex h-full min-h-[360px] flex-col items-center justify-center rounded-xl border border-border/70 bg-card/90 text-center'><CircleAlert className='mb-2 size-6 text-destructive' /><div className='font-medium'>页面截图加载失败</div><div className='mt-1 text-sm text-muted-foreground'>{errorMessage(error)}</div><Button className='mt-4' variant='outline' onClick={onRetry}><RefreshCw className='size-4' />重新加载</Button></div>
+  return <div className='h-full min-h-[360px] overflow-auto rounded-xl border border-border/70 bg-card/90 p-4' aria-live='polite'>
+    <div className='mb-4'><h2 className='font-semibold'>圈子页面截图</h2><p className='mt-1 text-sm text-muted-foreground'>每个实际圈子来源独立保留原始全页证据；最终成果汇总当前有效条目，并一次性框出全部负面卡片。</p></div>
+    {!groups?.length ? <div className='rounded-xl border border-dashed p-12 text-center text-sm text-muted-foreground'>当前批次没有圈子来源截图。</div> : <div className='grid gap-3 xl:grid-cols-2'>{groups.map((group, index) => {
+      const status = screenshotStatus[group.status]
+      return <Card key={group.id ?? `${group.external_id}-${group.list_order}-${index}`} className='border-border/70 py-0'><CardContent className='space-y-4 p-4'>
+        <div className='flex items-start justify-between gap-3'><div className='min-w-0'><div className='flex flex-wrap items-center gap-2'><h3 className='truncate font-semibold'>{group.circle_name || group.external_id}</h3><Badge variant='outline'>{group.list_order === 'latest_reply' ? '最新回复' : '最新发布'}</Badge></div><div className='mt-1 text-xs text-muted-foreground'>圈子 ID {group.external_id} · 原始证据 {group.evidence.length} 页 · 成果 v{group.current_version}</div></div><StatusBadge value={status.value} label={status.label} /></div>
+        <div className='grid grid-cols-3 gap-2 rounded-lg bg-muted/30 p-3 text-center'><div><div className='text-lg font-semibold tabular-nums'>{group.item_count}</div><div className='text-xs text-muted-foreground'>有效条目</div></div><div><div className='text-lg font-semibold tabular-nums text-destructive'>{group.negative_count}</div><div className='text-xs text-muted-foreground'>负面条目</div></div><div><div className='text-lg font-semibold tabular-nums'>{group.artifact?.tiles.length ?? 0}</div><div className='text-xs text-muted-foreground'>成果分片</div></div></div>
+        {group.error_message && <Alert variant='destructive'><CircleAlert className='size-4' /><AlertDescription>{group.error_message}</AlertDescription></Alert>}
+        <div className='flex flex-wrap gap-2'><Button size='sm' disabled={!group.artifact} onClick={() => setViewer({ group, mode: 'artifact', evidenceIndex: 0 })}><Eye className='size-4' />查看负面成果</Button><Button size='sm' variant='outline' disabled={!group.evidence.length} onClick={() => setViewer({ group, mode: 'evidence', evidenceIndex: 0 })}><Images className='size-4' />查看原始全页</Button>{group.artifact && <Button size='sm' variant='outline' asChild><a href={group.artifact.download_url}><Download className='size-4' />打包下载</a></Button>}</div>
+      </CardContent></Card>
+    })}</div>}
+    <Dialog open={Boolean(viewer)} onOpenChange={(open) => !open && setViewer(undefined)}><DialogContent className='h-[92svh] max-w-[96vw] gap-0 overflow-hidden p-0 sm:max-w-[96vw]'><DialogHeader className='border-b px-5 py-4 pr-14'><DialogTitle>{viewer?.group.circle_name || viewer?.group.external_id} · {viewer?.mode === 'artifact' ? '负面框选成果' : '原始全页证据'}</DialogTitle><DialogDescription>{viewer?.mode === 'artifact' ? screenshotArtifactSummary(viewer.group) : '原始证据保持采集时页面像素，不叠加判定标记。'}</DialogDescription><div className='flex flex-wrap gap-2 pt-2'><Button size='sm' variant={viewer?.mode === 'artifact' ? 'secondary' : 'outline'} disabled={!viewer?.group.artifact} onClick={() => viewer && setViewer({ ...viewer, mode: 'artifact' })}>负面成果</Button><Button size='sm' variant={viewer?.mode === 'evidence' ? 'secondary' : 'outline'} disabled={!viewer?.group.evidence.length} onClick={() => viewer && setViewer({ ...viewer, mode: 'evidence' })}>原始全页</Button>{viewer?.mode === 'evidence' && viewer.group.evidence.length > 1 && <Select value={String(viewer.evidenceIndex)} onValueChange={(value) => setViewer({ ...viewer, evidenceIndex: Number(value) })}><SelectTrigger className='w-32'><SelectValue /></SelectTrigger><SelectContent>{viewer.group.evidence.map((item, evidenceIndex) => <SelectItem key={item.id} value={String(evidenceIndex)}>第 {item.page_number} 页</SelectItem>)}</SelectContent></Select>}</div></DialogHeader><ScrollArea className='min-h-0 flex-1 bg-muted/35'><div className='mx-auto max-w-[1440px] space-y-3 p-4'>{viewer?.mode === 'artifact' ? viewer.group.artifact?.tiles.map((tile) => <img key={tile.index} src={tile.image_url} loading='lazy' className='h-auto w-full border bg-white shadow-sm' alt={`负面框选成果第 ${tile.index + 1} 片`} />) : viewer && <img src={viewer.group.evidence[viewer.evidenceIndex]?.image_url} className='h-auto w-full border bg-white shadow-sm' alt={`原始全页证据第 ${viewer.group.evidence[viewer.evidenceIndex]?.page_number} 页`} />}</div></ScrollArea></DialogContent></Dialog>
+  </div>
+}
+
+const screenshotStatus: Record<ScreenshotGroup['status'], { value: string; label: string }> = {
+  evidence_pending: { value: 'queued', label: '等待页面证据' },
+  evidence_running: { value: 'running', label: '页面证据采集中' },
+  waiting_for_sentiment: { value: 'queued', label: '等待舆情结论' },
+  rendering: { value: 'running', label: '成果生成中' },
+  ready: { value: 'success', label: '成果就绪' },
+  empty: { value: 'success', label: '空页面成果' },
+  failed: { value: 'failed', label: '生成失败' },
+  not_collected: { value: 'unknown', label: '历史批次未采集' },
+  not_applicable: { value: 'unknown', label: 'URL 清单不适用' },
 }
 
 const analysisStatusNames: Record<AnalysisStatus, string> = {

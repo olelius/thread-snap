@@ -52,9 +52,8 @@ from threadsnap.sentiment import (
     HOSTED_MODEL_CODE,
     SentimentFeedback,
     build_request,
+    complete_text_only_feedback_payload,
     deduplicate_media_urls,
-    normalize_feedback_payload,
-    normalize_text_only_feedback_payload,
     sentiment_input_hash,
     validate_modality_identity,
 )
@@ -435,8 +434,8 @@ class ApiAndConfigTests(AppCase):
             assert stored is not None
             self.assertEqual(old_urls, stored.video_urls)
 
-    def test_sentiment_normalizes_provider_shape_and_deduplicates_signed_media(self) -> None:
-        """兼容已观察到的提供方形状偏差，同时只提交一次同一稳定媒体。"""
+    def test_sentiment_rejects_provider_shape_and_deduplicates_signed_media(self) -> None:
+        """提供方形状偏差必须失败；稳定媒体输入仍只提交一次。"""
 
         first = "https://media.example.test/video.mp4?token=first"
         second = "https://media.example.test/video.mp4?token=second"
@@ -491,14 +490,8 @@ class ApiAndConfigTests(AppCase):
             "summary": "内容为风云A9提车分享。",
         }
 
-        normalized, changed = normalize_feedback_payload(payload, post)
-        feedback = SentimentFeedback.model_validate(normalized)
-        validate_modality_identity(feedback, post)
-
-        self.assertTrue(changed)
-        self.assertEqual(["标题与正文描述提车"], feedback.modalities.text.evidence)
-        self.assertEqual("absent", feedback.modalities.image.status)
-        self.assertEqual(0, feedback.modalities.video_visual.items[0].input_index)
+        with self.assertRaises(ValueError):
+            SentimentFeedback.model_validate(payload)
         self.assertEqual([first], deduplicate_media_urls(post.video_urls))
 
         config = SimpleNamespace(
@@ -511,12 +504,9 @@ class ApiAndConfigTests(AppCase):
         videos = [item for item in request["messages"][0]["content"] if item["type"] == "video_url"]
         self.assertEqual([first], [item["video_url"]["url"] for item in videos])
 
-    def test_sentiment_normalizes_relevant_media_item_as_processed(self) -> None:
-        """汇总计数明确完成时，兼容提供方把逐图状态写成 relevant。"""
+    def test_sentiment_rejects_non_contract_media_values(self) -> None:
+        """同义枚举、错误哈希和业务字段冲突都不在本地改写。"""
 
-        image_url = "https://media.example.test/a.jpg"
-        image_hash = hashlib.sha256(image_url.encode()).hexdigest()
-        post = PostSnapshot(title="风云A9", image_urls=[image_url], video_urls=[])
         payload = {
             "subject_relevance": True,
             "matched_subjects": ["风云A9"],
@@ -554,18 +544,8 @@ class ApiAndConfigTests(AppCase):
             "summary": "内容为车型展示。",
         }
 
-        normalized, changed = normalize_feedback_payload(payload, post)
-        feedback = SentimentFeedback.model_validate(normalized)
-        validate_modality_identity(feedback, post)
-
-        self.assertTrue(changed)
-        self.assertEqual(["风云A9"], feedback.matched_subjects)
-        self.assertIsNone(feedback.primary_category)
-        self.assertEqual([], feedback.secondary_categories)
-        self.assertEqual("processed", feedback.modalities.text.status)
-        self.assertEqual("processed", feedback.modalities.image.status)
-        self.assertEqual("processed", feedback.modalities.image.items[0].status)
-        self.assertEqual(image_hash, feedback.modalities.image.items[0].url_hash)
+        with self.assertRaises(ValueError):
+            SentimentFeedback.model_validate(payload)
 
     def test_sentiment_worker_starts_two_bounded_consumers(self) -> None:
         worker = self.container.sentiment_worker
@@ -779,6 +759,7 @@ class ApiAndConfigTests(AppCase):
         class FakeDeepSeekClient:
             def __init__(self) -> None:
                 self.requests: list[dict] = []
+                self.analysis_attempts = 0
 
             def request(self, base_url: str, api_key: str, body: dict):
                 self.assert_connection = (base_url, api_key)
@@ -786,6 +767,7 @@ class ApiAndConfigTests(AppCase):
                 content = body["messages"][0]["content"]
                 if '"ok":true' in content:
                     return '{"ok":true}', {"total_tokens": 4}, "deepseek-test", 6
+                self.analysis_attempts += 1
                 payload = {
                     "subject_relevance": True,
                     "matched_subjects": ["风云A9"],
@@ -796,31 +778,16 @@ class ApiAndConfigTests(AppCase):
                         "text": {
                             "status": "processed",
                             "evidence": ["标题和正文反馈风云A9车机卡顿。"],
-                        },
-                        # 即使提供方声称处理了媒体，后端也必须按真实输入覆盖为未参与。
-                        "image": {
-                            "status": "processed",
-                            "expected_count": 1,
-                            "processed_count": 1,
-                            "items": [],
-                        },
-                        "video_visual": {
-                            "status": "processed",
-                            "expected_count": 1,
-                            "processed_count": 1,
-                            "items": [],
-                        },
-                        "video_audio": {
-                            "status": "speech",
-                            "expected_count": 1,
-                            "processed_count": 1,
-                            "items": [],
-                        },
+                        }
                     },
                     "summary": "文字内容反馈风云A9车机卡顿，情感为负面。",
                 }
+                response_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                # 复现真实故障：首次与纠正响应逐字相同，modalities 少一个结束括号，
+                # summary 被嵌入其中。Worker 必须在两次调用的硬上限后结束。
+                response_text = response_text.replace('}},"summary"', '},"summary"', 1)
                 return (
-                    json.dumps(payload, ensure_ascii=False),
+                    response_text,
                     {"prompt_tokens": 80, "completion_tokens": 60, "total_tokens": 140},
                     "deepseek-analysis",
                     16,
@@ -899,6 +866,11 @@ class ApiAndConfigTests(AppCase):
         self.assertNotIn("secret-video.mp4", text_input)
         self.assertNotIn("image_url", json.dumps(analysis_body))
         self.assertNotIn("video_url", json.dumps(analysis_body))
+        self.assertEqual(2, fake_client.analysis_attempts)
+        self.assertEqual(2, len(analysis_body["messages"]))
+        self.assertEqual("user", analysis_body["messages"][1]["role"])
+        self.assertIn("JSONDecodeError", analysis_body["messages"][1]["content"])
+        self.assertNotIn('{"subject_relevance":', analysis_body["messages"][1]["content"])
         with self.container.sessions() as db:
             analysis = db.scalar(select(SentimentAnalysis))
             assert analysis is not None
@@ -907,6 +879,10 @@ class ApiAndConfigTests(AppCase):
             self.assertEqual("not_requested", analysis.modalities["image"]["status"])
             self.assertEqual("not_requested", analysis.modalities["video_visual"]["status"])
             self.assertEqual("not_requested", analysis.modalities["video_audio"]["status"])
+            self.assertEqual(1, analysis.retry_count)
+            self.assertTrue(analysis.locally_recovered)
+            self.assertEqual(2, len(analysis.attempt_failures))
+            self.assertEqual("MODEL_RESPONSE_ERROR", analysis.attempt_failures[0]["error_code"])
 
         latest = self.client.get("/api/v1/sentiment/config").json()
         qwen_restored = self.client.put(
@@ -944,22 +920,34 @@ class ApiAndConfigTests(AppCase):
         post.video_urls = ["https://example.test/second.mp4"]
         self.assertEqual(before, sentiment_input_hash(post, DEEPSEEK_MODEL_CODE))
 
-    def test_deepseek_text_normalization_marks_media_not_requested(self) -> None:
+    def test_deepseek_text_completion_only_adds_backend_media_facts(self) -> None:
         post = PostSnapshot(
             title="风云A9",
             image_urls=["https://example.test/a.jpg"],
             video_urls=["https://example.test/a.mp4"],
         )
         payload = {
+            "subject_relevance": True,
+            "matched_subjects": ["风云A9"],
+            "sentiment": "non_negative",
+            "primary_category": None,
+            "secondary_categories": [],
             "modalities": {
                 "text": {"status": "processed", "evidence": ["标题提及风云A9。"]},
-            }
+            },
+            "summary": "文字内容提及风云A9。",
         }
-        normalized, changed = normalize_text_only_feedback_payload(payload, post)
-        self.assertTrue(changed)
-        self.assertEqual("not_requested", normalized["modalities"]["image"]["status"])
-        self.assertEqual(1, normalized["modalities"]["image"]["expected_count"])
-        self.assertEqual([], normalized["modalities"]["video_audio"]["items"])
+        completed = complete_text_only_feedback_payload(payload, post)
+        feedback = SentimentFeedback.model_validate(completed)
+        validate_modality_identity(feedback, post)
+        self.assertEqual("not_requested", completed["modalities"]["image"]["status"])
+        self.assertEqual(1, completed["modalities"]["image"]["expected_count"])
+        self.assertEqual([], completed["modalities"]["video_audio"]["items"])
+        self.assertEqual({"text"}, set(payload["modalities"]))
+        invalid = json.loads(json.dumps(payload, ensure_ascii=False))
+        invalid["modalities"]["image"] = completed["modalities"]["image"]
+        with self.assertRaisesRegex(ValueError, "只允许 text"):
+            complete_text_only_feedback_payload(invalid, post)
 
     def test_deepseek_prompt_requires_text_status_contract(self) -> None:
         """DeepSeek 提示词必须给出文字状态枚举和完整 JSON 形状。"""
@@ -979,22 +967,26 @@ class ApiAndConfigTests(AppCase):
         self.assertIn('"status":"processed"', prompt)
         self.assertEqual({"type": "json_object"}, request["response_format"])
 
-    def test_deepseek_text_normalizes_observed_completed_synonyms(self) -> None:
-        """保留原始响应，同时兼容真实出现的已完成状态同义值。"""
+    def test_deepseek_text_rejects_non_contract_status_synonyms(self) -> None:
+        """文字状态同义值属于模型违约，由纠错请求处理。"""
 
         post = PostSnapshot(title="瑞虎8油耗", content="这油耗还可以吧。")
         for status in ("analyzed", "completed"):
             with self.subTest(status=status):
-                normalized, changed = normalize_text_only_feedback_payload(
-                    {
-                        "modalities": {
-                            "text": {"status": status, "evidence": ["油耗表现可以。"]}
-                        }
+                payload = {
+                    "subject_relevance": True,
+                    "matched_subjects": ["瑞虎8"],
+                    "sentiment": "non_negative",
+                    "primary_category": None,
+                    "secondary_categories": [],
+                    "modalities": {
+                        "text": {"status": status, "evidence": ["油耗表现可以。"]}
                     },
-                    post,
-                )
-                self.assertTrue(changed)
-                self.assertEqual("processed", normalized["modalities"]["text"]["status"])
+                    "summary": "文字评价瑞虎8油耗。",
+                }
+                completed = complete_text_only_feedback_payload(payload, post)
+                with self.assertRaises(ValueError):
+                    SentimentFeedback.model_validate(completed)
 
     def test_bootstrap_refreshes_available_adapter_version(self) -> None:
         with self.container.sessions.begin() as db:
@@ -1016,11 +1008,13 @@ class ApiAndConfigTests(AppCase):
         class FakeSentimentClient:
             def __init__(self) -> None:
                 self.analysis_requests = 0
+                self.request_bodies: list[dict] = []
 
             def request(self, _base_url: str, _key: str, body: dict):
                 text = body["messages"][0]["content"][-1]["text"]
                 if "ok" in text:
                     return '{"ok":true}', None, "test-request", 5
+                self.request_bodies.append(body)
                 self.analysis_requests += 1
                 if self.analysis_requests == 1:
                     return (
@@ -1036,30 +1030,33 @@ class ApiAndConfigTests(AppCase):
                     "primary_category": "product_complaint",
                     "secondary_categories": [],
                     "modalities": {
-                        "text": {"status": "processed", "evidence": "正文描述产品故障"},
+                        "text": {
+                            "status": "processed",
+                            "evidence": ["正文描述产品故障"],
+                        },
                         "image": {
                             "status": "processed",
                             "expected_count": 1,
                             "processed_count": 1,
                             "items": [
                                 {
-                                    "input_index": 1,
+                                    "input_index": 0,
                                     "url_hash": hashlib.sha256(
                                         b"https://example.test/a.jpg"
                                     ).hexdigest(),
                                     "status": "processed",
-                                    "evidence": "图片显示故障提示",
+                                    "evidence": ["图片显示故障提示"],
                                 }
                             ],
                         },
                         "video_visual": {
-                            "status": "skipped",
+                            "status": "absent",
                             "expected_count": 0,
                             "processed_count": 0,
                             "items": [],
                         },
                         "video_audio": {
-                            "status": "skipped",
+                            "status": "absent",
                             "expected_count": 0,
                             "processed_count": 0,
                             "items": [],
@@ -1143,13 +1140,19 @@ class ApiAndConfigTests(AppCase):
         ):
             self.assertTrue(self.container.sentiment_worker.process_once())
         self.assertEqual(2, fake_sentiment_client.analysis_requests)
+        correction_messages = fake_sentiment_client.request_bodies[1]["messages"]
+        self.assertEqual(2, len(correction_messages))
+        self.assertEqual("user", correction_messages[1]["role"])
+        self.assertIn("严格 JSON Schema 校验", correction_messages[1]["content"])
+        self.assertIn("JSONDecodeError", correction_messages[1]["content"])
+        self.assertNotIn('{"subject_relevance":', correction_messages[1]["content"])
         with self.container.sessions() as db:
             retried_analysis = db.scalar(select(SentimentAnalysis))
             assert retried_analysis is not None
             self.assertEqual(1, retried_analysis.retry_count)
             self.assertEqual(1, len(retried_analysis.attempt_failures))
             self.assertEqual(
-                "MODEL_STREAM_INCOMPLETE",
+                "MODEL_RESPONSE_ERROR",
                 retried_analysis.attempt_failures[0]["error_code"],
             )
 

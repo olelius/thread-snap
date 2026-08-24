@@ -27,6 +27,7 @@ from .models import (
     ValidationJob,
     utc_now,
 )
+from .screenshots import ScreenshotService
 from .sentiment import SentimentService, deduplicate_media_urls
 from .services import aggregate_run, related_run_ids
 from .session_store import SessionStore
@@ -42,12 +43,14 @@ class WorkerService:
         poll_seconds: float = 1.0,
         event_publisher: Callable[..., Any] | None = None,
         sentiment_service: SentimentService | None = None,
+        screenshot_service: ScreenshotService | None = None,
     ):
         self.factory = factory
         self.session_store = session_store
         self.poll_seconds = poll_seconds
         self.event_publisher = event_publisher
         self.sentiment_service = sentiment_service
+        self.screenshot_service = screenshot_service
         self.stop_event = threading.Event()
         self.thread: threading.Thread | None = None
         self.refresh_lock = threading.Lock()
@@ -203,6 +206,8 @@ class WorkerService:
         for code in platform_codes:
             if self._process_platform_head(code):
                 return True
+        if self.screenshot_service and self.screenshot_service.process_once():
+            return True
         return False
 
     def _collector(
@@ -213,7 +218,9 @@ class WorkerService:
         requested = snapshot_concurrency or platform.internal_concurrency
         concurrency = min(max(requested, platform.min_concurrency), platform.max_concurrency)
         return DongchediCollector(
-            self.session_store.get_state(platform.code), concurrency=concurrency
+            self.session_store.get_state(platform.code),
+            concurrency=concurrency,
+            browser_headless=self.session_store.settings.auth_browser_headless,
         )
 
     def _process_validation_job(self) -> bool:
@@ -401,6 +408,9 @@ class WorkerService:
             aggregate_run(db, run)
             summary_version = run.summary_version
             status = run.status
+        if self.screenshot_service:
+            for task_id in results:
+                self.screenshot_service.mark_task_complete(task_id)
         if self.event_publisher:
             self.event_publisher(
                 "run.changed", run_id, summary_version=summary_version, status=status
@@ -436,6 +446,8 @@ class WorkerService:
             if circle_id:
                 circle = db.get(Circle, circle_id)
                 needs_validation = bool(circle and circle.validation_status != "verified")
+        if self.screenshot_service and not known_urls and type(collector) is DongchediCollector:
+            self.screenshot_service.register_task(task_id)
         pending_records: list[dict[str, Any]] = []
         reported_failures = 0
         flushed_failures = 0
@@ -493,6 +505,13 @@ class WorkerService:
                     remaining,
                     skip_post_ids=completed_post_ids,
                     on_progress=report_progress,
+                    **(
+                        {
+                            "on_page_evidence": self.screenshot_service.capture_callback(task_id)
+                        }
+                        if self.screenshot_service and type(collector) is DongchediCollector
+                        else {}
+                    ),
                 )
             )
             if source_indexes:
@@ -523,6 +542,16 @@ class WorkerService:
                             remaining,
                             skip_post_ids=completed_post_ids,
                             on_progress=report_progress,
+                            **(
+                                {
+                                    "on_page_evidence": self.screenshot_service.capture_callback(
+                                        task_id
+                                    )
+                                }
+                                if self.screenshot_service
+                                and type(refreshed) is DongchediCollector
+                                else {}
+                            ),
                         )
                     )
                     if source_indexes:
@@ -749,6 +778,8 @@ class WorkerService:
             )
             db.add(post)
             db.flush()
+            if self.screenshot_service:
+                self.screenshot_service.link_post(db, task.id, post)
             if self.sentiment_service:
                 self.sentiment_service.enqueue_for_post(db, post, task.platform_code)
             next_order = max(next_order + 1, int(record.get("order_index", next_order)) + 1)

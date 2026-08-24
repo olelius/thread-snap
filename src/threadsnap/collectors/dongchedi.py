@@ -9,6 +9,7 @@ import math
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable
@@ -17,7 +18,10 @@ from urllib.parse import urlencode, urljoin, urlsplit
 from curl_cffi import requests
 from curl_cffi.requests import Cookies
 from lxml import html
+from patchright.sync_api import sync_playwright
 from scrapling.fetchers import DynamicSession
+
+from ..browser_runtime import browser_launch_args
 
 ADAPTER_VERSION = "dongchedi-dynamic-v4"
 BASE_URL = "https://www.dongchedi.com"
@@ -36,6 +40,7 @@ POST_RE = re.compile(
 SORT_LABEL_RE = re.compile(r"(?:\d{4}-\d{2}-\d{2}|\d+(?:分钟|小时|天|个月|年)前)(?:回复)?")
 VISIBLE_OPERATION_STATUSES = frozenset({0, 2})
 ProgressCallback = Callable[[dict[str, Any] | None, dict[str, Any] | None], None]
+PageEvidenceCallback = Callable[[dict[str, Any]], None]
 RICH_TEXT_TAG_RE = re.compile(
     r"<(?:article|blockquote|br|div|h[1-6]|img|li|ol|p|section|ul)\b",
     re.IGNORECASE,
@@ -213,12 +218,15 @@ class DongchediCollector:
         storage_state: dict[str, Any] | None,
         concurrency: int = 1,
         timeout_seconds: int = 30,
+        browser_headless: bool = False,
     ):
         self.storage_state = storage_state
         self.cookies = _cookies_from_state(storage_state)
         self.timeout_seconds = timeout_seconds
         self.concurrency = max(1, concurrency)
+        self.browser_headless = browser_headless
         self.semaphore = threading.BoundedSemaphore(self.concurrency)
+        self.page_capture_lock = threading.Lock()
         self._thread_local = threading.local()
 
     def _http_session(self) -> requests.Session:
@@ -286,6 +294,160 @@ class DongchediCollector:
         if "/login-required" in str(state.get("url", "")):
             raise AuthenticationRequired("懂车帝当前要求重新完成平台认证。")
         return self._normalize_card_rows(state.get("rows", []))
+
+    @staticmethod
+    def _stabilize_capture_layout(page: Any, cards: Any, page_number: int) -> None:
+        """在全页截图所用的页首状态中冻结并确认卡片布局。"""
+
+        page.add_style_tag(
+            content=(
+                "html{scroll-behavior:auto!important;scrollbar-width:none!important}"
+                "html::-webkit-scrollbar,body::-webkit-scrollbar"
+                "{display:none!important;width:0!important;height:0!important}"
+                "*,*::before,*::after{animation:none!important;transition:none!important}"
+            )
+        )
+        page.evaluate(
+            """() => {
+              window.scrollTo({top:0,left:0,behavior:'instant'});
+              document.documentElement.scrollTop=0;
+              document.documentElement.scrollLeft=0;
+              if (document.body) {
+                document.body.scrollTop=0;
+                document.body.scrollLeft=0;
+              }
+            }"""
+        )
+        page.wait_for_function("() => scrollX === 0 && scrollY === 0")
+        # 懒加载遍历结束时页面位于底部；同时 Playwright 全页截图会隐藏滚动条。
+        # 先主动冻结到截图所用的无滚动条页首布局，再等待卡片稳定，避免截图阶段
+        # 可用宽度增加后逐卡重排，造成纵向误差向页面底部持续累积。
+        previous_layout: list[dict[str, float]] | None = None
+        stable_samples = 0
+        for _attempt in range(8):
+            layout = cards.evaluate_all(
+                "els => els.map(e => {const r=e.getBoundingClientRect(); return {x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height,hrefs:Array.from(e.querySelectorAll('a')).map(a=>a.href)}})"
+            )
+            if layout == previous_layout:
+                stable_samples += 1
+                if stable_samples >= 2:
+                    break
+            else:
+                stable_samples = 0
+            previous_layout = layout
+            page.wait_for_timeout(250)
+        if stable_samples < 2:
+            raise CollectorFailure(
+                "PAGE_EVIDENCE_LAYOUT_UNSTABLE",
+                f"圈子第 {page_number} 页卡片布局在页首稳定窗口内仍持续变化。",
+            )
+
+    def capture_circle_page(self, circle_url: str, page_number: int) -> dict[str, Any]:
+        """从同一冻结 DOM 取得候选清单、卡片坐标和原始全页 PNG。"""
+
+        source = parse_circle_url(circle_url)
+        exact_url = source.url + ("" if page_number == 1 else f"/{page_number}")
+        with self.page_capture_lock, self.semaphore:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(
+                    headless=self.browser_headless, args=browser_launch_args()
+                )
+                context = browser.new_context(
+                    storage_state=self.storage_state,
+                    locale="zh-CN",
+                    timezone_id="Asia/Shanghai",
+                    viewport={"width": 1440, "height": 900},
+                    device_scale_factor=1,
+                )
+                browser_version = browser.version
+                page = context.new_page()
+                page.goto(exact_url, wait_until="domcontentloaded", timeout=60_000)
+                page.wait_for_timeout(1200)
+                if "/login-required" in page.url:
+                    context.close()
+                    browser.close()
+                    raise AuthenticationRequired("懂车帝当前要求重新完成平台认证。")
+                cards = page.locator("section.community-card")
+                count = cards.count()
+                for index in range(count):
+                    card = cards.nth(index)
+                    card.scroll_into_view_if_needed(timeout=10_000)
+                    try:
+                        card.locator("img").evaluate_all(
+                            """imgs => Promise.all(imgs.map(img => new Promise(resolve => {
+                              const src = img.currentSrc || img.src || '';
+                              if (!src || (img.complete && img.naturalWidth > 0)) return resolve();
+                              const done = () => resolve();
+                              img.addEventListener('load', done, {once:true});
+                              img.addEventListener('error', done, {once:true});
+                              setTimeout(done, 8000);
+                            })))"""
+                        )
+                    except Exception:
+                        # 平台原生占位或已被平台取消的媒体不阻断页面文字证据。
+                        pass
+                page.evaluate("() => document.fonts && document.fonts.ready")
+                media_state = cards.evaluate_all(
+                    """els => els.flatMap((card, cardIndex) =>
+                      Array.from(card.querySelectorAll('img')).map(img => ({
+                        cardIndex, src:img.currentSrc||img.src||'', complete:img.complete,
+                        naturalWidth:img.naturalWidth, naturalHeight:img.naturalHeight
+                      })))"""
+                )
+                incomplete = [
+                    item
+                    for item in media_state
+                    if not item.get("src")
+                    or not item.get("complete")
+                    or int(item.get("naturalWidth") or 0) <= 0
+                    or int(item.get("naturalHeight") or 0) <= 0
+                ]
+                if incomplete:
+                    raise CollectorFailure(
+                        "PAGE_EVIDENCE_MEDIA_INCOMPLETE",
+                        f"圈子第 {page_number} 页仍有 {len(incomplete)} 个帖子媒体处于空白、加载或破图状态。",
+                    )
+                self._stabilize_capture_layout(page, cards, page_number)
+                raw_rows = cards.evaluate_all(
+                    """els => els.map((e, i) => {
+                      const r=e.getBoundingClientRect();
+                      return {index:i,text:e.innerText||'',
+                        hrefs:Array.from(e.querySelectorAll('a')).map(a=>a.href),
+                        image_count:e.querySelectorAll('img').length,
+                        rect:{x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height}};
+                    })"""
+                )
+                normalized = self._normalize_card_rows(raw_rows)
+                by_index = {int(item.get("index", -1)): item for item in raw_rows}
+                rows = []
+                for item in normalized:
+                    raw = by_index.get(int(item["order_index"]), {})
+                    rows.append(
+                        {
+                            **item,
+                            "text": raw.get("text") or "",
+                            "image_count": int(raw.get("image_count") or 0),
+                            "rect": raw.get("rect") or {},
+                        }
+                    )
+                document = page.evaluate(
+                    "() => ({width:Math.max(document.documentElement.scrollWidth,document.body.scrollWidth),height:Math.max(document.documentElement.scrollHeight,document.body.scrollHeight)})"
+                )
+                screenshot = page.screenshot(full_page=True, type="png")
+                final_url = page.url
+                context.close()
+                browser.close()
+        return {
+            "page_number": page_number,
+            "exact_url": final_url,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "adapter_version": self.adapter_version,
+            "browser_version": browser_version,
+            "viewport": {"width": 1440, "height": 900, "device_scale_factor": 1},
+            "document": document,
+            "rows": rows,
+            "screenshot": screenshot,
+        }
 
     @staticmethod
     def _normalize_card_rows(
@@ -663,6 +825,7 @@ class DongchediCollector:
         target_count: int,
         skip_post_ids: set[str] | None = None,
         on_progress: ProgressCallback | None = None,
+        on_page_evidence: PageEvidenceCallback | None = None,
     ) -> dict[str, Any]:
         source = parse_circle_url(circle_url)
         records: list[dict[str, Any]] = []
@@ -673,19 +836,39 @@ class DongchediCollector:
         total_count: int | None = None
         exhausted = False
         candidate_position = 0
+        max_page_number = max(1, math.ceil((len(seen) + target_count) / 30) + 5)
         while len(records) < target_count:
             expected = (
                 None
                 if total_count is None
                 else min(30, max(0, total_count - (page_number - 1) * 30))
             )
-            page = self._fetch_circle_page(source.url, page_number, expected)
+            if on_page_evidence:
+                loader = getattr(on_page_evidence, "load", None)
+                captured = loader(page_number) if callable(loader) else None
+                captured = captured or self.capture_circle_page(source.url, page_number)
+                page = {
+                    "rows": captured["rows"],
+                    "total_count": None,
+                    "page_count": None,
+                }
+            else:
+                captured = None
+                page = self._fetch_circle_page(source.url, page_number, expected)
             if page_number == 1:
                 total_count = page["total_count"]
                 page_count = (
                     math.ceil(total_count / 30) if total_count is not None else page["page_count"]
                 )
             page_rows = page["rows"]
+            if captured is not None:
+                for row in page_rows:
+                    row["source_position"] = candidate_position + int(
+                        row.get("order_index", row.get("source_position", 0))
+                    )
+                captured["rows"] = page_rows
+                if not captured.get("persisted"):
+                    on_page_evidence(captured)
             if not page_rows:
                 exhausted = True
                 break
@@ -696,52 +879,76 @@ class DongchediCollector:
                 if page_count is not None and page_number < page_count:
                     page_number += 1
                     continue
+                if captured is not None and page_number < max_page_number:
+                    page_number += 1
+                    continue
                 exhausted = True
                 break
-            for candidate in candidates:
-                source_index = candidate_position
-                candidate_position += 1
-                seen.add(candidate["post_id"])
-                try:
-                    record = self.fetch_post(candidate["url"])
-                except AuthenticationRequired as exc:
-                    raise AuthenticationRequired(
-                        exc.message,
-                        trigger_url=candidate["url"],
-                        records=records,
-                        failures=failures,
-                    ) from exc
-                except CollectorFailure as exc:
-                    failure = {
-                        "url": candidate["url"],
-                        "code": exc.code,
-                        "message": exc.message,
-                        "source_index": source_index,
-                    }
-                    failures.append(failure)
+            candidate_cursor = 0
+            while candidate_cursor < len(candidates) and len(records) < target_count:
+                batch_size = min(
+                    self.concurrency,
+                    len(candidates) - candidate_cursor,
+                    target_count - len(records),
+                )
+                batch: list[tuple[dict[str, Any], int]] = []
+                for candidate in candidates[candidate_cursor : candidate_cursor + batch_size]:
+                    batch.append((candidate, candidate_position))
+                    candidate_position += 1
+                    seen.add(candidate["post_id"])
+                candidate_cursor += batch_size
+
+                def fetch_candidate(value: tuple[dict[str, Any], int]) -> tuple[Any, Any, int]:
+                    candidate, source_index = value
+                    try:
+                        return self.fetch_post(candidate["url"]), None, source_index
+                    except (AuthenticationRequired, CollectorFailure) as exc:
+                        return None, exc, source_index
+
+                with ThreadPoolExecutor(max_workers=len(batch)) as pool:
+                    results = list(pool.map(fetch_candidate, batch))
+                for (candidate, _source_index), (record, error, source_index) in zip(
+                    batch, results, strict=True
+                ):
+                    if isinstance(error, AuthenticationRequired):
+                        raise AuthenticationRequired(
+                            error.message,
+                            trigger_url=candidate["url"],
+                            records=records,
+                            failures=failures,
+                        ) from error
+                    if isinstance(error, CollectorFailure):
+                        failure = {
+                            "url": candidate["url"],
+                            "code": error.code,
+                            "message": error.message,
+                            "source_index": source_index,
+                        }
+                        failures.append(failure)
+                        if on_progress:
+                            on_progress(None, failure)
+                        continue
+                    if record is None:
+                        failure = {
+                            "url": candidate["url"],
+                            "code": "POST_NOT_FOUND",
+                            "message": "帖子详情当前不可用。",
+                            "source_index": source_index,
+                        }
+                        failures.append(failure)
+                        if on_progress:
+                            on_progress(None, failure)
+                        continue
+                    record["order_index"] = source_index
+                    records.append(record)
                     if on_progress:
-                        on_progress(None, failure)
-                    continue
-                if record is None:
-                    failure = {
-                        "url": candidate["url"],
-                        "code": "POST_NOT_FOUND",
-                        "message": "帖子详情当前不可用。",
-                        "source_index": source_index,
-                    }
-                    failures.append(failure)
-                    if on_progress:
-                        on_progress(None, failure)
-                    continue
-                record["order_index"] = source_index
-                records.append(record)
-                if on_progress:
-                    on_progress(record, None)
-                if len(records) >= target_count:
-                    break
+                        on_progress(record, None)
             if len(records) >= target_count:
                 break
             if page_count is not None and page_number >= page_count:
+                exhausted = True
+                break
+            if page_count is None and page_number >= max_page_number:
                 exhausted = True
                 break
             page_number += 1

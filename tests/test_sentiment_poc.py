@@ -92,11 +92,9 @@ class SentimentPocTests(unittest.TestCase):
         self.assertEqual(1, len(chunks))
         self.assertFalse(done_seen)
 
-    def test_parse_feedback_text_marks_trailing_fence_as_local_recovery(self) -> None:
-        feedback, strict, recovered = parse_feedback_text('{"ok":true}\n```')
-        self.assertEqual({"ok": True}, feedback)
-        self.assertFalse(strict)
-        self.assertTrue(recovered)
+    def test_parse_feedback_text_rejects_markdown_fence(self) -> None:
+        with self.assertRaises(json.JSONDecodeError):
+            parse_feedback_text('{"ok":true}\n```')
 
     def test_api_call_ledger_blocks_second_reservation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

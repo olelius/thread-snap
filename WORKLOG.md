@@ -16,6 +16,91 @@
 
 ---
 
+## 2026-08-24 — DeepSeek 重复坏 JSON 有界恢复与存量失败清零
+**总目标**：消除 DeepSeek 正常结束流中稳定复现的单括号 JSON 错误，同时保证持续错误不会形成无限模型循环或无限用量。
+**状态**：✅ 代码、真实存量恢复、截图成果重建与完整验证均已完成；当前数据库持久分析失败为 0。
+**干到哪里了**：
+- [x] 现场批次 `20260824-102857-001` 共 150 条，首次 JSON 语法错误 5 条；旧纠正链修复 3 条，另 2 条纠正响应与首次响应 SHA-256 完全相同，均为 `modalities` 少一个结束括号导致 `summary` 错层，不是网络截断。
+- [x] 格式纠正不再把坏响应作为 assistant 历史提交，只保留原始输入、错误候选哈希、具体错误和合同；模型调用固定最多 2 次，不永久重排队。
+- [x] DeepSeek 第二次仍为该实证错误时只构造 1 个补 `}` 候选；候选必须立即成为精确根字段对象并重新通过完整 Pydantic、字段关系和输入身份校验，不修改任何观点、枚举、数组、索引或哈希。
+- [x] 自动化替身连续两次返回逐字相同坏 JSON，验证 Worker 只调用 2 次、保存 2 条失败候选、标记 `locally_recovered=true` 并形成完整结果；其他错误仍有界结束。
+- [x] 数据库全部 3 条持久失败均通过同一只读门禁后原位恢复为 `analysis_completed`，保留原提示词版本、两次原始响应和错误审计；恢复前一致性备份为 `artifacts/runtime/sentiment-bounded-recovery-20260824/threadsnap-before-recovery.db`，SHA-256 `e19d64343c2f6c0378e43f458bb014b650d2025e46034d41c6f5ddc8d29958ba`，报告为同目录 `recovery-report.json`。
+- [x] 当前批次 API 复核为 150/150 `analysis_completed`、0 失败；5/5 截图成果均 `ready`，150 条成果卡片、26 条负面。后端 `/health`、前端和 Vite `/health` 代理均为 HTTP 200。
+- [x] 全部 102 项后端测试、`ruff check src tests`、Python 编译、`pip check`、前端 TypeScript/Vite 构建（2465 modules）及 `git diff --check` 通过。
+**下一步**：后续真实批次继续统计首次违约、干净纠正成功和单候选恢复分母；只有出现新的可复核错误族时才单独设计窄规则，不扩展通用猜测式 JSON 修复。
+**边界**：本次没有第三次模型调用、第二模型裁决或语义改写；单条任务模型调用上限为 2，本地结构候选上限为 1，候选不唯一或完整合同失败即明确结束。
+**关联**：`src/threadsnap/sentiment.py`、`tests/test_backend.py`、`docs/adr/0027-use-bounded-clean-correction-and-structural-recovery.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/sentiment-analysis.md`
+
+---
+
+## 2026-08-23 — 全页证据坐标漂移与整卡框选修复
+**总目标**：消除全页截图阶段页面重排造成的渐进式卡片裁切，并确保负面红框覆盖完整帖子卡片。
+**状态**：✅ 根因、采集预防、历史证据校正渲染、当前批次重建、视觉验收与完整验证均已完成。
+**干到哪里了**：
+- [x] 对批次 `01a02b0c-e9cf-7dd8-9bdc-354770f679d8` 的原图、DOM 矩形和成果裁片逐条比对：第 1 条纵向误差为 0px，第 16 条为 29px，第 30 条为 54px；DOM 卡片宽约 869.86px，而全页 PNG 中可见卡片宽为 880px。确认全页截图隐藏滚动条后可用宽度增加，引发图片网格逐卡重排和累计纵向漂移，不是舆情帖子关联错误。
+- [x] 生产采集器在取最终矩形前主动进入无滚动条、无动画、无平滑滚动的页首布局，确认滚动位置归零并连续取得三次稳定布局，再读取卡片矩形和生成全页 PNG。
+- [x] 渲染器升级为 `v3-pixel-aligned-card-boundaries`：从不可变原始证据像素恢复卡片可见边界，恢复失败时保守使用原矩形；校正只创建新成果版本，不改写原始截图、原清单或历史成果。
+- [x] 当前批次两个圈子成果均由 v1 重建为 v2：QQ3 EV 为 30 条/4 条负面/1 片 `880×10985`，风云 A9L 为 30 条/6 条负面/1 片 `880×11527`；逐片和 ZIP SHA-256 全部复核一致。QQ3 首/中/末源裁片分别为 `[211,586,880,393]`、`[211,6336,880,372]`、`[211,11452,880,393]`。
+- [x] 成果分片 URL 增加版本号与文件 SHA-256；保留长期不可变缓存的同时，每次重建都会产生新 URL，浏览器不会继续复用旧版本图片。
+- [x] 原尺寸视觉核对确认此前标出的第 14～18 条及末页卡片标题、正文、媒体、时间与评论/点赞/收藏/分享栏均完整，4 个负面红框覆盖整卡；证据为 `artifacts/runtime/card-crop-diagnosis-20260823/current-v2-cards-14-18.png`、`current-v2-last-cards.png` 和 `current-run-v2-verification.json`。
+- [x] 截图专项 8 项及全部 102 项后端测试通过；`ruff check src tests`、Python 编译、`pip check`、前端 TypeScript/Vite 构建（2465 modules）通过，后端 `/health` 与 Vite 代理 `/health` 均为 `ok`。全仓 Ruff 另发现 15 个既有 `artifacts/deployment/`、`poc/` 脚本导入排序问题，未改动无关范围。
+**下一步**：目标 Linux 离线包仍按截图业务总账执行真实捕获、2000 卡片、Chromium 解码、备份恢复和回滚门禁；同时复核无滚动条冻结布局在目标 Chromium 上的矩形/PNG 一致性。
+**边界**：舆情结论与帖子绑定继续使用平台帖子 ID，不依赖截图 OCR 或裁片位置；本次只修复证据坐标和成果边界。原始证据及历史成果版本保持不可变。
+**关联**：`src/threadsnap/collectors/dongchedi.py`、`src/threadsnap/screenshots.py`、`tests/test_screenshots.py`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/circle-screenshot-artifacts.md`
+
+---
+
+## 2026-08-23 — 成果图移除逐卡溯源条
+**总目标**：负面框选成果只保留原始帖子卡片像素和负面红框，不在图片中插入“贡献批次/捕获时间”信息条。
+**状态**：✅ 渲染器、查看器摘要、测试、owner 文档、完整验证及现有成果重建均已完成。
+**干到哪里了**：
+- [x] 渲染器移除每张卡片顶部 28px 溯源条，分片高度与卡片坐标改按原始裁片真实高度计算；负面红框仍绘制在原始卡片边界内。
+- [x] 逐卡 `run_number`、`captured_at` 继续保留在版本卡片审计项、成果 manifest 和 API，不修改数据库追溯能力。
+- [x] 查看器顶部统一显示贡献批次数与捕获时间范围，不在长图内重复显示技术时间。
+- [x] 定向渲染测试已验证首卡高度等于原始 350px、卡片顶部为原始像素、红框像素仍存在且逐卡审计字段不丢失。
+- [x] 渲染器版本 `v2-original-card-pixels` 纳入输入哈希；像素规则变化会创建新版本，旧文件不覆盖。当前 QQ3 EV 成果已从 v1 重建为 v2，30 条、4 条负面、1 个分片，首卡由 419px 回归原始 391px；逐卡 `run_number`/`captured_at` 仍在 manifest。
+- [x] 6 项截图专项和全部 100 项后端测试、Ruff、Python 编译、`pip check`、前端 TypeScript/Vite 构建（2465 modules）及 `git diff --check` 通过；后端、前端和 Vite 代理均为 HTTP 200。视觉核对确认卡片连续、红框保留、溯源条消失，证据为 `artifacts/runtime/remove-card-provenance-20260823/verification.json`，SHA-256 `50b6b903fc52136608ea1b9f469108359882e9cea51db0b5bec5ebc53e1bedd5`。
+**下一步**：目标 Linux 离线包仍按截图业务总账的既有门禁执行 2000 卡片、备份恢复和回滚验证。
+**边界**：原始页面证据和旧成果版本保持不可变；当前成果重建会生成新版本，ZIP 与逐文件哈希随新版本更新。
+**关联**：`src/threadsnap/screenshots.py`、`tests/test_screenshots.py`、`frontend/src/features/runs/run-detail-page.tsx`、`frontend/src/lib/types.ts`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/circle-screenshot-artifacts.md`
+
+---
+
+## 2026-08-23 — 云端舆情严格输出合同与带错纠正
+**总目标**：只有原生符合 ThreadSnap JSON Schema 的云端模型输出才能成为 AI 舆情结果；首次违约向同一模型反馈具体错误并要求按原合同重新生成一次。
+**状态**：✅ 严格解析、单次带错纠正、文档同步、全量验证与本地运行实例重启均已完成。
+**干到哪里了**：
+- [x] 现场确认批次 `01a02aea-1c8e-7e12-bd08-7d176f47ce32` 为 29/30 完成；“OTA升级啦”两次返回完全相同的 473 字符响应，`summary` 错嵌入 `modalities` 且根对象未闭合，旧逻辑原样重发后仍失败。
+- [x] 云端解析收紧为标准 JSON 对象和完整 Pydantic/媒体身份合同；Markdown 围栏、字段错层、同义枚举、字符串依据、一基索引、错误哈希及额外字段均不再本地改写。
+- [x] DeepSeek 严格通过其根字段与 `modalities.text` 后，后端只追加未发送媒体的数量和 `not_requested`，不修改任何模型负责字段。
+- [x] 首次格式违约保存 `MODEL_RESPONSE_ERROR` 审计，并使用“原输入 + 原始候选 + 具体校验错误 + 原合同”纠正一次；第二次重新执行全部校验，仍违约则失败。真实故障形状已由自动化替身复现并验证纠正闭环。
+- [x] 千问与 DeepSeek 提示词版本分别升级为 `v3-strict-output` 与 `deepseek-text-v3-strict-output`；连接测试也执行严格 `{"ok":true}` 合同及一次带错纠正。
+- [x] 100 项后端测试、Ruff、Python 编译、`pip check`、前端 TypeScript/Vite 生产构建（2465 modules）和 `git diff --check` 通过；后端已重启，后端 `/health`、前端 HTTP 和 Vite `/health` 代理均为 200。脱敏验证记录为 `artifacts/runtime/sentiment-strict-output-20260823/verification.json`，SHA-256 `a10e169294ed6a2ba40f159d9156d21cc7f39dd3f75546925bac9a01d4b834a3`。
+**下一步**：无代码缺口；当前历史失败条目保持原始审计，可由使用者人工判定，或在另行确认一次外部模型用量后执行受控重跑。
+**边界**：本次不自动重写历史分析结果，也不为当前失败条目静默发起新的付费请求；既有原始响应与历史归一化审计保持不变。
+**关联**：`src/threadsnap/sentiment.py`、`src/threadsnap/poc/sentiment.py`、`tests/test_backend.py`、`tests/test_sentiment_poc.py`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/sentiment-analysis.md`
+
+---
+
+## 2026-08-23 — 圈子页面证据与负面框选成果业务实现
+**总目标**：把实际圈子来源的冻结页面证据、详情快照、当前有效舆情结论和单圈负面框选成果贯通为可追溯、可补提合并、可版本化的批次详情能力。
+**状态**：✅ Windows 业务开发与本地验收完成；目标 CentOS Stream 10 的 2000 卡片、离线依赖、备份恢复和发布验收仍是上线门禁。
+**干到哪里了**：
+- [x] 新增两次 Alembic 迁移以及页面证据、页面卡片、稳定成果组、贡献关系、不可变版本、有序分片和版本卡片审计模型；原图、清单、成果、ZIP 和逐文件 SHA-256 统一进入 `data/screenshots/`。
+- [x] 懂车帝生产采集器按任务精确来源 URL 使用资源开启的 Patchright 冻结同一 DOM，等待字体、全部卡片图片终态及连续三次布局/身份稳定，再一次取得清单、卡片矩形和原始全页 PNG；平台捕获通道串行，详情按平台内部并发有界批量执行并保持冻结顺序。
+- [x] 重启续跑先校验原图和清单哈希并复用冻结候选；URL 清单不进入截图链路，历史批次显示 `not_collected`，最新回复与最新发布保持独立来源，正常零结果和错误零条分离。
+- [x] 原批次与补提按关联链和来源身份形成稳定成果组；只拼接实际入库卡片，逐卡增加贡献批次和捕获时间，全部当前有效结论齐备后生成，负面整卡红框，超过 30,000 px 时按卡片边界无损分片并提供一个 ZIP。
+- [x] 补提、人工修正、恢复 AI、后续 AI 结论变化和贡献批次删除都会生成或重建当前版本；历史版本保留，最后一个贡献删除后清理成果组；成果状态不改写提取与舆情状态。
+- [x] 页面与内部 API 已提供成果组、原始证据、分片、打包下载和本地重建；批次详情复用“链接结果 / 页面截图”页签，支持成果/原图切换和接近全屏查看，提取列表显示紧凑截图摘要，没有新增顶级导航。
+- [x] 生产采集器真实抓取最新回复与最新发布各 30 条，均为 30/30 唯一 ID，PNG 解码尺寸分别为 `1425×10575`、`1425×10680`；证据见 `artifacts/runtime/circle-screenshot-business-20260823/live-capture/verification.json`。
+- [x] 隔离业务夹具真实渲染 3 条、2 条负面、1 个成果分片；页面卡片、成果弹层和原始全页切换均通过且图片完成解码，证据见 `artifacts/runtime/circle-screenshot-business-20260823/ui-verification.json` 与三张 UI PNG。
+- [x] 100 项后端测试、Ruff、前端 TypeScript/Vite 生产构建、正式数据库迁移、后端 `/health` 和 Vite `/health` 代理均通过。
+**下一步**：把当前代码、Pillow 12.3.0 wheel 和既有 R9/R10 同分母输入组装进目标 Linux 离线包，执行真实页面捕获、2000 卡片分片/解码、备份恢复、贡献删除清理和回滚；通过后冻结跨平台单片上限并发布。
+**边界**：30,000 px 仍是 Windows 已验证候选上限；本次真实抓取只生成 Git 忽略的验收证据，没有创建业务批次或发送舆情模型请求。历史批次不补拍，现有业务快照保持不变。
+**关联**：`src/threadsnap/screenshots.py`、`src/threadsnap/collectors/dongchedi.py`、`src/threadsnap/worker.py`、`src/threadsnap/app.py`、`frontend/src/features/runs/run-detail-page.tsx`、`tests/test_screenshots.py`、`docs/chains/circle-screenshot-artifacts.md`
+
+---
+
 ## 2026-08-22 — 圈子页面证据 Windows PoC
 **总目标**：以真实圈子页面和 2000 卡片等价负载关闭页面清单、原始证据、补提成果、版本、分片及备份恢复的 Windows 可行性门禁。
 **状态**：✅ Windows R1～R10 当前范围全部通过；目标 Linux R9/R10 尚待同分母复测，业务实现尚未开始。

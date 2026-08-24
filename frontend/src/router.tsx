@@ -23,6 +23,7 @@ const runDetailRoute = createRoute({
   path: '/runs/$runId',
   component: lazyRouteComponent(() => import('@/features/runs/run-detail-page'), 'RunDetailPage'),
   validateSearch: (search: Record<string, unknown>) => ({
+    view: oneOf(search.view, ['links', 'screenshots'] as const),
     page: optionalPositiveInteger(search.page),
     pageSize: oneOfNumber(search.pageSize, [20, 50, 100] as const),
     title: text(search.title),

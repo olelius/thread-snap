@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import socket
 import threading
 from copy import deepcopy
@@ -58,8 +59,8 @@ MODEL_PROFILES = {
         "input_mode": "text_only",
     },
 }
-HOSTED_PROMPT_VERSION = "v2"
-DEEPSEEK_PROMPT_VERSION = "deepseek-text-v2"
+HOSTED_PROMPT_VERSION = "v4-clean-correction"
+DEEPSEEK_PROMPT_VERSION = "deepseek-text-v4-bounded-recovery"
 LOCAL_PIPELINE_VERSION = "local-v1"
 CATEGORIES = (
     "product_complaint",
@@ -344,140 +345,36 @@ def validate_modality_identity(feedback: SentimentFeedback, post: PostSnapshot) 
             raise ValueError(f"{name}.items 的 URL 哈希与实际输入不一致")
 
 
-def normalize_feedback_payload(
+def complete_text_only_feedback_payload(
     payload: dict[str, Any], post: PostSnapshot
-) -> tuple[dict[str, Any], bool]:
-    """只修复可由输入契约唯一确定的提供方 JSON 形状，不改写观点字段。"""
+) -> dict[str, Any]:
+    """严格校验文字模型负责的形状，再补充后端掌握的未请求媒体事实。"""
 
-    normalized = deepcopy(payload)
-    changed = False
-    matched_subjects = normalized.get("matched_subjects")
-    if isinstance(matched_subjects, list):
-        normalized_subjects: list[Any] = []
-        for item in matched_subjects:
-            if isinstance(item, dict):
-                value = item.get("product") or item.get("brand")
-                if isinstance(value, str) and value.strip():
-                    normalized_subjects.append(value.strip())
-                    changed = True
-                    continue
-            normalized_subjects.append(item)
-        normalized["matched_subjects"] = normalized_subjects
-    if normalized.get("sentiment") == "non_negative":
-        if normalized.get("primary_category") is not None:
-            normalized["primary_category"] = None
-            changed = True
-        if normalized.get("secondary_categories"):
-            normalized["secondary_categories"] = []
-            changed = True
-    modalities = normalized.get("modalities")
-    if not isinstance(modalities, dict):
-        return normalized, changed
+    expected_root = set(SentimentFeedback.model_fields)
+    if set(payload) != expected_root:
+        missing = sorted(expected_root - set(payload))
+        extra = sorted(set(payload) - expected_root)
+        raise ValueError(f"根字段不符合合同：missing={missing}, extra={extra}")
+    modalities = payload.get("modalities")
+    if not isinstance(modalities, dict) or set(modalities) != {"text"}:
+        observed = sorted(modalities) if isinstance(modalities, dict) else type(modalities).__name__
+        raise ValueError(f"文字模型 modalities 只允许 text，实际为：{observed}")
 
-    text = modalities.get("text")
-    if isinstance(text, dict):
-        if isinstance(text.get("evidence"), str):
-            text["evidence"] = [text["evidence"]]
-            changed = True
-        if text.get("status") == "present":
-            text["status"] = "processed"
-            changed = True
-
-    expected = {
-        "image": [stable_url_hash(value) for value in deduplicate_media_urls(post.image_urls)],
-        "video_visual": [
-            stable_url_hash(value) for value in deduplicate_media_urls(post.video_urls)
-        ],
-        "video_audio": [
-            stable_url_hash(value) for value in deduplicate_media_urls(post.video_urls)
-        ],
-    }
-    for name, expected_hashes in expected.items():
-        coverage = modalities.get(name)
-        if not isinstance(coverage, dict):
-            continue
-        if not expected_hashes and coverage.get("status") == "skipped":
-            coverage["status"] = "absent"
-            changed = True
-        elif (
-            expected_hashes
-            and coverage.get("status") == "present"
-            and coverage.get("processed_count") == coverage.get("expected_count")
-        ):
-            coverage["status"] = "processed"
-            changed = True
-        items = coverage.get("items")
-        if not isinstance(items, list):
-            continue
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            if isinstance(item.get("evidence"), str):
-                item["evidence"] = [item["evidence"]]
-                changed = True
-            # 提供方偶尔把“已处理且与主题相关”写成 relevant。覆盖层只表达
-            # 是否成功处理；当汇总状态和计数均明确为已处理时可唯一归一为 processed。
-            if (
-                item.get("status") in {"relevant", "present"}
-                and coverage.get("status") == "processed"
-                and coverage.get("processed_count") == coverage.get("expected_count")
-            ):
-                item["status"] = "processed"
-                changed = True
-        if not expected_hashes or len(items) != len(expected_hashes):
-            continue
-        indexes = {
-            item.get("input_index")
-            for item in items
-            if isinstance(item, dict) and isinstance(item.get("input_index"), int)
-        }
-        if indexes == set(range(1, len(expected_hashes) + 1)):
-            for item in items:
-                item["input_index"] -= 1
-            changed = True
-            indexes = set(range(len(expected_hashes)))
-        # URL 哈希和输入数量均由后端掌握。模型只需用完整、不重复的索引关联
-        # 观点与依据；避免让模型抄写 64 位冗余标识成为任务成败条件。
-        if indexes == set(range(len(expected_hashes))):
-            for item in items:
-                expected_hash = expected_hashes[item["input_index"]]
-                if item.get("url_hash") != expected_hash:
-                    item["url_hash"] = expected_hash
-                    changed = True
-    return normalized, changed
-
-
-def normalize_text_only_feedback_payload(
-    payload: dict[str, Any], post: PostSnapshot
-) -> tuple[dict[str, Any], bool]:
-    """固定云端文字模型的媒体覆盖；模型未接收媒体，不能声称已经处理。"""
-
-    normalized, changed = normalize_feedback_payload(payload, post)
-    modalities = normalized.setdefault("modalities", {})
-    if not isinstance(modalities, dict):
-        return normalized, changed
-    text = modalities.get("text")
-    if isinstance(text, dict) and text.get("status") in {"analyzed", "completed"}:
-        # DeepSeek JSON Object 保证语法，不约束字段枚举。两种状态都明确表达
-        # 文字已经完成分析，可唯一归一为统一合同中的 processed。
-        text["status"] = "processed"
-        changed = True
+    completed = deepcopy(payload)
+    completed_modalities = completed["modalities"]
     counts = {
         "image": len(deduplicate_media_urls(post.image_urls)),
         "video_visual": len(deduplicate_media_urls(post.video_urls)),
         "video_audio": len(deduplicate_media_urls(post.video_urls)),
     }
     for name, count in counts.items():
-        expected = {
+        completed_modalities[name] = {
             "status": "not_requested" if count else "absent",
             "expected_count": count,
             "processed_count": 0,
             "items": [],
         }
-        if modalities.get(name) != expected:
-            modalities[name] = expected
-            changed = True
-    return normalized, changed
+    return completed
 
 
 def validate_public_https_base_url(value: str, *, resolve: bool) -> str:
@@ -642,6 +539,83 @@ def build_request(
     return body
 
 
+def build_output_correction_request(
+    body: dict[str, Any],
+    raw_response: str,
+    exc: Exception,
+    *,
+    input_mode: str,
+    contract: str | None = None,
+) -> dict[str, Any]:
+    """用干净上下文反馈具体错误；只允许一次重新生成。"""
+
+    if isinstance(exc, ValidationError):
+        detail = json.dumps(
+            exc.errors(include_url=False, include_input=False),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+    else:
+        detail = f"{type(exc).__name__}: {exc}"
+    if contract is None:
+        modality_contract = (
+            "modalities 只能包含 text；text 只能包含 status 和 evidence"
+            if input_mode == "text_only"
+            else "modalities 必须且只能包含 text、image、video_visual、video_audio"
+        )
+        contract = (
+            "根对象必须且只能包含 subject_relevance、matched_subjects、sentiment、"
+            "primary_category、secondary_categories、modalities、summary；"
+            f"{modality_contract}。"
+        )
+    # 不把错误候选作为 assistant 消息再次喂给模型。真实故障已经证明低温度下
+    # 这种对话历史会逐字复现同一坏 JSON；这里只保留候选哈希供审计关联。
+    response_hash = hashlib.sha256(raw_response.encode("utf-8")).hexdigest()
+    correction = deepcopy(body)
+    correction["messages"] = [
+        *list(body.get("messages") or []),
+        {
+            "role": "user",
+            "content": (
+                "上一次响应未通过严格 JSON Schema 校验，请从最初输入重新生成。\n"
+                f"错误候选 SHA-256：{response_hash}\n"
+                f"具体错误：{detail[:4000]}\n"
+                "不要复述或续写错误候选，不要解释错误，不要使用 Markdown，不要添加任何额外字段。\n"
+                f"{contract}\n"
+                "所有字段、层级、类型、枚举、数组和媒体身份必须严格满足最初给出的合同。"
+                "只返回一个完整、可直接解析的标准 JSON 对象。"
+            ),
+        },
+    ]
+    return correction
+
+
+def repair_missing_modalities_closure(raw_response: str) -> dict[str, Any]:
+    """只修复一个可证明的 ``modalities`` 结束括号遗漏。
+
+    提供方曾正常结束流却返回 ``...\"text\": {...},\"summary\":...}``，使
+    ``summary`` 落入 ``modalities`` 且根对象未闭合。本函数只构造一个候选：在
+    根级 ``summary`` 前补一个右花括号；候选必须立即成为字段集合精确匹配的
+    JSON 对象，后续仍需通过完整 Pydantic 与业务关系校验。
+    """
+
+    matches = list(re.finditer(r',\s*"summary"\s*:', raw_response))
+    if len(matches) != 1:
+        raise ValueError("结构修复只接受一个 summary 字段候选")
+    marker = matches[0]
+    candidate = raw_response[: marker.start()] + "}" + raw_response[marker.start() :]
+    payload = json.loads(candidate)
+    if not isinstance(payload, dict):
+        raise ValueError("结构修复结果不是 JSON 对象")
+    expected_root = set(SentimentFeedback.model_fields)
+    if set(payload) != expected_root:
+        raise ValueError("结构修复后的根字段不符合舆情合同")
+    modalities = payload.get("modalities")
+    if not isinstance(modalities, dict) or "summary" in modalities:
+        raise ValueError("结构修复后 summary 仍未回到根对象")
+    return payload
+
+
 class SentimentModelClient:
     """窄 OpenAI 兼容客户端：不跟随重定向，不自动重试。"""
 
@@ -800,6 +774,7 @@ def _failed_attempt(
     *,
     attempt: int,
     exc: Exception,
+    error_code: str,
     raw_response: str,
     request_id: str | None,
     usage: dict[str, Any] | None,
@@ -809,7 +784,7 @@ def _failed_attempt(
 
     return {
         "attempt": attempt,
-        "error_code": "MODEL_STREAM_INCOMPLETE",
+        "error_code": error_code,
         "error_message": f"{type(exc).__name__}: {exc}"[:2000],
         "raw_response": raw_response or None,
         "provider_request_id": request_id,
@@ -999,10 +974,25 @@ class SentimentService:
                 duration_ms = self.local_analyzer.validate(subject)
                 request_id = None
             else:
-                text, _usage, request_id, duration_ms = self.client.request(base_url, api_key, body)
-                parsed, _strict, _recovered = parse_feedback_text(text)
-                if parsed.get("ok") is not True:
-                    raise ValueError("测试响应缺少 ok=true")
+                for output_attempt in range(2):
+                    text, _usage, request_id, duration_ms = self.client.request(
+                        base_url, api_key, body
+                    )
+                    try:
+                        parsed, _strict, _recovered = parse_feedback_text(text)
+                        if set(parsed) != {"ok"} or parsed.get("ok") is not True:
+                            raise ValueError("测试响应必须且只能包含 ok=true")
+                        break
+                    except (ValueError, json.JSONDecodeError) as exc:
+                        if output_attempt:
+                            raise
+                        body = build_output_correction_request(
+                            body,
+                            text,
+                            exc,
+                            input_mode=profile["input_mode"],
+                            contract="根对象必须且只能包含 ok，且 ok 的值必须为 true。",
+                        )
         except (httpx.HTTPError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
             with self.factory.begin() as db:
                 config = db.get(SentimentConfig, config_id)
@@ -1396,6 +1386,7 @@ class SentimentWorker:
         retry_count = 0
         transport_retries = 0
         incomplete_retries = 0
+        output_correction_retries = 0
         while True:
             if not self._wait_for_rate_limit():
                 return False
@@ -1411,6 +1402,7 @@ class SentimentWorker:
                             _failed_attempt(
                                 attempt=retry_count + 1,
                                 exc=exc,
+                                error_code="MODEL_STREAM_INCOMPLETE",
                                 raw_response=raw,
                                 request_id=exc.request_id,
                                 usage=exc.usage,
@@ -1461,28 +1453,59 @@ class SentimentWorker:
             try:
                 payload, _strict, recovered = parse_feedback_text(raw)
                 if analysis_profile["input_mode"] == "text_only":
-                    payload, normalized = normalize_text_only_feedback_payload(payload, post)
-                else:
-                    payload, normalized = normalize_feedback_payload(payload, post)
+                    payload = complete_text_only_feedback_payload(payload, post)
                 feedback = SentimentFeedback.model_validate(payload)
                 validate_modality_identity(feedback, post)
             except (ValueError, json.JSONDecodeError, ValidationError) as exc:
-                if _is_truncated_json_error(exc, raw) and incomplete_retries < 1:
+                if output_correction_retries < 1:
                     attempt_failures.append(
                         _failed_attempt(
                             attempt=retry_count + 1,
                             exc=exc,
+                            error_code="MODEL_RESPONSE_ERROR",
                             raw_response=raw,
                             request_id=request_id,
                             usage=usage,
                             duration_ms=duration_ms,
                         )
                     )
-                    incomplete_retries += 1
+                    body = build_output_correction_request(
+                        body,
+                        raw,
+                        exc,
+                        input_mode=analysis_profile["input_mode"],
+                    )
+                    output_correction_retries += 1
                     retry_count += 1
                     if self.stop_event.wait(1.0):
                         return False
                     continue
+                attempt_failures.append(
+                    _failed_attempt(
+                        attempt=retry_count + 1,
+                        exc=exc,
+                        error_code="MODEL_RESPONSE_ERROR",
+                        raw_response=raw,
+                        request_id=request_id,
+                        usage=usage,
+                        duration_ms=duration_ms,
+                    )
+                )
+                if analysis_profile["input_mode"] == "text_only":
+                    try:
+                        payload = repair_missing_modalities_closure(raw)
+                        payload = complete_text_only_feedback_payload(payload, post)
+                        feedback = SentimentFeedback.model_validate(payload)
+                        validate_modality_identity(feedback, post)
+                    except (ValueError, json.JSONDecodeError, ValidationError):
+                        pass
+                    else:
+                        recovered = True
+                        status = self._coverage_status(feedback)
+                        result = (
+                            "unrelated" if not feedback.subject_relevance else feedback.sentiment
+                        )
+                        break
                 self._record_failure(
                     analysis_id,
                     post_id,
@@ -1490,7 +1513,6 @@ class SentimentWorker:
                     raw_response=raw,
                     retry_count=retry_count,
                     attempt_failures=attempt_failures,
-                    stream_incomplete=_is_truncated_json_error(exc, raw),
                 )
                 return True
             status = self._coverage_status(feedback)
@@ -1504,7 +1526,7 @@ class SentimentWorker:
             result=result,
             raw=raw,
             attempt_failures=attempt_failures,
-            locally_recovered=recovered or normalized,
+            locally_recovered=recovered,
             request_id=request_id,
             usage=usage,
             retry_count=retry_count,

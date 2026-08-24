@@ -257,29 +257,13 @@ def parse_sse_lines_with_completion(
 
 
 def parse_feedback_text(text: str) -> tuple[dict[str, Any], bool, bool]:
-    """解析模型 JSON，并标记是否仅通过移除 Markdown 围栏恢复。"""
+    """严格解析模型 JSON；围栏、前后说明和非对象结果均视为违约。"""
 
-    stripped = text.strip()
-    try:
-        value = json.loads(stripped)
-        if not isinstance(value, dict):
-            raise ValueError("模型响应不是 JSON 对象")
-        return value, True, False
-    except json.JSONDecodeError as strict_error:
-        candidate = stripped
-        if candidate.startswith("```json"):
-            candidate = candidate[7:].lstrip()
-        elif candidate.startswith("```"):
-            candidate = candidate[3:].lstrip()
-        decoder = json.JSONDecoder()
-        try:
-            value, end = decoder.raw_decode(candidate)
-        except json.JSONDecodeError:
-            raise strict_error
-        remainder = candidate[end:].strip()
-        if remainder != "```" or not isinstance(value, dict):
-            raise strict_error
-        return value, False, True
+    value = json.loads(text)
+    if not isinstance(value, dict):
+        raise ValueError("模型响应不是 JSON 对象")
+    # 保留三元返回形状供既有 PoC 记录读取；严格合同下不再存在本地恢复。
+    return value, True, False
 
 
 def reserve_api_call(ledger_path: Path, round_id: str, maximum: int) -> int:
