@@ -12,11 +12,13 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
+from PIL import Image
 from sqlalchemy import func, select
 
 from threadsnap.app import create_app
 from threadsnap.config import Settings
 from threadsnap.models import ExtractionRun
+from threadsnap.reputation_dongchedi import ReputationPageResult, normalize_series_url
 
 
 class ReputationInspectionTest(unittest.TestCase):
@@ -54,7 +56,7 @@ class ReputationInspectionTest(unittest.TestCase):
         capability = self.client.get("/api/v1/reputation/capabilities").json()
         self.assertTrue(capability["reputation_synthetic_runs"])
         self.assertEqual(len(capability["scenarios"]), 3)
-        self.assertEqual(capability["real_adapter_status"], "not_configured")
+        self.assertEqual(capability["real_adapter_status"], "available")
 
         disabled = Settings(
             database_url=f"sqlite:///{(self.root / 'production.db').as_posix()}",
@@ -66,9 +68,7 @@ class ReputationInspectionTest(unittest.TestCase):
         )
         with TestClient(create_app(disabled)) as client:
             self.assertFalse(
-                client.get("/api/v1/reputation/capabilities").json()[
-                    "reputation_synthetic_runs"
-                ]
+                client.get("/api/v1/reputation/capabilities").json()["reputation_synthetic_runs"]
             )
             response = client.post(
                 "/api/v1/reputation/test-runs",
@@ -87,9 +87,7 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual(month_end["required_evidence_count"], 27)
         self.assertEqual(daily["status"], "partial_success")
         tones = {
-            metric["tone"]
-            for result in daily["results"]
-            for metric in result["metrics"].values()
+            metric["tone"] for result in daily["results"] for metric in result["metrics"].values()
         }
         self.assertEqual(tones, {"positive", "negative", "neutral"})
         self.assertEqual(
@@ -115,7 +113,9 @@ class ReputationInspectionTest(unittest.TestCase):
         workbook = load_workbook(xlsx_path)
         sheet = workbook["口碑巡检"]
         self.assertEqual(sheet.max_row, 28)
-        fills = {sheet.cell(row, column).fill.fgColor.rgb for row in range(2, 29) for column in (5, 6, 7)}
+        fills = {
+            sheet.cell(row, column).fill.fgColor.rgb for row in range(2, 29) for column in (5, 6, 7)
+        }
         self.assertTrue(any(str(value).endswith("E2F0D9") for value in fills))
         self.assertTrue(any(str(value).endswith("F4CCCC") for value in fills))
         self.assertGreater(len(sheet._images), 0)
@@ -160,8 +160,10 @@ class ReputationInspectionTest(unittest.TestCase):
                         "role": "focus" if focus else "competitor",
                         "role_order": order,
                         "platform_code": "dongchedi",
-                        "platform_vehicle_id": f"platform-{index + 1:02d}",
-                        "platform_url": f"https://example.test/{index + 1}",
+                        "platform_vehicle_id": str(10000 + index),
+                        "platform_url": (
+                            f"https://www.dongchedi.com/auto/series/score/{10000 + index}-x-x-x-x-x"
+                        ),
                         "platform_display_name": f"页面车型{index + 1:02d}",
                     }
                 )
@@ -208,6 +210,128 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual(save.status_code, 400)
         after = self.client.get("/api/v1/reputation/scope").json()
         self.assertEqual(before["revision"], after["revision"])
+
+    def test_real_mapping_validation_binds_live_metrics_and_evidence(self) -> None:
+        csv_path = self.root / "real-scope.csv"
+        headers = [
+            "schema_version",
+            "seed_key",
+            "series_name",
+            "vehicle_name",
+            "role",
+            "role_order",
+            "platform_code",
+            "platform_vehicle_id",
+            "platform_url",
+            "platform_display_name",
+        ]
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=headers)
+            writer.writeheader()
+            for index in range(27):
+                focus = index < 14
+                platform_id = str(20000 + index)
+                writer.writerow(
+                    {
+                        "schema_version": "reputation-scope-v1",
+                        "seed_key": f"real-{index + 1:02d}",
+                        "series_name": f"车系{index // 5 + 1}",
+                        "vehicle_name": f"车型{index + 1:02d}",
+                        "role": "focus" if focus else "competitor",
+                        "role_order": index + 1 if focus else index - 13,
+                        "platform_code": "dongchedi",
+                        "platform_vehicle_id": platform_id,
+                        "platform_url": (
+                            f"https://www.dongchedi.com/auto/series/score/{platform_id}-x-x-x-x-x"
+                        ),
+                        "platform_display_name": f"页面车型{index + 1:02d}",
+                    }
+                )
+        scope = self.client.app.state.container.reputation.initialize_scope_csv(csv_path)
+        self.client.app.state.container.session_store.import_state(
+            "dongchedi",
+            {
+                "cookies": [
+                    {
+                        "name": "fixture",
+                        "value": "session",
+                        "domain": ".dongchedi.com",
+                        "path": "/",
+                    }
+                ]
+            },
+        )
+
+        class FakeAdapter:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def validate_sync(self, targets, output_dir):
+                output_dir.mkdir(parents=True)
+                values = []
+                for index, target in enumerate(targets):
+                    target_dir = output_dir / target.vehicle_id
+                    target_dir.mkdir()
+                    full = target_dir / "full.png"
+                    metric = target_dir / "metric.png"
+                    Image.new("RGB", (800, 1200), "white").save(full)
+                    Image.new("RGB", (600, 240), "white").save(metric)
+                    values.append(
+                        ReputationPageResult(
+                            vehicle_id=target.vehicle_id,
+                            platform_vehicle_id=target.platform_vehicle_id,
+                            mapping_hash=target.mapping_hash,
+                            final_url=target.platform_url,
+                            actual_name=target.platform_display_name,
+                            score_raw="3.80",
+                            rank_raw="4",
+                            volume_raw=str(500 + index),
+                            rank_scope="同级车评分",
+                            measurements=[{"stable": True}] * 3,
+                            full_page_path=full,
+                            metric_region_path=metric,
+                            full_page_sha256=hashlib.sha256(full.read_bytes()).hexdigest(),
+                            metric_region_sha256=hashlib.sha256(metric.read_bytes()).hexdigest(),
+                            width=800,
+                            height=1200,
+                            metric_rect={"x": 0, "y": 0, "width": 600, "height": 240},
+                            duration_ms=100,
+                        )
+                    )
+                return values
+
+        self.client.app.state.container.reputation.adapter_factory = FakeAdapter
+        response = self.client.post(
+            "/api/v1/reputation/scope/mapping-validations",
+            json={"revision": scope["revision"]},
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        validation = response.json()
+        self.assertEqual(validation["succeeded_count"], 27)
+        self.assertEqual(validation["failed_count"], 0)
+        verified = validation["scope"]["vehicles"]
+        self.assertTrue(
+            all(row["mappings"]["dongchedi"]["validation_status"] == "verified" for row in verified)
+        )
+        self.assertEqual(verified[0]["mappings"]["dongchedi"]["latest_metrics"]["volume"], "500")
+        evidence = self.client.get(validation["attempts"][0]["metric_region_url"])
+        self.assertEqual(evidence.status_code, 200)
+        self.assertEqual(evidence.headers["content-type"], "image/png")
+        publish = self.client.post(
+            "/api/v1/reputation/scope/publish",
+            json={
+                "revision": validation["scope"]["revision"],
+                "initial_review_acknowledged": True,
+            },
+        )
+        self.assertEqual(publish.status_code, 200, publish.text)
+        self.assertEqual(publish.json()["published_version"]["version"], 1)
+
+    def test_dongchedi_reputation_url_requires_matching_stable_id(self) -> None:
+        url = "https://www.dongchedi.com/auto/series/score/24729-x-x-x-x-x"
+        self.assertEqual(normalize_series_url(url, "24729"), url)
+        with self.assertRaisesRegex(Exception, "车型ID"):
+            normalize_series_url(url, "10170")
 
 
 if __name__ == "__main__":

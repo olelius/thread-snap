@@ -271,6 +271,38 @@ export type ReputationScopeMapping = {
   platform_url: string
   platform_display_name: string
   validation_status: 'unverified' | 'verified' | 'failed'
+  validation_run_id?: string
+  validation_attempt_id?: string
+  validated_at?: string
+  actual_name?: string
+  latest_metrics?: { score?: string; rank?: string; volume?: string; rank_scope?: string }
+  validation_error?: string
+}
+
+export type ReputationMappingValidation = {
+  id: string
+  platform_code: string
+  status: string
+  requested_count: number
+  succeeded_count: number
+  failed_count: number
+  concurrency: number
+  started_at: string
+  finished_at?: string
+  attempts: Array<{
+    id: string
+    vehicle_id: string
+    attempt_number: number
+    status: string
+    actual_name?: string
+    metrics: { score?: string; rank?: string; volume?: string; rank_scope?: string }
+    error_code?: string
+    error_message?: string
+    duration_ms?: number
+    full_page_url?: string
+    metric_region_url?: string
+  }>
+  scope: ReputationScope
 }
 
 export type ReputationScopeVehicle = {

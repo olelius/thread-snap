@@ -725,6 +725,65 @@ class ReputationScopeVersion(Base):
     published_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
 
 
+class ReputationMappingValidationRun(Base):
+    """一次映射验证操作的冻结目标集合与汇总。"""
+
+    __tablename__ = "reputation_mapping_validation_runs"
+    __table_args__ = (Index("ix_reputation_mapping_validation_runs_created", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    platform_code: Mapped[str] = mapped_column(String(32), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="running")
+    input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    concurrency: Mapped[int] = mapped_column(Integer, nullable=False)
+    requested_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    succeeded_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    started_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class ReputationMappingValidationAttempt(Base):
+    """单个车型映射的一次不可变真实页面验证尝试。"""
+
+    __tablename__ = "reputation_mapping_validation_attempts"
+    __table_args__ = (
+        UniqueConstraint(
+            "run_id",
+            "vehicle_id",
+            "attempt_number",
+            name="uq_reputation_mapping_validation_attempt",
+        ),
+        Index("ix_reputation_mapping_validation_attempts_run", "run_id", "vehicle_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("reputation_mapping_validation_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    vehicle_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    mapping_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    contract_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    adapter_version: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    actual_name: Mapped[str | None] = mapped_column(String(160))
+    final_url: Mapped[str | None] = mapped_column(Text)
+    metrics: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    gate_results: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    full_page_path: Mapped[str | None] = mapped_column(Text)
+    metric_region_path: Mapped[str | None] = mapped_column(Text)
+    full_page_sha256: Mapped[str | None] = mapped_column(String(64))
+    metric_region_sha256: Mapped[str | None] = mapped_column(String(64))
+    error_code: Mapped[str | None] = mapped_column(String(64))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    finished_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+
+
 class ReputationRun(Base):
     """与帖子提取批次隔离的口碑巡检运行。"""
 
