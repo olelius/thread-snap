@@ -127,7 +127,8 @@ class ReputationInspectionTest(unittest.TestCase):
             manifest = json.loads(bundle.read("manifest.json"))
             checksums = bundle.read("SHA256SUMS").decode("utf-8").splitlines()
             self.assertEqual(len(manifest["items"]), 6)
-            self.assertEqual(len(checksums), 12)
+            self.assertEqual(len(checksums), 6)
+            self.assertEqual(manifest["schema_version"], "reputation-evidence-region-v1")
             digest, name = checksums[0].split("  ", 1)
             self.assertEqual(hashlib.sha256(bundle.read(name)).hexdigest(), digest)
 
@@ -333,6 +334,16 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual(acceptance["status"], "success")
         self.assertEqual(len(acceptance["results"]), 27)
         self.assertEqual(acceptance["complete_evidence_count"], 27)
+        compacted = self.client.app.state.container.reputation.compact_region_evidence()
+        self.assertGreaterEqual(compacted["validation_attempts"], 27)
+        self.assertGreaterEqual(compacted["run_evidence"], 27)
+        refreshed = self.client.get(f"/api/v1/reputation/runs/{acceptance['id']}").json()
+        run_evidence = refreshed["results"][0]["evidence"]
+        self.assertEqual(run_evidence["full_page_sha256"], run_evidence["metric_region_sha256"])
+        self.assertEqual(
+            self.client.get(run_evidence["full_page_url"]).content,
+            self.client.get(run_evidence["metric_region_url"]).content,
+        )
 
     def test_dongchedi_reputation_url_requires_matching_stable_id(self) -> None:
         url = "https://www.dongchedi.com/auto/series/score/24729-x-x-x-x-x"
