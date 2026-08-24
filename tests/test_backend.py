@@ -59,6 +59,8 @@ from threadsnap.sentiment import (
     build_request,
     complete_deepseek_tool_payload,
     deduplicate_media_urls,
+    recover_deepseek_tool_payload,
+    repair_deepseek_tool_json,
     sentiment_input_hash,
     validate_modality_identity,
 )
@@ -753,6 +755,7 @@ class ApiAndConfigTests(AppCase):
 
         def handler(request: httpx.Request) -> httpx.Response:
             observed.append(request)
+            self.assertEqual(30.0, request.extensions["timeout"]["read"])
             content = "\n\n".join(
                 [
                     'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"submit_probe","arguments":"{\\"ok\\":"}}]},"finish_reason":null}]}',
@@ -1014,6 +1017,9 @@ class ApiAndConfigTests(AppCase):
                     "summary": "文字内容反馈风云A9车机卡顿，情感为负面。",
                 }
                 response_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+                response_text = response_text.replace(
+                    '"sentiment":"negative"', '"sentiment":negative', 1
+                )
                 return (
                     response_text,
                     {"prompt_tokens": 80, "completion_tokens": 60, "total_tokens": 140},
@@ -1082,6 +1088,10 @@ class ApiAndConfigTests(AppCase):
             task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
             assert task is not None
             self.container.worker._store_records(db, task, [record])
+            analysis = db.scalar(select(SentimentAnalysis))
+            assert analysis is not None
+            analysis.error_code = "MODEL_RESPONSE_ERROR"
+            analysis.error_message = "旧失败"
 
         def unexpected_media_resolution(*_args, **_kwargs):
             raise AssertionError("DeepSeek 文字模型不应解析视频播放地址")
@@ -1116,8 +1126,11 @@ class ApiAndConfigTests(AppCase):
             self.assertEqual("not_requested", analysis.modalities["video_visual"]["status"])
             self.assertEqual("not_requested", analysis.modalities["video_audio"]["status"])
             self.assertEqual(0, analysis.retry_count)
-            self.assertFalse(analysis.locally_recovered)
-            self.assertEqual([], analysis.attempt_failures)
+            self.assertTrue(analysis.locally_recovered)
+            self.assertEqual(1, len(analysis.attempt_failures))
+            self.assertIn("JSONDecodeError", analysis.attempt_failures[0]["error_message"])
+            self.assertIsNone(analysis.error_code)
+            self.assertIsNone(analysis.error_message)
 
         latest = self.client.get("/api/v1/sentiment/config").json()
         qwen_restored = self.client.put(
@@ -1245,6 +1258,50 @@ class ApiAndConfigTests(AppCase):
                 }
                 with self.assertRaises(ValidationError):
                     complete_deepseek_tool_payload(payload, post)
+
+    def test_deepseek_schema_guided_repair_covers_structure_error_family(self) -> None:
+        """通用修复覆盖纯结构变体，并拒绝语义改写或 Schema 外取值。"""
+
+        post = PostSnapshot(title="奇瑞", content="只提及品牌。")
+        payload = {
+            "subject_relevance": True,
+            "matched_subjects": ["奇瑞"],
+            "sentiment": "non_negative",
+            "primary_category": None,
+            "secondary_categories": [],
+            "evidence": ["只提及品牌。"],
+            "summary": "内容为中性品牌提及。",
+        }
+        raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+        malformed = {
+            "unquoted_enum": raw.replace('"non_negative"', "non_negative", 1),
+            "missing_comma": raw.replace(',"primary_category"', '"primary_category"', 1),
+            "missing_array_closure": raw.replace('"secondary_categories":[]', '"secondary_categories":[', 1),
+            "trailing_comma": raw[:-1] + ",}",
+            "unquoted_key": raw.replace('"summary":', "summary:", 1),
+        }
+        for name, candidate in malformed.items():
+            with self.subTest(name=name):
+                try:
+                    json.loads(candidate)
+                except json.JSONDecodeError as exc:
+                    completed = recover_deepseek_tool_payload(candidate, post, exc.pos)
+                else:
+                    self.fail("测试输入必须是非法 JSON")
+                feedback = SentimentFeedback.model_validate(completed)
+                self.assertEqual("non_negative", feedback.sentiment)
+                self.assertEqual("内容为中性品牌提及。", feedback.summary)
+
+        semantic_change = "result: " + raw
+        with self.assertRaisesRegex(ValueError, "语义字符"):
+            repair_deepseek_tool_json(semantic_change)
+
+        unsupported_enum = raw.replace('"non_negative"', "neutral", 1)
+        with self.assertRaisesRegex(ValueError, "没有唯一完整合同候选"):
+            try:
+                json.loads(unsupported_enum)
+            except json.JSONDecodeError as exc:
+                recover_deepseek_tool_payload(unsupported_enum, post, exc.pos)
 
     def test_deepseek_strict_tool_correction_keeps_schema_and_compact_error(self) -> None:
         """关系纠正继续复用严格工具，不回退到 JSON Object 或错误候选正文。"""
