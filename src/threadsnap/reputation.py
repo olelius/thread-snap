@@ -63,9 +63,7 @@ FIXTURE_VERSION = "reputation-synthetic-v1"
 PLATFORM_CODE = "dongchedi"
 PLATFORM_NAME = "懂车帝"
 INSPECTION_TIME = time(12, 0)
-REPORT_TIME = time(12, 30)
 INSPECTION_TIME_TEXT = "12:00:00"
-REPORT_TIME_TEXT = "12:30:00"
 SCENARIOS: dict[str, dict[str, str]] = {
     "baseline_initialization": {
         "name": "基线初始化",
@@ -787,7 +785,7 @@ class ReputationService:
             return len(rows) + len(reports)
 
     def check_schedule(self, now: datetime | None = None) -> dict[str, Any]:
-        """对账固定12:00巡检、跨日漏触发水位和12:30汇报时点。"""
+        """对账固定12:00巡检、跨日漏触发水位和终态汇报。"""
 
         current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         zone = ZoneInfo(self.settings.timezone)
@@ -862,9 +860,8 @@ class ReputationService:
                                 & (ReputationRun.report_attempt_count < 2)
                             ),
                         ),
-                        ReputationRun.report_planned_at <= current,
                     )
-                    .order_by(ReputationRun.report_planned_at, ReputationRun.id)
+                    .order_by(ReputationRun.finished_at, ReputationRun.id)
                 ).all()
             )
         return {
@@ -971,9 +968,6 @@ class ReputationService:
                 else schedule_type
             )
             run_number = f"RP-S-{day:%Y%m%d}-{run_id[-4:].upper()}"
-            report_planned_at = datetime.combine(
-                day, REPORT_TIME, tzinfo=zone
-            ).astimezone(timezone.utc)
             run = ReputationRun(
                 id=run_id,
                 number=run_number,
@@ -986,7 +980,7 @@ class ReputationService:
                 scope_version_id=version.id,
                 idempotency_key=idempotency_key,
                 planned_at=planned_at,
-                report_planned_at=report_planned_at,
+                report_planned_at=None,
                 delayed=current > planned_at + timedelta(minutes=1),
                 concurrency=max(1, min(int(platform.internal_concurrency), 8)),
                 baseline_date=baseline_date,
@@ -1366,7 +1360,7 @@ class ReputationService:
             )
             if event:
                 event.status = run.status
-                event.message = "正式口碑巡检已到达终态，等待12:30汇报。"
+                event.message = "正式口碑巡检已到达终态，正在生成汇报。"
         if self.event_publisher:
             self.event_publisher("reputation.run.changed", run_id, status=run.status)
         return self.get_run(run_id)
@@ -1421,9 +1415,6 @@ class ReputationService:
                     status_code=409,
                 )
             failed_only = current_run.status == "failed"
-            before_planned = bool(
-                current_run.report_planned_at and current < current_run.report_planned_at
-            )
             already_success = bool(
                 current_run.report_status == "success"
                 and current_run.report_path
@@ -1436,13 +1427,21 @@ class ReputationService:
                 run = db.get(ReputationRun, run_id)
                 run.report_status = "not_generated"
                 run.report_generated_at = current
-            return self.get_run(run_id)
-        if before_planned:
+                event = db.scalar(
+                    select(ReputationScheduleEvent).where(
+                        ReputationScheduleEvent.run_id == run_id
+                    )
+                )
+                if event:
+                    event.message = "正式口碑巡检全部失败，未生成普通排名汇报。"
             return self.get_run(run_id)
         if already_success:
             return self.get_run(run_id)
         with self.sessions.begin() as db:
             run = db.get(ReputationRun, run_id)
+            # 旧版本可能给尚未生成的批次保留固定汇报时点；终态触发合同
+            # 生效后，首次生成时清除该等待门槛，只记录实际生成时间。
+            run.report_planned_at = None
             run.report_status = "generating"
             run.report_attempt_count += 1
         with self.sessions() as db:
@@ -1492,6 +1491,11 @@ class ReputationService:
             run.report_generated_at = current
             run.report_status = "success"
             run.error_message = None
+            event = db.scalar(
+                select(ReputationScheduleEvent).where(ReputationScheduleEvent.run_id == run_id)
+            )
+            if event:
+                event.message = "正式口碑巡检已到达终态，汇报已生成。"
         if self.event_publisher:
             self.event_publisher("reputation.run.changed", run_id, status="report_success")
         return self.get_run(run_id)
@@ -1600,7 +1604,7 @@ class ReputationService:
             return {
                 "timezone": self.settings.timezone,
                 "inspection_time": INSPECTION_TIME_TEXT,
-                "report_time": REPORT_TIME_TEXT,
+                "report_time": None,
                 "last_event": {
                     "planned_date": event.planned_date,
                     "run_type": event.run_type,

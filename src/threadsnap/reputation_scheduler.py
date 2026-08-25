@@ -1,4 +1,4 @@
-"""固定口碑日程、正式执行和12:30产物的单进程协调器。"""
+"""固定口碑日程、正式执行和终态产物的单进程协调器。"""
 
 from __future__ import annotations
 
@@ -61,12 +61,7 @@ class ReputationCoordinator:
             if not self.service.can_execute_official(run_id):
                 continue
             run = self.service.execute_run(run_id)
-            report_planned = run.get("report_planned_at")
-            if (
-                run.get("source_type") == "scheduled"
-                and report_planned
-                and current >= datetime.fromisoformat(report_planned).astimezone(timezone.utc)
-            ):
+            if run.get("source_type") == "scheduled":
                 self.service.generate_report(run_id, datetime.now(timezone.utc))
         current = datetime.now(timezone.utc) if now is None else current
         refreshed = self.service.check_schedule(current)

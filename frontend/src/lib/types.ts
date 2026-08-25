@@ -250,7 +250,7 @@ export type ReputationRun = {
   parent_run_id?: string
   scope_version_id?: string
   planned_at?: string
-  report_planned_at?: string
+  report_planned_at?: string | null
   report_generated_at?: string
   delayed: boolean
   concurrency?: number
@@ -281,7 +281,7 @@ export type ReputationRun = {
 export type ReputationSchedule = {
   timezone: string
   inspection_time: string
-  report_time: string
+  report_time: string | null
   last_event?: {
     planned_date: string
     run_type: 'daily' | 'month_end'

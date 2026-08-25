@@ -16,6 +16,20 @@
 
 ---
 
+## 2026-08-25 — 口碑汇报改为巡检终态立即生成
+**总目标**：取消没有业务价值的固定汇报等待时点，在正式巡检取得可靠终态后立即生成正文、TXT和XLSX。
+**状态**：✅ 终态触发汇报已部署，今天12:00真实批次的等待门槛已清除并成功补生成。
+**干到哪里了**：
+- [x] 12:00只负责创建正式巡检；协调器在同一执行轮取得成功、部分成功或失败终态后立即进入汇报生成，恢复轮询也会立即处理历史`waiting`或有重试预算的失败产物，不再比较独立汇报计划时点。
+- [x] 新批次`report_planned_at`保持空值，日程API保留兼容字段但返回`report_time=null`；前端日程改为“巡检完成后立即生成汇报”，详情移除“等待定时汇报”和计划生成时间文案。
+- [x] 已部署并重启后端；真实批次 `RP-S-20260825-5AF9` 在12:00:13终态，旧版12:30门槛已清除，于12:05:59成功生成TXT/XLSX，API确认`report_status=success`、`report_planned_at=null`，8000后端和5173代理健康均为`ok`。
+- [x] 新增协调器同一轮“执行→终态→汇报成功”回归；完整122项后端测试、Ruff、Python编译、`pip check`、前端生产构建（2467 modules）和`git diff --check`通过。Patchright真实前端确认新日程文案、汇报正文和TXT/XLSX入口可见，旧等待文案消失、控制台错误0，证据位于`artifacts/runtime/reputation-terminal-report-20260825/`。
+**下一步**：无。
+**边界**：汇报仍只读取终态冻结数据；运行中不生成半成品，全部失败仍按原合同只形成失败记录，证据ZIP继续按需生成且不阻塞汇报。
+**关联**：`src/threadsnap/reputation.py`、`src/threadsnap/reputation_scheduler.py`、`frontend/src/features/reputation/reputation-page.tsx`、`frontend/src/features/reputation/reputation-detail-page.tsx`、`tests/test_reputation.py`、`CONTEXT.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/reputation-inspection.md`
+
+---
+
 ## 2026-08-25 — 将口碑固定日程调整为12:00并完成真实定时验收
 **总目标**：把口碑正式巡检调整到12:00，并通过后台协调器的真实到点触发证明定时链生效。
 **状态**：✅ 固定日程已调整为12:00巡检、12:30汇报，真实到点批次27/27成功。
