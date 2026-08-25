@@ -28,7 +28,9 @@ from threadsnap.models import (
     ReputationTombstone,
 )
 from threadsnap.reputation_dongchedi import (
+    DongchediReputationAdapter,
     ReputationAdapterError,
+    ReputationMappingTarget,
     ReputationPageResult,
     normalize_series_url,
 )
@@ -39,9 +41,18 @@ class OfficialFakeAdapter:
 
     score_overrides: dict[str, str] = {}
     failures: set[str] = set()
+    last_prefer_http_first: bool | None = None
 
-    def __init__(self, *_args, evidence_policy=None, **_kwargs):
+    def __init__(
+        self,
+        *_args,
+        evidence_policy=None,
+        prefer_http_first: bool = False,
+        **_kwargs,
+    ):
         self.evidence_policy = evidence_policy
+        self.prefer_http_first = prefer_http_first
+        type(self).last_prefer_http_first = prefer_http_first
 
     def validate_sync(self, targets, output_dir):
         output_dir.mkdir(parents=True)
@@ -425,6 +436,129 @@ class ReputationInspectionTest(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "车型ID"):
             normalize_series_url(url, "10170")
 
+    def test_dongchedi_http_parser_matches_browser_metric_contract(self) -> None:
+        """SSR直出页应按当前车型行解析三项指标，而不是误取同级均值。"""
+
+        target = ReputationMappingTarget(
+            vehicle_id="vehicle-1",
+            platform_vehicle_id="24729",
+            platform_url="https://www.dongchedi.com/auto/series/score/24729-x-x-x-x-x",
+            platform_display_name="风云A9",
+            mapping_hash="fixture",
+        )
+        content = """
+        <html><body>
+          <h1 class="tw-hidden">隐藏标题</h1><h1>风云A9</h1>
+          <span>共 1,137 人评价</span>
+          <div class="rank-wrapper"><ul>
+            <li><span class="car-name">车型甲</span><span class="score-wrapper">4.08</span></li>
+            <li class="tw-text-common-yellow">
+              <span class="car-name">风云A9</span><span class="score-wrapper">3.90</span>
+            </li>
+          </ul></div>
+        </body></html>
+        """.encode()
+        result = DongchediReputationAdapter._parse_http_page(
+            target, target.platform_url, content, duration_ms=12
+        )
+        self.assertEqual(result.actual_name, "风云A9")
+        self.assertEqual(result.score_raw, "3.90")
+        self.assertEqual(result.rank_raw, "2")
+        self.assertEqual(result.volume_raw, "1137")
+        self.assertEqual(result.measurements[-1]["collection_method"], "http_ssr")
+        self.assertIsNone(result.metric_region_path)
+
+    def test_dongchedi_http_first_opens_browser_only_for_evidence_targets(self) -> None:
+        """日常取数不启动浏览器，比较命中的目标才进入截图页面池。"""
+
+        browser_targets: list[str] = []
+
+        class FixtureAdapter(DongchediReputationAdapter):
+            def _visit_http(self, target):
+                measurement = {
+                    "actual_name": target.platform_display_name,
+                    "score_raw": "3.90" if target.vehicle_id == "vehicle-2" else "3.80",
+                    "rank_raw": "2",
+                    "volume_raw": "共 500 人评价",
+                    "rank_scope": "同级车评分",
+                    "collection_method": "http_ssr",
+                }
+                return ReputationPageResult(
+                    vehicle_id=target.vehicle_id,
+                    platform_vehicle_id=target.platform_vehicle_id,
+                    mapping_hash=target.mapping_hash,
+                    final_url=target.platform_url,
+                    actual_name=target.platform_display_name,
+                    score_raw=measurement["score_raw"],
+                    rank_raw="2",
+                    volume_raw="500",
+                    rank_scope="同级车评分",
+                    measurements=[measurement],
+                    full_page_path=None,
+                    metric_region_path=None,
+                    full_page_sha256=None,
+                    metric_region_sha256=None,
+                    width=0,
+                    height=0,
+                    metric_rect={},
+                    duration_ms=10,
+                )
+
+            async def _validate_browser_targets(self, targets, output_dir, **_kwargs):
+                browser_targets.extend(target.vehicle_id for target in targets)
+                values = []
+                for target in targets:
+                    target_dir = output_dir / target.vehicle_id
+                    target_dir.mkdir()
+                    metric = target_dir / "region.png"
+                    Image.new("RGB", (600, 240), "white").save(metric)
+                    digest = hashlib.sha256(metric.read_bytes()).hexdigest()
+                    values.append(
+                        ReputationPageResult(
+                            vehicle_id=target.vehicle_id,
+                            platform_vehicle_id=target.platform_vehicle_id,
+                            mapping_hash=target.mapping_hash,
+                            final_url=target.platform_url,
+                            actual_name=target.platform_display_name,
+                            score_raw="3.90",
+                            rank_raw="2",
+                            volume_raw="500",
+                            rank_scope="同级车评分",
+                            measurements=[{"collection_method": "browser"}],
+                            full_page_path=metric,
+                            metric_region_path=metric,
+                            full_page_sha256=digest,
+                            metric_region_sha256=digest,
+                            width=600,
+                            height=240,
+                            metric_rect={"x": 0, "y": 0, "width": 600, "height": 240},
+                            duration_ms=20,
+                        )
+                    )
+                return values
+
+        targets = [
+            ReputationMappingTarget(
+                vehicle_id=f"vehicle-{index}",
+                platform_vehicle_id=str(24000 + index),
+                platform_url=f"https://www.dongchedi.com/auto/series/{24000 + index}",
+                platform_display_name=f"车型{index}",
+                mapping_hash=f"hash-{index}",
+            )
+            for index in range(1, 4)
+        ]
+        adapter = FixtureAdapter(
+            None,
+            concurrency=2,
+            evidence_policy=lambda target, _measurement: target.vehicle_id == "vehicle-2",
+            prefer_http_first=True,
+        )
+        results = adapter.validate_sync(targets, self.root / "http-first")
+        self.assertEqual(browser_targets, ["vehicle-2"])
+        self.assertIsNone(results[0].metric_region_path)
+        self.assertTrue(results[1].metric_region_path.is_file())
+        self.assertIsNone(results[2].metric_region_path)
+
 
 class OfficialReputationLifecycleTest(unittest.TestCase):
     """验证10:00正式批次、10:30产物、补跑与删除的组合生命周期。"""
@@ -444,6 +578,7 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         self.service.adapter_factory = OfficialFakeAdapter
         OfficialFakeAdapter.score_overrides = {}
         OfficialFakeAdapter.failures = set()
+        OfficialFakeAdapter.last_prefer_http_first = None
         self._publish_scope()
 
     def tearDown(self) -> None:
@@ -598,6 +733,7 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         self.assertEqual(baseline["run_type"], "baseline_initialization")
         self.assertEqual(baseline["status"], "success")
         self.assertEqual(baseline["complete_evidence_count"], 27)
+        self.assertFalse(OfficialFakeAdapter.last_prefer_http_first)
         waiting = self.service.generate_report(baseline_id, self._at("2030-01-02", "10:29"))
         self.assertEqual(waiting["report_status"], "waiting")
         reported = self.service.generate_report(baseline_id, self._at("2030-01-02", "10:30"))
@@ -612,6 +748,7 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         self.assertEqual(daily["baseline_date"], "2030-01-02")
         self.assertEqual(daily["required_evidence_count"], 1)
         self.assertEqual(daily["complete_evidence_count"], 1)
+        self.assertTrue(OfficialFakeAdapter.last_prefer_http_first)
         changed = next(item for item in daily["results"] if item["vehicle_id"] == "official-01")
         self.assertEqual(changed["metrics"]["score"]["direction"], "up")
 

@@ -1214,6 +1214,9 @@ class ReputationService:
                 timeout_seconds=90,
                 batch_timeout_seconds=45 * 60,
                 evidence_policy=evidence_policy,
+                prefer_http_first=(
+                    run_type != "baseline_initialization" and schedule_type != "month_end"
+                ),
             )
             try:
                 first = adapter.validate_sync(targets, root / f"attempt-1-{uuid7()}")
