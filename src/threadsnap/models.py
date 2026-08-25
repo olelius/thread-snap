@@ -791,6 +791,8 @@ class ReputationRun(Base):
     __table_args__ = (
         Index("ix_reputation_runs_created", "source_type", "created_at"),
         Index("ix_reputation_runs_status", "status", "created_at"),
+        Index("ix_reputation_runs_root", "root_run_id", "created_at"),
+        Index("ux_reputation_runs_idempotency", "idempotency_key", unique=True),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
@@ -799,8 +801,23 @@ class ReputationRun(Base):
     scenario_id: Mapped[str | None] = mapped_column(String(48))
     fixture_version: Mapped[str | None] = mapped_column(String(32))
     input_hash: Mapped[str | None] = mapped_column(String(64))
+    target_keys: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     run_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    schedule_type: Mapped[str | None] = mapped_column(String(32))
     planned_date: Mapped[str] = mapped_column(String(10), nullable=False)
+    root_run_id: Mapped[str | None] = mapped_column(String(36))
+    parent_run_id: Mapped[str | None] = mapped_column(String(36))
+    scope_version_id: Mapped[str | None] = mapped_column(String(36))
+    idempotency_key: Mapped[str | None] = mapped_column(String(96))
+    planned_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    report_planned_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    report_generated_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    delayed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    concurrency: Mapped[int | None] = mapped_column(Integer)
+    baseline_date: Mapped[str | None] = mapped_column(String(10))
+    baseline_frozen_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    baseline_source_run_id: Mapped[str | None] = mapped_column(String(36))
+    baseline_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
     platform_codes: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     planned_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
@@ -809,6 +826,7 @@ class ReputationRun(Base):
     required_evidence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     complete_evidence_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     report_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    report_attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     report_text: Mapped[str | None] = mapped_column(Text)
     report_path: Mapped[str | None] = mapped_column(Text)
     xlsx_path: Mapped[str | None] = mapped_column(Text)
@@ -843,6 +861,9 @@ class ReputationResult(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     metrics: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     evidence_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    mapping_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    duration_ms: Mapped[int | None] = mapped_column(Integer)
     error_code: Mapped[str | None] = mapped_column(String(64))
     error_message: Mapped[str | None] = mapped_column(Text)
     collected_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
@@ -864,3 +885,67 @@ class ReputationEvidence(Base):
     width: Mapped[int] = mapped_column(Integer, nullable=False)
     height: Mapped[int] = mapped_column(Integer, nullable=False)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+
+
+class ReputationScheduleEvent(Base):
+    """固定口碑日程的一次不可变触发或配置错误记录。"""
+
+    __tablename__ = "reputation_schedule_events"
+    __table_args__ = (
+        UniqueConstraint("planned_date", "run_type", name="uq_reputation_schedule_event"),
+        Index("ix_reputation_schedule_events_planned", "planned_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    planned_date: Mapped[str] = mapped_column(String(10), nullable=False)
+    run_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    planned_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    scope_version_id: Mapped[str | None] = mapped_column(String(36))
+    run_id: Mapped[str | None] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+
+
+class ReputationSchedulerState(Base):
+    """单进程固定调度器的持久化对账水位。"""
+
+    __tablename__ = "reputation_scheduler_state"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    last_checked_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+
+
+class ReputationTombstone(Base):
+    """已经删除的正式口碑日期身份，阻止调度重建。"""
+
+    __tablename__ = "reputation_tombstones"
+    __table_args__ = (
+        UniqueConstraint("planned_date", "run_type", name="uq_reputation_tombstone"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    planned_date: Mapped[str] = mapped_column(String(10), nullable=False)
+    run_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(96), nullable=False, unique=True)
+    original_run_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    result_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    deleted_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+
+
+class ReputationDeleteJob(Base):
+    """正式口碑关联链的两阶段文件隔离删除作业。"""
+
+    __tablename__ = "reputation_delete_jobs"
+    __table_args__ = (Index("ix_reputation_delete_jobs_status", "status", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    root_run_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(String(96), nullable=False, unique=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    manifest: Mapped[list[dict[str, Any]]] = mapped_column(JSON, nullable=False, default=list)
+    quarantine_path: Mapped[str] = mapped_column(Text, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now, onupdate=utc_now)
+    completed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())

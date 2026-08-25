@@ -118,7 +118,8 @@
 5. `docs/adr/0034-use-quarantined-two-phase-deletion-for-reputation-batches.md`；
 6. `docs/adr/0035-prioritize-official-reputation-runs-without-preemption.md`；
 7. `docs/adr/0036-isolate-synthetic-reputation-test-runs.md`；
-8. 执行平台适配或页面证据 PoC 时读取该工作线约定的 Git 外真实样本。
+8. `docs/adr/0037-retain-only-reputation-metric-region-evidence.md`；
+9. 执行平台适配或页面证据 PoC 时读取该工作线约定的 Git 外真实样本。
 
 ## 4. 已接受 ADR
 
@@ -153,10 +154,11 @@
 | `docs/adr/0027-use-bounded-clean-correction-and-structural-recovery.md` | 云端舆情使用干净纠正上下文，并只恢复可唯一证明的单括号结构错误 |
 | `docs/adr/0031-render-negative-artifacts-on-full-page-evidence.md` | 关联截图在完整原始页面副本上沿用负面框选，不再裁片拼接 |
 | `docs/adr/0032-separate-reputation-inspection-from-post-extraction.md` | 垂媒口碑巡检使用独立业务模块和批次，不作为帖子提取批次的附属结果 |
-| `docs/adr/0033-preserve-full-reputation-page-and-derived-metric-region.md` | 口碑巡检保留不可变完整原页，并从同一原页派生可嵌入表格的指标区域证据 |
+| `docs/adr/0033-preserve-full-reputation-page-and-derived-metric-region.md` | 已被 ADR 0037 替代的历史双截图证据方案 |
 | `docs/adr/0034-use-quarantined-two-phase-deletion-for-reputation-batches.md` | 口碑巡检批次使用删除清单、同盘隔离区和数据库提交边界完成可恢复删除 |
 | `docs/adr/0035-prioritize-official-reputation-runs-without-preemption.md` | 每日正式口碑巡检在平台容量队列中非抢占优先，补跑和其他任务保持普通FIFO |
 | `docs/adr/0036-isolate-synthetic-reputation-test-runs.md` | 手动合成口碑运行只存在于隔离测试环境，复用正式处理链但不污染正式批次、基线或调度 |
+| `docs/adr/0037-retain-only-reputation-metric-region-evidence.md` | 口碑巡检在稳定DOM边界上只保留一张指标区域PNG，并由前端、XLSX和证据包复用 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 

@@ -41,6 +41,7 @@ from .reputation import (
     ScopePublishRequest,
     SyntheticRunCreate,
 )
+from .reputation_scheduler import ReputationCoordinator
 from .scheduler import SchedulerService
 from .schemas import (
     CircleBatchUpdate,
@@ -88,6 +89,9 @@ class Container:
             session_store=self.session_store,
             event_publisher=self.events.publish,
         )
+        self.reputation_coordinator = ReputationCoordinator(
+            self.reputation, settings.scheduler_poll_seconds
+        )
         self.local_sentiment = LocalSentimentAnalyzer(
             settings.paddlenlp_home,
             num_threads=settings.local_sentiment_num_threads,
@@ -131,8 +135,10 @@ class Container:
             self.worker.start()
             self.sentiment_worker.start()
             self.scheduler.start()
+            self.reputation_coordinator.start()
 
     async def stop(self) -> None:
+        self.reputation_coordinator.stop()
         self.scheduler.stop()
         self.sentiment_worker.stop()
         self.worker.stop()
@@ -184,6 +190,10 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
     ) -> dict[str, Any]:
         return _container(request).reputation.list_runs(offset, limit)
 
+    @router.get("/reputation/schedule")
+    def get_reputation_schedule(request: Request) -> dict[str, Any]:
+        return _container(request).reputation.schedule_status()
+
     @router.post("/reputation/test-runs", status_code=202)
     def create_reputation_test_run(
         value: SyntheticRunCreate,
@@ -194,6 +204,29 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
     @router.get("/reputation/runs/{run_id}")
     def get_reputation_run(run_id: str, request: Request) -> dict[str, Any]:
         return _container(request).reputation.get_run(run_id, prefix)
+
+    @router.post("/reputation/runs/{run_id}/retry-failed", status_code=202)
+    def retry_reputation_failed(run_id: str, request: Request) -> dict[str, Any]:
+        container = _container(request)
+        result = container.reputation.retry_failed(run_id)
+        container.reputation_coordinator.wake()
+        return result
+
+    @router.post("/reputation/runs/{run_id}/artifacts/retry")
+    def retry_reputation_artifacts(run_id: str, request: Request) -> dict[str, Any]:
+        return _container(request).reputation.generate_report(run_id)
+
+    @router.delete("/reputation/runs/{run_id}", status_code=202)
+    def delete_reputation_run(run_id: str, request: Request) -> dict[str, Any]:
+        return _container(request).reputation.delete_official(run_id)
+
+    @router.get("/reputation/delete-jobs/{job_id}")
+    def get_reputation_delete_job(job_id: str, request: Request) -> dict[str, Any]:
+        return _container(request).reputation.get_delete_job(job_id)
+
+    @router.post("/reputation/delete-jobs/{job_id}/retry")
+    def retry_reputation_delete_cleanup(job_id: str, request: Request) -> dict[str, Any]:
+        return _container(request).reputation.retry_delete_cleanup(job_id)
 
     @router.delete("/reputation/test-runs/{run_id}")
     def delete_reputation_test_run(run_id: str, request: Request) -> dict[str, Any]:
