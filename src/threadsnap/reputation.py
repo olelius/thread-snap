@@ -127,6 +127,10 @@ class ScopeVehicleCreateRequest(BaseModel):
     platform_display_name: str
 
 
+class ScopeVehicleUpdateRequest(ScopeVehicleCreateRequest):
+    """修改车型草稿时复用新增车型的完整字段合同。"""
+
+
 class ScopeVehicleRevisionRequest(BaseModel):
     revision: int
 
@@ -2144,16 +2148,15 @@ class ReputationService:
 
     @staticmethod
     def _normalize_role_orders(vehicles: list[dict[str, Any]], role: str) -> None:
-        """保持启用车型优先且角色内顺序连续，停用车型保留在组尾。"""
+        """按车型映射显示顺序重排角色序号，停用车型接在启用车型之后。"""
 
-        grouped = [vehicle for vehicle in vehicles if vehicle.get("role") == role]
-        grouped.sort(
-            key=lambda vehicle: (
-                not bool(vehicle.get("enabled", True)),
-                int(vehicle.get("role_order") or 0),
-                str(vehicle.get("id") or ""),
-            )
-        )
+        grouped = [
+            vehicle
+            for enabled in (True, False)
+            for vehicle in vehicles
+            if vehicle.get("role") == role
+            and bool(vehicle.get("enabled", True)) is enabled
+        ]
         for position, vehicle in enumerate(grouped, start=1):
             vehicle["role_order"] = position
 
@@ -2171,8 +2174,9 @@ class ReputationService:
             )
         return draft
 
-    def create_scope_vehicle(self, value: ScopeVehicleCreateRequest) -> dict[str, Any]:
-        """新增一条独立车型身份；内部 ID 只由服务端生成且永不复用。"""
+    @staticmethod
+    def _scope_vehicle_fields(value: ScopeVehicleCreateRequest) -> dict[str, str]:
+        """校验并规范化新增与修改对话框共用的车型字段。"""
 
         if value.platform_code != PLATFORM_CODE:
             raise DomainError("REPUTATION_SCOPE_PLATFORM", "当前阶段只接受已接入平台的车型映射。")
@@ -2186,16 +2190,24 @@ class ReputationService:
         if not all(fields.values()):
             raise DomainError(
                 "REPUTATION_SCOPE_VEHICLE_REQUIRED",
-                "新增车型的名称、项目组归属和平台映射不能为空。",
+                "车型名称、项目组归属和平台映射不能为空。",
             )
         if len(fields["project_group"]) > 80:
             raise DomainError(
                 "REPUTATION_SCOPE_PROJECT_GROUP_TOO_LONG", "项目组归属不能超过80个字符。"
             )
         try:
-            normalized_url = normalize_series_url(value.platform_url, fields["platform_vehicle_id"])
+            fields["platform_url"] = normalize_series_url(
+                value.platform_url, fields["platform_vehicle_id"]
+            )
         except ReputationAdapterError as error:
             raise DomainError(error.code, error.message) from error
+        return fields
+
+    def create_scope_vehicle(self, value: ScopeVehicleCreateRequest) -> dict[str, Any]:
+        """新增一条独立车型身份；内部 ID 只由服务端生成且永不复用。"""
+
+        fields = self._scope_vehicle_fields(value)
         with self.sessions.begin() as db:
             draft = self._require_scope_revision(
                 db.get(ReputationScopeDraft, "current"), value.revision
@@ -2229,7 +2241,7 @@ class ReputationService:
                     "mappings": {
                         PLATFORM_CODE: {
                             "platform_vehicle_id": fields["platform_vehicle_id"],
-                            "platform_url": normalized_url,
+                            "platform_url": fields["platform_url"],
                             "platform_display_name": fields["platform_display_name"],
                             "validation_status": "unverified",
                         }
@@ -2240,6 +2252,77 @@ class ReputationService:
             draft.data = data
             draft.revision += 1
         return self.get_scope()
+
+    def update_scope_vehicle(
+        self, vehicle_id: str, value: ScopeVehicleUpdateRequest
+    ) -> dict[str, Any]:
+        """修改当前范围草稿中的车型信息，映射变化时撤销原验证绑定。"""
+
+        fields = self._scope_vehicle_fields(value)
+        mapping_changed = False
+        changed = False
+        with self.sessions.begin() as db:
+            draft = self._require_scope_revision(
+                db.get(ReputationScopeDraft, "current"), value.revision
+            )
+            data = json.loads(json.dumps(draft.data, ensure_ascii=False))
+            vehicles = data.get("vehicles", [])
+            vehicle = next((row for row in vehicles if row.get("id") == vehicle_id), None)
+            if not vehicle:
+                raise DomainError(
+                    "REPUTATION_SCOPE_VEHICLE_NOT_FOUND", "车型不存在。", status_code=404
+                )
+            if any(
+                row.get("id") != vehicle_id
+                and str(
+                    row.get("mappings", {})
+                    .get(PLATFORM_CODE, {})
+                    .get("platform_vehicle_id")
+                )
+                == fields["platform_vehicle_id"]
+                for row in vehicles
+            ):
+                raise DomainError("REPUTATION_SCOPE_DUPLICATE", "平台车型 ID 已被现有车型使用。")
+
+            mapping = vehicle.setdefault("mappings", {}).get(PLATFORM_CODE) or {}
+            mapping_changed = any(
+                str(mapping.get(key) or "") != fields[key]
+                for key in (
+                    "platform_vehicle_id",
+                    "platform_url",
+                    "platform_display_name",
+                )
+            )
+            old_role = str(vehicle.get("role") or "")
+            changed = mapping_changed or old_role != value.role or any(
+                str(vehicle.get(key) or "") != fields[key]
+                for key in ("series_name", "vehicle_name", "project_group")
+            )
+            if changed:
+                vehicle.update(
+                    {
+                        "series_name": fields["series_name"],
+                        "vehicle_name": fields["vehicle_name"],
+                        "project_group": fields["project_group"],
+                        "role": value.role,
+                    }
+                )
+                if mapping_changed:
+                    vehicle["mappings"][PLATFORM_CODE] = {
+                        "platform_vehicle_id": fields["platform_vehicle_id"],
+                        "platform_url": fields["platform_url"],
+                        "platform_display_name": fields["platform_display_name"],
+                        "validation_status": "unverified",
+                    }
+                if old_role != value.role:
+                    self._normalize_role_orders(vehicles, old_role)
+                    self._normalize_role_orders(vehicles, value.role)
+                draft.data = data
+                draft.revision += 1
+        scope = self.get_scope()
+        scope["last_vehicle_action"] = "updated" if changed else "unchanged"
+        scope["last_vehicle_mapping_changed"] = mapping_changed
+        return scope
 
     def remove_scope_vehicle(self, vehicle_id: str, revision: int) -> dict[str, Any]:
         """未引用车型永久删除；已有历史引用的车型只停用。"""

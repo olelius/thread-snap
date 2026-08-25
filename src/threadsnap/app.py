@@ -41,6 +41,7 @@ from .reputation import (
     ScopePublishRequest,
     ScopeVehicleCreateRequest,
     ScopeVehicleRevisionRequest,
+    ScopeVehicleUpdateRequest,
     SyntheticRunCreate,
 )
 from .reputation_scheduler import ReputationCoordinator
@@ -273,6 +274,14 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
         request: Request,
     ) -> dict[str, Any]:
         return _container(request).reputation.create_scope_vehicle(value)
+
+    @router.patch("/reputation/scope/vehicles/{vehicle_id}")
+    def update_reputation_scope_vehicle(
+        vehicle_id: str,
+        value: ScopeVehicleUpdateRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        return _container(request).reputation.update_scope_vehicle(vehicle_id, value)
 
     @router.delete("/reputation/scope/vehicles/{vehicle_id}")
     def remove_reputation_scope_vehicle(

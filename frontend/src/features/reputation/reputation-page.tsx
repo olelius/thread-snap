@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { motion, useReducedMotion } from 'motion/react'
-import { Activity, Beaker, CalendarClock, CarFront, ChartNoAxesCombined, ChevronLeft, ChevronRight, CircleAlert, ExternalLink, FileCheck2, Gauge, Images, Loader2, Play, Plus, RefreshCw, Rocket, RotateCcw, ScanSearch, Settings2, Trash2 } from 'lucide-react'
+import { Activity, Beaker, CalendarClock, CarFront, ChartNoAxesCombined, ChevronLeft, ChevronRight, CircleAlert, ExternalLink, FileCheck2, Gauge, Images, Loader2, Pencil, Play, Plus, RefreshCw, Rocket, RotateCcw, ScanSearch, Settings2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
@@ -194,6 +194,19 @@ const emptyVehicleForm: VehicleForm = {
   platform_display_name: '',
 }
 
+function vehicleFormFrom(vehicle: ReputationScopeVehicle): VehicleForm {
+  const mapping = vehicle.mappings.dongchedi
+  return {
+    series_name: vehicle.series_name,
+    vehicle_name: vehicle.vehicle_name,
+    project_group: vehicle.project_group,
+    role: vehicle.role,
+    platform_vehicle_id: mapping?.platform_vehicle_id ?? '',
+    platform_url: mapping?.platform_url ?? '',
+    platform_display_name: mapping?.platform_display_name ?? '',
+  }
+}
+
 type PublishPreview = {
   can_publish: boolean
   has_changes: boolean
@@ -209,7 +222,8 @@ function ScopePanel({ query, adapterStatus, adapterMessage }: { query: ReturnTyp
   const queryClient = useQueryClient()
   const [mappingOpen, setMappingOpen] = useState(false)
   const [publishOpen, setPublishOpen] = useState(false)
-  const [createOpen, setCreateOpen] = useState(false)
+  const [vehicleDialogOpen, setVehicleDialogOpen] = useState(false)
+  const [editTarget, setEditTarget] = useState<ReputationScopeVehicle>()
   const [removeTarget, setRemoveTarget] = useState<ReputationScopeVehicle>()
   const [vehicleForm, setVehicleForm] = useState<VehicleForm>(emptyVehicleForm)
   const [mappingText, setMappingText] = useState('')
@@ -237,18 +251,24 @@ function ScopePanel({ query, adapterStatus, adapterMessage }: { query: ReturnTyp
     onSuccess: (value) => { refreshScopeState(value); setMappingOpen(false); setMappingText(''); setPreview(undefined); toast.success('映射草稿已原子保存', { description: '变化项已恢复为待真实页面验证状态。' }) },
     onError: (error) => toast.error('映射保存失败', { description: errorMessage(error) }),
   })
-  const createMutation = useMutation({
-    mutationFn: () => api<ReputationScope>('/reputation/scope/vehicles', {
-      method: 'POST',
+  const saveVehicleMutation = useMutation({
+    mutationFn: () => api<ReputationScope>(editTarget ? `/reputation/scope/vehicles/${encodeURIComponent(editTarget.id)}` : '/reputation/scope/vehicles', {
+      method: editTarget ? 'PATCH' : 'POST',
       body: JSON.stringify({ revision: query.data?.revision, platform_code: 'dongchedi', ...vehicleForm }),
     }),
     onSuccess: (value) => {
+      const editing = Boolean(editTarget)
       refreshScopeState(value)
-      setCreateOpen(false)
+      setVehicleDialogOpen(false)
+      setEditTarget(undefined)
       setVehicleForm(emptyVehicleForm)
-      toast.success('车型已加入当前范围草稿', { description: '新映射需通过真实页面验证后才能发布。' })
+      toast.success(editing ? '车型信息已保存' : '车型已加入当前范围草稿', {
+        description: editing
+          ? value.last_vehicle_mapping_changed ? '平台映射已变化，该车型需要重新验证后再发布。' : '修改已进入范围草稿，发布后影响后续巡检。'
+          : '新映射需通过真实页面验证后才能发布。',
+      })
     },
-    onError: (error) => toast.error('新增车型失败', { description: errorMessage(error) }),
+    onError: (error) => toast.error(editTarget ? '修改车型失败' : '新增车型失败', { description: errorMessage(error) }),
   })
   const removeMutation = useMutation({
     mutationFn: (vehicle: ReputationScopeVehicle) => api<ReputationScope>(`/reputation/scope/vehicles/${encodeURIComponent(vehicle.id)}?revision=${query.data?.revision}`, { method: 'DELETE' }),
@@ -291,6 +311,11 @@ function ScopePanel({ query, adapterStatus, adapterMessage }: { query: ReturnTyp
     },
     onError: (error) => toast.error('范围发布失败', { description: errorMessage(error) }),
   })
+  const openVehicleDialog = (vehicle?: ReputationScopeVehicle) => {
+    setEditTarget(vehicle)
+    setVehicleForm(vehicle ? vehicleFormFrom(vehicle) : emptyVehicleForm)
+    setVehicleDialogOpen(true)
+  }
   if (query.isLoading) return <Card className='h-full py-0'><CardContent className='space-y-3 p-5'><Skeleton className='h-16 w-full' /><Skeleton className='h-72 w-full' /></CardContent></Card>
   if (query.isError) return <Failure title='车型范围加载失败' detail={errorMessage(query.error)} retry={() => query.refetch()} />
   const scope = query.data!
@@ -299,6 +324,8 @@ function ScopePanel({ query, adapterStatus, adapterMessage }: { query: ReturnTyp
   const verified = activeVehicles.filter((item) => item.mappings.dongchedi?.validation_status === 'verified').length
   const pendingValidation = activeVehicles.length - verified
   const canCreate = Object.entries(vehicleForm).every(([key, value]) => key === 'role' || value.trim())
+  const vehicleFormChanged = !editTarget || JSON.stringify(vehicleForm) !== JSON.stringify(vehicleFormFrom(editTarget))
+  const canSaveVehicle = canCreate && vehicleFormChanged
   const publishPreview = publishPreviewQuery.data
   const publishDisabled = !publishPreview?.can_publish
 
@@ -316,7 +343,7 @@ function ScopePanel({ query, adapterStatus, adapterMessage }: { query: ReturnTyp
         </div>
         <div className='flex flex-wrap items-center justify-end gap-2'>
           <Button variant='outline' size='sm' disabled={validateMutation.isPending || !activeVehicles.length} onClick={() => validateMutation.mutate()}>{validateMutation.isPending ? <Loader2 className='size-4 animate-spin' /> : <ScanSearch className='size-4' />}{validateMutation.isPending ? '正在验证…' : pendingValidation ? `验证待验证（${pendingValidation}）` : '重新验证全部'}</Button>
-          <Button variant='outline' size='sm' onClick={() => setCreateOpen(true)}><Plus className='size-4' />新增车型</Button>
+          <Button variant='outline' size='sm' onClick={() => openVehicleDialog()}><Plus className='size-4' />新增车型</Button>
           <Button variant='outline' size='sm' onClick={() => setMappingOpen(true)}>批量粘贴映射</Button>
           <Button size='sm' disabled={publishDisabled} title={publishPreview?.warning} onClick={() => setPublishOpen(true)}><Rocket className='size-4' />发布变更</Button>
         </div>
@@ -329,14 +356,14 @@ function ScopePanel({ query, adapterStatus, adapterMessage }: { query: ReturnTyp
           <TableBody>{displayVehicles.map((vehicle) => {
             const mapping = vehicle.mappings.dongchedi
             const metrics = mapping?.latest_metrics
-            return <TableRow key={vehicle.id} className={vehicle.enabled ? undefined : 'bg-muted/20 text-muted-foreground'}><TableCell className='w-24 pl-4'><ReputationRoleLabel role={vehicle.role} position={vehicle.role_order} /></TableCell><TableCell className='font-mono text-xs text-muted-foreground'>{vehicle.id}</TableCell><TableCell>{vehicle.series_name}</TableCell><TableCell className='font-medium'>{vehicle.vehicle_name}</TableCell><TableCell>{vehicle.project_group}</TableCell><TableCell>{mapping?.actual_name || mapping?.platform_display_name || '—'}</TableCell><TableCell className='text-right font-medium tabular-nums'>{metrics?.score ?? '暂无'}</TableCell><TableCell className='text-right font-medium tabular-nums'>{metrics?.rank ?? '暂无'}</TableCell><TableCell className='text-right font-medium tabular-nums'>{metrics?.volume ?? '暂无'}</TableCell><TableCell>{vehicle.enabled ? <StatusBadge value={mapping?.validation_status ?? 'unknown'} label={mappingStatusName(mapping?.validation_status)} /> : <Badge variant='outline'>已停用</Badge>}{vehicle.enabled && mapping?.validation_error && <div className='mt-1 max-w-44 text-[11px] text-destructive'>{mapping.validation_error}</div>}</TableCell><TableCell className='text-center'>{mapping?.validation_attempt_id ? <Button asChild variant='ghost' size='icon'><a href={`/api/v1/reputation/mapping-validations/attempts/${mapping.validation_attempt_id}/metric`} target='_blank' rel='noreferrer' aria-label='查看指标区域截图'><Images className='size-4' /></a></Button> : '—'}</TableCell><TableCell className='text-center'>{mapping?.platform_url ? <Button asChild variant='ghost' size='icon'><a href={mapping.platform_url} target='_blank' rel='noreferrer' aria-label='打开平台页面'><ExternalLink className='size-4' /></a></Button> : '—'}</TableCell><TableCell className='pr-4 text-right'><ScopeVehicleAction vehicle={vehicle} restorePending={restoreMutation.isPending} onRemove={() => setRemoveTarget(vehicle)} onRestore={() => restoreMutation.mutate(vehicle)} /></TableCell></TableRow>
+            return <TableRow key={vehicle.id} className={vehicle.enabled ? undefined : 'bg-muted/20 text-muted-foreground'}><TableCell className='w-24 pl-4'><ReputationRoleLabel role={vehicle.role} position={vehicle.role_order} /></TableCell><TableCell className='font-mono text-xs text-muted-foreground'>{vehicle.id}</TableCell><TableCell>{vehicle.series_name}</TableCell><TableCell className='font-medium'>{vehicle.vehicle_name}</TableCell><TableCell>{vehicle.project_group}</TableCell><TableCell>{mapping?.actual_name || mapping?.platform_display_name || '—'}</TableCell><TableCell className='text-right font-medium tabular-nums'>{metrics?.score ?? '暂无'}</TableCell><TableCell className='text-right font-medium tabular-nums'>{metrics?.rank ?? '暂无'}</TableCell><TableCell className='text-right font-medium tabular-nums'>{metrics?.volume ?? '暂无'}</TableCell><TableCell>{vehicle.enabled ? <StatusBadge value={mapping?.validation_status ?? 'unknown'} label={mappingStatusName(mapping?.validation_status)} /> : <Badge variant='outline'>已停用</Badge>}{vehicle.enabled && mapping?.validation_error && <div className='mt-1 max-w-44 text-[11px] text-destructive'>{mapping.validation_error}</div>}</TableCell><TableCell className='text-center'>{mapping?.validation_attempt_id ? <Button asChild variant='ghost' size='icon'><a href={`/api/v1/reputation/mapping-validations/attempts/${mapping.validation_attempt_id}/metric`} target='_blank' rel='noreferrer' aria-label='查看指标区域截图'><Images className='size-4' /></a></Button> : '—'}</TableCell><TableCell className='text-center'>{mapping?.platform_url ? <Button asChild variant='ghost' size='icon'><a href={mapping.platform_url} target='_blank' rel='noreferrer' aria-label='打开平台页面'><ExternalLink className='size-4' /></a></Button> : '—'}</TableCell><TableCell className='pr-4 text-right'><ScopeVehicleAction vehicle={vehicle} editPending={saveVehicleMutation.isPending} restorePending={restoreMutation.isPending} onEdit={() => openVehicleDialog(vehicle)} onRemove={() => setRemoveTarget(vehicle)} onRestore={() => restoreMutation.mutate(vehicle)} /></TableCell></TableRow>
           })}</TableBody>
         </Table>
       </div>
       </Card>
     </div>}
 
-    <Dialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (!open) setVehicleForm(emptyVehicleForm) }}><DialogContent className='sm:max-w-2xl'><DialogHeader><DialogTitle className='flex items-center gap-2'><Plus className='size-5 text-primary' />新增车型</DialogTitle><DialogDescription>新增后先进入当前草稿并分配不可复用的内部车型 ID；完成真实页面验证并发布后，后续巡检才会包含该车型。</DialogDescription></DialogHeader><div className='grid gap-4 py-1 sm:grid-cols-2'><div className='space-y-2'><Label htmlFor='series-name'>车系</Label><Input id='series-name' value={vehicleForm.series_name} onChange={(event) => setVehicleForm((value) => ({ ...value, series_name: event.target.value }))} placeholder='例如：风云系' /></div><div className='space-y-2'><Label htmlFor='vehicle-name'>车型</Label><Input id='vehicle-name' value={vehicleForm.vehicle_name} onChange={(event) => setVehicleForm((value) => ({ ...value, vehicle_name: event.target.value }))} placeholder='例如：风云A9' /></div><div className='space-y-2'><Label htmlFor='project-group'>项目组归属</Label><Input id='project-group' maxLength={80} value={vehicleForm.project_group} onChange={(event) => setVehicleForm((value) => ({ ...value, project_group: event.target.value }))} placeholder='例如：奇瑞项目组' /></div><div className='space-y-2'><Label>角色</Label><Select value={vehicleForm.role} onValueChange={(role: 'focus' | 'competitor') => setVehicleForm((value) => ({ ...value, role }))}><SelectTrigger className='w-full'><SelectValue /></SelectTrigger><SelectContent><SelectItem value='focus'>重点车型</SelectItem><SelectItem value='competitor'>竞品车型</SelectItem></SelectContent></Select></div><div className='space-y-2'><Label htmlFor='platform-id'>平台车型 ID</Label><Input id='platform-id' value={vehicleForm.platform_vehicle_id} onChange={(event) => setVehicleForm((value) => ({ ...value, platform_vehicle_id: event.target.value }))} placeholder='平台页面中的车型 ID' /></div><div className='space-y-2'><Label htmlFor='platform-name'>平台展示名</Label><Input id='platform-name' value={vehicleForm.platform_display_name} onChange={(event) => setVehicleForm((value) => ({ ...value, platform_display_name: event.target.value }))} placeholder='页面实际展示的车型名称' /></div><div className='space-y-2 sm:col-span-2'><Label htmlFor='platform-url'>车型口碑页 URL</Label><Input id='platform-url' value={vehicleForm.platform_url} onChange={(event) => setVehicleForm((value) => ({ ...value, platform_url: event.target.value }))} placeholder='https://www.dongchedi.com/auto/series/score/…' /></div></div><DialogFooter><Button variant='outline' onClick={() => setCreateOpen(false)}>取消</Button><Button disabled={!canCreate || createMutation.isPending} onClick={() => createMutation.mutate()}>{createMutation.isPending ? <Loader2 className='size-4 animate-spin' /> : <Plus className='size-4' />}确认新增</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={vehicleDialogOpen} onOpenChange={(open) => { setVehicleDialogOpen(open); if (!open) { setEditTarget(undefined); setVehicleForm(emptyVehicleForm) } }}><DialogContent className='sm:max-w-2xl'><DialogHeader><DialogTitle className='flex items-center gap-2'>{editTarget ? <Pencil className='size-5 text-primary' /> : <Plus className='size-5 text-primary' />}{editTarget ? '修改车型' : '新增车型'}</DialogTitle><DialogDescription>{editTarget ? `修改 ${editTarget.vehicle_name} 的当前范围草稿；平台映射字段变化后需要重新验证，发布后影响后续巡检。` : '新增后先进入当前草稿并分配不可复用的内部车型 ID；完成真实页面验证并发布后，后续巡检才会包含该车型。'}</DialogDescription></DialogHeader><div className='grid gap-4 py-1 sm:grid-cols-2'><div className='space-y-2'><Label htmlFor='series-name'>车系</Label><Input id='series-name' value={vehicleForm.series_name} onChange={(event) => setVehicleForm((value) => ({ ...value, series_name: event.target.value }))} placeholder='例如：风云系' /></div><div className='space-y-2'><Label htmlFor='vehicle-name'>车型</Label><Input id='vehicle-name' value={vehicleForm.vehicle_name} onChange={(event) => setVehicleForm((value) => ({ ...value, vehicle_name: event.target.value }))} placeholder='例如：风云A9' /></div><div className='space-y-2'><Label htmlFor='project-group'>项目组归属</Label><Input id='project-group' maxLength={80} value={vehicleForm.project_group} onChange={(event) => setVehicleForm((value) => ({ ...value, project_group: event.target.value }))} placeholder='例如：奇瑞项目组' /></div><div className='space-y-2'><Label>角色</Label><Select value={vehicleForm.role} onValueChange={(role: 'focus' | 'competitor') => setVehicleForm((value) => ({ ...value, role }))}><SelectTrigger className='w-full'><SelectValue /></SelectTrigger><SelectContent><SelectItem value='focus'>重点车型</SelectItem><SelectItem value='competitor'>竞品车型</SelectItem></SelectContent></Select></div><div className='space-y-2'><Label htmlFor='platform-id'>平台车型 ID</Label><Input id='platform-id' value={vehicleForm.platform_vehicle_id} onChange={(event) => setVehicleForm((value) => ({ ...value, platform_vehicle_id: event.target.value }))} placeholder='平台页面中的车型 ID' /></div><div className='space-y-2'><Label htmlFor='platform-name'>平台展示名</Label><Input id='platform-name' value={vehicleForm.platform_display_name} onChange={(event) => setVehicleForm((value) => ({ ...value, platform_display_name: event.target.value }))} placeholder='页面实际展示的车型名称' /></div><div className='space-y-2 sm:col-span-2'><Label htmlFor='platform-url'>车型口碑页 URL</Label><Input id='platform-url' value={vehicleForm.platform_url} onChange={(event) => setVehicleForm((value) => ({ ...value, platform_url: event.target.value }))} placeholder='https://www.dongchedi.com/auto/series/score/…' /></div></div><DialogFooter><Button variant='outline' onClick={() => { setVehicleDialogOpen(false); setEditTarget(undefined); setVehicleForm(emptyVehicleForm) }}>取消</Button><Button disabled={!canSaveVehicle || saveVehicleMutation.isPending} onClick={() => saveVehicleMutation.mutate()}>{saveVehicleMutation.isPending ? <Loader2 className='size-4 animate-spin' /> : editTarget ? <Pencil className='size-4' /> : <Plus className='size-4' />}{saveVehicleMutation.isPending ? '正在保存…' : editTarget ? '保存修改' : '确认新增'}</Button></DialogFooter></DialogContent></Dialog>
 
     <AlertDialog open={Boolean(removeTarget)} onOpenChange={(open) => { if (!open) setRemoveTarget(undefined) }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{removeTarget?.removal_mode === 'disable' ? '停用该车型？' : '永久删除该车型？'}</AlertDialogTitle><AlertDialogDescription>{removeTarget?.removal_mode === 'disable' ? `${removeTarget.vehicle_name} 已被历史版本或批次引用，因此会保留身份和历史数据，只从后续发布范围中停用。` : `${removeTarget?.vehicle_name ?? ''} 尚未进入任何版本或批次，确认后会从当前草稿中永久删除。`}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction className='bg-destructive text-destructive-foreground hover:bg-destructive/90' disabled={removeMutation.isPending} onClick={() => removeTarget && removeMutation.mutate(removeTarget)}>{removeMutation.isPending ? '处理中…' : removeTarget?.removal_mode === 'disable' ? '确认停用' : '确认删除'}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
 
@@ -346,11 +373,11 @@ function ScopePanel({ query, adapterStatus, adapterMessage }: { query: ReturnTyp
   </div>
 }
 
-function ScopeVehicleAction({ vehicle, restorePending, onRemove, onRestore }: { vehicle: ReputationScopeVehicle; restorePending: boolean; onRemove: () => void; onRestore: () => void }) {
+function ScopeVehicleAction({ vehicle, editPending, restorePending, onEdit, onRemove, onRestore }: { vehicle: ReputationScopeVehicle; editPending: boolean; restorePending: boolean; onEdit: () => void; onRemove: () => void; onRestore: () => void }) {
   const label = vehicle.enabled
     ? vehicle.removal_mode === 'disable' ? '停用并保留历史' : '永久删除未发布车型'
     : '恢复车型'
-  return <Tooltip><TooltipTrigger asChild>{vehicle.enabled ? <Button variant='ghost' size='icon' className='text-muted-foreground hover:text-destructive' aria-label={`${vehicle.removal_mode === 'disable' ? '停用' : '删除'}车型 ${vehicle.vehicle_name}`} onClick={onRemove}><Trash2 className='size-4' /></Button> : <Button variant='ghost' size='icon' aria-label={`恢复车型 ${vehicle.vehicle_name}`} disabled={restorePending} onClick={onRestore}><RotateCcw className='size-4' /></Button>}</TooltipTrigger><TooltipContent side='left'>{label}</TooltipContent></Tooltip>
+  return <div className='inline-flex items-center justify-end gap-1'><Button variant='ghost' size='sm' className='h-8 px-2 text-muted-foreground hover:text-foreground' aria-label={`修改车型 ${vehicle.vehicle_name}`} disabled={editPending} onClick={onEdit}><Pencil className='size-3.5' />修改</Button><Tooltip><TooltipTrigger asChild>{vehicle.enabled ? <Button variant='ghost' size='icon' className='size-8 text-muted-foreground hover:text-destructive' aria-label={`${vehicle.removal_mode === 'disable' ? '停用' : '删除'}车型 ${vehicle.vehicle_name}`} onClick={onRemove}><Trash2 className='size-4' /></Button> : <Button variant='ghost' size='icon' className='size-8' aria-label={`恢复车型 ${vehicle.vehicle_name}`} disabled={restorePending} onClick={onRestore}><RotateCcw className='size-4' /></Button>}</TooltipTrigger><TooltipContent side='left'>{label}</TooltipContent></Tooltip></div>
 }
 
 function Failure({ title, detail, retry }: { title: string; detail: string; retry: () => void }) {
