@@ -1,7 +1,7 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { motion, useReducedMotion } from 'motion/react'
-import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, CircleAlert, Clipboard, Download, FileArchive, FileSpreadsheet, FileText, ImageIcon, Minus, RefreshCw, ShieldCheck } from 'lucide-react'
+import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Check, CircleAlert, Clipboard, Clock3, Download, FileArchive, FileSpreadsheet, FileText, ImageIcon, Minus, RefreshCw, RotateCcw, ShieldCheck, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
@@ -23,10 +23,22 @@ export function ReputationDetailPage() {
   const search = useSearch({ strict: false }) as SearchState
   const view = search.view ?? 'ranking'
   const navigate = useNavigate({ from: '/reputation/runs/$runId' })
+  const queryClient = useQueryClient()
   const reduceMotion = useReducedMotion()
   const query = useQuery({
     queryKey: ['reputation-run', runId],
     queryFn: () => api<ReputationRun>(`/reputation/runs/${runId}`),
+    refetchInterval: (value) => value.state.data && (['queued', 'running'].includes(value.state.data.status) || value.state.data.report_status === 'waiting') ? 3_000 : false,
+  })
+  const retry = useMutation({
+    mutationFn: () => api<ReputationRun>(`/reputation/runs/${runId}/retry-failed`, { method: 'POST' }),
+    onSuccess: (next) => { queryClient.invalidateQueries({ queryKey: ['reputation-runs'] }); toast.success('失败项补跑已创建', { description: `${next.number} · ${next.planned_count} 项` }); navigate({ to: '/reputation/runs/$runId', params: { runId: next.id }, search: { view: 'ranking' } }) },
+    onError: (error) => toast.error('创建补跑失败', { description: errorMessage(error) }),
+  })
+  const remove = useMutation({
+    mutationFn: () => api<{ status: string }>(`/reputation/runs/${runId}`, { method: 'DELETE' }),
+    onSuccess: (job) => { queryClient.invalidateQueries({ queryKey: ['reputation-runs'] }); toast.success(job.status === 'success' ? '正式巡检关联链已删除' : '删除作业已提交', { description: `作业状态：${job.status}` }); navigate({ to: '/reputation', search: { tab: 'runs' } }) },
+    onError: (error) => toast.error('删除失败', { description: errorMessage(error) }),
   })
 
   if (query.isLoading) return <div className='space-y-4'><Skeleton className='h-20 w-full' /><div className='grid gap-3 md:grid-cols-4'>{Array.from({ length: 4 }).map((_, index) => <Skeleton key={index} className='h-28 w-full' />)}</div><Skeleton className='h-[420px] w-full' /></div>
@@ -38,14 +50,15 @@ export function ReputationDetailPage() {
   return <div className='flex h-full min-h-0 flex-col gap-4'>
     <PageHeader
       title={run.number}
-      description={`${runTypeName(run.run_type)} · ${run.planned_date} · ${run.platform_codes.length} 个平台 · ${run.planned_count} 款车型`}
+      description={`${runDisplayType(run)} · ${run.planned_date} · ${run.platform_codes.length} 个平台 · ${run.planned_count} 款车型`}
       eyebrow={<Button variant='ghost' size='sm' className='-ml-2 mb-1 h-7 text-xs text-muted-foreground' onClick={() => navigate({ to: '/reputation', search: { tab: 'runs' } })}><ArrowLeft className='size-3.5' />返回口碑巡检</Button>}
-      actions={<><StatusBadge value={run.status} label={statusName(run.status)} />{run.source_type === 'synthetic' && <Badge variant='outline' className='border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300'>合成测试</Badge>}{run.source_type === 'real_acceptance' && <Badge variant='outline' className='border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'>真实验收</Badge>}</>}
+      actions={<><StatusBadge value={run.status} label={statusName(run.status)} />{run.source_type === 'scheduled' && <Badge variant='outline' className='border-cyan-500/25 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300'>正式调度</Badge>}{run.source_type === 'retry' && <Badge variant='outline'>失败项补跑</Badge>}{run.delayed && <Badge variant='outline' title='服务在计划时间之后恢复，并于同一自然日自动补触发。' className='border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300'>同日补触发</Badge>}{run.source_type === 'synthetic' && <Badge variant='outline' className='border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300'>合成测试</Badge>}{run.source_type === 'real_acceptance' && <Badge variant='outline' className='border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'>真实验收</Badge>}</>}
     />
+    {run.source_type === 'scheduled' && <Card className='shrink-0 border-border/70 py-3'><CardContent className='flex flex-wrap items-center justify-between gap-3 px-4 text-sm'><div className='flex flex-wrap gap-x-6 gap-y-1 text-muted-foreground'><span className='flex items-center gap-1.5'><Clock3 className='size-4 text-primary' />计划巡检 {formatDate(run.planned_at)}</span><span>计划汇报 {formatDate(run.report_planned_at)}</span><span>范围版本 {run.scope_version_id?.slice(-8) ?? '—'}</span><span>{run.baseline_source_run_id ? `前日基线 ${run.baseline_date ?? '—'}（已冻结）` : `目标基线日 ${run.baseline_date ?? '—'}（无可用数据）`}</span></div><div className='flex gap-2'>{run.unresolved_count && ['partial_success', 'failed'].includes(run.status) ? <Button size='sm' variant='outline' disabled={retry.isPending} onClick={() => retry.mutate()}><RotateCcw className='size-4' />补跑 {run.unresolved_count} 个失败项</Button> : null}<Button size='sm' variant='outline' className='text-destructive hover:text-destructive' disabled={remove.isPending || !['success', 'partial_success', 'failed'].includes(run.status)} onClick={() => { if (window.confirm('将整体删除该正式批次、全部补跑及交付文件，并保留日期墓碑。确认继续？')) remove.mutate() }}><Trash2 className='size-4' />删除关联链</Button></div></CardContent></Card>}
     <div className='grid shrink-0 gap-3 sm:grid-cols-2 xl:grid-cols-4'>
       <Kpi label='处理完成' value={`${done}/${run.planned_count}`} hint={`${completion}% 已结束`} icon={Check} tone='cyan'><Progress value={completion} className='mt-2 h-1.5' /></Kpi>
       <Kpi label='成功结果' value={String(run.completed_count)} hint={run.failed_count ? `${run.failed_count} 项需关注` : '全部成功'} icon={ShieldCheck} tone='green' />
-      <Kpi label='页面证据' value={`${run.complete_evidence_count}/${run.required_evidence_count}`} hint={run.complete_evidence_count === run.required_evidence_count ? '所需证据完整' : '仍有证据缺口'} icon={ImageIcon} tone='violet' />
+      <Kpi label='页面证据' value={run.required_evidence_count ? `${run.complete_evidence_count}/${run.required_evidence_count}` : '无需截图'} hint={run.required_evidence_count ? (run.complete_evidence_count === run.required_evidence_count ? '所需证据完整' : '仍有证据缺口') : '无口碑分或排名变化'} icon={ImageIcon} tone='violet' />
       <Kpi label='完成时间' value={formatDate(run.finished_at).slice(11)} hint={formatDate(run.finished_at).slice(0, 10)} icon={RefreshCw} tone='amber' />
     </div>
     <div className='flex shrink-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between'>
@@ -77,7 +90,9 @@ function MetricCell({ metric, inverseLabel = false }: { metric: ReputationMetric
   const Icon = metric.direction === 'up' ? ArrowUp : metric.direction === 'down' ? ArrowDown : Minus
   const tone = metric.tone === 'positive' ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : metric.tone === 'negative' ? 'border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-300' : 'border-border bg-muted/35 text-foreground'
   if (!metric.raw) return <div><span className='text-sm text-muted-foreground'>—</span><div className='mt-1 text-[11px] text-muted-foreground'>{stateName(metric.comparison_status)}</div></div>
-  return <div className={cn('inline-flex min-w-24 flex-col rounded-md border px-2 py-1.5', tone)}><span className='font-semibold tabular-nums'>{metric.raw}</span>{metric.delta ? <span className='mt-0.5 flex items-center gap-1 text-[11px]'><Icon className='size-3' />{inverseLabel ? (metric.tone === 'positive' ? '名次上升' : '名次下降') : (metric.direction === 'up' ? '较前日上升' : '较前日下降')} {metric.delta.replace(/[+-]/, '')}</span> : <span className='mt-0.5 text-[11px] opacity-75'>{stateName(metric.comparison_status)}</span>}</div>
+  const comparable = metric.comparison_status === 'comparable'
+  const changeLabel = metric.direction === 'same' ? (inverseLabel ? '名次持平' : '较前日持平') : inverseLabel ? (metric.tone === 'positive' ? '名次上升' : '名次下降') : (metric.direction === 'up' ? '较前日上升' : '较前日下降')
+  return <div className={cn('inline-flex min-w-24 flex-col rounded-md border px-2 py-1.5', tone)}><span className='font-semibold tabular-nums'>{metric.raw}</span>{comparable ? <span className='mt-0.5 flex items-center gap-1 text-[11px]'><Icon className='size-3' />{changeLabel}{metric.direction !== 'same' && metric.delta ? ` ${metric.delta.replace(/[+-]/, '')}` : ''}</span> : <span className='mt-0.5 text-[11px] opacity-75'>{stateName(metric.comparison_status)}</span>}</div>
 }
 
 function EvidencePanel({ results }: { results: ReputationResult[] }) {
@@ -90,12 +105,13 @@ function EvidenceMetric({ label, value }: { label: string; value?: string }) { r
 
 function ReportPanel({ run }: { run: ReputationRun }) {
   const report = run.report_text ?? ''
-  return <div className='grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_300px]'><Card className='flex min-h-0 flex-col overflow-hidden py-0'><div className='flex shrink-0 items-center justify-between border-b bg-muted/25 px-4 py-3'><div><div className='font-medium'>定时汇报正文</div><div className='text-xs text-muted-foreground'>纯文本输出，不依赖颜色传达变化</div></div><Button variant='outline' size='sm' onClick={async () => { await navigator.clipboard.writeText(report); toast.success('汇报正文已复制') }}><Clipboard className='size-4' />复制</Button></div><pre className='min-h-0 flex-1 overflow-auto whitespace-pre-wrap p-5 font-sans text-sm leading-7'>{report}</pre></Card><div className='space-y-4 overflow-auto'><Card><CardHeader><CardTitle className='flex items-center gap-2 text-base'><FileText className='size-4 text-primary' />交付完整性</CardTitle><CardDescription>同一运行生成三类可追溯文件。</CardDescription></CardHeader><CardContent className='space-y-2 text-sm'><DeliveryRow label='汇报 TXT' done={run.report_status === 'success'} /><DeliveryRow label='彩色 XLSX' done={Boolean(run.downloads?.xlsx)} /><DeliveryRow label='页面证据 ZIP' done={run.complete_evidence_count === run.required_evidence_count} /></CardContent></Card><Card><CardHeader><CardTitle className='text-base'>异常口径</CardTitle></CardHeader><CardContent className='text-sm leading-6 text-muted-foreground'>页面缺失、需认证和无法可靠解析会进入“异常与缺失”，不会用空值伪装成无变化。</CardContent></Card></div></div>
+  return <div className='grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_300px]'><Card className='flex min-h-0 flex-col overflow-hidden py-0'><div className='flex shrink-0 items-center justify-between border-b bg-muted/25 px-4 py-3'><div><div className='font-medium'>定时汇报正文</div><div className='text-xs text-muted-foreground'>纯文本输出，不依赖颜色传达变化</div></div><Button variant='outline' size='sm' disabled={!report} onClick={async () => { await navigator.clipboard.writeText(report); toast.success('汇报正文已复制') }}><Clipboard className='size-4' />复制</Button></div>{report ? <pre className='min-h-0 flex-1 overflow-auto whitespace-pre-wrap p-5 font-sans text-sm leading-7'>{report}</pre> : <CardContent className='grid min-h-64 flex-1 place-items-center text-center'><div><Clock3 className='mx-auto mb-2 size-7 text-muted-foreground/55' /><div className='font-medium'>{run.status === 'running' ? '巡检执行中' : '等待定时汇报'}</div><div className='mt-1 text-sm text-muted-foreground'>{run.status === 'running' ? '汇报只读取终态冻结结果。' : `计划生成时间：${formatDate(run.report_planned_at)}`}</div></div></CardContent>}</Card><div className='space-y-4 overflow-auto'><Card><CardHeader><CardTitle className='flex items-center gap-2 text-base'><FileText className='size-4 text-primary' />交付完整性</CardTitle><CardDescription>同一运行生成三类可追溯文件。</CardDescription></CardHeader><CardContent className='space-y-2 text-sm'><DeliveryRow label='汇报 TXT' done={run.report_status === 'success'} /><DeliveryRow label='彩色 XLSX' done={Boolean(run.downloads?.xlsx)} /><DeliveryRow label='页面证据 ZIP' done={run.complete_evidence_count === run.required_evidence_count} /></CardContent></Card><Card><CardHeader><CardTitle className='text-base'>异常口径</CardTitle></CardHeader><CardContent className='text-sm leading-6 text-muted-foreground'>页面缺失、需认证和无法可靠解析会进入“异常与缺失”，不会用空值伪装成无变化。</CardContent></Card></div></div>
 }
 
 function DeliveryRow({ label, done }: { label: string; done: boolean }) { return <div className='flex items-center justify-between rounded-md bg-muted/40 px-3 py-2'><span>{label}</span><span className={cn('flex items-center gap-1 text-xs', done ? 'text-emerald-600 dark:text-emerald-300' : 'text-amber-600 dark:text-amber-300')}>{done ? <Check className='size-3.5' /> : <CircleAlert className='size-3.5' />}{done ? '已生成' : '待处理'}</span></div> }
 
 function DownloadButton({ href, icon: Icon, children }: { href?: string; icon: typeof Download; children: React.ReactNode }) { return <Button asChild={Boolean(href)} variant='outline' size='sm' disabled={!href}>{href ? <a href={href}><Icon className='size-4' />{children}</a> : <span><Icon className='size-4' />{children}</span>}</Button> }
 function runTypeName(value: ReputationRun['run_type']) { return ({ baseline_initialization: '基线初始化', daily: '日常巡检', month_end: '月末巡检' })[value] }
+function runDisplayType(run: ReputationRun) { return run.source_type === 'scheduled' ? (run.schedule_type === 'month_end' ? '月末巡检' : '日常巡检') : runTypeName(run.run_type) }
 function statusName(value: string) { return ({ success: '成功', partial_success: '部分成功', failed: '失败', running: '运行中', queued: '排队中' } as Record<string, string>)[value] ?? value }
-function stateName(value: string) { return ({ no_baseline: '暂无基线', comparable: '可比较', not_available: '页面暂无', unknown: '无法确认', auth_required: '需要认证' } as Record<string, string>)[value] ?? value }
+function stateName(value: string) { return ({ no_baseline: '暂无基线', comparable: '可比较', not_comparable: '口径变化', not_available: '页面暂无', unknown: '无法确认', auth_required: '需要认证' } as Record<string, string>)[value] ?? value }

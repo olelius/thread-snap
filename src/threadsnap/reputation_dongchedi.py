@@ -8,7 +8,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlsplit
 
 from patchright.async_api import Browser, Page, async_playwright
@@ -60,10 +60,10 @@ class ReputationPageResult:
     volume_raw: str | None
     rank_scope: str
     measurements: list[dict[str, Any]]
-    full_page_path: Path
-    metric_region_path: Path
-    full_page_sha256: str
-    metric_region_sha256: str
+    full_page_path: Path | None
+    metric_region_path: Path | None
+    full_page_sha256: str | None
+    metric_region_sha256: str | None
     width: int
     height: int
     metric_rect: dict[str, float]
@@ -133,11 +133,15 @@ class DongchediReputationAdapter:
         concurrency: int = 2,
         headless: bool = False,
         timeout_seconds: int = 90,
+        batch_timeout_seconds: int = 45 * 60,
+        evidence_policy: Callable[[ReputationMappingTarget, dict[str, Any]], bool] | None = None,
     ) -> None:
         self.storage_state = storage_state
         self.concurrency = max(1, min(int(concurrency), 8))
         self.headless = headless
         self.timeout_seconds = timeout_seconds
+        self.batch_timeout_seconds = max(1, int(batch_timeout_seconds))
+        self.evidence_policy = evidence_policy
 
     @staticmethod
     def _validate_identity(
@@ -300,33 +304,39 @@ class DongchediReputationAdapter:
                     "口碑分与同级排名的可用状态不一致。",
                 )
             metric_rect = _metric_rect(current)
-            target_dir = output_dir / target.vehicle_id
-            target_dir.mkdir(parents=True, exist_ok=False)
-            document_width = float(current.get("document_width") or 0)
-            document_height = float(current.get("document_height") or 0)
-            if (
-                metric_rect["x"] < 0
-                or metric_rect["y"] < 0
-                or metric_rect["x"] + metric_rect["width"] > document_width
-                or metric_rect["y"] + metric_rect["height"] > document_height
-            ):
-                raise ReputationAdapterError(
-                    "REPUTATION_EVIDENCE_REGION_INVALID",
-                    "指标区域超出页面边界。",
+            capture = self.evidence_policy is None or self.evidence_policy(target, current)
+            metric_path: Path | None = None
+            digest: str | None = None
+            width = int(round(metric_rect["width"]))
+            height = int(round(metric_rect["height"]))
+            if capture:
+                target_dir = output_dir / target.vehicle_id
+                target_dir.mkdir(parents=True, exist_ok=False)
+                document_width = float(current.get("document_width") or 0)
+                document_height = float(current.get("document_height") or 0)
+                if (
+                    metric_rect["x"] < 0
+                    or metric_rect["y"] < 0
+                    or metric_rect["x"] + metric_rect["width"] > document_width
+                    or metric_rect["y"] + metric_rect["height"] > document_height
+                ):
+                    raise ReputationAdapterError(
+                        "REPUTATION_EVIDENCE_REGION_INVALID",
+                        "指标区域超出页面边界。",
+                    )
+                metric_path = target_dir / "region.png"
+                await page.screenshot(
+                    path=str(metric_path),
+                    clip=metric_rect,
+                    animations="disabled",
                 )
-            metric_path = target_dir / "region.png"
-            await page.screenshot(
-                path=str(metric_path),
-                clip=metric_rect,
-                animations="disabled",
-            )
-            with Image.open(metric_path) as source:
-                width, height = source.size
-            if not metric_path.is_file():
-                raise ReputationAdapterError(
-                    "REPUTATION_EVIDENCE_WRITE_FAILED", "真实页面证据写入失败。"
-                )
-            digest = _sha256(metric_path)
+                with Image.open(metric_path) as source:
+                    width, height = source.size
+                if not metric_path.is_file():
+                    raise ReputationAdapterError(
+                        "REPUTATION_EVIDENCE_WRITE_FAILED", "真实页面证据写入失败。"
+                    )
+                digest = _sha256(metric_path)
             return ReputationPageResult(
                 vehicle_id=target.vehicle_id,
                 platform_vehicle_id=target.platform_vehicle_id,
@@ -359,6 +369,7 @@ class DongchediReputationAdapter:
 
         output_dir.mkdir(parents=True, exist_ok=False)
         semaphore = asyncio.Semaphore(self.concurrency)
+        auth_failed = asyncio.Event()
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(
                 headless=self.headless,
@@ -367,13 +378,33 @@ class DongchediReputationAdapter:
 
             async def bounded(target: ReputationMappingTarget) -> ReputationPageResult | Exception:
                 async with semaphore:
+                    if auth_failed.is_set():
+                        return ReputationAdapterError(
+                            "AUTH_REQUIRED", "懂车帝共享Session需要更新。"
+                        )
                     try:
                         return await self._visit(browser, target, output_dir)
                     except Exception as error:
+                        if isinstance(error, ReputationAdapterError) and error.code == "AUTH_REQUIRED":
+                            auth_failed.set()
                         return error
 
+            tasks = [asyncio.create_task(bounded(target)) for target in targets]
             try:
-                return await asyncio.gather(*(bounded(target) for target in targets))
+                done, pending = await asyncio.wait(
+                    tasks, timeout=self.batch_timeout_seconds, return_when=asyncio.ALL_COMPLETED
+                )
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+                timeout_error = ReputationAdapterError(
+                    "REPUTATION_BATCH_TIMEOUT",
+                    "口碑巡检达到45分钟批次上限，未完成项已停止。",
+                )
+                return [
+                    task.result() if task in done else timeout_error for task in tasks
+                ]
             finally:
                 await browser.close()
 

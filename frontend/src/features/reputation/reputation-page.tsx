@@ -2,12 +2,12 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { motion, useReducedMotion } from 'motion/react'
-import { Activity, Beaker, ChartNoAxesCombined, CircleAlert, ExternalLink, FileCheck2, Gauge, Images, Loader2, Play, RefreshCw, Rocket, ScanSearch, Settings2, ShieldCheck } from 'lucide-react'
+import { Activity, Beaker, CalendarClock, ChartNoAxesCombined, CircleAlert, ExternalLink, FileCheck2, Gauge, Images, Loader2, Play, RefreshCw, Rocket, ScanSearch, Settings2, ShieldCheck } from 'lucide-react'
 import { toast } from 'sonner'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
 import { api, errorMessage, formatDate, platformName } from '@/lib/api'
-import type { PageResult, ReputationCapabilities, ReputationMappingValidation, ReputationRun, ReputationScope } from '@/lib/types'
+import type { PageResult, ReputationCapabilities, ReputationMappingValidation, ReputationRun, ReputationSchedule, ReputationScope } from '@/lib/types'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -37,6 +37,11 @@ export function ReputationPage() {
   const runs = useQuery({
     queryKey: ['reputation-runs'],
     queryFn: () => api<PageResult<ReputationRun>>('/reputation/runs?limit=100'),
+    refetchInterval: (query) => query.state.data?.items.some((run) => ['queued', 'running'].includes(run.status) || run.report_status === 'waiting') ? 3_000 : false,
+  })
+  const schedule = useQuery({
+    queryKey: ['reputation-schedule'],
+    queryFn: () => api<ReputationSchedule>('/reputation/schedule'),
   })
   const scope = useQuery({
     queryKey: ['reputation-scope'],
@@ -63,7 +68,7 @@ export function ReputationPage() {
         description='独立管理垂媒车型口碑分、排名、页面证据与定时汇报，不与帖子提取批次混合。'
         eyebrow={<div className='mb-1 flex items-center gap-2 text-xs font-semibold tracking-[0.18em] text-primary uppercase'><ChartNoAxesCombined className='size-3.5' /> Reputation intelligence</div>}
         actions={<>
-          <Button variant='outline' size='sm' onClick={() => { runs.refetch(); scope.refetch(); capabilities.refetch() }}><RefreshCw className={`size-4 ${runs.isFetching ? 'animate-spin' : ''}`} />刷新</Button>
+          <Button variant='outline' size='sm' onClick={() => { runs.refetch(); scope.refetch(); capabilities.refetch(); schedule.refetch() }}><RefreshCw className={`size-4 ${runs.isFetching ? 'animate-spin' : ''}`} />刷新</Button>
           {capabilities.data?.reputation_synthetic_runs && <Button size='sm' onClick={() => setTestOpen(true)}><Beaker className='size-4' />手动跑测试</Button>}
         </>}
       />
@@ -86,7 +91,7 @@ export function ReputationPage() {
         className='min-h-0 flex-1 overflow-hidden'
       >
         {tab === 'runs'
-          ? <RunsPanel query={runs} onOpen={(id) => navigate({ to: '/reputation/runs/$runId', params: { runId: id }, search: { view: 'ranking' } })} />
+          ? <RunsPanel query={runs} schedule={schedule.data} onOpen={(id) => navigate({ to: '/reputation/runs/$runId', params: { runId: id }, search: { view: 'ranking' } })} />
           : <ScopePanel query={scope} adapterMessage={capabilities.data?.real_adapter_message} />}
       </motion.div>
 
@@ -114,12 +119,16 @@ export function ReputationPage() {
   )
 }
 
-function RunsPanel({ query, onOpen }: { query: ReturnType<typeof useQuery<PageResult<ReputationRun>>>; onOpen: (id: string) => void }) {
+function RunsPanel({ query, schedule, onOpen }: { query: ReturnType<typeof useQuery<PageResult<ReputationRun>>>; schedule?: ReputationSchedule; onOpen: (id: string) => void }) {
   if (query.isLoading) return <Card className='h-full py-0'><CardContent className='space-y-3 p-5'>{Array.from({ length: 7 }).map((_, index) => <Skeleton key={index} className='h-12 w-full' />)}</CardContent></Card>
   if (query.isError) return <Failure title='巡检批次加载失败' detail={errorMessage(query.error)} retry={() => query.refetch()} />
   const items = query.data?.items ?? []
   return (
     <Card className='flex h-full min-h-0 flex-col overflow-hidden border-border/70 bg-card/90 py-0 shadow-sm backdrop-blur'>
+      <div className='flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-muted/20 px-4 py-3'>
+        <div className='flex items-center gap-2 text-sm'><span className='grid size-8 place-items-center rounded-lg bg-primary/10 text-primary'><CalendarClock className='size-4' /></span><span><span className='block font-medium'>每日 {schedule?.inspection_time?.slice(0, 5) ?? '10:00'} 正式巡检</span><span className='block text-xs text-muted-foreground'>{schedule?.timezone ?? 'Asia/Shanghai'} · {schedule?.report_time?.slice(0, 5) ?? '10:30'} 生成汇报</span></span></div>
+        <div className='max-w-xl text-right text-xs text-muted-foreground'>{schedule?.last_event ? `${schedule.last_event.planned_date} · ${schedule.last_event.message}` : '等待首个正式计划事件'}</div>
+      </div>
       <div className='min-h-0 flex-1 overflow-auto'>
         <Table className='min-w-[980px]'>
           <TableHeader><TableRow className='bg-muted/35'><TableHead>巡检编号</TableHead><TableHead>类型</TableHead><TableHead>平台与范围</TableHead><TableHead>状态</TableHead><TableHead>处理进度</TableHead><TableHead>证据完整度</TableHead><TableHead>完成时间</TableHead><TableHead /></TableRow></TableHeader>
@@ -129,11 +138,11 @@ function RunsPanel({ query, onOpen }: { query: ReturnType<typeof useQuery<PageRe
               const percent = run.planned_count ? Math.round(done / run.planned_count * 100) : 0
               return <TableRow key={run.id} className='cursor-pointer transition-colors hover:bg-primary/[0.035]' onClick={() => onOpen(run.id)}>
                 <TableCell><div className='font-medium'>{run.number}</div><div className='mt-1 text-xs text-muted-foreground'>{run.planned_date}</div></TableCell>
-                <TableCell><Badge variant='secondary'>{runTypeName(run.run_type)}</Badge>{run.source_type === 'synthetic' && <div className='mt-1 text-[11px] text-violet-600 dark:text-violet-300'>合成测试</div>}{run.source_type === 'real_acceptance' && <div className='mt-1 text-[11px] text-emerald-600 dark:text-emerald-300'>真实验收</div>}</TableCell>
+                <TableCell><Badge variant='secondary'>{runDisplayType(run)}</Badge>{run.run_type === 'baseline_initialization' && run.source_type === 'scheduled' && <div className='mt-1 text-[11px] text-muted-foreground'>基线初始化</div>}{run.source_type === 'scheduled' && <div className='mt-1 text-[11px] text-cyan-700 dark:text-cyan-300'>正式调度{run.delayed ? ' · 同日补触发' : ''}</div>}{run.source_type === 'synthetic' && <div className='mt-1 text-[11px] text-violet-600 dark:text-violet-300'>合成测试</div>}{run.source_type === 'real_acceptance' && <div className='mt-1 text-[11px] text-emerald-600 dark:text-emerald-300'>真实验收</div>}</TableCell>
                 <TableCell><div className='text-sm'>{run.platform_codes.map(platformName).join('、')}</div><div className='mt-1 text-xs text-muted-foreground'>{run.planned_count} 款车型</div></TableCell>
-                <TableCell><StatusBadge value={run.status} label={statusName(run.status)} /></TableCell>
+                <TableCell><StatusBadge value={run.status} label={statusName(run.status)} />{run.retry_runs?.length ? <div className='mt-1 text-[11px] text-muted-foreground'>关联补跑 {run.retry_runs.length} 次 · {run.resolved_count}/{run.planned_count} 已完整</div> : null}</TableCell>
                 <TableCell><div className='w-36 space-y-1.5'><div className='flex justify-between text-xs'><span>{done}/{run.planned_count}</span><span className='text-muted-foreground'>{percent}%</span></div><Progress value={percent} className='h-1.5' />{run.failed_count > 0 && <div className='text-[11px] text-red-600 dark:text-red-300'>{run.failed_count} 项异常</div>}</div></TableCell>
-                <TableCell><div className='flex items-center gap-1.5 text-sm'><FileCheck2 className={`size-4 ${run.complete_evidence_count === run.required_evidence_count ? 'text-emerald-500' : 'text-amber-500'}`} />{run.complete_evidence_count}/{run.required_evidence_count}</div></TableCell>
+                <TableCell><div className='flex items-center gap-1.5 text-sm'><FileCheck2 className={`size-4 ${run.complete_evidence_count === run.required_evidence_count ? 'text-emerald-500' : 'text-amber-500'}`} />{run.required_evidence_count ? `${run.complete_evidence_count}/${run.required_evidence_count}` : '无需截图'}</div></TableCell>
                 <TableCell className='whitespace-nowrap text-sm'>{formatDate(run.finished_at)}</TableCell>
                 <TableCell><Button variant='ghost' size='sm' onClick={(event) => { event.stopPropagation(); onOpen(run.id) }}>查看</Button></TableCell>
               </TableRow>
@@ -217,5 +226,6 @@ function Failure({ title, detail, retry }: { title: string; detail: string; retr
 }
 
 function runTypeName(value: ReputationRun['run_type']) { return ({ baseline_initialization: '基线初始化', daily: '日常巡检', month_end: '月末巡检' })[value] }
+function runDisplayType(run: ReputationRun) { return run.source_type === 'scheduled' ? (run.schedule_type === 'month_end' ? '月末巡检' : '日常巡检') : runTypeName(run.run_type) }
 function statusName(value: string) { return ({ success: '成功', partial_success: '部分成功', failed: '失败', running: '运行中', queued: '排队中' } as Record<string, string>)[value] ?? value }
 function mappingStatusName(value?: string) { return ({ verified: '已验证', unverified: '待验证', failed: '验证失败' } as Record<string, string>)[value ?? ''] ?? '未知' }

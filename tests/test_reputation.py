@@ -8,7 +8,9 @@ import json
 import tempfile
 import unittest
 import zipfile
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
@@ -17,8 +19,80 @@ from sqlalchemy import func, select
 
 from threadsnap.app import create_app
 from threadsnap.config import Settings
-from threadsnap.models import ExtractionRun
-from threadsnap.reputation_dongchedi import ReputationPageResult, normalize_series_url
+from threadsnap.models import (
+    ExtractionRun,
+    PlatformConfig,
+    ReputationResult,
+    ReputationRun,
+    ReputationScheduleEvent,
+    ReputationTombstone,
+)
+from threadsnap.reputation_dongchedi import (
+    ReputationAdapterError,
+    ReputationPageResult,
+    normalize_series_url,
+)
+
+
+class OfficialFakeAdapter:
+    """支持证据策略和可控失败的正式巡检确定性适配器。"""
+
+    score_overrides: dict[str, str] = {}
+    failures: set[str] = set()
+
+    def __init__(self, *_args, evidence_policy=None, **_kwargs):
+        self.evidence_policy = evidence_policy
+
+    def validate_sync(self, targets, output_dir):
+        output_dir.mkdir(parents=True)
+        values = []
+        for index, target in enumerate(targets):
+            if target.vehicle_id in self.failures:
+                values.append(
+                    ReputationAdapterError(
+                        "REPUTATION_PAGE_FIXTURE_FAILURE", "确定性正式巡检失败。"
+                    )
+                )
+                continue
+            score = self.score_overrides.get(target.vehicle_id, "3.80")
+            measurement = {
+                "score_raw": score,
+                "rank_raw": "4",
+                "volume_raw": str(500 + index),
+                "rank_scope": "同级车评分",
+            }
+            capture = self.evidence_policy is None or self.evidence_policy(target, measurement)
+            metric = None
+            digest = None
+            if capture:
+                target_dir = output_dir / target.vehicle_id
+                target_dir.mkdir()
+                metric = target_dir / "region.png"
+                Image.new("RGB", (600, 240), "white").save(metric)
+                digest = hashlib.sha256(metric.read_bytes()).hexdigest()
+            values.append(
+                ReputationPageResult(
+                    vehicle_id=target.vehicle_id,
+                    platform_vehicle_id=target.platform_vehicle_id,
+                    mapping_hash=target.mapping_hash,
+                    final_url=target.platform_url,
+                    actual_name=target.platform_display_name,
+                    score_raw=score,
+                    rank_raw="4",
+                    volume_raw=str(500 + index),
+                    rank_scope="同级车评分",
+                    measurements=[measurement] * 3,
+                    full_page_path=metric,
+                    metric_region_path=metric,
+                    full_page_sha256=digest,
+                    metric_region_sha256=digest,
+                    width=600,
+                    height=240,
+                    metric_rect={"x": 0, "y": 0, "width": 600, "height": 240},
+                    duration_ms=25,
+                )
+            )
+        return values
 
 
 class ReputationInspectionTest(unittest.TestCase):
@@ -350,6 +424,244 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual(normalize_series_url(url, "24729"), url)
         with self.assertRaisesRegex(Exception, "车型ID"):
             normalize_series_url(url, "10170")
+
+
+class OfficialReputationLifecycleTest(unittest.TestCase):
+    """验证10:00正式批次、10:30产物、补跑与删除的组合生命周期。"""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        self.settings = Settings(
+            database_url=f"sqlite:///{(self.root / 'official.db').as_posix()}",
+            data_dir=self.root / "data",
+            start_background_services=False,
+            runtime_mode="test",
+        )
+        self.client_context = TestClient(create_app(self.settings))
+        self.client = self.client_context.__enter__()
+        self.service = self.client.app.state.container.reputation
+        self.service.adapter_factory = OfficialFakeAdapter
+        OfficialFakeAdapter.score_overrides = {}
+        OfficialFakeAdapter.failures = set()
+        self._publish_scope()
+
+    def tearDown(self) -> None:
+        self.client_context.__exit__(None, None, None)
+        self.temporary.cleanup()
+
+    def _publish_scope(self) -> None:
+        csv_path = self.root / "official-scope.csv"
+        headers = [
+            "schema_version",
+            "seed_key",
+            "series_name",
+            "vehicle_name",
+            "role",
+            "role_order",
+            "platform_code",
+            "platform_vehicle_id",
+            "platform_url",
+            "platform_display_name",
+        ]
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=headers)
+            writer.writeheader()
+            for index in range(27):
+                focus = index < 14
+                platform_id = str(30000 + index)
+                writer.writerow(
+                    {
+                        "schema_version": "reputation-scope-v1",
+                        "seed_key": f"official-{index + 1:02d}",
+                        "series_name": f"正式车系{index // 5 + 1}",
+                        "vehicle_name": f"正式车型{index + 1:02d}",
+                        "role": "focus" if focus else "competitor",
+                        "role_order": index + 1 if focus else index - 13,
+                        "platform_code": "dongchedi",
+                        "platform_vehicle_id": platform_id,
+                        "platform_url": (
+                            "https://www.dongchedi.com/auto/series/score/"
+                            f"{platform_id}-x-x-x-x-x"
+                        ),
+                        "platform_display_name": f"正式页面车型{index + 1:02d}",
+                    }
+                )
+        scope = self.service.initialize_scope_csv(csv_path)
+        self.client.app.state.container.session_store.import_state(
+            "dongchedi",
+            {
+                "cookies": [
+                    {
+                        "name": "fixture",
+                        "value": "session",
+                        "domain": ".dongchedi.com",
+                        "path": "/",
+                    }
+                ]
+            },
+        )
+        validation = self.service.validate_mappings(
+            type("Request", (), {"revision": scope["revision"], "vehicle_ids": None})()
+        )
+        self.service.publish_scope(
+            type(
+                "Publish",
+                (),
+                {
+                    "revision": validation["scope"]["revision"],
+                    "initial_review_acknowledged": True,
+                },
+            )()
+        )
+        with self.client.app.state.container.sessions.begin() as db:
+            platform = db.get(PlatformConfig, "dongchedi")
+            platform.enabled = True
+
+    @staticmethod
+    def _at(day: str, clock: str) -> datetime:
+        return datetime.fromisoformat(f"{day}T{clock}:00").replace(
+            tzinfo=ZoneInfo("Asia/Shanghai")
+        ).astimezone(timezone.utc)
+
+    def test_real_initialization_is_next_day_baseline(self) -> None:
+        """真实初始化数据必须承担次日基线，不能因来源类型再次初始化。"""
+
+        collected = self._at("2030-01-01", "15:30")
+        with self.client.app.state.container.sessions.begin() as db:
+            baseline = ReputationRun(
+                number="RP-A-20300101-BASE",
+                source_type="real_acceptance",
+                run_type="baseline_initialization",
+                planned_date="2030-01-01",
+                status="success",
+                platform_codes=["dongchedi"],
+                planned_count=1,
+                completed_count=1,
+                report_status="success",
+                created_at=collected,
+                finished_at=collected,
+            )
+            db.add(baseline)
+            db.flush()
+            db.add(
+                ReputationResult(
+                    run_id=baseline.id,
+                    vehicle_id="official-01",
+                    series_name="正式车系1",
+                    vehicle_name="正式车型01",
+                    role="focus",
+                    role_position=0,
+                    vehicle_position=1,
+                    platform_code="dongchedi",
+                    platform_name="懂车帝",
+                    status="success",
+                    metrics={
+                        "score": {"raw": "3.70", "value": "3.70"},
+                        "rank": {"raw": "4", "value": "4", "scope": "同级车评分"},
+                        "volume": {"raw": "500", "value": "500"},
+                    },
+                    collected_at=collected,
+                )
+            )
+
+        due = self.service.check_schedule(self._at("2030-01-02", "10:00"))
+        run_id = due["queued_run_ids"][0]
+        queued = self.service.get_run(run_id)
+        self.assertEqual(queued["run_type"], "daily")
+        self.assertEqual(queued["baseline_source_run_id"], baseline.id)
+
+        finished = self.service.execute_run(run_id)
+        first = next(
+            item for item in finished["results"] if item["vehicle_id"] == "official-01"
+        )
+        self.assertEqual(first["metrics"]["score"]["baseline_value"], "3.70")
+        self.assertEqual(first["metrics"]["score"]["direction"], "up")
+
+    def test_official_schedule_baseline_daily_retry_delete_and_missed_day(self) -> None:
+        before = self.service.check_schedule(self._at("2030-01-02", "09:59"))
+        self.assertIsNone(before["created_run_id"])
+
+        due = self.service.check_schedule(self._at("2030-01-02", "10:00"))
+        self.assertEqual(len(due["queued_run_ids"]), 1)
+        baseline_id = due["queued_run_ids"][0]
+        self.assertTrue(
+            self.client.app.state.container.worker._official_reputation_waiting("dongchedi")
+        )
+        self.assertTrue(self.service.can_execute_official(baseline_id))
+        duplicate = self.service.check_schedule(self._at("2030-01-02", "10:01"))
+        self.assertEqual(duplicate["created_run_id"], baseline_id)
+        baseline = self.service.execute_run(baseline_id)
+        self.assertFalse(
+            self.client.app.state.container.worker._official_reputation_waiting("dongchedi")
+        )
+        self.assertEqual(baseline["run_type"], "baseline_initialization")
+        self.assertEqual(baseline["status"], "success")
+        self.assertEqual(baseline["complete_evidence_count"], 27)
+        waiting = self.service.generate_report(baseline_id, self._at("2030-01-02", "10:29"))
+        self.assertEqual(waiting["report_status"], "waiting")
+        reported = self.service.generate_report(baseline_id, self._at("2030-01-02", "10:30"))
+        self.assertEqual(reported["report_status"], "success")
+        self.assertTrue(Path(reported["downloads"]["txt"].split("/api/v1")[-1]).name)
+
+        OfficialFakeAdapter.score_overrides = {"official-01": "3.90"}
+        daily_due = self.service.check_schedule(self._at("2030-01-03", "10:00"))
+        daily_id = daily_due["queued_run_ids"][0]
+        daily = self.service.execute_run(daily_id)
+        self.assertEqual(daily["run_type"], "daily")
+        self.assertEqual(daily["baseline_date"], "2030-01-02")
+        self.assertEqual(daily["required_evidence_count"], 1)
+        self.assertEqual(daily["complete_evidence_count"], 1)
+        changed = next(item for item in daily["results"] if item["vehicle_id"] == "official-01")
+        self.assertEqual(changed["metrics"]["score"]["direction"], "up")
+
+        OfficialFakeAdapter.failures = {"official-02"}
+        failed_due = self.service.check_schedule(self._at("2030-01-04", "10:00"))
+        failed_id = failed_due["queued_run_ids"][0]
+        failed = self.service.execute_run(failed_id)
+        self.assertEqual(failed["status"], "partial_success")
+        incomplete_report = self.service.generate_report(
+            failed_id, self._at("2030-01-04", "10:30")
+        )
+        self.assertIn("【不完整汇报】", incomplete_report["report_text"])
+        self.assertNotIn("今日无口碑指标变化", incomplete_report["report_text"])
+        retry = self.service.retry_failed(failed_id)
+        self.assertEqual(retry["source_type"], "retry")
+        self.assertEqual(retry["planned_count"], 1)
+        OfficialFakeAdapter.failures = set()
+        retry_done = self.service.execute_run(retry["id"])
+        self.assertEqual(retry_done["status"], "success")
+        linked = self.service.get_run(failed_id)
+        self.assertEqual(linked["linked_status"], "success")
+        self.assertEqual(linked["unresolved_count"], 0)
+        with self.assertRaisesRegex(Exception, "已经全部补跑成功"):
+            self.service.retry_failed(failed_id)
+
+        job = self.service.delete_official(failed_id)
+        self.assertEqual(job["status"], "success", job)
+        with self.client.app.state.container.sessions() as db:
+            self.assertIsNone(db.get(ReputationRun, failed_id))
+            self.assertEqual(
+                db.scalar(select(func.count()).select_from(ReputationTombstone)), 1
+            )
+        same_day = self.service.check_schedule(self._at("2030-01-04", "11:00"))
+        self.assertIsNone(same_day["created_run_id"])
+
+        missed = self.service.check_schedule(self._at("2030-01-06", "09:00"))
+        self.assertIn("2030-01-05", missed["missed_dates"])
+        with self.client.app.state.container.sessions() as db:
+            event = db.scalar(
+                select(ReputationScheduleEvent).where(
+                    ReputationScheduleEvent.planned_date == "2030-01-05"
+                )
+            )
+            self.assertEqual(event.status, "missed")
+
+        resumed = self.service.check_schedule(self._at("2030-01-06", "10:00"))
+        resumed_run = self.service.get_run(resumed["queued_run_ids"][0])
+        self.assertEqual(resumed_run["run_type"], "daily")
+        self.assertEqual(resumed_run["baseline_date"], "2030-01-05")
+        self.assertIsNone(resumed_run["baseline_source_run_id"])
 
 
 if __name__ == "__main__":

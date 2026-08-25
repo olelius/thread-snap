@@ -24,6 +24,7 @@ from .models import (
     ExtractionRun,
     PlatformConfig,
     PostSnapshot,
+    ReputationRun,
     ValidationJob,
     utc_now,
 )
@@ -193,7 +194,7 @@ class WorkerService:
                 self.stop_event.wait(self.poll_seconds)
 
     def process_once(self) -> bool:
-        if self._process_validation_job():
+        if not self._official_reputation_waiting() and self._process_validation_job():
             return True
         with self.factory() as db:
             platform_codes = list(
@@ -317,6 +318,8 @@ class WorkerService:
             self.event_publisher("validation.changed", circle_id, job_id=job_id, status=status)
 
     def _process_platform_head(self, platform_code: str) -> bool:
+        if self._official_reputation_waiting(platform_code):
+            return False
         with self.factory.begin() as db:
             if db.scalar(
                 select(func.count())
@@ -416,6 +419,20 @@ class WorkerService:
                 "run.changed", run_id, summary_version=summary_version, status=status
             )
         return True
+
+    def _official_reputation_waiting(self, platform_code: str | None = None) -> bool:
+        """正式口碑批次排队或运行时，普通平台任务停止领取新工作。"""
+
+        with self.factory() as db:
+            rows = db.scalars(
+                select(ReputationRun).where(
+                    ReputationRun.source_type == "scheduled",
+                    ReputationRun.status.in_(["queued", "running"]),
+                )
+            ).all()
+            return any(
+                platform_code is None or platform_code in (row.platform_codes or []) for row in rows
+            )
 
     def _execute_task(self, collector: DongchediCollector, task_id: str) -> dict[str, Any]:
         with self.factory() as db:

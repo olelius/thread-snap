@@ -9,9 +9,10 @@ import json
 import shutil
 import zipfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
+from time import monotonic
 from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
@@ -21,21 +22,28 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from PIL import Image, ImageDraw
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from .config import Settings
 from .errors import DomainError
 from .ids import uuid7
 from .models import (
+    Circle,
+    CircleTask,
     PlatformConfig,
+    ReputationDeleteJob,
     ReputationEvidence,
     ReputationMappingValidationAttempt,
     ReputationMappingValidationRun,
     ReputationResult,
     ReputationRun,
+    ReputationScheduleEvent,
+    ReputationSchedulerState,
     ReputationScopeDraft,
     ReputationScopeVersion,
+    ReputationTombstone,
+    ValidationJob,
 )
 from .reputation_dongchedi import (
     ADAPTER_VERSION as REAL_ADAPTER_VERSION,
@@ -343,15 +351,36 @@ class ReputationService:
 
     def list_runs(self, offset: int = 0, limit: int = 50) -> dict[str, Any]:
         with self.sessions() as db:
-            total = db.scalar(select(func.count()).select_from(ReputationRun)) or 0
+            root_filter = ReputationRun.source_type != "retry"
+            total = (
+                db.scalar(select(func.count()).select_from(ReputationRun).where(root_filter)) or 0
+            )
             runs = db.scalars(
                 select(ReputationRun)
+                .where(root_filter)
                 .order_by(ReputationRun.created_at.desc(), ReputationRun.id.desc())
                 .offset(offset)
                 .limit(limit)
             ).all()
+            items = []
+            for run in runs:
+                value = self._run_dict(run)
+                value["retry_runs"] = [
+                    self._run_dict(item)
+                    for item in db.scalars(
+                        select(ReputationRun)
+                        .where(
+                            ReputationRun.source_type == "retry",
+                            ReputationRun.root_run_id == run.id,
+                        )
+                        .order_by(ReputationRun.created_at, ReputationRun.id)
+                    ).all()
+                ]
+                if run.source_type == "scheduled":
+                    value.update(self._chain_summary(db, run))
+                items.append(value)
             return {
-                "items": [self._run_dict(run) for run in runs],
+                "items": items,
                 "total": int(total),
                 "offset": offset,
                 "limit": limit,
@@ -386,11 +415,71 @@ class ReputationService:
                 self._result_dict(row, evidence_by_result.get(row.id), prefix) for row in results
             ]
             payload["downloads"] = {
-                "txt": f"{prefix}/reputation/runs/{run.id}/report.txt",
-                "xlsx": f"{prefix}/reputation/runs/{run.id}/export.xlsx",
-                "evidence_zip": f"{prefix}/reputation/runs/{run.id}/evidence.zip",
+                **(
+                    {"txt": f"{prefix}/reputation/runs/{run.id}/report.txt"}
+                    if run.report_path
+                    else {}
+                ),
+                **(
+                    {"xlsx": f"{prefix}/reputation/runs/{run.id}/export.xlsx"}
+                    if run.xlsx_path
+                    else {}
+                ),
+                **(
+                    {"evidence_zip": f"{prefix}/reputation/runs/{run.id}/evidence.zip"}
+                    if run.required_evidence_count or run.evidence_zip_path
+                    else {}
+                ),
             }
+            root_id = run.root_run_id or run.id
+            payload["retry_runs"] = [
+                self._run_dict(item)
+                for item in db.scalars(
+                    select(ReputationRun)
+                    .where(
+                        ReputationRun.source_type == "retry",
+                        ReputationRun.root_run_id == root_id,
+                    )
+                    .order_by(ReputationRun.created_at, ReputationRun.id)
+                ).all()
+            ]
+            root = db.get(ReputationRun, root_id)
+            if root and root.source_type == "scheduled":
+                payload.update(self._chain_summary(db, root))
             return payload
+
+    @staticmethod
+    def _chain_summary(db: Session, root: ReputationRun) -> dict[str, Any]:
+        chain = db.scalars(
+            select(ReputationRun)
+            .where(or_(ReputationRun.id == root.id, ReputationRun.root_run_id == root.id))
+            .order_by(ReputationRun.created_at, ReputationRun.id)
+        ).all()
+        successful: set[str] = set()
+        for item in chain:
+            results = db.scalars(
+                select(ReputationResult).where(ReputationResult.run_id == item.id)
+            ).all()
+            evidence_ids = {
+                value.result_id
+                for value in db.scalars(
+                    select(ReputationEvidence).where(
+                        ReputationEvidence.result_id.in_([row.id for row in results])
+                    )
+                ).all()
+            }
+            for result in results:
+                if result.status == "success" and (
+                    not result.evidence_required or result.id in evidence_ids
+                ):
+                    successful.add(f"{result.vehicle_id}|{result.platform_code}")
+        resolved = len(set(root.target_keys) & successful)
+        unresolved = max(0, len(root.target_keys) - resolved)
+        return {
+            "resolved_count": resolved,
+            "unresolved_count": unresolved,
+            "linked_status": "success" if unresolved == 0 else "partial_success" if resolved else "failed",
+        }
 
     def create_synthetic(self, scenario_id: str) -> dict[str, Any]:
         self._require_synthetic()
@@ -672,6 +761,1077 @@ class ReputationService:
             self.event_publisher("reputation.run.changed", run_id, status=run.status)
         return self.get_run(run_id)
 
+    def recover_interrupted(self) -> int:
+        """进程启动时把未提交终态的正式运行恢复为排队，避免重复创建批次。"""
+
+        with self.sessions.begin() as db:
+            rows = db.scalars(
+                select(ReputationRun).where(
+                    ReputationRun.source_type.in_(["scheduled", "retry"]),
+                    ReputationRun.status == "running",
+                )
+            ).all()
+            for row in rows:
+                row.status = "queued"
+                row.error_message = "服务重启后从不可变批次身份恢复执行。"
+            reports = db.scalars(
+                select(ReputationRun).where(ReputationRun.report_status == "generating")
+            ).all()
+            for row in reports:
+                row.report_status = "failed"
+                row.error_message = "服务重启中断派生产物生成，可按既定重试预算继续。"
+            return len(rows) + len(reports)
+
+    def check_schedule(self, now: datetime | None = None) -> dict[str, Any]:
+        """对账固定10:00巡检、跨日漏触发水位和10:30汇报时点。"""
+
+        current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        zone = ZoneInfo(self.settings.timezone)
+        local_now = current.astimezone(zone)
+        missed_dates: list[str] = []
+        with self.sessions.begin() as db:
+            state = db.get(ReputationSchedulerState, 1)
+            if state:
+                previous_day = state.last_checked_at.astimezone(zone).date()
+                cursor = previous_day + timedelta(days=1)
+                while cursor < local_now.date():
+                    schedule_type = self._schedule_type(cursor)
+                    existing = db.scalar(
+                        select(ReputationScheduleEvent).where(
+                            ReputationScheduleEvent.planned_date == cursor.isoformat(),
+                            ReputationScheduleEvent.run_type == schedule_type,
+                        )
+                    )
+                    tombstone = db.scalar(
+                        select(ReputationTombstone).where(
+                            ReputationTombstone.planned_date == cursor.isoformat(),
+                            ReputationTombstone.run_type == schedule_type,
+                        )
+                    )
+                    if not existing and not tombstone:
+                        planned = datetime.combine(cursor, time(10, 0), tzinfo=zone).astimezone(
+                            timezone.utc
+                        )
+                        db.add(
+                            ReputationScheduleEvent(
+                                planned_date=cursor.isoformat(),
+                                run_type=schedule_type,
+                                planned_at=planned,
+                                status="missed",
+                                message="服务跨自然日恢复，按合同只记录漏触发，不补采历史页面。",
+                            )
+                        )
+                        missed_dates.append(cursor.isoformat())
+                    cursor += timedelta(days=1)
+                state.last_checked_at = current
+            else:
+                db.add(ReputationSchedulerState(id=1, last_checked_at=current))
+
+        planned_at = datetime.combine(
+            local_now.date(), time(10, 0), tzinfo=zone
+        ).astimezone(timezone.utc)
+        created_run_id = None
+        if current >= planned_at:
+            created_run_id = self._ensure_official_run(planned_at, current)
+
+        with self.sessions() as db:
+            queued = list(
+                db.scalars(
+                    select(ReputationRun.id)
+                    .where(
+                        ReputationRun.source_type.in_(["scheduled", "retry"]),
+                        ReputationRun.status == "queued",
+                    )
+                    .order_by(ReputationRun.created_at, ReputationRun.id)
+                ).all()
+            )
+            reports = list(
+                db.scalars(
+                    select(ReputationRun.id)
+                    .where(
+                        ReputationRun.source_type == "scheduled",
+                        ReputationRun.status.in_(["success", "partial_success", "failed"]),
+                        or_(
+                            ReputationRun.report_status.in_(["pending", "waiting"]),
+                            (
+                                (ReputationRun.report_status == "failed")
+                                & (ReputationRun.report_attempt_count < 2)
+                            ),
+                        ),
+                        ReputationRun.report_planned_at <= current,
+                    )
+                    .order_by(ReputationRun.report_planned_at, ReputationRun.id)
+                ).all()
+            )
+        return {
+            "created_run_id": created_run_id,
+            "queued_run_ids": queued,
+            "report_run_ids": reports,
+            "missed_dates": missed_dates,
+        }
+
+    @staticmethod
+    def _schedule_type(day: date) -> str:
+        return "month_end" if (day + timedelta(days=1)).month != day.month else "daily"
+
+    def _ensure_official_run(self, planned_at: datetime, current: datetime) -> str | None:
+        zone = ZoneInfo(self.settings.timezone)
+        day = planned_at.astimezone(zone).date()
+        planned_date = day.isoformat()
+        schedule_type = self._schedule_type(day)
+        idempotency_key = f"reputation:{planned_date}:{schedule_type}"
+        with self.sessions.begin() as db:
+            tombstone = db.scalar(
+                select(ReputationTombstone).where(
+                    ReputationTombstone.planned_date == planned_date,
+                    ReputationTombstone.run_type == schedule_type,
+                )
+            )
+            if tombstone:
+                return None
+            event = db.scalar(
+                select(ReputationScheduleEvent).where(
+                    ReputationScheduleEvent.planned_date == planned_date,
+                    ReputationScheduleEvent.run_type == schedule_type,
+                )
+            )
+            if event:
+                return event.run_id
+            existing = db.scalar(
+                select(ReputationRun).where(ReputationRun.idempotency_key == idempotency_key)
+            )
+            if existing:
+                return existing.id
+            version = db.scalar(
+                select(ReputationScopeVersion)
+                .where(ReputationScopeVersion.published_at <= planned_at)
+                .order_by(ReputationScopeVersion.published_at.desc(), ReputationScopeVersion.version.desc())
+                .limit(1)
+            )
+            if not version:
+                db.add(
+                    ReputationScheduleEvent(
+                        planned_date=planned_date,
+                        run_type=schedule_type,
+                        planned_at=planned_at,
+                        status="configuration_error",
+                        message="计划时刻没有已发布的口碑巡检范围，未创建空批次。",
+                    )
+                )
+                return None
+            snapshot = json.loads(json.dumps(version.snapshot, ensure_ascii=False))
+            target_keys = [
+                f"{vehicle['id']}|{PLATFORM_CODE}"
+                for vehicle in snapshot.get("vehicles", [])
+                if vehicle.get("enabled", True)
+                and vehicle.get("mappings", {}).get(PLATFORM_CODE)
+            ]
+            platform = db.get(PlatformConfig, PLATFORM_CODE)
+            if not target_keys or not platform or not platform.enabled:
+                db.add(
+                    ReputationScheduleEvent(
+                        planned_date=planned_date,
+                        run_type=schedule_type,
+                        planned_at=planned_at,
+                        status="configuration_error",
+                        message="计划范围没有当前具备运行资格的车型平台项，未创建空批次。",
+                        scope_version_id=version.id,
+                    )
+                )
+                return None
+            previous_real_runs = db.scalar(
+                select(func.count()).select_from(ReputationRun).where(
+                    ReputationRun.source_type.in_(["scheduled", "real_acceptance"]),
+                    ReputationRun.planned_date < planned_date,
+                )
+            ) or 0
+            deleted_official_runs = (
+                db.scalar(
+                    select(func.count()).select_from(ReputationTombstone).where(
+                        ReputationTombstone.planned_date < planned_date
+                    )
+                )
+                or 0
+            )
+            baseline_date = (day - timedelta(days=1)).isoformat()
+            baseline_source, baseline_snapshot = self._freeze_baseline(db, baseline_date)
+            run_id = uuid7()
+            # 真实初始化验收批次承载的就是首日基线。只要前一自然日已经有
+            # 完整的真实基线快照，下一次正式巡检就应直接进入日常比较；不能
+            # 因其不是调度器创建而再次初始化。
+            run_type = (
+                "baseline_initialization"
+                if previous_real_runs == 0
+                and deleted_official_runs == 0
+                and not baseline_snapshot
+                else schedule_type
+            )
+            run_number = f"RP-S-{day:%Y%m%d}-{run_id[-4:].upper()}"
+            report_planned_at = datetime.combine(
+                day, time(10, 30), tzinfo=zone
+            ).astimezone(timezone.utc)
+            run = ReputationRun(
+                id=run_id,
+                number=run_number,
+                source_type="scheduled",
+                run_type=run_type,
+                schedule_type=schedule_type,
+                planned_date=planned_date,
+                target_keys=target_keys,
+                root_run_id=run_id,
+                scope_version_id=version.id,
+                idempotency_key=idempotency_key,
+                planned_at=planned_at,
+                report_planned_at=report_planned_at,
+                delayed=current > planned_at + timedelta(minutes=1),
+                concurrency=max(1, min(int(platform.internal_concurrency), 8)),
+                baseline_date=baseline_date,
+                baseline_frozen_at=current,
+                baseline_source_run_id=baseline_source,
+                baseline_snapshot=baseline_snapshot,
+                status="queued",
+                platform_codes=[PLATFORM_CODE],
+                planned_count=len(target_keys),
+                report_status="waiting",
+                created_at=current,
+            )
+            db.add(run)
+            db.add(
+                ReputationScheduleEvent(
+                    planned_date=planned_date,
+                    run_type=schedule_type,
+                    planned_at=planned_at,
+                    status="queued",
+                    message=(
+                        "服务同日恢复，已创建延迟正式口碑巡检批次。"
+                        if run.delayed
+                        else "已按10:00计划创建正式口碑巡检批次。"
+                    ),
+                    scope_version_id=version.id,
+                    run_id=run_id,
+                    created_at=current,
+                )
+            )
+            return run_id
+
+    @staticmethod
+    def _freeze_baseline(
+        db: Session, baseline_date: str
+    ) -> tuple[str | None, dict[str, Any]]:
+        roots = db.scalars(
+            select(ReputationRun)
+            .where(
+                ReputationRun.source_type.in_(["scheduled", "real_acceptance"]),
+                ReputationRun.planned_date == baseline_date,
+            )
+            .order_by(ReputationRun.created_at.desc())
+        ).all()
+        # 同一天若已经存在正式调度批次，它优先于初始化验收批次；验收批次
+        # 只负责在正式日检尚未出现时提供首日真实基线。
+        root = next((item for item in roots if item.source_type == "scheduled"), None)
+        if root is None:
+            root = next((item for item in roots if item.source_type == "real_acceptance"), None)
+        if not root:
+            return None, {}
+        chain = db.scalars(
+            select(ReputationRun)
+            .where(or_(ReputationRun.id == root.id, ReputationRun.root_run_id == root.id))
+            .order_by(ReputationRun.created_at, ReputationRun.id)
+        ).all()
+        snapshot: dict[str, Any] = {}
+        for chain_run in chain:
+            for result in db.scalars(
+                select(ReputationResult).where(ReputationResult.run_id == chain_run.id)
+            ).all():
+                if result.status not in {"success", "partial_success"}:
+                    continue
+                key = f"{result.vehicle_id}|{result.platform_code}"
+                snapshot[key] = {
+                    "metrics": result.metrics,
+                    "source_run_id": chain_run.id,
+                    "collected_at": result.collected_at.isoformat(),
+                }
+        return root.id, snapshot
+
+    @staticmethod
+    def _decimal_value(raw: str | None) -> Decimal | None:
+        if raw is None:
+            return None
+        try:
+            return Decimal(str(raw).replace(",", "").strip())
+        except Exception:
+            return None
+
+    @classmethod
+    def _official_metric(
+        cls,
+        raw: str | None,
+        baseline: dict[str, Any] | None,
+        *,
+        inverse: bool = False,
+        scope: str | None = None,
+    ) -> dict[str, Any]:
+        current = cls._decimal_value(raw)
+        if current is None:
+            value = _metric(None, None, state="not_available", raw=raw)
+        else:
+            baseline_metric = baseline or {}
+            baseline_value = cls._decimal_value(baseline_metric.get("value"))
+            if scope and baseline_metric.get("scope") and baseline_metric.get("scope") != scope:
+                value = {
+                    "raw": raw or format(current, "f"),
+                    "value": format(current, "f"),
+                    "baseline_raw": baseline_metric.get("raw"),
+                    "baseline_value": baseline_metric.get("value"),
+                    "delta": None,
+                    "direction": "none",
+                    "tone": "neutral",
+                    "comparison_status": "not_comparable",
+                }
+            else:
+                value = _metric(
+                    current,
+                    baseline_value,
+                    inverse=inverse,
+                    raw=raw,
+                    baseline_raw=baseline_metric.get("raw"),
+                )
+        if scope:
+            value["scope"] = scope
+        return value
+
+    @classmethod
+    def _official_metrics(
+        cls, page: ReputationPageResult, baseline_row: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        baseline = (baseline_row or {}).get("metrics", {})
+        return {
+            "score": cls._official_metric(page.score_raw, baseline.get("score")),
+            "rank": cls._official_metric(
+                page.rank_raw,
+                baseline.get("rank"),
+                inverse=True,
+                scope=page.rank_scope,
+            ),
+            "volume": cls._official_metric(page.volume_raw, baseline.get("volume")),
+        }
+
+    @staticmethod
+    def _needs_evidence(
+        run_type: str,
+        schedule_type: str | None,
+        role: str,
+        metrics: dict[str, Any],
+    ) -> bool:
+        if run_type == "baseline_initialization" or schedule_type == "month_end":
+            return True
+        return role == "focus" and any(
+            metrics[name].get("direction") in {"up", "down"}
+            or metrics[name].get("comparison_status") == "not_comparable"
+            for name in ("score", "rank")
+        )
+
+    def execute_run(self, run_id: str) -> dict[str, Any]:
+        """执行一个已持久化的正式或失败项补跑批次。"""
+
+        started = datetime.now(timezone.utc)
+        with self.sessions.begin() as db:
+            run = db.get(ReputationRun, run_id)
+            if not run:
+                raise DomainError(
+                    "REPUTATION_RUN_NOT_FOUND", "口碑巡检运行不存在。", status_code=404
+                )
+            if run.status in {"success", "partial_success", "failed"}:
+                return self.get_run(run_id)
+            if run.source_type not in {"scheduled", "retry"}:
+                raise DomainError("REPUTATION_RUN_NOT_EXECUTABLE", "该运行不属于正式执行队列。")
+            version = db.get(ReputationScopeVersion, run.scope_version_id)
+            if not version:
+                run.status = "failed"
+                run.error_message = "批次冻结的范围版本不存在。"
+                run.finished_at = started
+                return self.get_run(run_id)
+            run.status = "running"
+            run.started_at = started
+            run.error_message = None
+            snapshot = json.loads(json.dumps(version.snapshot, ensure_ascii=False))
+            target_keys = set(run.target_keys)
+            baseline_snapshot = json.loads(json.dumps(run.baseline_snapshot, ensure_ascii=False))
+            concurrency = int(run.concurrency or 1)
+            run_type = run.run_type
+            schedule_type = run.schedule_type
+
+        vehicles = {
+            item["id"]: item
+            for item in snapshot.get("vehicles", [])
+            if item.get("enabled", True)
+        }
+        targets: list[ReputationMappingTarget] = []
+        for vehicle in vehicles.values():
+            key = f"{vehicle['id']}|{PLATFORM_CODE}"
+            if target_keys and key not in target_keys:
+                continue
+            mapping = vehicle.get("mappings", {}).get(PLATFORM_CODE)
+            if not mapping:
+                continue
+            targets.append(
+                ReputationMappingTarget(
+                    vehicle_id=vehicle["id"],
+                    platform_vehicle_id=str(mapping["platform_vehicle_id"]),
+                    platform_url=normalize_series_url(
+                        str(mapping["platform_url"]), str(mapping["platform_vehicle_id"])
+                    ),
+                    platform_display_name=str(mapping["platform_display_name"]),
+                    mapping_hash=_mapping_hash(vehicle["id"], mapping),
+                )
+            )
+
+        def evidence_policy(target: ReputationMappingTarget, measurement: dict[str, Any]) -> bool:
+            vehicle = vehicles[target.vehicle_id]
+            baseline = baseline_snapshot.get(f"{target.vehicle_id}|{PLATFORM_CODE}")
+            metrics = {
+                "score": self._official_metric(
+                    measurement.get("score_raw"), (baseline or {}).get("metrics", {}).get("score")
+                ),
+                "rank": self._official_metric(
+                    measurement.get("rank_raw"),
+                    (baseline or {}).get("metrics", {}).get("rank"),
+                    inverse=True,
+                    scope=str(measurement.get("rank_scope") or "同级车评分"),
+                ),
+            }
+            return self._needs_evidence(run_type, schedule_type, vehicle["role"], metrics)
+
+        root = self.settings.reputation_dir / run_id / "collection"
+        root.mkdir(parents=True, exist_ok=True)
+        storage_state = self.session_store.get_state(PLATFORM_CODE) if self.session_store else None
+        if storage_state:
+            deadline = monotonic() + 45 * 60
+            adapter = self.adapter_factory(
+                storage_state,
+                concurrency=concurrency,
+                headless=self.settings.auth_browser_headless,
+                timeout_seconds=90,
+                batch_timeout_seconds=45 * 60,
+                evidence_policy=evidence_policy,
+            )
+            try:
+                first = adapter.validate_sync(targets, root / f"attempt-1-{uuid7()}")
+                retry_indexes = [
+                    index
+                    for index, result in enumerate(first)
+                    if isinstance(result, ReputationAdapterError) and result.retryable
+                ]
+                remaining = int(deadline - monotonic())
+                if retry_indexes and remaining > 0:
+                    adapter.batch_timeout_seconds = remaining
+                    retried = adapter.validate_sync(
+                        [targets[index] for index in retry_indexes], root / f"attempt-2-{uuid7()}"
+                    )
+                elif retry_indexes:
+                    retried = [
+                        ReputationAdapterError(
+                            "REPUTATION_BATCH_TIMEOUT",
+                            "口碑巡检达到45分钟批次上限，未完成项已停止。",
+                        )
+                        for _ in retry_indexes
+                    ]
+                else:
+                    retried = []
+                retry_results = dict(zip(retry_indexes, retried, strict=True))
+                final_results = [
+                    retry_results.get(index, result) for index, result in enumerate(first)
+                ]
+                attempt_counts = [2 if index in retry_results else 1 for index in range(len(first))]
+            except Exception as error:
+                final_results = [error for _ in targets]
+                attempt_counts = [1 for _ in targets]
+        else:
+            final_results = [
+                ReputationAdapterError("AUTH_REQUIRED", "懂车帝共享Session需要更新。")
+                for _ in targets
+            ]
+            attempt_counts = [1 for _ in targets]
+
+        finished = datetime.now(timezone.utc)
+        with self.sessions.begin() as db:
+            run = db.get(ReputationRun, run_id)
+            if not run:
+                raise RuntimeError("口碑巡检批次在执行期间丢失")
+            db.execute(delete(ReputationEvidence).where(ReputationEvidence.result_id.in_(
+                select(ReputationResult.id).where(ReputationResult.run_id == run_id)
+            )))
+            db.execute(delete(ReputationResult).where(ReputationResult.run_id == run_id))
+            completed = 0
+            failed = 0
+            required = 0
+            complete_evidence = 0
+            for target, result, attempt_count in zip(
+                targets, final_results, attempt_counts, strict=True
+            ):
+                vehicle = vehicles[target.vehicle_id]
+                key = f"{target.vehicle_id}|{PLATFORM_CODE}"
+                baseline = baseline_snapshot.get(key)
+                if isinstance(result, ReputationPageResult):
+                    metrics = self._official_metrics(result, baseline)
+                    evidence_required = self._needs_evidence(
+                        run.run_type, run.schedule_type, vehicle["role"], metrics
+                    )
+                    has_evidence = bool(
+                        result.metric_region_path
+                        and result.metric_region_sha256
+                        and result.metric_region_path.is_file()
+                        and _sha256(result.metric_region_path) == result.metric_region_sha256
+                    )
+                    row_status = "success"
+                    error_code = None
+                    error_message = None
+                    if evidence_required and not has_evidence:
+                        row_status = "partial_success"
+                        error_code = "REPUTATION_EVIDENCE_MISSING"
+                        error_message = "指标已取得，但本项必需页面证据缺失。"
+                    completed += 1
+                    required += int(evidence_required)
+                    complete_evidence += int(evidence_required and has_evidence)
+                    duration_ms = result.duration_ms
+                else:
+                    metrics = {
+                        name: _metric(None, None, state="unknown")
+                        for name in ("score", "rank", "volume")
+                    }
+                    evidence_required = run.run_type == "baseline_initialization" or run.schedule_type == "month_end"
+                    has_evidence = False
+                    row_status = "failed"
+                    failed += 1
+                    required += int(evidence_required)
+                    parsed = self._validation_error(result)
+                    error_code = parsed["code"]
+                    error_message = parsed["message"]
+                    duration_ms = None
+                row = ReputationResult(
+                    run_id=run_id,
+                    vehicle_id=target.vehicle_id,
+                    series_name=vehicle["series_name"],
+                    vehicle_name=vehicle["vehicle_name"],
+                    role=vehicle["role"],
+                    role_position=0 if vehicle["role"] == "focus" else 1,
+                    vehicle_position=int(vehicle["role_order"]),
+                    platform_code=PLATFORM_CODE,
+                    platform_name=PLATFORM_NAME,
+                    status=row_status,
+                    metrics=metrics,
+                    evidence_required=evidence_required,
+                    mapping_snapshot=vehicle.get("mappings", {}).get(PLATFORM_CODE) or {},
+                    attempt_count=attempt_count,
+                    duration_ms=duration_ms,
+                    error_code=error_code,
+                    error_message=error_message,
+                    collected_at=finished,
+                )
+                db.add(row)
+                db.flush()
+                if isinstance(result, ReputationPageResult) and has_evidence and evidence_required:
+                    db.add(
+                        ReputationEvidence(
+                            result_id=row.id,
+                            full_page_path=str(result.metric_region_path),
+                            metric_region_path=str(result.metric_region_path),
+                            full_page_sha256=str(result.metric_region_sha256),
+                            metric_region_sha256=str(result.metric_region_sha256),
+                            width=result.width,
+                            height=result.height,
+                        )
+                    )
+            run.completed_count = completed
+            run.failed_count = failed
+            run.required_evidence_count = required
+            run.complete_evidence_count = complete_evidence
+            run.finished_at = finished
+            if completed == 0:
+                run.status = "failed"
+            elif failed or complete_evidence < required:
+                run.status = "partial_success"
+            else:
+                run.status = "success"
+            run.report_status = "waiting" if run.source_type == "scheduled" else "not_applicable"
+            event = db.scalar(
+                select(ReputationScheduleEvent).where(ReputationScheduleEvent.run_id == run.id)
+            )
+            if event:
+                event.status = run.status
+                event.message = "正式口碑巡检已到达终态，等待10:30汇报。"
+        if self.event_publisher:
+            self.event_publisher("reputation.run.changed", run_id, status=run.status)
+        return self.get_run(run_id)
+
+    def can_execute_official(self, run_id: str) -> bool:
+        """只有同平台已经开始的普通任务释放后，正式口碑批次才取得容量。"""
+
+        with self.sessions() as db:
+            run = db.get(ReputationRun, run_id)
+            if not run or run.status != "queued":
+                return False
+            for platform_code in run.platform_codes:
+                running_tasks = db.scalar(
+                    select(func.count()).select_from(CircleTask).where(
+                        CircleTask.platform_code == platform_code,
+                        CircleTask.status.in_(
+                            ["queued", "running"] if run.source_type == "retry" else ["running"]
+                        ),
+                    )
+                ) or 0
+                running_validations = db.scalar(
+                    select(func.count())
+                    .select_from(ValidationJob)
+                    .join(Circle, ValidationJob.circle_id == Circle.id)
+                    .where(
+                        Circle.platform_code == platform_code,
+                        ValidationJob.status.in_(
+                            ["queued", "running"] if run.source_type == "retry" else ["running"]
+                        ),
+                    )
+                ) or 0
+                if running_tasks or running_validations:
+                    return False
+            return True
+
+    def generate_report(self, run_id: str, now: datetime | None = None) -> dict[str, Any]:
+        """从终态冻结结果生成正文、TXT与固定版式XLSX；同一输入幂等复用。"""
+
+        current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        with self.sessions() as db:
+            current_run = db.get(ReputationRun, run_id)
+            if not current_run:
+                raise DomainError(
+                    "REPUTATION_RUN_NOT_FOUND", "口碑巡检运行不存在。", status_code=404
+                )
+            if current_run.source_type != "scheduled":
+                raise DomainError("REPUTATION_REPORT_NOT_APPLICABLE", "该运行不生成正式定时汇报。")
+            if current_run.status not in {"success", "partial_success", "failed"}:
+                raise DomainError(
+                    "REPUTATION_REPORT_NOT_READY",
+                    "巡检尚未终态，汇报继续等待。",
+                    status_code=409,
+                )
+            failed_only = current_run.status == "failed"
+            before_planned = bool(
+                current_run.report_planned_at and current < current_run.report_planned_at
+            )
+            already_success = bool(
+                current_run.report_status == "success"
+                and current_run.report_path
+                and current_run.xlsx_path
+                and Path(current_run.report_path).is_file()
+                and Path(current_run.xlsx_path).is_file()
+            )
+        if failed_only:
+            with self.sessions.begin() as db:
+                run = db.get(ReputationRun, run_id)
+                run.report_status = "not_generated"
+                run.report_generated_at = current
+            return self.get_run(run_id)
+        if before_planned:
+            return self.get_run(run_id)
+        if already_success:
+            return self.get_run(run_id)
+        with self.sessions.begin() as db:
+            run = db.get(ReputationRun, run_id)
+            run.report_status = "generating"
+            run.report_attempt_count += 1
+        with self.sessions() as db:
+            run = db.get(ReputationRun, run_id)
+            results = db.scalars(
+                select(ReputationResult)
+                .where(ReputationResult.run_id == run_id)
+                .order_by(ReputationResult.role_position, ReputationResult.vehicle_position)
+            ).all()
+            evidence_by_result = {
+                item.result_id: item
+                for item in db.scalars(
+                    select(ReputationEvidence).where(
+                        ReputationEvidence.result_id.in_([row.id for row in results])
+                    )
+                ).all()
+            }
+            run_dir = self.settings.reputation_dir / run.id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            report = self._render_report(run, results)
+            report_path = run_dir / f"{run.number}.txt"
+            xlsx_path = run_dir / f"{run.number}.xlsx"
+            report_temp = run_dir / f".{run.number}.{uuid7()}.tmp.txt"
+            xlsx_temp = run_dir / f".{run.number}.{uuid7()}.tmp.xlsx"
+            try:
+                report_temp.write_text(report, encoding="utf-8")
+                self._create_xlsx(run, results, evidence_by_result, xlsx_temp)
+                report_temp.replace(report_path)
+                xlsx_temp.replace(xlsx_path)
+            except Exception as error:
+                report_temp.unlink(missing_ok=True)
+                xlsx_temp.unlink(missing_ok=True)
+                with self.sessions.begin() as update_db:
+                    failed = update_db.get(ReputationRun, run_id)
+                    failed.report_status = "failed"
+                    failed.error_message = f"口碑派生产物生成失败：{type(error).__name__}"
+                raise DomainError(
+                    "REPUTATION_ARTIFACT_GENERATION_FAILED",
+                    "口碑汇报或XLSX生成失败，可按冻结输入重试。",
+                    status_code=503,
+                ) from error
+        with self.sessions.begin() as db:
+            run = db.get(ReputationRun, run_id)
+            run.report_text = report
+            run.report_path = str(report_path)
+            run.xlsx_path = str(xlsx_path)
+            run.report_generated_at = current
+            run.report_status = "success"
+            run.error_message = None
+        if self.event_publisher:
+            self.event_publisher("reputation.run.changed", run_id, status="report_success")
+        return self.get_run(run_id)
+
+    def retry_failed(self, run_id: str) -> dict[str, Any]:
+        """只为关联链中仍未取得完整成功的车型平台项创建补跑批次。"""
+
+        now = datetime.now(timezone.utc)
+        with self.sessions.begin() as db:
+            selected = db.get(ReputationRun, run_id)
+            if not selected:
+                raise DomainError(
+                    "REPUTATION_RUN_NOT_FOUND", "口碑巡检运行不存在。", status_code=404
+                )
+            root_id = selected.root_run_id or selected.id
+            root = db.get(ReputationRun, root_id)
+            if not root or root.source_type != "scheduled":
+                raise DomainError("REPUTATION_RETRY_FORBIDDEN", "只有正式口碑巡检关联链可以补跑。")
+            if root.status not in {"partial_success", "failed"}:
+                raise DomainError(
+                    "REPUTATION_RETRY_NOT_NEEDED",
+                    "原批次没有需要补跑的失败项。",
+                    status_code=409,
+                )
+            chain = db.scalars(
+                select(ReputationRun)
+                .where(or_(ReputationRun.id == root.id, ReputationRun.root_run_id == root.id))
+                .order_by(ReputationRun.created_at, ReputationRun.id)
+            ).all()
+            successful: set[str] = set()
+            for item in chain:
+                evidence_ids = {
+                    value.result_id
+                    for value in db.scalars(
+                        select(ReputationEvidence).join(
+                            ReputationResult, ReputationEvidence.result_id == ReputationResult.id
+                        ).where(ReputationResult.run_id == item.id)
+                    ).all()
+                }
+                for result in db.scalars(
+                    select(ReputationResult).where(ReputationResult.run_id == item.id)
+                ).all():
+                    if result.status == "success" and (
+                        not result.evidence_required or result.id in evidence_ids
+                    ):
+                        successful.add(f"{result.vehicle_id}|{result.platform_code}")
+            pending = sorted(set(root.target_keys) - successful)
+            if not pending:
+                raise DomainError(
+                    "REPUTATION_RETRY_NOT_NEEDED",
+                    "关联链失败项已经全部补跑成功。",
+                    status_code=409,
+                )
+            input_hash = _text_hash({"root": root.id, "targets": pending})
+            existing = db.scalar(
+                select(ReputationRun).where(
+                    ReputationRun.source_type == "retry",
+                    ReputationRun.root_run_id == root.id,
+                    ReputationRun.input_hash == input_hash,
+                    ReputationRun.status.in_(["queued", "running"]),
+                )
+            )
+            if existing:
+                return self.get_run(existing.id)
+            retry_id = uuid7()
+            retry = ReputationRun(
+                id=retry_id,
+                number=f"RP-R-{now:%Y%m%d-%H%M%S}-{retry_id[-4:].upper()}",
+                source_type="retry",
+                run_type=root.run_type,
+                schedule_type=root.schedule_type,
+                planned_date=root.planned_date,
+                target_keys=pending,
+                root_run_id=root.id,
+                parent_run_id=selected.id,
+                scope_version_id=root.scope_version_id,
+                input_hash=input_hash,
+                planned_at=root.planned_at,
+                report_planned_at=root.report_planned_at,
+                delayed=root.delayed,
+                concurrency=root.concurrency,
+                baseline_date=root.baseline_date,
+                baseline_frozen_at=root.baseline_frozen_at,
+                baseline_source_run_id=root.baseline_source_run_id,
+                baseline_snapshot=root.baseline_snapshot,
+                status="queued",
+                platform_codes=root.platform_codes,
+                planned_count=len(pending),
+                report_status="not_applicable",
+                created_at=now,
+            )
+            db.add(retry)
+        if self.event_publisher:
+            self.event_publisher("reputation.run.changed", retry_id, status="queued")
+        return self.get_run(retry_id)
+
+    def schedule_status(self) -> dict[str, Any]:
+        """返回固定日程及最近事件，供前端只读展示。"""
+
+        with self.sessions() as db:
+            event = db.scalar(
+                select(ReputationScheduleEvent)
+                .order_by(ReputationScheduleEvent.planned_at.desc())
+                .limit(1)
+            )
+            return {
+                "timezone": self.settings.timezone,
+                "inspection_time": "10:00:00",
+                "report_time": "10:30:00",
+                "last_event": {
+                    "planned_date": event.planned_date,
+                    "run_type": event.run_type,
+                    "status": event.status,
+                    "message": event.message,
+                    "run_id": event.run_id,
+                    "planned_at": event.planned_at.isoformat(),
+                }
+                if event
+                else None,
+            }
+
+    def delete_official(self, run_id: str) -> dict[str, Any]:
+        """按关联链执行同盘隔离、数据库提交和墓碑写入。"""
+
+        now = datetime.now(timezone.utc)
+        with self.sessions() as db:
+            selected = db.get(ReputationRun, run_id)
+            if not selected:
+                raise DomainError(
+                    "REPUTATION_RUN_NOT_FOUND", "口碑巡检运行不存在。", status_code=404
+                )
+            root_id = selected.root_run_id or selected.id
+            root_run = db.get(ReputationRun, root_id)
+            if not root_run or root_run.source_type != "scheduled":
+                raise DomainError(
+                    "REPUTATION_DELETE_FORBIDDEN", "只有终态每日正式巡检批次可以整体删除。"
+                )
+            if root_run.status not in {"success", "partial_success", "failed"}:
+                raise DomainError(
+                    "REPUTATION_DELETE_NOT_TERMINAL", "巡检尚未终态，暂不能删除。", status_code=409
+                )
+            job_key = f"delete:{root_id}"
+            existing = db.scalar(
+                select(ReputationDeleteJob).where(ReputationDeleteJob.idempotency_key == job_key)
+            )
+            if existing:
+                return self._delete_job_dict(existing)
+            chain = db.scalars(
+                select(ReputationRun).where(
+                    or_(ReputationRun.id == root_id, ReputationRun.root_run_id == root_id)
+                )
+            ).all()
+            result_rows = db.scalars(
+                select(ReputationResult).where(
+                    ReputationResult.run_id.in_([item.id for item in chain])
+                )
+            ).all()
+            result_hash = _text_hash(
+                [
+                    {
+                        "id": item.id,
+                        "run_id": item.run_id,
+                        "vehicle_id": item.vehicle_id,
+                        "platform_code": item.platform_code,
+                        "status": item.status,
+                        "metrics": item.metrics,
+                    }
+                    for item in sorted(result_rows, key=lambda value: value.id)
+                ]
+            )
+            chain_ids = [item.id for item in chain]
+            schedule_type = root_run.schedule_type or self._schedule_type(
+                date.fromisoformat(root_run.planned_date)
+            )
+            planned_date = root_run.planned_date
+            idempotency_key = root_run.idempotency_key or (
+                f"reputation:{planned_date}:{schedule_type}"
+            )
+
+        storage_root = self.settings.reputation_dir.resolve()
+        files: list[Path] = []
+        for chain_id in chain_ids:
+            directory = (self.settings.reputation_dir / chain_id).resolve()
+            if directory.is_relative_to(storage_root) and directory.is_dir():
+                files.extend(path for path in directory.rglob("*") if path.is_file())
+        manifest = [
+            {
+                "path": str(path),
+                "relative_path": path.relative_to(storage_root).as_posix(),
+                "sha256": _sha256(path),
+                "size": path.stat().st_size,
+            }
+            for path in sorted(set(files))
+        ]
+        job_id = uuid7()
+        quarantine = storage_root / ".quarantine" / job_id
+        with self.sessions.begin() as db:
+            db.add(
+                ReputationDeleteJob(
+                    id=job_id,
+                    root_run_id=root_id,
+                    idempotency_key=job_key,
+                    status="deleting",
+                    manifest=manifest,
+                    quarantine_path=str(quarantine),
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+
+        moved: list[tuple[Path, Path]] = []
+        try:
+            for item in manifest:
+                source = Path(item["path"]).resolve()
+                if not source.is_relative_to(storage_root) or _sha256(source) != item["sha256"]:
+                    raise RuntimeError(f"删除清单校验失败：{item['relative_path']}")
+                destination = quarantine / item["relative_path"]
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                source.replace(destination)
+                moved.append((source, destination))
+        except Exception as error:
+            for source, destination in reversed(moved):
+                source.parent.mkdir(parents=True, exist_ok=True)
+                if destination.exists() and not source.exists():
+                    destination.replace(source)
+            with self.sessions.begin() as db:
+                job = db.get(ReputationDeleteJob, job_id)
+                if job:
+                    job.status = "delete_failed"
+                    job.error_message = str(error)
+                    job.updated_at = datetime.now(timezone.utc)
+            return self.get_delete_job(job_id)
+
+        try:
+            with self.sessions.begin() as db:
+                db.execute(delete(ReputationRun).where(ReputationRun.id.in_(chain_ids)))
+                db.add(
+                    ReputationTombstone(
+                        planned_date=planned_date,
+                        run_type=schedule_type,
+                        idempotency_key=idempotency_key,
+                        original_run_id=root_id,
+                        result_hash=result_hash,
+                        deleted_at=datetime.now(timezone.utc),
+                    )
+                )
+                event = db.scalar(
+                    select(ReputationScheduleEvent).where(
+                        ReputationScheduleEvent.planned_date == planned_date,
+                        ReputationScheduleEvent.run_type == schedule_type,
+                    )
+                )
+                if event:
+                    event.status = "deleted"
+                    event.message = "正式口碑巡检关联链已删除，日期幂等身份由墓碑保留。"
+                    event.run_id = None
+                job = db.get(ReputationDeleteJob, job_id)
+                if job:
+                    job.status = "storage_cleanup_pending"
+                    job.updated_at = datetime.now(timezone.utc)
+        except Exception as error:
+            for source, destination in reversed(moved):
+                source.parent.mkdir(parents=True, exist_ok=True)
+                if destination.exists() and not source.exists():
+                    destination.replace(source)
+            with self.sessions.begin() as db:
+                job = db.get(ReputationDeleteJob, job_id)
+                if job:
+                    job.status = "delete_failed"
+                    job.error_message = str(error)
+                    job.updated_at = datetime.now(timezone.utc)
+            return self.get_delete_job(job_id)
+
+        cleanup_error = None
+        try:
+            if quarantine.exists():
+                shutil.rmtree(quarantine)
+            for chain_id in chain_ids:
+                shutil.rmtree(storage_root / chain_id, ignore_errors=True)
+        except Exception as error:
+            cleanup_error = str(error)
+        with self.sessions.begin() as db:
+            job = db.get(ReputationDeleteJob, job_id)
+            if job:
+                job.status = "storage_cleanup_pending" if cleanup_error else "success"
+                job.error_message = cleanup_error
+                job.updated_at = datetime.now(timezone.utc)
+                job.completed_at = None if cleanup_error else datetime.now(timezone.utc)
+        return self.get_delete_job(job_id)
+
+    def get_delete_job(self, job_id: str) -> dict[str, Any]:
+        with self.sessions() as db:
+            job = db.get(ReputationDeleteJob, job_id)
+            if not job:
+                raise DomainError(
+                    "REPUTATION_DELETE_JOB_NOT_FOUND", "删除作业不存在。", status_code=404
+                )
+            return self._delete_job_dict(job)
+
+    def retry_delete_cleanup(self, job_id: str) -> dict[str, Any]:
+        """重试数据库提交后尚未完成的隔离区清理。"""
+
+        with self.sessions() as db:
+            job = db.get(ReputationDeleteJob, job_id)
+            if not job:
+                raise DomainError(
+                    "REPUTATION_DELETE_JOB_NOT_FOUND", "删除作业不存在。", status_code=404
+                )
+            if job.status == "success":
+                return self._delete_job_dict(job)
+            if job.status != "storage_cleanup_pending":
+                raise DomainError(
+                    "REPUTATION_DELETE_RETRY_NOT_READY",
+                    "该删除作业不处于存储清理待重试状态。",
+                    status_code=409,
+                )
+            quarantine = Path(job.quarantine_path)
+        try:
+            if quarantine.exists():
+                shutil.rmtree(quarantine)
+        except Exception as error:
+            with self.sessions.begin() as db:
+                job = db.get(ReputationDeleteJob, job_id)
+                job.error_message = str(error)
+                job.updated_at = datetime.now(timezone.utc)
+            return self.get_delete_job(job_id)
+        with self.sessions.begin() as db:
+            job = db.get(ReputationDeleteJob, job_id)
+            job.status = "success"
+            job.error_message = None
+            job.updated_at = datetime.now(timezone.utc)
+            job.completed_at = datetime.now(timezone.utc)
+        return self.get_delete_job(job_id)
+
+    @staticmethod
+    def _delete_job_dict(job: ReputationDeleteJob) -> dict[str, Any]:
+        return {
+            "id": job.id,
+            "root_run_id": job.root_run_id,
+            "status": job.status,
+            "file_count": len(job.manifest),
+            "error_message": job.error_message,
+            "created_at": job.created_at.isoformat(),
+            "updated_at": job.updated_at.isoformat(),
+            "completed_at": job.completed_at.isoformat() if job.completed_at else None,
+        }
+
     def delete_synthetic(self, run_id: str) -> dict[str, Any]:
         self._require_synthetic()
         with self.sessions.begin() as db:
@@ -805,7 +1965,13 @@ class ReputationService:
             if run.evidence_zip_path and Path(run.evidence_zip_path).is_file():
                 return Path(run.evidence_zip_path)
             results = db.scalars(
-                select(ReputationResult).where(ReputationResult.run_id == run_id)
+                select(ReputationResult)
+                .where(ReputationResult.run_id == run_id)
+                .order_by(
+                    ReputationResult.role_position,
+                    ReputationResult.vehicle_position,
+                    ReputationResult.platform_code,
+                )
             ).all()
             result_by_id = {row.id: row for row in results}
             evidence = db.scalars(
@@ -813,35 +1979,54 @@ class ReputationService:
                     ReputationEvidence.result_id.in_(list(result_by_id))
                 )
             ).all()
+            evidence_by_result = {item.result_id: item for item in evidence}
             run_dir = self.settings.reputation_dir / run_id
             zip_path = run_dir / f"{run.number}-evidence.zip"
+            zip_temp = run_dir / f".{run.number}-{uuid7()}.tmp.zip"
             manifest: list[dict[str, Any]] = []
             checksums: list[str] = []
-            with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_STORED) as archive:
-                for item in evidence:
-                    result = result_by_id[item.result_id]
-                    name = f"{result.platform_code}/{result.vehicle_id}/region.png"
-                    archive.write(item.metric_region_path, name)
-                    checksums.append(f"{item.metric_region_sha256}  {name}")
-                    manifest.append(
-                        {
-                            "evidence_id": item.id,
-                            "result_id": result.id,
-                            "vehicle_id": result.vehicle_id,
-                            "platform_code": result.platform_code,
-                            "region_path": name,
-                            "region_sha256": item.metric_region_sha256,
-                        }
+            try:
+                with zipfile.ZipFile(zip_temp, "w", compression=zipfile.ZIP_STORED) as archive:
+                    for result in [item for item in results if item.evidence_required]:
+                        item = evidence_by_result.get(result.id)
+                        name = f"{result.platform_code}/{result.vehicle_id}/region.png"
+                        if item and Path(item.metric_region_path).is_file():
+                            archive.write(item.metric_region_path, name)
+                            checksums.append(f"{item.metric_region_sha256}  {name}")
+                            manifest.append(
+                                {
+                                    "status": "complete",
+                                    "evidence_id": item.id,
+                                    "result_id": result.id,
+                                    "vehicle_id": result.vehicle_id,
+                                    "platform_code": result.platform_code,
+                                    "region_path": name,
+                                    "region_sha256": item.metric_region_sha256,
+                                }
+                            )
+                        else:
+                            manifest.append(
+                                {
+                                    "status": "missing",
+                                    "result_id": result.id,
+                                    "vehicle_id": result.vehicle_id,
+                                    "platform_code": result.platform_code,
+                                    "reason": result.error_message or "必需指标区域证据缺失。",
+                                }
+                            )
+                    archive.writestr(
+                        "manifest.json",
+                        json.dumps(
+                            {"schema_version": "reputation-evidence-region-v1", "items": manifest},
+                            ensure_ascii=False,
+                            indent=2,
+                        ),
                     )
-                archive.writestr(
-                    "manifest.json",
-                    json.dumps(
-                        {"schema_version": "reputation-evidence-region-v1", "items": manifest},
-                        ensure_ascii=False,
-                        indent=2,
-                    ),
-                )
-                archive.writestr("SHA256SUMS", "\n".join(checksums) + "\n")
+                    archive.writestr("SHA256SUMS", "\n".join(checksums) + "\n")
+                zip_temp.replace(zip_path)
+            except Exception:
+                zip_temp.unlink(missing_ok=True)
+                raise
             run.evidence_zip_path = str(zip_path)
             return zip_path
 
@@ -1474,10 +2659,19 @@ class ReputationService:
         image.save(path, format="PNG", optimize=False)
 
     def _render_report(self, run: ReputationRun, results: list[ReputationResult]) -> str:
-        title = f"{run.planned_date}口碑分及排名变动如下："
+        prefix = "【不完整汇报】" if run.status == "partial_success" else ""
+        title = f"{prefix}{run.planned_date}口碑分及排名变动如下："
         lines = [title, "", f"【{PLATFORM_NAME}】"]
         if run.run_type == "baseline_initialization":
             lines.extend(["首次基线初始化，无前日变化可比较。", f"全量页面证据：{run.complete_evidence_count}/{run.required_evidence_count}"])
+            if run.schedule_type == "month_end":
+                lines.append("月末巡检：本批次同时作为首次基线并执行当前范围全量页面证据。")
+            missing = [item for item in results if item.status != "success"]
+            if missing:
+                lines.extend(
+                    ["", "异常与缺失："]
+                    + [f"- {item.vehicle_name}：{item.error_message or item.status}" for item in missing]
+                )
             return "\n".join(lines) + "\n"
         changed_count = 0
         anomalies: list[str] = []
@@ -1507,11 +2701,13 @@ class ReputationService:
                 anomalies.append(
                     f"- {result.vehicle_name}：{result.error_message or '、'.join(states)}"
                 )
-        if not changed_count:
+        if not changed_count and not anomalies:
             lines.append("今日无口碑指标变化。")
+        elif not changed_count:
+            lines.append("今日没有可确认的正常变化。")
         if anomalies:
             lines.extend(["", "异常与缺失：", *anomalies])
-        if run.run_type == "month_end":
+        if run.schedule_type == "month_end" or run.run_type == "month_end":
             lines.extend(["", "月末巡检：已执行当前范围全量页面证据。"])
         return "\n".join(lines) + "\n"
 
@@ -1571,7 +2767,25 @@ class ReputationService:
             "source_type": run.source_type,
             "scenario_id": run.scenario_id,
             "run_type": run.run_type,
+            "schedule_type": run.schedule_type,
             "planned_date": run.planned_date,
+            "root_run_id": run.root_run_id,
+            "parent_run_id": run.parent_run_id,
+            "scope_version_id": run.scope_version_id,
+            "planned_at": run.planned_at.isoformat() if run.planned_at else None,
+            "report_planned_at": (
+                run.report_planned_at.isoformat() if run.report_planned_at else None
+            ),
+            "report_generated_at": (
+                run.report_generated_at.isoformat() if run.report_generated_at else None
+            ),
+            "delayed": run.delayed,
+            "concurrency": run.concurrency,
+            "baseline_date": run.baseline_date,
+            "baseline_frozen_at": (
+                run.baseline_frozen_at.isoformat() if run.baseline_frozen_at else None
+            ),
+            "baseline_source_run_id": run.baseline_source_run_id,
             "status": run.status,
             "platform_codes": run.platform_codes,
             "planned_count": run.planned_count,
@@ -1580,6 +2794,7 @@ class ReputationService:
             "required_evidence_count": run.required_evidence_count,
             "complete_evidence_count": run.complete_evidence_count,
             "report_status": run.report_status,
+            "report_attempt_count": run.report_attempt_count,
             "report_text": run.report_text,
             "created_at": run.created_at.isoformat(),
             "started_at": run.started_at.isoformat() if run.started_at else None,
@@ -1605,6 +2820,8 @@ class ReputationService:
             "status": result.status,
             "metrics": result.metrics,
             "evidence_required": result.evidence_required,
+            "attempt_count": result.attempt_count,
+            "duration_ms": result.duration_ms,
             "error_code": result.error_code,
             "error_message": result.error_message,
             "collected_at": result.collected_at.isoformat(),

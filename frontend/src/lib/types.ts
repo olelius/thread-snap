@@ -230,6 +230,8 @@ export type ReputationResult = {
   status: string
   metrics: Record<'score' | 'rank' | 'volume', ReputationMetric>
   evidence_required: boolean
+  attempt_count?: number
+  duration_ms?: number
   error_code?: string
   error_message?: string
   collected_at: string
@@ -239,10 +241,22 @@ export type ReputationResult = {
 export type ReputationRun = {
   id: string
   number: string
-  source_type: 'synthetic' | 'scheduled' | 'real_acceptance'
+  source_type: 'synthetic' | 'scheduled' | 'retry' | 'real_acceptance'
   scenario_id?: string
   run_type: 'baseline_initialization' | 'daily' | 'month_end'
+  schedule_type?: 'daily' | 'month_end'
   planned_date: string
+  root_run_id?: string
+  parent_run_id?: string
+  scope_version_id?: string
+  planned_at?: string
+  report_planned_at?: string
+  report_generated_at?: string
+  delayed: boolean
+  concurrency?: number
+  baseline_date?: string
+  baseline_frozen_at?: string
+  baseline_source_run_id?: string
   status: string
   platform_codes: string[]
   planned_count: number
@@ -251,12 +265,31 @@ export type ReputationRun = {
   required_evidence_count: number
   complete_evidence_count: number
   report_status: string
+  report_attempt_count?: number
   report_text?: string
   created_at: string
   started_at?: string
   finished_at?: string
   results?: ReputationResult[]
-  downloads?: { txt: string; xlsx: string; evidence_zip: string }
+  downloads?: { txt?: string; xlsx?: string; evidence_zip?: string }
+  retry_runs?: ReputationRun[]
+  resolved_count?: number
+  unresolved_count?: number
+  linked_status?: string
+}
+
+export type ReputationSchedule = {
+  timezone: string
+  inspection_time: string
+  report_time: string
+  last_event?: {
+    planned_date: string
+    run_type: 'daily' | 'month_end'
+    status: string
+    message: string
+    run_id?: string
+    planned_at: string
+  }
 }
 
 export type ReputationCapabilities = {
