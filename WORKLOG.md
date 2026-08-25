@@ -16,6 +16,21 @@
 
 ---
 
+## 2026-08-25 — 增加车型项目组归属维护
+**总目标**：在“车型与映射”中为每款车型增加可编辑的项目组归属，用自由文本区分后续不同项目组，并将现有车型统一初始化为“奇瑞项目组”。
+**状态**：✅ 数据回填、接口、逐行输入、新增表单、发布差异和真实页面闭环均已完成。
+**干到哪里了**：
+- [x] 车型范围草稿与后续不可变版本增加 `project_group`；现有27款通过Alembic迁移回填“奇瑞项目组”并仅递增当前草稿revision，已发布版本1保持原快照不变。
+- [x] 增加带revision冲突保护的逐车型PATCH接口；归属去除首尾空白后限制1至80字符，修改不改变平台映射哈希或既有验证状态，并作为独立项目组差异进入发布预览。
+- [x] 车型表增加“项目组归属”文本输入，只有内容变化时才显示保存按钮，Enter可保存、Escape可还原；新增车型表单默认“奇瑞项目组”，发布确认区单独显示项目组变更数及逐车归属。
+- [x] 完整124项后端测试、Ruff、TypeScript检查、生产构建（2468 modules）和`git diff --check`通过；隔离旧库验证草稿revision从6升级到7且已发布快照不被改写。
+- [x] 实际数据库升级前已备份至`artifacts/runtime/reputation-project-group/threadsnap-pre-migration.db`（SHA-256 `e88d66fb897d6ebc405e59f0305e7126609a4296b882162227546273b2634e1e`）；真实API和Patchright均完成“奇瑞项目组→验收值→奇瑞项目组”保存恢复，映射状态始终为已验证、最终项目组待发布差异为0、控制台错误为0，界面证据位于同目录。
+**下一步**：无。
+**边界**：项目组当前只属于车型范围管理和版本快照，不新增项目组字典、筛选或巡检汇报分组；本次验收已恢复全部实际车型为“奇瑞项目组”，没有发布新范围版本。
+**关联**：`src/threadsnap/reputation.py`、`src/threadsnap/app.py`、`src/threadsnap/migrations/versions/c7e3a1d9b402_reputation_project_group.py`、`frontend/src/features/reputation/reputation-page.tsx`、`frontend/src/lib/types.ts`、`tests/test_reputation.py`、`CONTEXT.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/reputation-inspection.md`
+
+---
+
 ## 2026-08-25 — 移除巡检批次总数底栏并接入按需分页
 **总目标**：删除巡检批次表格底部重复的总数提示，并让长期累积的批次通过简洁的服务端分页浏览。
 **状态**：✅ 总数底栏已移除，超过20条时才出现分页导航。
