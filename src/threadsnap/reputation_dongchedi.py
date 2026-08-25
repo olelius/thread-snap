@@ -1,22 +1,26 @@
-"""懂车帝口碑页面的真实浏览器适配器。"""
+"""懂车帝口碑页面的轻量取数与按需浏览器证据适配器。"""
 
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import re
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
+from curl_cffi import requests
+from curl_cffi.requests import Cookies
+from lxml import html
 from patchright.async_api import Browser, Page, async_playwright
 from PIL import Image
 
 from .browser_runtime import browser_launch_args
 
-ADAPTER_VERSION = "dongchedi-reputation-v2-region-only"
+ADAPTER_VERSION = "dongchedi-reputation-v3-http-first"
 VALIDATION_CONTRACT_VERSION = "dongchedi-reputation-mapping-v1"
 VIEWPORT = {"width": 1440, "height": 1000}
 SERIES_URL_RE = re.compile(
@@ -48,7 +52,7 @@ class ReputationMappingTarget:
 
 @dataclass(frozen=True)
 class ReputationPageResult:
-    """一次页面上下文完整通过三门禁后的真实结果。"""
+    """一次轻量响应或浏览器页面完整通过身份与指标门禁后的真实结果。"""
 
     vehicle_id: str
     platform_vehicle_id: str
@@ -100,6 +104,31 @@ def _name_key(value: str) -> str:
     return re.sub(r"[\s·._-]+", "", value).casefold()
 
 
+def _cookies_from_state(state: dict[str, Any] | None) -> Cookies:
+    """把浏览器 storage state 中仍有效的懂车帝 Cookie 转成 HTTP CookieJar。"""
+
+    jar = Cookies()
+    now = time.time()
+    for item in (state or {}).get("cookies", []):
+        if not isinstance(item, dict):
+            continue
+        domain = str(item.get("domain") or "")
+        expires = item.get("expires", -1)
+        if "dongchedi.com" not in domain:
+            continue
+        if isinstance(expires, (int, float)) and expires > 0 and expires <= now:
+            continue
+        if all(item.get(key) for key in ("name", "value", "path")):
+            jar.set(
+                str(item["name"]),
+                str(item["value"]),
+                domain=domain,
+                path=str(item["path"]),
+                secure=bool(item.get("secure")),
+            )
+    return jar
+
+
 def _metric_rect(measurement: dict[str, Any]) -> dict[str, float]:
     boxes = [
         value
@@ -119,7 +148,7 @@ def _metric_rect(measurement: dict[str, Any]) -> dict[str, float]:
 
 
 class DongchediReputationAdapter:
-    """用一个有头Chromium和有界页面池验证懂车帝口碑映射。"""
+    """日常巡检轻量取数，只有必要证据项才进入有界浏览器页面池。"""
 
     code = "dongchedi"
     display_name = "懂车帝"
@@ -135,6 +164,7 @@ class DongchediReputationAdapter:
         timeout_seconds: int = 90,
         batch_timeout_seconds: int = 45 * 60,
         evidence_policy: Callable[[ReputationMappingTarget, dict[str, Any]], bool] | None = None,
+        prefer_http_first: bool = False,
     ) -> None:
         self.storage_state = storage_state
         self.concurrency = max(1, min(int(concurrency), 8))
@@ -142,6 +172,19 @@ class DongchediReputationAdapter:
         self.timeout_seconds = timeout_seconds
         self.batch_timeout_seconds = max(1, int(batch_timeout_seconds))
         self.evidence_policy = evidence_policy
+        self.prefer_http_first = prefer_http_first
+        self.cookies = _cookies_from_state(storage_state)
+        self._thread_local = threading.local()
+
+    def _http_session(self) -> requests.Session:
+        """每个取数线程独享 Session，避免跨线程共享可变请求状态。"""
+
+        session = getattr(self._thread_local, "http", None)
+        if session is None:
+            session = requests.Session(impersonate="chrome")
+            session.cookies.update(self.cookies)
+            self._thread_local.http = session
+        return session
 
     @staticmethod
     def _validate_identity(
@@ -247,6 +290,8 @@ class DongchediReputationAdapter:
         browser: Browser,
         target: ReputationMappingTarget,
         output_dir: Path,
+        *,
+        force_capture: bool = False,
     ) -> ReputationPageResult:
         started = time.monotonic()
         context = await browser.new_context(
@@ -304,7 +349,11 @@ class DongchediReputationAdapter:
                     "口碑分与同级排名的可用状态不一致。",
                 )
             metric_rect = _metric_rect(current)
-            capture = self.evidence_policy is None or self.evidence_policy(target, current)
+            capture = (
+                force_capture
+                or self.evidence_policy is None
+                or self.evidence_policy(target, current)
+            )
             metric_path: Path | None = None
             digest: str | None = None
             width = int(round(metric_rect["width"]))
@@ -360,14 +409,175 @@ class DongchediReputationAdapter:
         finally:
             await context.close()
 
-    async def validate(
+    @staticmethod
+    def _node_text(node: Any) -> str:
+        """读取 SSR 节点的可见文本，并折叠布局空白。"""
+
+        return " ".join(str(node.text_content()).split())
+
+    @classmethod
+    def _parse_http_page(
+        cls,
+        target: ReputationMappingTarget,
+        final_url: str,
+        content: bytes,
+        *,
+        duration_ms: int,
+    ) -> ReputationPageResult:
+        """从服务端直出的口碑页 HTML 解析与浏览器相同的业务字段。"""
+
+        try:
+            document = html.fromstring(content.decode("utf-8"))
+        except (TypeError, UnicodeDecodeError, ValueError) as error:
+            raise ReputationAdapterError(
+                "REPUTATION_HTTP_DOCUMENT_INVALID",
+                "口碑页面没有返回可解析的HTML文档。",
+                retryable=True,
+            ) from error
+
+        rank_roots = document.xpath(
+            "//*[contains(concat(' ',normalize-space(@class),' '),' rank-wrapper ')]"
+        )
+        current_row: Any | None = None
+        rows: list[Any] = []
+        for root in rank_roots:
+            candidate_rows = root.xpath(
+                ".//li[.//*[contains(concat(' ',normalize-space(@class),' '),' car-name ')]]"
+            )
+            candidate_current = next(
+                (
+                    row
+                    for row in candidate_rows
+                    if "tw-text-common-yellow" in str(row.get("class") or "").split()
+                ),
+                None,
+            )
+            if candidate_current is not None:
+                rows = candidate_rows
+                current_row = candidate_current
+                break
+        heading_nodes = [
+            node
+            for node in document.xpath("//h1")
+            if "tw-hidden" not in str(node.get("class") or "").split()
+        ]
+        actual_name = cls._node_text(heading_nodes[0]).removeprefix("懂").strip() if heading_nodes else ""
+        score_raw: str | None = None
+        rank_raw: str | None = None
+        if current_row is not None:
+            name_nodes = current_row.xpath(
+                ".//*[contains(concat(' ',normalize-space(@class),' '),' car-name ')]"
+            )
+            score_nodes = current_row.xpath(
+                ".//*[contains(concat(' ',normalize-space(@class),' '),' score-wrapper ')]"
+            )
+            if name_nodes:
+                actual_name = cls._node_text(name_nodes[0])
+            score_text = cls._node_text(score_nodes[0]) if score_nodes else ""
+            score_raw = score_text if score_text and score_text != "-" else None
+            rank_raw = str(rows.index(current_row) + 1) if score_raw is not None else None
+        if not actual_name:
+            raise ReputationAdapterError(
+                "REPUTATION_IDENTITY_MISSING",
+                "口碑页面直出内容没有可验证的车型身份。",
+                retryable=True,
+            )
+        cls._validate_identity(target, final_url, actual_name)
+
+        volume_raw: str | None = None
+        volume_text: str | None = None
+        for node in document.xpath("//span|//div"):
+            text = cls._node_text(node)
+            match = VOLUME_RE.fullmatch(text)
+            if match:
+                volume_text = text
+                volume_raw = match.group(1).replace(",", "")
+                break
+        measurement = {
+            "actual_name": actual_name,
+            "score_raw": score_raw,
+            "rank_raw": rank_raw,
+            "volume_raw": volume_text,
+            "rank_scope": "同级车评分",
+            "collection_method": "http_ssr",
+        }
+        return ReputationPageResult(
+            vehicle_id=target.vehicle_id,
+            platform_vehicle_id=target.platform_vehicle_id,
+            mapping_hash=target.mapping_hash,
+            final_url=final_url,
+            actual_name=actual_name,
+            score_raw=score_raw,
+            rank_raw=rank_raw,
+            volume_raw=volume_raw,
+            rank_scope="同级车评分",
+            measurements=[measurement],
+            full_page_path=None,
+            metric_region_path=None,
+            full_page_sha256=None,
+            metric_region_sha256=None,
+            width=0,
+            height=0,
+            metric_rect={},
+            duration_ms=duration_ms,
+        )
+
+    def _visit_http(self, target: ReputationMappingTarget) -> ReputationPageResult:
+        """直接请求车型口碑 URL；该阶段不启动浏览器，也不加载图片资源。"""
+
+        started = time.monotonic()
+        try:
+            response = self._http_session().get(
+                target.platform_url,
+                timeout=self.timeout_seconds,
+                allow_redirects=True,
+            )
+        except Exception as error:
+            raise ReputationAdapterError(
+                "REPUTATION_HTTP_NETWORK_ERROR",
+                f"直接访问口碑页面失败：{error}",
+                retryable=True,
+            ) from error
+        final_url = str(response.url)
+        body = bytes(response.content or b"")
+        if "/login-required" in urlsplit(final_url).path or b"login-required" in body[:200_000].lower():
+            raise ReputationAdapterError("AUTH_REQUIRED", "懂车帝共享Session需要更新。")
+        if response.status_code >= 500 or response.status_code == 429:
+            raise ReputationAdapterError(
+                "REPUTATION_PAGE_SERVER_ERROR",
+                f"平台页面返回HTTP {response.status_code}。",
+                retryable=True,
+            )
+        if response.status_code >= 400:
+            raise ReputationAdapterError(
+                "REPUTATION_HTTP_STATUS_ERROR",
+                f"直接访问口碑页面返回HTTP {response.status_code}。",
+            )
+        if not body:
+            raise ReputationAdapterError(
+                "REPUTATION_HTTP_DOCUMENT_EMPTY",
+                "直接访问口碑页面返回空文档。",
+                retryable=True,
+            )
+        return self._parse_http_page(
+            target,
+            final_url,
+            body,
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
+
+    async def _validate_browser_targets(
         self,
         targets: list[ReputationMappingTarget],
         output_dir: Path,
+        *,
+        force_capture: bool = False,
+        timeout_seconds: int | None = None,
     ) -> list[ReputationPageResult | Exception]:
-        """按输入顺序返回结果；页面池并发不影响持久化顺序。"""
+        """只为指定目标启动浏览器；正式日检传入的就是已判定需截图项。"""
 
-        output_dir.mkdir(parents=True, exist_ok=False)
+        if not targets:
+            return []
         semaphore = asyncio.Semaphore(self.concurrency)
         auth_failed = asyncio.Event()
         async with async_playwright() as playwright:
@@ -383,7 +593,12 @@ class DongchediReputationAdapter:
                             "AUTH_REQUIRED", "懂车帝共享Session需要更新。"
                         )
                     try:
-                        return await self._visit(browser, target, output_dir)
+                        return await self._visit(
+                            browser,
+                            target,
+                            output_dir,
+                            force_capture=force_capture,
+                        )
                     except Exception as error:
                         if isinstance(error, ReputationAdapterError) and error.code == "AUTH_REQUIRED":
                             auth_failed.set()
@@ -392,7 +607,9 @@ class DongchediReputationAdapter:
             tasks = [asyncio.create_task(bounded(target)) for target in targets]
             try:
                 done, pending = await asyncio.wait(
-                    tasks, timeout=self.batch_timeout_seconds, return_when=asyncio.ALL_COMPLETED
+                    tasks,
+                    timeout=timeout_seconds or self.batch_timeout_seconds,
+                    return_when=asyncio.ALL_COMPLETED,
                 )
                 for task in pending:
                     task.cancel()
@@ -402,11 +619,83 @@ class DongchediReputationAdapter:
                     "REPUTATION_BATCH_TIMEOUT",
                     "口碑巡检达到45分钟批次上限，未完成项已停止。",
                 )
-                return [
-                    task.result() if task in done else timeout_error for task in tasks
-                ]
+                return [task.result() if task in done else timeout_error for task in tasks]
             finally:
                 await browser.close()
+
+    async def _validate_http_first(
+        self,
+        targets: list[ReputationMappingTarget],
+        output_dir: Path,
+    ) -> list[ReputationPageResult | Exception]:
+        """并发轻量取数并完成比较，只把命中证据规则的项交给浏览器。"""
+
+        deadline = time.monotonic() + self.batch_timeout_seconds
+        semaphore = asyncio.Semaphore(self.concurrency)
+        auth_failed = asyncio.Event()
+
+        async def bounded(target: ReputationMappingTarget) -> ReputationPageResult | Exception:
+            async with semaphore:
+                if auth_failed.is_set():
+                    return ReputationAdapterError("AUTH_REQUIRED", "懂车帝共享Session需要更新。")
+                try:
+                    return await asyncio.to_thread(self._visit_http, target)
+                except Exception as error:
+                    if isinstance(error, ReputationAdapterError) and error.code == "AUTH_REQUIRED":
+                        auth_failed.set()
+                    return error
+
+        tasks = [asyncio.create_task(bounded(target)) for target in targets]
+        done, pending = await asyncio.wait(
+            tasks,
+            timeout=self.batch_timeout_seconds,
+            return_when=asyncio.ALL_COMPLETED,
+        )
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        timeout_error = ReputationAdapterError(
+            "REPUTATION_BATCH_TIMEOUT",
+            "口碑巡检达到45分钟批次上限，未完成项已停止。",
+        )
+        results: list[ReputationPageResult | Exception] = [
+            task.result() if task in done else timeout_error for task in tasks
+        ]
+        capture_indexes = [
+            index
+            for index, (target, result) in enumerate(zip(targets, results, strict=True))
+            if isinstance(result, ReputationPageResult)
+            and (
+                self.evidence_policy is None
+                or self.evidence_policy(target, result.measurements[-1])
+            )
+        ]
+        if not capture_indexes:
+            return results
+
+        remaining = max(1, int(deadline - time.monotonic()))
+        browser_results = await self._validate_browser_targets(
+            [targets[index] for index in capture_indexes],
+            output_dir,
+            force_capture=True,
+            timeout_seconds=remaining,
+        )
+        for index, browser_result in zip(capture_indexes, browser_results, strict=True):
+            results[index] = browser_result
+        return results
+
+    async def validate(
+        self,
+        targets: list[ReputationMappingTarget],
+        output_dir: Path,
+    ) -> list[ReputationPageResult | Exception]:
+        """按输入顺序返回结果；HTTP与页面池并发都不影响持久化顺序。"""
+
+        output_dir.mkdir(parents=True, exist_ok=False)
+        if self.prefer_http_first:
+            return await self._validate_http_first(targets, output_dir)
+        return await self._validate_browser_targets(targets, output_dir)
 
     def validate_sync(
         self,
