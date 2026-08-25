@@ -34,6 +34,7 @@ from threadsnap.reputation_dongchedi import (
     ReputationAdapterError,
     ReputationMappingTarget,
     ReputationPageResult,
+    _metric_rect,
     normalize_series_url,
 )
 from threadsnap.reputation_scheduler import ReputationCoordinator
@@ -669,6 +670,19 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual(normalize_series_url(url, "24729"), url)
         with self.assertRaisesRegex(Exception, "车型ID"):
             normalize_series_url(url, "10170")
+
+    def test_dongchedi_metric_region_trims_decoration_above_heading(self) -> None:
+        """证据顶部只留4px，不把标题上方的平台装饰横条带入截图。"""
+
+        rect = _metric_rect(
+            {
+                "heading_box": {"x": 100, "y": 200, "width": 100, "height": 30},
+                "score_box": {"x": 300, "y": 250, "width": 20, "height": 20},
+                "volume_box": {"x": 330, "y": 240, "width": 80, "height": 20},
+                "rank_box": {"x": 500, "y": 220, "width": 400, "height": 300},
+            }
+        )
+        self.assertEqual(rect, {"x": 80.0, "y": 196.0, "width": 840.0, "height": 360.0})
 
     def test_dongchedi_http_parser_matches_browser_metric_contract(self) -> None:
         """SSR直出页应按当前车型行解析三项指标，而不是误取同级均值。"""

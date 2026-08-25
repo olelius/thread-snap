@@ -20,7 +20,7 @@ from PIL import Image
 
 from .browser_runtime import browser_launch_args
 
-ADAPTER_VERSION = "dongchedi-reputation-v3-http-first"
+ADAPTER_VERSION = "dongchedi-reputation-v4-trimmed-region"
 VALIDATION_CONTRACT_VERSION = "dongchedi-reputation-mapping-v1"
 VIEWPORT = {"width": 1440, "height": 1000}
 SERIES_URL_RE = re.compile(
@@ -141,9 +141,11 @@ def _metric_rect(measurement: dict[str, Any]) -> dict[str, float]:
             "页面身份与指标区域没有形成可截图的稳定边界。",
         )
     left = max(0.0, min(float(item["x"]) for item in boxes) - 20)
-    top = max(0.0, min(float(item["y"]) for item in boxes) - 20)
+    # 页面标题上方紧邻一条不属于指标卡的装饰横条；截图窗口整体下移16px：
+    # 顶部由20px收紧为4px，底部由20px扩展为36px，保持原截图高度。
+    top = max(0.0, min(float(item["y"]) for item in boxes) - 4)
     right = max(float(item["x"]) + float(item["width"]) for item in boxes) + 20
-    bottom = max(float(item["y"]) + float(item["height"]) for item in boxes) + 20
+    bottom = max(float(item["y"]) + float(item["height"]) for item in boxes) + 36
     return {"x": left, "y": top, "width": right - left, "height": bottom - top}
 
 

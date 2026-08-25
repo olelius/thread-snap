@@ -16,6 +16,20 @@
 
 ---
 
+## 2026-08-25 — 下移口碑证据截图顶部边界
+**总目标**：移除指标区域截图顶部误带入的平台装饰横条，同时完整保留车型身份和三项指标。
+**状态**：✅ 截图矩形、定向回归和单车型真实平台验收已完成。
+**干到哪里了**：
+- [x] 指标矩形顶部安全边距由20px收紧为4px、底部由20px扩展为36px，截图窗口整体下移16px且保持原高度；左右仍为20px。
+- [x] 车型标题、口碑分、排名、口碑量四个稳定DOM框仍共同决定截图并集，三次稳定测量、越界校验和单张PNG合同不变。
+- [x] 适配器版本升级为`dongchedi-reputation-v4-trimmed-region`，历史证据保持不可变，新验证与新巡检使用新边界。
+- [x] 定向矩形测试和Ruff通过；真实重验`01a03821-dcf7-76a1-b5ad-60ca97621f92`成功生成`1282×378`风云A9区域图，顶部装饰横条已消失、车型标题与三项指标完整、底部同步下移，SHA-256为`F6D220641D448CFA9EA186D187296E408BC9E13045138BB8181CD2EB8C066B11`，证据位于`artifacts/runtime/reputation-evidence-top-boundary/fengyun-a9-region.png`。
+**下一步**：无。
+**边界**：不裁改历史PNG，不修改证据查看器、指标解析、截图分母或下载链路。
+**关联**：`src/threadsnap/reputation_dongchedi.py`、`tests/test_reputation.py`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/reputation-inspection.md`
+
+---
+
 ## 2026-08-25 — 证据查看器接入应用主题语义色
 **总目标**：消除固定黑色查看器与系统外壳的割裂，同时让浅色、深色和跟随系统主题都使用同一套语义色合同。
 **状态**：✅ 主题令牌改造及浅色、深色真实页面验收已完成。
