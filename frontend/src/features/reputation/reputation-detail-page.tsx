@@ -110,7 +110,10 @@ function ReportPanel({ run }: { run: ReputationRun }) {
 
 function DeliveryRow({ label, done }: { label: string; done: boolean }) { return <div className='flex items-center justify-between rounded-md bg-muted/40 px-3 py-2'><span>{label}</span><span className={cn('flex items-center gap-1 text-xs', done ? 'text-emerald-600 dark:text-emerald-300' : 'text-amber-600 dark:text-amber-300')}>{done ? <Check className='size-3.5' /> : <CircleAlert className='size-3.5' />}{done ? '已生成' : '待处理'}</span></div> }
 
-function DownloadButton({ href, icon: Icon, children }: { href?: string; icon: typeof Download; children: React.ReactNode }) { return <Button asChild={Boolean(href)} variant='outline' size='sm' disabled={!href}>{href ? <a href={href}><Icon className='size-4' />{children}</a> : <span><Icon className='size-4' />{children}</span>}</Button> }
+function DownloadButton({ href, icon: Icon, children }: { href?: string; icon: typeof Download; children: React.ReactNode }) {
+  if (href) return <Button asChild variant='outline' size='sm'><a href={href}><Icon className='size-4' />{children}</a></Button>
+  return <Button variant='outline' size='sm' disabled><Icon className='size-4' />{children}</Button>
+}
 function runTypeName(value: ReputationRun['run_type']) { return ({ baseline_initialization: '基线初始化', daily: '日常巡检', month_end: '月末巡检' })[value] }
 function runDisplayType(run: ReputationRun) { return run.source_type === 'scheduled' ? (run.schedule_type === 'month_end' ? '月末巡检' : '日常巡检') : runTypeName(run.run_type) }
 function statusName(value: string) { return ({ success: '成功', partial_success: '部分成功', failed: '失败', running: '运行中', queued: '排队中' } as Record<string, string>)[value] ?? value }
