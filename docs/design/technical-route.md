@@ -155,7 +155,7 @@
 
 - 已建立独立的范围草稿/已发布版本、巡检运行、车型平台结果和双文件逻辑证据数据库基线，以及 `/api/v1/reputation/*` 与 `/internal/v1/reputation/*` 查询、范围、合成测试和下载接口。
 - 隔离合成运行以 `runtime_mode=test`、显式能力开关和测试数据库标记三因子门禁，固定提供基线、日常混合、月末混合三场景；输出27行网页/XLSX、UTF-8 TXT、单张指标区域图和带清单校验值的按需证据ZIP。生产门禁不成立时创建操作返回不可发现响应，前端不显示按钮。
-- 前端在既有 React/Vite/TanStack Router/Query/shadcn/ui 外壳内增加 `/reputation` 和 `/reputation/runs/$runId`，保留 URL 视图状态、语义色与文字/箭头双编码、指标证据卡片、报告复制下载，以及服从 `prefers-reduced-motion` 的 180～300ms 位移/透明度动效。排名表与页面证据卡片查看同一指标图时复用接近全屏的站内Radix Dialog，不打开新标签页。
+- 前端在既有 React/Vite/TanStack Router/Query/shadcn/ui 外壳内增加 `/reputation` 和 `/reputation/runs/$runId`，保留 URL 视图状态、语义色与文字/箭头双编码、指标证据卡片、报告复制下载，以及服从 `prefers-reduced-motion` 的 180～300ms 位移/透明度动效。排名表与页面证据卡片查看同一指标图时复用站内Radix Dialog，不打开新标签页；查看器取消固定视口高度，使用内容自适应深色图片舞台与固定宽度证据信息侧栏，在小屏时将侧栏折叠到图片下方。
 - 一次性范围初始化通过 `threadsnap reputation-init --file <CSV>` 执行；空模板和Schema位于 `docs/templates/reputation-scope-v1.csv` 与 `docs/templates/reputation-scope-v1.md`。页面已提供单平台四列Tab分隔映射的预览与原子保存，保存结果保持未验证。
 - 车型项目组归属保存在范围草稿及后续不可变版本的车型JSON中；新增与逐行修改复用完整字段合同，项目组要求显式提交非空值且不提供默认值。前端复用同一受控Dialog，列表仍只读返回；`PATCH /reputation/scope/vehicles/{vehicle_id}`携带草稿revision并一次提交车系、车型、项目组、角色和当前平台映射，内部车型ID不进入可编辑字段。映射三字段未变时保留验证绑定，任一字段变化时原子替换为`unverified`映射；revision冲突、平台车型ID重复或URL身份不匹配时整次零写入。既有草稿由版本化迁移补齐“奇瑞项目组”并递增revision，已发布版本保持不可变；读取旧快照缺失字段时按同一兼容值解释。
 - 巡检详情接口读取运行绑定的 `scope_version_id`，以该不可变版本 `snapshot.vehicles` 的数组位置排列车型结果，并按运行冻结的平台代码顺序排列同一车型的多平台结果；页面证据复用同一响应顺序。没有范围版本的旧测试批次或范围版本已不可读时，保留既有角色与组内序号排序作为兼容兜底，不读取当前草稿推断历史顺序。
