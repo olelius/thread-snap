@@ -16,15 +16,29 @@
 
 ---
 
+## 2026-08-25 — 将项目组归属改为新增时填写、列表只读
+**总目标**：纠正项目组归属交互；输入框只出现在“新增车型”对话框，车型列表只展示归属文本。
+**状态**：✅ 表格内联输入和逐车型修改接口已移除，新增表单与现有数据保留，真实页面验收通过。
+**干到哪里了**：
+- [x] “项目组归属”列改为普通文本，不再显示输入边框、保存按钮或逐行编辑状态；表格最小宽度同步收紧。
+- [x] 新增车型对话框继续提供1至80字符的项目组输入，默认“奇瑞项目组”，新车型创建后随范围草稿和版本快照保存。
+- [x] 删除未被需求支持的逐车型PATCH接口和项目组独立发布差异计数，并增加接口测试确认列表不能内联修改。
+- [x] 完整123项后端测试、Ruff、TypeScript检查、生产构建（2468 modules）和`git diff --check`通过；Patchright确认表格项目组输入框0个、只读“奇瑞项目组”单元格27个、新增对话框项目组输入1个且默认值正确、PATCH返回405、控制台错误0，证据位于`artifacts/runtime/reputation-project-group-readonly/`。
+**下一步**：无。
+**边界**：现有27款仍全部归属“奇瑞项目组”；本次不修改或发布实际范围数据。
+**关联**：`src/threadsnap/reputation.py`、`src/threadsnap/app.py`、`frontend/src/features/reputation/reputation-page.tsx`、`tests/test_reputation.py`、`CONTEXT.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/reputation-inspection.md`
+
+---
+
 ## 2026-08-25 — 增加车型项目组归属维护
-**总目标**：在“车型与映射”中为每款车型增加可编辑的项目组归属，用自由文本区分后续不同项目组，并将现有车型统一初始化为“奇瑞项目组”。
-**状态**：✅ 数据回填、接口、逐行输入、新增表单、发布差异和真实页面闭环均已完成。
+**总目标**：为每款车型增加项目组归属，用自由文本区分后续不同项目组，并将现有车型统一初始化为“奇瑞项目组”。
+**状态**：✅ 数据回填、新增表单、只读列表展示和范围版本保存均已完成；交互已由后续条目纠正为仅新增时填写。
 **干到哪里了**：
 - [x] 车型范围草稿与后续不可变版本增加 `project_group`；现有27款通过Alembic迁移回填“奇瑞项目组”并仅递增当前草稿revision，已发布版本1保持原快照不变。
-- [x] 增加带revision冲突保护的逐车型PATCH接口；归属去除首尾空白后限制1至80字符，修改不改变平台映射哈希或既有验证状态，并作为独立项目组差异进入发布预览。
-- [x] 车型表增加“项目组归属”文本输入，只有内容变化时才显示保存按钮，Enter可保存、Escape可还原；新增车型表单默认“奇瑞项目组”，发布确认区单独显示项目组变更数及逐车归属。
+- [x] 新增车型请求保存1至80字符的项目组归属；列表只读显示该值，不提供逐车型修改接口。
+- [x] 新增车型表单默认“奇瑞项目组”，发布确认区逐车展示归属。
 - [x] 完整124项后端测试、Ruff、TypeScript检查、生产构建（2468 modules）和`git diff --check`通过；隔离旧库验证草稿revision从6升级到7且已发布快照不被改写。
-- [x] 实际数据库升级前已备份至`artifacts/runtime/reputation-project-group/threadsnap-pre-migration.db`（SHA-256 `e88d66fb897d6ebc405e59f0305e7126609a4296b882162227546273b2634e1e`）；真实API和Patchright均完成“奇瑞项目组→验收值→奇瑞项目组”保存恢复，映射状态始终为已验证、最终项目组待发布差异为0、控制台错误为0，界面证据位于同目录。
+- [x] 实际数据库升级前已备份至`artifacts/runtime/reputation-project-group/threadsnap-pre-migration.db`（SHA-256 `e88d66fb897d6ebc405e59f0305e7126609a4296b882162227546273b2634e1e`）；现有27款全部回填“奇瑞项目组”，界面证据位于同目录。
 **下一步**：无。
 **边界**：项目组当前只属于车型范围管理和版本快照，不新增项目组字典、筛选或巡检汇报分组；本次验收已恢复全部实际车型为“奇瑞项目组”，没有发布新范围版本。
 **关联**：`src/threadsnap/reputation.py`、`src/threadsnap/app.py`、`src/threadsnap/migrations/versions/c7e3a1d9b402_reputation_project_group.py`、`frontend/src/features/reputation/reputation-page.tsx`、`frontend/src/lib/types.ts`、`tests/test_reputation.py`、`CONTEXT.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/reputation-inspection.md`

@@ -366,6 +366,11 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual(created["project_group"], "新能源项目组")
         self.assertEqual(created["removal_mode"], "delete")
         self.assertEqual(created["mappings"]["dongchedi"]["validation_status"], "unverified")
+        inline_edit = self.client.patch(
+            f"/api/v1/reputation/scope/vehicles/{created['id']}",
+            json={"revision": created_scope["revision"], "project_group": "其他项目组"},
+        )
+        self.assertEqual(inline_edit.status_code, 405)
 
         duplicate = self.client.post(
             "/api/v1/reputation/scope/vehicles",
@@ -435,56 +440,6 @@ class ReputationInspectionTest(unittest.TestCase):
             version = db.scalar(select(ReputationScopeVersion))
             assert version is not None
             self.assertTrue(version.snapshot["vehicles"][0]["enabled"])
-
-    def test_scope_vehicle_project_group_is_editable_and_versioned(self) -> None:
-        """项目组属于范围身份草稿，修改不撤销映射验证且不改写历史版本。"""
-
-        self.initialize_scope("project-group.csv")
-        with self.client.app.state.container.sessions.begin() as db:
-            draft = db.get(ReputationScopeDraft, "current")
-            assert draft is not None
-            data = json.loads(json.dumps(draft.data, ensure_ascii=False))
-            data["vehicles"][0]["mappings"]["dongchedi"]["validation_status"] = "verified"
-            draft.data = data
-            version = ReputationScopeVersion(
-                version=1,
-                snapshot=json.loads(json.dumps(data, ensure_ascii=False)),
-                source_revision=draft.revision,
-            )
-            db.add(version)
-            db.flush()
-            draft.published_version_id = version.id
-
-        before = self.client.get("/api/v1/reputation/scope").json()
-        updated_response = self.client.patch(
-            "/api/v1/reputation/scope/vehicles/vehicle-01",
-            json={"revision": before["revision"], "project_group": " 新能源项目组 "},
-        )
-        self.assertEqual(updated_response.status_code, 200, updated_response.text)
-        updated = updated_response.json()
-        vehicle = next(row for row in updated["vehicles"] if row["id"] == "vehicle-01")
-        self.assertEqual(vehicle["project_group"], "新能源项目组")
-        self.assertEqual(
-            vehicle["mappings"]["dongchedi"]["validation_status"], "verified"
-        )
-        self.assertEqual(updated["revision"], before["revision"] + 1)
-
-        preview = self.client.get("/api/v1/reputation/scope/publish-preview").json()
-        self.assertEqual(preview["project_group_changed_count"], 1)
-        self.assertTrue(preview["has_changes"])
-
-        invalid = self.client.patch(
-            "/api/v1/reputation/scope/vehicles/vehicle-01",
-            json={"revision": updated["revision"], "project_group": "   "},
-        )
-        self.assertEqual(invalid.status_code, 400, invalid.text)
-        after_invalid = self.client.get("/api/v1/reputation/scope").json()
-        self.assertEqual(after_invalid["revision"], updated["revision"])
-
-        with self.client.app.state.container.sessions() as db:
-            version = db.scalar(select(ReputationScopeVersion))
-            assert version is not None
-            self.assertEqual(version.snapshot["vehicles"][0]["project_group"], "奇瑞项目组")
 
     def test_real_mapping_validation_binds_live_metrics_and_evidence(self) -> None:
         csv_path = self.root / "real-scope.csv"
