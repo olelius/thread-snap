@@ -7,7 +7,7 @@ import hashlib
 import re
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -20,13 +20,15 @@ from PIL import Image
 
 from .browser_runtime import browser_launch_args
 
-ADAPTER_VERSION = "dongchedi-reputation-v4-trimmed-region"
+ADAPTER_VERSION = "dongchedi-reputation-v5-circle-content"
 VALIDATION_CONTRACT_VERSION = "dongchedi-reputation-mapping-v1"
 VIEWPORT = {"width": 1440, "height": 1000}
 SERIES_URL_RE = re.compile(
     r"^https://www\.dongchedi\.com/auto/series/(?:score/)?(?P<id>\d+)(?:-x-x-x-x-x)?/?(?:\?.*)?$"
 )
 VOLUME_RE = re.compile(r"共\s*([0-9,]+)\s*人评价")
+CIRCLE_CONTENT_RE = re.compile(r"共\s*([0-9,]+)\s*条内容")
+CIRCLE_PATH_RE = re.compile(r"^/community/(?P<id>\d+)/?$")
 
 
 class ReputationAdapterError(RuntimeError):
@@ -62,6 +64,8 @@ class ReputationPageResult:
     score_raw: str | None
     rank_raw: str | None
     volume_raw: str | None
+    circle_content_raw: str | None
+    circle_url: str | None
     rank_scope: str
     measurements: list[dict[str, Any]]
     full_page_path: Path | None
@@ -167,6 +171,7 @@ class DongchediReputationAdapter:
         batch_timeout_seconds: int = 45 * 60,
         evidence_policy: Callable[[ReputationMappingTarget, dict[str, Any]], bool] | None = None,
         prefer_http_first: bool = False,
+        include_circle_content: bool = False,
     ) -> None:
         self.storage_state = storage_state
         self.concurrency = max(1, min(int(concurrency), 8))
@@ -175,6 +180,7 @@ class DongchediReputationAdapter:
         self.batch_timeout_seconds = max(1, int(batch_timeout_seconds))
         self.evidence_policy = evidence_policy
         self.prefer_http_first = prefer_http_first
+        self.include_circle_content = include_circle_content
         self.cookies = _cookies_from_state(storage_state)
         self._thread_local = threading.local()
 
@@ -187,6 +193,68 @@ class DongchediReputationAdapter:
             session.cookies.update(self.cookies)
             self._thread_local.http = session
         return session
+
+    def _visit_circle_content(self, target: ReputationMappingTarget) -> tuple[str, str]:
+        """通过同一平台车型ID直接读取圈子内容总量，不启动额外浏览器页面。"""
+
+        circle_url = f"https://www.dongchedi.com/community/{target.platform_vehicle_id}"
+        try:
+            response = self._http_session().get(
+                circle_url,
+                timeout=self.timeout_seconds,
+                allow_redirects=True,
+            )
+        except Exception as error:
+            raise ReputationAdapterError(
+                "REPUTATION_CIRCLE_NETWORK_ERROR",
+                f"直接访问车型圈子页面失败：{error}",
+                retryable=True,
+            ) from error
+        final_url = str(response.url)
+        body = bytes(response.content or b"")
+        if "/login-required" in urlsplit(final_url).path or b"login-required" in body[:200_000].lower():
+            raise ReputationAdapterError("AUTH_REQUIRED", "懂车帝共享Session需要更新。")
+        if response.status_code >= 500 or response.status_code == 429:
+            raise ReputationAdapterError(
+                "REPUTATION_CIRCLE_SERVER_ERROR",
+                f"车型圈子页面返回HTTP {response.status_code}。",
+                retryable=True,
+            )
+        if response.status_code >= 400:
+            raise ReputationAdapterError(
+                "REPUTATION_CIRCLE_STATUS_ERROR",
+                f"车型圈子页面返回HTTP {response.status_code}。",
+            )
+        final_path = urlsplit(final_url).path
+        circle_match = CIRCLE_PATH_RE.match(final_path)
+        if not circle_match or circle_match.group("id") != target.platform_vehicle_id:
+            raise ReputationAdapterError(
+                "REPUTATION_CIRCLE_IDENTITY_REDIRECT",
+                "圈子页面跳转后的稳定车型ID与口碑巡检车型ID不一致。",
+            )
+        if not body:
+            raise ReputationAdapterError(
+                "REPUTATION_CIRCLE_DOCUMENT_EMPTY",
+                "车型圈子页面返回空文档。",
+                retryable=True,
+            )
+        try:
+            document = html.fromstring(body.decode("utf-8"))
+            text = " ".join(document.text_content().split())
+        except (TypeError, UnicodeDecodeError, ValueError) as error:
+            raise ReputationAdapterError(
+                "REPUTATION_CIRCLE_DOCUMENT_INVALID",
+                "车型圈子页面没有返回可解析的HTML文档。",
+                retryable=True,
+            ) from error
+        match = CIRCLE_CONTENT_RE.search(text)
+        if not match:
+            raise ReputationAdapterError(
+                "REPUTATION_CIRCLE_CONTENT_MISSING",
+                "车型圈子页面未返回可识别的内容总量。",
+                retryable=True,
+            )
+        return match.group(1).replace(",", ""), circle_url
 
     @staticmethod
     def _validate_identity(
@@ -351,6 +419,12 @@ class DongchediReputationAdapter:
                     "口碑分与同级排名的可用状态不一致。",
                 )
             metric_rect = _metric_rect(current)
+            circle_content_raw: str | None = None
+            circle_url: str | None = None
+            if self.include_circle_content:
+                circle_content_raw, circle_url = await asyncio.to_thread(
+                    self._visit_circle_content, target
+                )
             capture = (
                 force_capture
                 or self.evidence_policy is None
@@ -397,6 +471,8 @@ class DongchediReputationAdapter:
                 score_raw=str(score_raw) if score_raw is not None else None,
                 rank_raw=str(rank_raw) if rank_raw is not None else None,
                 volume_raw=volume_raw,
+                circle_content_raw=circle_content_raw,
+                circle_url=circle_url,
                 rank_scope=str(current.get("rank_scope") or "同级车评分"),
                 measurements=measurements,
                 full_page_path=metric_path,
@@ -512,6 +588,8 @@ class DongchediReputationAdapter:
             score_raw=score_raw,
             rank_raw=rank_raw,
             volume_raw=volume_raw,
+            circle_content_raw=None,
+            circle_url=None,
             rank_scope="同级车评分",
             measurements=[measurement],
             full_page_path=None,
@@ -561,10 +639,19 @@ class DongchediReputationAdapter:
                 "直接访问口碑页面返回空文档。",
                 retryable=True,
             )
-        return self._parse_http_page(
+        result = self._parse_http_page(
             target,
             final_url,
             body,
+            duration_ms=round((time.monotonic() - started) * 1000),
+        )
+        if not self.include_circle_content:
+            return result
+        circle_content_raw, circle_url = self._visit_circle_content(target)
+        return replace(
+            result,
+            circle_content_raw=circle_content_raw,
+            circle_url=circle_url,
             duration_ms=round((time.monotonic() - started) * 1000),
         )
 

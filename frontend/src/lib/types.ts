@@ -228,7 +228,9 @@ export type ReputationResult = {
   platform_code: string
   platform_name: string
   status: string
-  metrics: Record<'score' | 'rank' | 'volume', ReputationMetric>
+  metrics: Record<'score' | 'rank' | 'volume', ReputationMetric> & {
+    circle_content?: ReputationMetric
+  }
   evidence_required: boolean
   attempt_count?: number
   duration_ms?: number

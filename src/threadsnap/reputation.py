@@ -253,6 +253,7 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
         score_base = Decimal("3.80") + Decimal(index) / Decimal(100)
         rank_base = Decimal(5 + (index % 5))
         volume_base = Decimal(500 + index * 37)
+        circle_content_base = Decimal(5000 + index * 113)
         pattern = index % 9
         status = "success"
         error_code = None
@@ -261,38 +262,47 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
             score = _metric(score_base, None)
             rank = _metric(rank_base, None, inverse=True)
             volume = _metric(volume_base, None)
+            circle_content = _metric(circle_content_base, None)
         elif pattern == 0:
             score = _metric(score_base + Decimal("0.12"), score_base)
             rank = _metric(rank_base - 1, rank_base, inverse=True)
             volume = _metric(volume_base + 120, volume_base)
+            circle_content = _metric(circle_content_base + 45, circle_content_base)
         elif pattern == 1:
             score = _metric(score_base - Decimal("0.08"), score_base)
             rank = _metric(rank_base + 2, rank_base, inverse=True)
             volume = _metric(volume_base - 80, volume_base)
+            circle_content = _metric(circle_content_base - 20, circle_content_base)
         elif pattern == 2:
             score = _metric(score_base + Decimal("0.05"), score_base)
             rank = _metric(rank_base + 1, rank_base, inverse=True)
             volume = _metric(volume_base, volume_base)
+            circle_content = _metric(circle_content_base + 12, circle_content_base)
         elif pattern == 3:
             score = _metric(score_base, score_base)
             rank = _metric(rank_base, rank_base, inverse=True)
             volume = _metric(volume_base, volume_base)
+            circle_content = _metric(circle_content_base, circle_content_base)
         elif pattern == 4:
             score = _metric(score_base, score_base)
             rank = _metric(rank_base, rank_base, inverse=True)
             volume = _metric(volume_base + 300, volume_base)
+            circle_content = _metric(circle_content_base + 180, circle_content_base)
         elif pattern == 5:
             score = _metric(score_base, None)
             rank = _metric(rank_base, None, inverse=True)
             volume = _metric(volume_base, None)
+            circle_content = _metric(circle_content_base, None)
         elif pattern == 6:
             score = _metric(None, None, state="not_available", raw="暂无评分")
             rank = _metric(None, None, state="not_available", raw="暂无排名")
             volume = _metric(volume_base, volume_base)
+            circle_content = _metric(circle_content_base, circle_content_base)
         elif pattern == 7:
             score = _metric(None, None, state="unknown")
             rank = _metric(None, None, state="unknown")
             volume = _metric(None, None, state="unknown")
+            circle_content = _metric(None, None, state="unknown")
             status = "failed"
             error_code = "SYNTHETIC_UNKNOWN"
             error_message = "合成场景：页面结构无法可靠解析。"
@@ -300,6 +310,7 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
             score = _metric(None, None, state="auth_required")
             rank = _metric(None, None, state="auth_required")
             volume = _metric(None, None, state="auth_required")
+            circle_content = _metric(None, None, state="auth_required")
             status = "failed"
             error_code = "AUTH_REQUIRED"
             error_message = "合成场景：共享平台会话需要更新。"
@@ -309,7 +320,12 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
                 "status": status,
                 "error_code": error_code,
                 "error_message": error_message,
-                "metrics": {"score": score, "rank": rank, "volume": volume},
+                "metrics": {
+                    "score": score,
+                    "rank": rank,
+                    "volume": volume,
+                    "circle_content": circle_content,
+                },
                 "evidence_required": True,
             }
         )
@@ -1157,6 +1173,10 @@ class ReputationService:
         cls, page: ReputationPageResult, baseline_row: dict[str, Any] | None
     ) -> dict[str, Any]:
         baseline = (baseline_row or {}).get("metrics", {})
+        circle_content = cls._official_metric(
+            page.circle_content_raw, baseline.get("circle_content")
+        )
+        circle_content["source_url"] = page.circle_url
         return {
             "score": cls._official_metric(page.score_raw, baseline.get("score")),
             "rank": cls._official_metric(
@@ -1166,6 +1186,7 @@ class ReputationService:
                 scope=page.rank_scope,
             ),
             "volume": cls._official_metric(page.volume_raw, baseline.get("volume")),
+            "circle_content": circle_content,
         }
 
     @staticmethod
@@ -1264,6 +1285,7 @@ class ReputationService:
                 batch_timeout_seconds=45 * 60,
                 evidence_policy=evidence_policy,
                 prefer_http_first=False,
+                include_circle_content=True,
             )
             try:
                 first = adapter.validate_sync(targets, root / f"attempt-1-{uuid7()}")
@@ -1347,7 +1369,7 @@ class ReputationService:
                 else:
                     metrics = {
                         name: _metric(None, None, state="unknown")
-                        for name in ("score", "rank", "volume")
+                        for name in ("score", "rank", "volume", "circle_content")
                     }
                     evidence_required = True
                     has_evidence = False
@@ -3055,7 +3077,7 @@ class ReputationService:
 
     def _render_report(self, run: ReputationRun, results: list[ReputationResult]) -> str:
         prefix = "【不完整汇报】" if run.status == "partial_success" else ""
-        title = f"{prefix}{run.planned_date}口碑分及排名变动如下："
+        title = f"{prefix}{run.planned_date}口碑巡检指标变动如下："
         lines = [title, "", f"【{PLATFORM_NAME}】"]
         if run.run_type == "baseline_initialization":
             lines.extend(["首次基线初始化，无前日变化可比较。", f"全量页面证据：{run.complete_evidence_count}/{run.required_evidence_count}"])
@@ -3072,8 +3094,15 @@ class ReputationService:
         anomalies: list[str] = []
         for result in results:
             changes: list[str] = []
-            for key, name in (("score", "口碑分"), ("rank", "排名"), ("volume", "口碑量")):
-                metric = result.metrics[key]
+            for key, name in (
+                ("score", "口碑分"),
+                ("rank", "排名"),
+                ("volume", "口碑量"),
+                ("circle_content", "圈子内容量"),
+            ):
+                metric = result.metrics.get(key)
+                if not metric:
+                    continue
                 if metric.get("direction") in {"up", "down"}:
                     direction = "上升" if metric["direction"] == "up" else "下降"
                     changes.append(
@@ -3116,7 +3145,17 @@ class ReputationService:
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "口碑巡检"
-        headers = ["日期", "角色", "车系", "车型", "口碑分", "排名", "口碑量", "备注"]
+        headers = [
+            "日期",
+            "角色",
+            "车系",
+            "车型",
+            "口碑分",
+            "排名",
+            "口碑量",
+            "圈子内容量",
+            "备注",
+        ]
         sheet.append(headers)
         for cell in sheet[1]:
             cell.fill = HEADER_FILL
@@ -3131,11 +3170,17 @@ class ReputationService:
                 result.metrics["score"].get("raw") or "—",
                 result.metrics["rank"].get("raw") or "—",
                 result.metrics["volume"].get("raw") or "—",
+                result.metrics.get("circle_content", {}).get("raw") or "—",
                 "",
             ]
             sheet.append(values)
-            for column, metric_name in ((5, "score"), (6, "rank"), (7, "volume")):
-                tone = result.metrics[metric_name].get("tone")
+            for column, metric_name in (
+                (5, "score"),
+                (6, "rank"),
+                (7, "volume"),
+                (8, "circle_content"),
+            ):
+                tone = result.metrics.get(metric_name, {}).get("tone")
                 sheet.cell(row_index, column).fill = (
                     GREEN_FILL if tone == "positive" else RED_FILL if tone == "negative" else NEUTRAL_FILL
                 )
@@ -3145,13 +3190,13 @@ class ReputationService:
                 preview = WorksheetImage(evidence.metric_region_path)
                 preview.width = 294
                 preview.height = 66
-                sheet.add_image(preview, f"H{row_index}")
+                sheet.add_image(preview, f"I{row_index}")
                 sheet.row_dimensions[row_index].height = 52
-        widths = [13, 12, 18, 22, 12, 12, 14, 44]
+        widths = [13, 12, 18, 22, 12, 12, 14, 16, 44]
         for index, width in enumerate(widths, start=1):
             sheet.column_dimensions[get_column_letter(index)].width = width
         sheet.freeze_panes = "E2"
-        sheet.auto_filter.ref = f"A1:H{len(results) + 1}"
+        sheet.auto_filter.ref = f"A1:I{len(results) + 1}"
         workbook.save(path)
 
     @staticmethod
