@@ -25,6 +25,8 @@ from threadsnap.models import (
     ReputationResult,
     ReputationRun,
     ReputationScheduleEvent,
+    ReputationScopeDraft,
+    ReputationScopeVersion,
     ReputationTombstone,
 )
 from threadsnap.reputation_dongchedi import (
@@ -137,6 +139,46 @@ class ReputationInspectionTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 202, response.text)
         return response.json()
+
+    def initialize_scope(self, filename: str = "scope.csv") -> dict:
+        """写入固定 27 车型初始化清单并返回当前范围。"""
+
+        csv_path = self.root / filename
+        headers = [
+            "schema_version",
+            "seed_key",
+            "series_name",
+            "vehicle_name",
+            "role",
+            "role_order",
+            "platform_code",
+            "platform_vehicle_id",
+            "platform_url",
+            "platform_display_name",
+        ]
+        with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=headers)
+            writer.writeheader()
+            for index in range(27):
+                focus = index < 14
+                order = index + 1 if focus else index - 13
+                writer.writerow(
+                    {
+                        "schema_version": "reputation-scope-v1",
+                        "seed_key": f"vehicle-{index + 1:02d}",
+                        "series_name": f"车系{index // 5 + 1}",
+                        "vehicle_name": f"车型{index + 1:02d}",
+                        "role": "focus" if focus else "competitor",
+                        "role_order": order,
+                        "platform_code": "dongchedi",
+                        "platform_vehicle_id": str(10000 + index),
+                        "platform_url": (
+                            f"https://www.dongchedi.com/auto/series/score/{10000 + index}-x-x-x-x-x"
+                        ),
+                        "platform_display_name": f"页面车型{index + 1:02d}",
+                    }
+                )
+        return self.client.app.state.container.reputation.initialize_scope_csv(csv_path)
 
     def test_synthetic_capability_requires_all_three_guards(self) -> None:
         capability = self.client.get("/api/v1/reputation/capabilities").json()
@@ -297,6 +339,97 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual(save.status_code, 400)
         after = self.client.get("/api/v1/reputation/scope").json()
         self.assertEqual(before["revision"], after["revision"])
+
+    def test_scope_vehicle_add_delete_disable_and_restore_preserve_history(self) -> None:
+        scope = self.initialize_scope("vehicle-maintenance.csv")
+        created_response = self.client.post(
+            "/api/v1/reputation/scope/vehicles",
+            json={
+                "revision": scope["revision"],
+                "series_name": "新增车系",
+                "vehicle_name": "新增车型",
+                "role": "competitor",
+                "platform_code": "dongchedi",
+                "platform_vehicle_id": "39999",
+                "platform_url": "https://www.dongchedi.com/auto/series/score/39999-x-x-x-x-x",
+                "platform_display_name": "新增车型页面",
+            },
+        )
+        self.assertEqual(created_response.status_code, 200, created_response.text)
+        created_scope = created_response.json()
+        created = next(row for row in created_scope["vehicles"] if row["vehicle_name"] == "新增车型")
+        self.assertTrue(created["id"].startswith("rep-"))
+        self.assertEqual(created["removal_mode"], "delete")
+        self.assertEqual(created["mappings"]["dongchedi"]["validation_status"], "unverified")
+
+        duplicate = self.client.post(
+            "/api/v1/reputation/scope/vehicles",
+            json={
+                "revision": created_scope["revision"],
+                "series_name": "重复车系",
+                "vehicle_name": "重复车型",
+                "role": "focus",
+                "platform_vehicle_id": "39999",
+                "platform_url": "https://www.dongchedi.com/auto/series/score/39999-x-x-x-x-x",
+                "platform_display_name": "重复页面",
+            },
+        )
+        self.assertEqual(duplicate.status_code, 400)
+
+        removed = self.client.delete(
+            f"/api/v1/reputation/scope/vehicles/{created['id']}",
+            params={"revision": created_scope["revision"]},
+        )
+        self.assertEqual(removed.status_code, 200, removed.text)
+        removed_scope = removed.json()
+        self.assertEqual(removed_scope["last_vehicle_action"], "deleted")
+        self.assertNotIn(created["id"], {row["id"] for row in removed_scope["vehicles"]})
+
+        with self.client.app.state.container.sessions.begin() as db:
+            draft = db.get(ReputationScopeDraft, "current")
+            assert draft is not None
+            version = ReputationScopeVersion(
+                version=1,
+                snapshot=json.loads(json.dumps(draft.data, ensure_ascii=False)),
+                source_revision=draft.revision,
+            )
+            db.add(version)
+            db.flush()
+            draft.published_version_id = version.id
+
+        published_scope = self.client.get("/api/v1/reputation/scope").json()
+        original = next(row for row in published_scope["vehicles"] if row["id"] == "vehicle-01")
+        self.assertEqual(original["removal_mode"], "disable")
+        disabled = self.client.delete(
+            "/api/v1/reputation/scope/vehicles/vehicle-01",
+            params={"revision": published_scope["revision"]},
+        )
+        self.assertEqual(disabled.status_code, 200, disabled.text)
+        disabled_scope = disabled.json()
+        self.assertEqual(disabled_scope["last_vehicle_action"], "disabled")
+        disabled_vehicle = next(
+            row for row in disabled_scope["vehicles"] if row["id"] == "vehicle-01"
+        )
+        self.assertFalse(disabled_vehicle["enabled"])
+        preview = self.client.get("/api/v1/reputation/scope/publish-preview").json()
+        self.assertEqual(preview["vehicle_count"], 26)
+        self.assertEqual(preview["disabled_count"], 1)
+
+        restored = self.client.post(
+            "/api/v1/reputation/scope/vehicles/vehicle-01/restore",
+            json={"revision": disabled_scope["revision"]},
+        )
+        self.assertEqual(restored.status_code, 200, restored.text)
+        restored_scope = restored.json()
+        self.assertTrue(
+            next(row for row in restored_scope["vehicles"] if row["id"] == "vehicle-01")[
+                "enabled"
+            ]
+        )
+        with self.client.app.state.container.sessions() as db:
+            version = db.scalar(select(ReputationScopeVersion))
+            assert version is not None
+            self.assertTrue(version.snapshot["vehicles"][0]["enabled"])
 
     def test_real_mapping_validation_binds_live_metrics_and_evidence(self) -> None:
         csv_path = self.root / "real-scope.csv"

@@ -2,24 +2,29 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { motion, useReducedMotion } from 'motion/react'
-import { Activity, Beaker, CalendarClock, ChartNoAxesCombined, CircleAlert, ExternalLink, FileCheck2, Gauge, Images, Loader2, Play, RefreshCw, Rocket, ScanSearch, Settings2, ShieldCheck } from 'lucide-react'
+import { Activity, Beaker, CalendarClock, CarFront, ChartNoAxesCombined, CircleAlert, ExternalLink, FileCheck2, Gauge, Images, Loader2, Play, Plus, RefreshCw, Rocket, RotateCcw, ScanSearch, Settings2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
 import { ReputationRoleLabel } from '@/features/reputation/reputation-role-label'
 import { api, errorMessage, formatDate, platformName } from '@/lib/api'
-import type { PageResult, ReputationCapabilities, ReputationMappingValidation, ReputationRun, ReputationSchedule, ReputationScope } from '@/lib/types'
+import type { PageResult, ReputationCapabilities, ReputationMappingValidation, ReputationRun, ReputationSchedule, ReputationScope, ReputationScopeVehicle } from '@/lib/types'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Progress } from '@/components/ui/progress'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 type SearchState = { tab?: 'runs' | 'scope' }
 
@@ -156,12 +161,53 @@ function RunsPanel({ query, schedule, onOpen }: { query: ReturnType<typeof useQu
   )
 }
 
+type VehicleForm = {
+  series_name: string
+  vehicle_name: string
+  role: 'focus' | 'competitor'
+  platform_vehicle_id: string
+  platform_url: string
+  platform_display_name: string
+}
+
+const emptyVehicleForm: VehicleForm = {
+  series_name: '',
+  vehicle_name: '',
+  role: 'focus',
+  platform_vehicle_id: '',
+  platform_url: '',
+  platform_display_name: '',
+}
+
+type PublishPreview = {
+  can_publish: boolean
+  has_changes: boolean
+  added_count: number
+  disabled_count: number
+  role_changed_count: number
+  mapping_changed_count: number
+  identity_changed_count: number
+  warning?: string
+}
+
 function ScopePanel({ query, adapterStatus, adapterMessage }: { query: ReturnType<typeof useQuery<ReputationScope>>; adapterStatus?: ReputationCapabilities['real_adapter_status']; adapterMessage?: string }) {
   const queryClient = useQueryClient()
   const [mappingOpen, setMappingOpen] = useState(false)
   const [publishOpen, setPublishOpen] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [removeTarget, setRemoveTarget] = useState<ReputationScopeVehicle>()
+  const [vehicleForm, setVehicleForm] = useState<VehicleForm>(emptyVehicleForm)
   const [mappingText, setMappingText] = useState('')
   const [preview, setPreview] = useState<{ valid: boolean; changed_count: number; unchanged_count: number; errors: Array<{ row: string; reason: string }> }>()
+  const publishPreviewQuery = useQuery({
+    queryKey: ['reputation-scope-publish-preview', query.data?.revision],
+    queryFn: () => api<PublishPreview>('/reputation/scope/publish-preview'),
+    enabled: Boolean(query.data?.initialized),
+  })
+  const refreshScopeState = (value: ReputationScope) => {
+    queryClient.setQueryData(['reputation-scope'], value)
+    queryClient.invalidateQueries({ queryKey: ['reputation-scope-publish-preview'] })
+  }
   const parseRows = () => mappingText.trim().split(/\r?\n/).filter(Boolean).map((line) => {
     const [vehicle_id, platform_vehicle_id, platform_url, ...display] = line.split('\t')
     return { vehicle_id: vehicle_id?.trim(), platform_vehicle_id: platform_vehicle_id?.trim(), platform_url: platform_url?.trim(), platform_display_name: display.join('\t').trim() }
@@ -173,8 +219,37 @@ function ScopePanel({ query, adapterStatus, adapterMessage }: { query: ReturnTyp
   })
   const saveMutation = useMutation({
     mutationFn: () => api<ReputationScope>('/reputation/scope/mappings', { method: 'PUT', body: JSON.stringify({ revision: query.data?.revision, platform_code: 'dongchedi', rows: parseRows() }) }),
-    onSuccess: (value) => { queryClient.setQueryData(['reputation-scope'], value); setMappingOpen(false); setMappingText(''); setPreview(undefined); toast.success('映射草稿已原子保存', { description: '变化项已恢复为待真实页面验证状态。' }) },
+    onSuccess: (value) => { refreshScopeState(value); setMappingOpen(false); setMappingText(''); setPreview(undefined); toast.success('映射草稿已原子保存', { description: '变化项已恢复为待真实页面验证状态。' }) },
     onError: (error) => toast.error('映射保存失败', { description: errorMessage(error) }),
+  })
+  const createMutation = useMutation({
+    mutationFn: () => api<ReputationScope>('/reputation/scope/vehicles', {
+      method: 'POST',
+      body: JSON.stringify({ revision: query.data?.revision, platform_code: 'dongchedi', ...vehicleForm }),
+    }),
+    onSuccess: (value) => {
+      refreshScopeState(value)
+      setCreateOpen(false)
+      setVehicleForm(emptyVehicleForm)
+      toast.success('车型已加入当前范围草稿', { description: '新映射需通过真实页面验证后才能发布。' })
+    },
+    onError: (error) => toast.error('新增车型失败', { description: errorMessage(error) }),
+  })
+  const removeMutation = useMutation({
+    mutationFn: (vehicle: ReputationScopeVehicle) => api<ReputationScope>(`/reputation/scope/vehicles/${encodeURIComponent(vehicle.id)}?revision=${query.data?.revision}`, { method: 'DELETE' }),
+    onSuccess: (value) => {
+      refreshScopeState(value)
+      setRemoveTarget(undefined)
+      toast.success(value.last_vehicle_action === 'disabled' ? '车型已停用' : '车型已删除', {
+        description: value.last_vehicle_action === 'disabled' ? '历史版本与既有批次保持不变，后续范围不再包含该车型。' : '该车型尚未进入版本或批次，草稿身份已永久删除。',
+      })
+    },
+    onError: (error) => toast.error('车型移除失败', { description: errorMessage(error) }),
+  })
+  const restoreMutation = useMutation({
+    mutationFn: (vehicle: ReputationScopeVehicle) => api<ReputationScope>(`/reputation/scope/vehicles/${encodeURIComponent(vehicle.id)}/restore`, { method: 'POST', body: JSON.stringify({ revision: query.data?.revision }) }),
+    onSuccess: (value) => { refreshScopeState(value); toast.success('车型已恢复', { description: '已重新加入后续发布范围。' }) },
+    onError: (error) => toast.error('恢复车型失败', { description: errorMessage(error) }),
   })
   const validateMutation = useMutation({
     mutationFn: () => api<ReputationMappingValidation>('/reputation/scope/mapping-validations', {
@@ -182,7 +257,7 @@ function ScopePanel({ query, adapterStatus, adapterMessage }: { query: ReturnTyp
       body: JSON.stringify({ revision: query.data?.revision }),
     }, 180_000),
     onSuccess: (value) => {
-      queryClient.setQueryData(['reputation-scope'], value.scope)
+      refreshScopeState(value.scope)
       toast.success('真实页面验证完成', {
         description: `${value.succeeded_count}/${value.requested_count} 项通过，使用并发 ${value.concurrency}`,
       })
@@ -195,31 +270,69 @@ function ScopePanel({ query, adapterStatus, adapterMessage }: { query: ReturnTyp
       body: JSON.stringify({ revision: query.data?.revision, initial_review_acknowledged: true }),
     }),
     onSuccess: (value) => {
-      queryClient.setQueryData(['reputation-scope'], value)
+      refreshScopeState(value)
       setPublishOpen(false)
-      toast.success('口碑巡检范围已发布', { description: `当前版本 V${value.published_version?.version}` })
+      toast.success('口碑巡检范围已发布', { description: '后续计划触发将使用本次冻结范围。' })
     },
     onError: (error) => toast.error('范围发布失败', { description: errorMessage(error) }),
   })
-  if (query.isLoading) return <Card className='h-full py-0'><CardContent className='space-y-3 p-5'><Skeleton className='h-24 w-full' /><Skeleton className='h-72 w-full' /></CardContent></Card>
+  if (query.isLoading) return <Card className='h-full py-0'><CardContent className='space-y-3 p-5'><Skeleton className='h-16 w-full' /><Skeleton className='h-72 w-full' /></CardContent></Card>
   if (query.isError) return <Failure title='车型范围加载失败' detail={errorMessage(query.error)} retry={() => query.refetch()} />
   const scope = query.data!
-  const verified = scope.vehicles.filter((item) => item.mappings.dongchedi?.validation_status === 'verified').length
-  return <div className='h-full space-y-4 overflow-auto pr-1'>
-    <div className='grid gap-3 md:grid-cols-3'>
-      <SummaryCard icon={ShieldCheck} label='已发布版本' value={scope.published_version ? `V${scope.published_version.version}` : '尚未发布'} hint='发布版本不可变，批次保存触发时快照' />
-      <SummaryCard icon={ChartNoAxesCombined} label='车型范围' value={`${scope.vehicles.length}/27`} hint='14 款重点车型 + 13 款竞品' />
-      <SummaryCard icon={FileCheck2} label='映射验证' value={`${verified}/${scope.vehicles.length || 27}`} hint='真实页面逐项验证后才开放发布' />
-    </div>
-    {adapterStatus === 'not_configured' && adapterMessage && <Alert variant='destructive'><CircleAlert /><AlertTitle>真实采集器尚未就绪</AlertTitle><AlertDescription>{adapterMessage}</AlertDescription></Alert>}
-    {!scope.initialized ? <Card><CardHeader><CardTitle className='text-base'>车型范围尚未初始化</CardTitle><CardDescription>{scope.message} 初始化属于一次性运维动作，避免浏览器上传真实业务清单。</CardDescription></CardHeader><CardContent className='rounded-lg bg-muted/45 p-4 font-mono text-xs'>threadsnap reputation-init --file &lt;UTF-8-CSV&gt;</CardContent></Card> : <Card className='overflow-hidden border-border/70 bg-card/90 py-0 shadow-sm'><div className='flex flex-wrap justify-end gap-2 border-b px-4 py-3'><Button variant='outline' size='sm' onClick={() => setMappingOpen(true)}>批量粘贴映射</Button>{verified === scope.vehicles.length && <Button variant='outline' size='sm' onClick={() => setPublishOpen(true)}><Rocket className='size-4' />{scope.published_version ? '发布新版本' : '发布首个范围'}</Button>}<Button size='sm' disabled={validateMutation.isPending || !scope.vehicles.length} onClick={() => validateMutation.mutate()}>{validateMutation.isPending ? <Loader2 className='size-4 animate-spin' /> : <ScanSearch className='size-4' />}{validateMutation.isPending ? '正在并发验证…' : verified === scope.vehicles.length ? '重新验证全部' : '验证全部真实页面'}</Button></div><div className='overflow-auto'><Table className='min-w-[1120px]'><TableHeader><TableRow className='bg-muted/35'><TableHead className='w-24 pl-4'>角色顺序</TableHead><TableHead>内部车型 ID</TableHead><TableHead>车系</TableHead><TableHead>车型</TableHead><TableHead>平台展示名</TableHead><TableHead className='text-right'>口碑分</TableHead><TableHead className='text-right'>同级排名</TableHead><TableHead className='text-right'>口碑量</TableHead><TableHead>映射状态</TableHead><TableHead className='text-center'>证据</TableHead><TableHead className='px-4 text-center'>页面</TableHead></TableRow></TableHeader><TableBody>{scope.vehicles.map((vehicle) => { const mapping = vehicle.mappings.dongchedi; const metrics = mapping?.latest_metrics; return <TableRow key={vehicle.id}><TableCell className='w-24 pl-4'><ReputationRoleLabel role={vehicle.role} position={vehicle.role_order} /></TableCell><TableCell className='font-mono text-xs text-muted-foreground'>{vehicle.id}</TableCell><TableCell>{vehicle.series_name}</TableCell><TableCell className='font-medium'>{vehicle.vehicle_name}</TableCell><TableCell>{mapping?.actual_name || mapping?.platform_display_name || '—'}</TableCell><TableCell className='text-right font-medium tabular-nums'>{metrics?.score ?? '暂无'}</TableCell><TableCell className='text-right font-medium tabular-nums'>{metrics?.rank ?? '暂无'}</TableCell><TableCell className='text-right font-medium tabular-nums'>{metrics?.volume ?? '暂无'}</TableCell><TableCell><StatusBadge value={mapping?.validation_status ?? 'unknown'} label={mappingStatusName(mapping?.validation_status)} />{mapping?.validation_error && <div className='mt-1 max-w-44 text-[11px] text-destructive'>{mapping.validation_error}</div>}</TableCell><TableCell className='text-center'>{mapping?.validation_attempt_id ? <Button asChild variant='ghost' size='icon'><a href={`/api/v1/reputation/mapping-validations/attempts/${mapping.validation_attempt_id}/metric`} target='_blank' rel='noreferrer' aria-label='查看指标区域截图'><Images className='size-4' /></a></Button> : '—'}</TableCell><TableCell className='px-4 text-center'>{mapping?.platform_url ? <Button asChild variant='ghost' size='icon'><a href={mapping.platform_url} target='_blank' rel='noreferrer' aria-label='打开平台页面'><ExternalLink className='size-4' /></a></Button> : '—'}</TableCell></TableRow> })}</TableBody></Table></div></Card>}
+  const activeVehicles = scope.vehicles.filter((item) => item.enabled)
+  const displayVehicles = [...scope.vehicles].sort((left, right) => Number(right.enabled) - Number(left.enabled))
+  const verified = activeVehicles.filter((item) => item.mappings.dongchedi?.validation_status === 'verified').length
+  const pendingValidation = activeVehicles.length - verified
+  const canCreate = Object.entries(vehicleForm).every(([key, value]) => key === 'role' || value.trim())
+  const publishPreview = publishPreviewQuery.data
+  const publishDisabled = !publishPreview?.can_publish
+
+  return <div className='flex h-full min-h-0 flex-col gap-3'>
+    {adapterStatus === 'not_configured' && adapterMessage && <Alert variant='destructive' className='shrink-0'><CircleAlert /><AlertTitle>真实采集器尚未就绪</AlertTitle><AlertDescription>{adapterMessage}</AlertDescription></Alert>}
+    {!scope.initialized ? <Card><CardHeader><CardTitle className='text-base'>车型范围尚未初始化</CardTitle><CardDescription>{scope.message} 初始化属于一次性运维动作，避免浏览器上传真实业务清单。</CardDescription></CardHeader><CardContent className='rounded-lg bg-muted/45 p-4 font-mono text-xs'>threadsnap reputation-init --file &lt;UTF-8-CSV&gt;</CardContent></Card> : <Card className='flex min-h-0 flex-1 flex-col overflow-hidden border-border/70 bg-card/90 py-0 shadow-sm'>
+      <div className='flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-card/95 px-4 py-3 backdrop-blur'>
+        <div className='flex min-w-0 items-center gap-3'>
+          <span className='grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary'><CarFront className='size-4.5' /></span>
+          <div className='min-w-0'>
+            <div className='flex flex-wrap items-center gap-2'><span className='font-semibold'>车型与映射</span><Badge variant='secondary'>{activeVehicles.length} 款启用</Badge>{scope.vehicles.length > activeVehicles.length && <Badge variant='outline'>{scope.vehicles.length - activeVehicles.length} 款停用</Badge>}</div>
+            <div className='mt-0.5 text-xs text-muted-foreground'>维护后续巡检范围；新增或停用后统一验证并发布，历史批次保持不变。</div>
+          </div>
+        </div>
+        <div className='flex flex-wrap items-center justify-end gap-2'>
+          <Button variant='outline' size='sm' disabled={validateMutation.isPending || !activeVehicles.length} onClick={() => validateMutation.mutate()}>{validateMutation.isPending ? <Loader2 className='size-4 animate-spin' /> : <ScanSearch className='size-4' />}{validateMutation.isPending ? '正在验证…' : pendingValidation ? `验证待验证（${pendingValidation}）` : '重新验证全部'}</Button>
+          <Button variant='outline' size='sm' onClick={() => setCreateOpen(true)}><Plus className='size-4' />新增车型</Button>
+          <Button variant='outline' size='sm' onClick={() => setMappingOpen(true)}>批量粘贴映射</Button>
+          <Button size='sm' disabled={publishDisabled} title={publishPreview?.warning} onClick={() => setPublishOpen(true)}><Rocket className='size-4' />发布变更</Button>
+        </div>
+      </div>
+      <div className='min-h-0 flex-1 overflow-auto'>
+        <Table className='min-w-[1240px]'>
+          <TableHeader className='sticky top-0 z-10 bg-card shadow-[0_1px_0_hsl(var(--border))]'><TableRow className='bg-muted/35 hover:bg-muted/35'><TableHead className='w-24 pl-4'>角色顺序</TableHead><TableHead>内部车型 ID</TableHead><TableHead>车系</TableHead><TableHead>车型</TableHead><TableHead>平台展示名</TableHead><TableHead className='text-right'>口碑分</TableHead><TableHead className='text-right'>同级排名</TableHead><TableHead className='text-right'>口碑量</TableHead><TableHead>状态</TableHead><TableHead className='text-center'>证据</TableHead><TableHead className='text-center'>页面</TableHead><TableHead className='pr-4 text-right'>操作</TableHead></TableRow></TableHeader>
+          <TableBody>{displayVehicles.map((vehicle) => {
+            const mapping = vehicle.mappings.dongchedi
+            const metrics = mapping?.latest_metrics
+            return <TableRow key={vehicle.id} className={vehicle.enabled ? undefined : 'bg-muted/20 text-muted-foreground'}><TableCell className='w-24 pl-4'><ReputationRoleLabel role={vehicle.role} position={vehicle.role_order} /></TableCell><TableCell className='font-mono text-xs text-muted-foreground'>{vehicle.id}</TableCell><TableCell>{vehicle.series_name}</TableCell><TableCell className='font-medium'>{vehicle.vehicle_name}</TableCell><TableCell>{mapping?.actual_name || mapping?.platform_display_name || '—'}</TableCell><TableCell className='text-right font-medium tabular-nums'>{metrics?.score ?? '暂无'}</TableCell><TableCell className='text-right font-medium tabular-nums'>{metrics?.rank ?? '暂无'}</TableCell><TableCell className='text-right font-medium tabular-nums'>{metrics?.volume ?? '暂无'}</TableCell><TableCell>{vehicle.enabled ? <StatusBadge value={mapping?.validation_status ?? 'unknown'} label={mappingStatusName(mapping?.validation_status)} /> : <Badge variant='outline'>已停用</Badge>}{vehicle.enabled && mapping?.validation_error && <div className='mt-1 max-w-44 text-[11px] text-destructive'>{mapping.validation_error}</div>}</TableCell><TableCell className='text-center'>{mapping?.validation_attempt_id ? <Button asChild variant='ghost' size='icon'><a href={`/api/v1/reputation/mapping-validations/attempts/${mapping.validation_attempt_id}/metric`} target='_blank' rel='noreferrer' aria-label='查看指标区域截图'><Images className='size-4' /></a></Button> : '—'}</TableCell><TableCell className='text-center'>{mapping?.platform_url ? <Button asChild variant='ghost' size='icon'><a href={mapping.platform_url} target='_blank' rel='noreferrer' aria-label='打开平台页面'><ExternalLink className='size-4' /></a></Button> : '—'}</TableCell><TableCell className='pr-4 text-right'><ScopeVehicleAction vehicle={vehicle} restorePending={restoreMutation.isPending} onRemove={() => setRemoveTarget(vehicle)} onRestore={() => restoreMutation.mutate(vehicle)} /></TableCell></TableRow>
+          })}</TableBody>
+        </Table>
+      </div>
+      <div className='shrink-0 border-t bg-card/95 px-4 py-2.5 text-xs text-muted-foreground'>已验证 {verified}/{activeVehicles.length} · 新增车型在发布前可永久删除，已有历史车型仅停用并保留既有版本与批次。</div>
+    </Card>}
+
+    <Dialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (!open) setVehicleForm(emptyVehicleForm) }}><DialogContent className='sm:max-w-xl'><DialogHeader><DialogTitle className='flex items-center gap-2'><Plus className='size-5 text-primary' />新增车型</DialogTitle><DialogDescription>新增后先进入当前草稿并分配不可复用的内部车型 ID；完成真实页面验证并发布后，后续巡检才会包含该车型。</DialogDescription></DialogHeader><div className='grid gap-4 py-1 sm:grid-cols-2'><div className='space-y-2'><Label htmlFor='series-name'>车系</Label><Input id='series-name' value={vehicleForm.series_name} onChange={(event) => setVehicleForm((value) => ({ ...value, series_name: event.target.value }))} placeholder='例如：风云系' /></div><div className='space-y-2'><Label htmlFor='vehicle-name'>车型</Label><Input id='vehicle-name' value={vehicleForm.vehicle_name} onChange={(event) => setVehicleForm((value) => ({ ...value, vehicle_name: event.target.value }))} placeholder='例如：风云A9' /></div><div className='space-y-2'><Label>角色</Label><Select value={vehicleForm.role} onValueChange={(role: 'focus' | 'competitor') => setVehicleForm((value) => ({ ...value, role }))}><SelectTrigger className='w-full'><SelectValue /></SelectTrigger><SelectContent><SelectItem value='focus'>重点车型</SelectItem><SelectItem value='competitor'>竞品车型</SelectItem></SelectContent></Select></div><div className='space-y-2'><Label htmlFor='platform-id'>平台车型 ID</Label><Input id='platform-id' value={vehicleForm.platform_vehicle_id} onChange={(event) => setVehicleForm((value) => ({ ...value, platform_vehicle_id: event.target.value }))} placeholder='平台页面中的车型 ID' /></div><div className='space-y-2 sm:col-span-2'><Label htmlFor='platform-name'>平台展示名</Label><Input id='platform-name' value={vehicleForm.platform_display_name} onChange={(event) => setVehicleForm((value) => ({ ...value, platform_display_name: event.target.value }))} placeholder='页面实际展示的车型名称' /></div><div className='space-y-2 sm:col-span-2'><Label htmlFor='platform-url'>车型口碑页 URL</Label><Input id='platform-url' value={vehicleForm.platform_url} onChange={(event) => setVehicleForm((value) => ({ ...value, platform_url: event.target.value }))} placeholder='https://www.dongchedi.com/auto/series/score/…' /></div></div><DialogFooter><Button variant='outline' onClick={() => setCreateOpen(false)}>取消</Button><Button disabled={!canCreate || createMutation.isPending} onClick={() => createMutation.mutate()}>{createMutation.isPending ? <Loader2 className='size-4 animate-spin' /> : <Plus className='size-4' />}确认新增</Button></DialogFooter></DialogContent></Dialog>
+
+    <AlertDialog open={Boolean(removeTarget)} onOpenChange={(open) => { if (!open) setRemoveTarget(undefined) }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{removeTarget?.removal_mode === 'disable' ? '停用该车型？' : '永久删除该车型？'}</AlertDialogTitle><AlertDialogDescription>{removeTarget?.removal_mode === 'disable' ? `${removeTarget.vehicle_name} 已被历史版本或批次引用，因此会保留身份和历史数据，只从后续发布范围中停用。` : `${removeTarget?.vehicle_name ?? ''} 尚未进入任何版本或批次，确认后会从当前草稿中永久删除。`}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction className='bg-destructive text-destructive-foreground hover:bg-destructive/90' disabled={removeMutation.isPending} onClick={() => removeTarget && removeMutation.mutate(removeTarget)}>{removeMutation.isPending ? '处理中…' : removeTarget?.removal_mode === 'disable' ? '确认停用' : '确认删除'}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+
     <Dialog open={mappingOpen} onOpenChange={(open) => { setMappingOpen(open); if (!open) setPreview(undefined) }}><DialogContent className='sm:max-w-2xl'><DialogHeader><DialogTitle>批量粘贴懂车帝映射</DialogTitle><DialogDescription>每行四列，以 Tab 分隔：内部车型 ID、平台车型 ID、页面 URL、平台展示名。只提交实际变化项，保存操作全有或全无。</DialogDescription></DialogHeader><Textarea value={mappingText} onChange={(event) => { setMappingText(event.target.value); setPreview(undefined) }} className='min-h-56 font-mono text-xs' placeholder={'dcd-24729\t24729\thttps://www.dongchedi.com/auto/series/score/24729-x-x-x-x-x\t风云A9'} />{preview && <Alert className={preview.valid ? 'border-emerald-500/25 bg-emerald-500/5' : 'border-red-500/25 bg-red-500/5'}><AlertTitle>{preview.valid ? `预览通过：将更新 ${preview.changed_count} 项` : `发现 ${preview.errors.length} 个错误`}</AlertTitle><AlertDescription>{preview.valid ? `${preview.unchanged_count} 项保持不变；保存后变化项进入待验证状态。` : preview.errors.map((item) => `第 ${item.row} 行：${item.reason}`).join('；')}</AlertDescription></Alert>}<DialogFooter><Button variant='outline' onClick={() => setMappingOpen(false)}>取消</Button><Button variant='secondary' disabled={!mappingText.trim() || previewMutation.isPending} onClick={() => previewMutation.mutate()}>预览影响</Button><Button disabled={!preview?.valid || saveMutation.isPending} onClick={() => saveMutation.mutate()}>{saveMutation.isPending ? '保存中…' : '确认保存草稿'}</Button></DialogFooter></DialogContent></Dialog>
-    <Dialog open={publishOpen} onOpenChange={setPublishOpen}><DialogContent className='sm:max-w-xl'><DialogHeader><DialogTitle className='flex items-center gap-2'><Rocket className='size-5 text-primary' />确认发布口碑巡检范围</DialogTitle><DialogDescription>本次发布包含 {scope.vehicles.length} 款车型、{verified} 项已验证懂车帝映射。发布后形成不可变版本，供后续 12:00 正式巡检按计划时点冻结使用。</DialogDescription></DialogHeader><div className='max-h-64 overflow-auto rounded-lg border p-3'><div className='grid grid-cols-2 gap-x-4 gap-y-2 text-sm'>{scope.vehicles.map((vehicle) => <div key={vehicle.id} className='flex items-center justify-between gap-2'><span className='truncate'>{vehicle.vehicle_name}</span><Badge variant={vehicle.role === 'focus' ? 'default' : 'secondary'}>{vehicle.role === 'focus' ? '重点' : '竞品'}</Badge></div>)}</div></div><DialogFooter><Button variant='outline' onClick={() => setPublishOpen(false)}>返回核对</Button><Button disabled={publishMutation.isPending} onClick={() => publishMutation.mutate()}>{publishMutation.isPending ? <Loader2 className='size-4 animate-spin' /> : <Rocket className='size-4' />}确认发布</Button></DialogFooter></DialogContent></Dialog>
+
+    <Dialog open={publishOpen} onOpenChange={setPublishOpen}><DialogContent className='sm:max-w-xl'><DialogHeader><DialogTitle className='flex items-center gap-2'><Rocket className='size-5 text-primary' />确认发布范围变更</DialogTitle><DialogDescription>本次将冻结 {activeVehicles.length} 款启用车型和 {verified} 项已验证映射；后续计划使用新范围，既有批次保持不变。</DialogDescription></DialogHeader><div className='grid grid-cols-2 gap-3 rounded-lg border bg-muted/20 p-3 text-sm sm:grid-cols-4'><div><div className='text-xs text-muted-foreground'>新增</div><div className='mt-1 font-semibold'>{publishPreview?.added_count ?? 0}</div></div><div><div className='text-xs text-muted-foreground'>停用</div><div className='mt-1 font-semibold'>{publishPreview?.disabled_count ?? 0}</div></div><div><div className='text-xs text-muted-foreground'>角色/顺序</div><div className='mt-1 font-semibold'>{publishPreview?.role_changed_count ?? 0}</div></div><div><div className='text-xs text-muted-foreground'>映射/名称</div><div className='mt-1 font-semibold'>{(publishPreview?.mapping_changed_count ?? 0) + (publishPreview?.identity_changed_count ?? 0)}</div></div></div><div className='max-h-56 overflow-auto rounded-lg border p-3'><div className='grid grid-cols-2 gap-x-4 gap-y-2 text-sm'>{activeVehicles.map((vehicle) => <div key={vehicle.id} className='flex items-center justify-between gap-2'><span className='truncate'>{vehicle.vehicle_name}</span><Badge variant={vehicle.role === 'focus' ? 'default' : 'secondary'}>{vehicle.role === 'focus' ? '重点' : '竞品'}</Badge></div>)}</div></div><DialogFooter><Button variant='outline' onClick={() => setPublishOpen(false)}>返回核对</Button><Button disabled={publishMutation.isPending} onClick={() => publishMutation.mutate()}>{publishMutation.isPending ? <Loader2 className='size-4 animate-spin' /> : <Rocket className='size-4' />}确认发布</Button></DialogFooter></DialogContent></Dialog>
   </div>
 }
 
-function SummaryCard({ icon: Icon, label, value, hint }: { icon: typeof ShieldCheck; label: string; value: string; hint: string }) {
-  return <Card className='border-border/70 bg-card/88 py-4 shadow-sm'><CardContent className='flex items-start gap-3 px-4'><div className='grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary'><Icon className='size-4.5' /></div><div><div className='text-xs text-muted-foreground'>{label}</div><div className='mt-0.5 text-xl font-semibold tabular-nums'>{value}</div><div className='mt-1 text-[11px] text-muted-foreground'>{hint}</div></div></CardContent></Card>
+function ScopeVehicleAction({ vehicle, restorePending, onRemove, onRestore }: { vehicle: ReputationScopeVehicle; restorePending: boolean; onRemove: () => void; onRestore: () => void }) {
+  const label = vehicle.enabled
+    ? vehicle.removal_mode === 'disable' ? '停用并保留历史' : '永久删除未发布车型'
+    : '恢复车型'
+  return <Tooltip><TooltipTrigger asChild>{vehicle.enabled ? <Button variant='ghost' size='icon' className='text-muted-foreground hover:text-destructive' aria-label={`${vehicle.removal_mode === 'disable' ? '停用' : '删除'}车型 ${vehicle.vehicle_name}`} onClick={onRemove}><Trash2 className='size-4' /></Button> : <Button variant='ghost' size='icon' aria-label={`恢复车型 ${vehicle.vehicle_name}`} disabled={restorePending} onClick={onRestore}><RotateCcw className='size-4' /></Button>}</TooltipTrigger><TooltipContent side='left'>{label}</TooltipContent></Tooltip>
 }
 
 function Failure({ title, detail, retry }: { title: string; detail: string; retry: () => void }) {

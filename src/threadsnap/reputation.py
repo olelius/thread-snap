@@ -114,6 +114,21 @@ class MappingValidationRequest(BaseModel):
     vehicle_ids: list[str] | None = None
 
 
+class ScopeVehicleCreateRequest(BaseModel):
+    revision: int
+    series_name: str
+    vehicle_name: str
+    role: Literal["focus", "competitor"]
+    platform_code: str = PLATFORM_CODE
+    platform_vehicle_id: str
+    platform_url: str
+    platform_display_name: str
+
+
+class ScopeVehicleRevisionRequest(BaseModel):
+    revision: int
+
+
 @dataclass(frozen=True)
 class SyntheticVehicle:
     vehicle_id: str
@@ -615,7 +630,9 @@ class ReputationService:
                 .order_by(ReputationMappingValidationAttempt.finished_at)
             ).all()
             snapshot = json.loads(json.dumps(version.snapshot, ensure_ascii=False))
-            vehicles = snapshot.get("vehicles", [])
+            vehicles = [
+                item for item in snapshot.get("vehicles", []) if item.get("enabled", True)
+            ]
             by_vehicle = {item.vehicle_id: item for item in attempts}
             missing = [item["id"] for item in vehicles if item["id"] not in by_vehicle]
             if missing:
@@ -2053,14 +2070,188 @@ class ReputationService:
                     "message": "尚未通过UTF-8 CSV初始化27款车型。",
                 }
             data = draft.data or {}
+            referenced_ids = self._scope_reference_ids(db)
+            vehicles = json.loads(json.dumps(data.get("vehicles", []), ensure_ascii=False))
+            for vehicle in vehicles:
+                vehicle["removal_mode"] = (
+                    "disable" if vehicle.get("id") in referenced_ids else "delete"
+                )
             return {
                 "initialized": True,
                 "revision": draft.revision,
-                "vehicles": data.get("vehicles", []),
+                "vehicles": vehicles,
                 "published_version": self._published_version_dict(db, draft),
                 "source_sha256": draft.source_sha256,
                 "updated_at": draft.updated_at.isoformat(),
             }
+
+    @staticmethod
+    def _scope_reference_ids(db: Session) -> set[str]:
+        """返回已进入不可变版本或正式结果的车型身份。"""
+
+        referenced: set[str] = set(
+            db.scalars(select(ReputationResult.vehicle_id).distinct()).all()
+        )
+        for version in db.scalars(select(ReputationScopeVersion)).all():
+            for vehicle in (version.snapshot or {}).get("vehicles", []):
+                vehicle_id = str(vehicle.get("id") or "")
+                if vehicle_id:
+                    referenced.add(vehicle_id)
+        return referenced
+
+    @staticmethod
+    def _normalize_role_orders(vehicles: list[dict[str, Any]], role: str) -> None:
+        """保持启用车型优先且角色内顺序连续，停用车型保留在组尾。"""
+
+        grouped = [vehicle for vehicle in vehicles if vehicle.get("role") == role]
+        grouped.sort(
+            key=lambda vehicle: (
+                not bool(vehicle.get("enabled", True)),
+                int(vehicle.get("role_order") or 0),
+                str(vehicle.get("id") or ""),
+            )
+        )
+        for position, vehicle in enumerate(grouped, start=1):
+            vehicle["role_order"] = position
+
+    @staticmethod
+    def _require_scope_revision(
+        draft: ReputationScopeDraft | None, revision: int
+    ) -> ReputationScopeDraft:
+        if not draft:
+            raise DomainError("REPUTATION_SCOPE_UNINITIALIZED", "请先初始化口碑车型范围。")
+        if draft.revision != revision:
+            raise DomainError(
+                "REPUTATION_SCOPE_CONFLICT",
+                "范围草稿已经变化，请刷新后重试。",
+                status_code=409,
+            )
+        return draft
+
+    def create_scope_vehicle(self, value: ScopeVehicleCreateRequest) -> dict[str, Any]:
+        """新增一条独立车型身份；内部 ID 只由服务端生成且永不复用。"""
+
+        if value.platform_code != PLATFORM_CODE:
+            raise DomainError("REPUTATION_SCOPE_PLATFORM", "当前阶段只接受已接入平台的车型映射。")
+        fields = {
+            "series_name": value.series_name.strip(),
+            "vehicle_name": value.vehicle_name.strip(),
+            "platform_vehicle_id": value.platform_vehicle_id.strip(),
+            "platform_display_name": value.platform_display_name.strip(),
+        }
+        if not all(fields.values()):
+            raise DomainError("REPUTATION_SCOPE_VEHICLE_REQUIRED", "新增车型的名称和平台映射不能为空。")
+        try:
+            normalized_url = normalize_series_url(value.platform_url, fields["platform_vehicle_id"])
+        except ReputationAdapterError as error:
+            raise DomainError(error.code, error.message) from error
+        with self.sessions.begin() as db:
+            draft = self._require_scope_revision(
+                db.get(ReputationScopeDraft, "current"), value.revision
+            )
+            data = json.loads(json.dumps(draft.data, ensure_ascii=False))
+            vehicles = data.setdefault("vehicles", [])
+            if any(
+                str(vehicle.get("mappings", {}).get(PLATFORM_CODE, {}).get("platform_vehicle_id"))
+                == fields["platform_vehicle_id"]
+                for vehicle in vehicles
+            ):
+                raise DomainError("REPUTATION_SCOPE_DUPLICATE", "平台车型 ID 已被现有车型使用。")
+            role_order = 1 + max(
+                (
+                    int(vehicle.get("role_order") or 0)
+                    for vehicle in vehicles
+                    if vehicle.get("role") == value.role
+                    and bool(vehicle.get("enabled", True))
+                ),
+                default=0,
+            )
+            vehicles.append(
+                {
+                    "id": f"rep-{uuid7()}",
+                    "series_name": fields["series_name"],
+                    "vehicle_name": fields["vehicle_name"],
+                    "role": value.role,
+                    "role_order": role_order,
+                    "enabled": True,
+                    "mappings": {
+                        PLATFORM_CODE: {
+                            "platform_vehicle_id": fields["platform_vehicle_id"],
+                            "platform_url": normalized_url,
+                            "platform_display_name": fields["platform_display_name"],
+                            "validation_status": "unverified",
+                        }
+                    },
+                }
+            )
+            self._normalize_role_orders(vehicles, value.role)
+            draft.data = data
+            draft.revision += 1
+        return self.get_scope()
+
+    def remove_scope_vehicle(self, vehicle_id: str, revision: int) -> dict[str, Any]:
+        """未引用车型永久删除；已有历史引用的车型只停用。"""
+
+        action = "deleted"
+        with self.sessions.begin() as db:
+            draft = self._require_scope_revision(
+                db.get(ReputationScopeDraft, "current"), revision
+            )
+            data = json.loads(json.dumps(draft.data, ensure_ascii=False))
+            vehicles = data.get("vehicles", [])
+            vehicle = next((row for row in vehicles if row.get("id") == vehicle_id), None)
+            if not vehicle:
+                raise DomainError(
+                    "REPUTATION_SCOPE_VEHICLE_NOT_FOUND", "车型不存在。", status_code=404
+                )
+            role = str(vehicle.get("role") or "")
+            if vehicle_id in self._scope_reference_ids(db):
+                if not vehicle.get("enabled", True):
+                    raise DomainError("REPUTATION_SCOPE_VEHICLE_DISABLED", "车型已经停用。")
+                vehicle["enabled"] = False
+                action = "disabled"
+            else:
+                vehicles.remove(vehicle)
+            self._normalize_role_orders(vehicles, role)
+            draft.data = data
+            draft.revision += 1
+        scope = self.get_scope()
+        scope["last_vehicle_action"] = action
+        return scope
+
+    def restore_scope_vehicle(
+        self, vehicle_id: str, value: ScopeVehicleRevisionRequest
+    ) -> dict[str, Any]:
+        """恢复历史车型，并放到对应角色当前启用列表末尾。"""
+
+        with self.sessions.begin() as db:
+            draft = self._require_scope_revision(
+                db.get(ReputationScopeDraft, "current"), value.revision
+            )
+            data = json.loads(json.dumps(draft.data, ensure_ascii=False))
+            vehicles = data.get("vehicles", [])
+            vehicle = next((row for row in vehicles if row.get("id") == vehicle_id), None)
+            if not vehicle:
+                raise DomainError(
+                    "REPUTATION_SCOPE_VEHICLE_NOT_FOUND", "车型不存在。", status_code=404
+                )
+            if vehicle.get("enabled", True):
+                raise DomainError("REPUTATION_SCOPE_VEHICLE_ENABLED", "车型当前已经启用。")
+            vehicle["enabled"] = True
+            vehicle["role_order"] = 1 + max(
+                (
+                    int(row.get("role_order") or 0)
+                    for row in vehicles
+                    if row is not vehicle
+                    and row.get("role") == vehicle.get("role")
+                    and bool(row.get("enabled", True))
+                ),
+                default=0,
+            )
+            self._normalize_role_orders(vehicles, str(vehicle.get("role") or ""))
+            draft.data = data
+            draft.revision += 1
+        return self.get_scope()
 
     def initialize_scope_csv(self, path: Path) -> dict[str, Any]:
         raw = path.read_bytes()
@@ -2227,7 +2418,9 @@ class ReputationService:
                 "范围草稿已经变化，请刷新后重试。",
                 status_code=409,
             )
-        requested_ids = value.vehicle_ids or [row["id"] for row in scope["vehicles"]]
+        requested_ids = value.vehicle_ids or [
+            row["id"] for row in scope["vehicles"] if row.get("enabled", True)
+        ]
         if not requested_ids or len(set(requested_ids)) != len(requested_ids):
             raise DomainError("REPUTATION_VALIDATION_TARGETS", "验证车型不能为空或重复。")
         by_id = {row["id"]: row for row in scope["vehicles"]}
@@ -2237,6 +2430,13 @@ class ReputationService:
                 "REPUTATION_VALIDATION_TARGETS",
                 "验证请求包含不存在的内部车型ID。",
                 details=[{"vehicle_id": item, "reason": "内部车型ID不存在"} for item in unknown],
+            )
+        disabled = [item for item in requested_ids if not by_id[item].get("enabled", True)]
+        if disabled:
+            raise DomainError(
+                "REPUTATION_VALIDATION_TARGETS",
+                "停用车型不参与映射验证。",
+                details=[{"vehicle_id": item, "reason": "车型已停用"} for item in disabled],
             )
         if not self.session_store:
             raise DomainError(
@@ -2538,8 +2738,54 @@ class ReputationService:
         scope = self.get_scope()
         if not scope["initialized"]:
             raise DomainError("REPUTATION_SCOPE_UNINITIALIZED", "请先初始化口碑车型范围。")
-        vehicles = scope["vehicles"]
+        vehicles = [row for row in scope["vehicles"] if row.get("enabled", True)]
         verified = sum(1 for vehicle in vehicles if self._mapping_is_verified(vehicle))
+        with self.sessions() as db:
+            draft = db.get(ReputationScopeDraft, "current")
+            published = (
+                db.get(ReputationScopeVersion, draft.published_version_id)
+                if draft and draft.published_version_id
+                else None
+            )
+            previous = [
+                row
+                for row in ((published.snapshot or {}).get("vehicles", []) if published else [])
+                if row.get("enabled", True)
+            ]
+        current_by_id = {str(row["id"]): row for row in vehicles}
+        previous_by_id = {str(row["id"]): row for row in previous}
+        added_ids = current_by_id.keys() - previous_by_id.keys()
+        disabled_ids = previous_by_id.keys() - current_by_id.keys()
+
+        def business_mapping(row: dict[str, Any]) -> dict[str, Any]:
+            mapping = row.get("mappings", {}).get(PLATFORM_CODE, {})
+            return {
+                key: mapping.get(key)
+                for key in ("platform_vehicle_id", "platform_url", "platform_display_name")
+            }
+
+        shared_ids = current_by_id.keys() & previous_by_id.keys()
+        role_changed = sum(
+            current_by_id[item].get("role") != previous_by_id[item].get("role")
+            or current_by_id[item].get("role_order") != previous_by_id[item].get("role_order")
+            for item in shared_ids
+        )
+        mapping_changed = sum(
+            business_mapping(current_by_id[item]) != business_mapping(previous_by_id[item])
+            for item in shared_ids
+        )
+        identity_changed = sum(
+            any(
+                current_by_id[item].get(key) != previous_by_id[item].get(key)
+                for key in ("series_name", "vehicle_name")
+            )
+            for item in shared_ids
+        )
+        has_changes = published is None or bool(
+            added_ids or disabled_ids or role_changed or mapping_changed or identity_changed
+        )
+        verified_all = bool(vehicles) and verified == len(vehicles)
+        can_publish = verified_all and has_changes
         return {
             "revision": scope["revision"],
             "initial_publish": scope["published_version"] is None,
@@ -2548,10 +2794,20 @@ class ReputationService:
             "competitor_count": sum(row["role"] == "competitor" for row in vehicles),
             "verified_mapping_count": verified,
             "expected_mapping_count": len(vehicles),
-            "can_publish": verified == len(vehicles),
-            "warning": None
-            if verified == len(vehicles)
-            else "真实页面验证尚未全部完成，当前不会开放发布。",
+            "added_count": len(added_ids),
+            "disabled_count": len(disabled_ids),
+            "role_changed_count": role_changed,
+            "mapping_changed_count": mapping_changed,
+            "identity_changed_count": identity_changed,
+            "has_changes": has_changes,
+            "can_publish": can_publish,
+            "warning": (
+                None
+                if can_publish
+                else "当前范围没有待发布变更。"
+                if verified_all
+                else "真实页面验证尚未全部完成，当前不会开放发布。"
+            ),
         }
 
     @staticmethod
