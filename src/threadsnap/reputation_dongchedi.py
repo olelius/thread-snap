@@ -8,6 +8,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass, replace
+from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -20,9 +21,27 @@ from PIL import Image
 
 from .browser_runtime import browser_launch_args
 
-ADAPTER_VERSION = "dongchedi-reputation-v5-circle-content"
+ADAPTER_VERSION = "dongchedi-reputation-v6-negative-rate"
 VALIDATION_CONTRACT_VERSION = "dongchedi-reputation-mapping-v1"
 VIEWPORT = {"width": 1440, "height": 1000}
+NEGATIVE_RATE_API_URL = (
+    "https://api.dcarapi.com/motor/car_score/api/v1/landing_page/get_detail/"
+)
+NEGATIVE_RATE_APP_PARAMS = {
+    "aid": "36",
+    "app_name": "automobile",
+    "version_code": "921",
+    "version_name": "9.2.1",
+    "manifest_version_code": "921",
+    "device_platform": "android",
+    "os": "android",
+}
+NEGATIVE_RATE_HEADERS = {
+    "Accept": "application/json",
+    "User-Agent": "com.ss.android.auto/921 (Linux; Android 13)",
+    "x-tt-appid": "36",
+    "x-ss-dp": "36",
+}
 SERIES_URL_RE = re.compile(
     r"^https://www\.dongchedi\.com/auto/series/(?:score/)?(?P<id>\d+)(?:-x-x-x-x-x)?/?(?:\?.*)?$"
 )
@@ -76,6 +95,10 @@ class ReputationPageResult:
     height: int
     metric_rect: dict[str, float]
     duration_ms: int
+    negative_rate_raw: str | None = None
+    negative_rate_url: str | None = None
+    negative_rate_positive_count: int | None = None
+    negative_rate_negative_count: int | None = None
 
 
 def normalize_series_url(url: str, expected_id: str | None = None) -> str:
@@ -172,6 +195,7 @@ class DongchediReputationAdapter:
         evidence_policy: Callable[[ReputationMappingTarget, dict[str, Any]], bool] | None = None,
         prefer_http_first: bool = False,
         include_circle_content: bool = False,
+        include_negative_rate: bool = False,
     ) -> None:
         self.storage_state = storage_state
         self.concurrency = max(1, min(int(concurrency), 8))
@@ -181,6 +205,7 @@ class DongchediReputationAdapter:
         self.evidence_policy = evidence_policy
         self.prefer_http_first = prefer_http_first
         self.include_circle_content = include_circle_content
+        self.include_negative_rate = include_negative_rate
         self.cookies = _cookies_from_state(storage_state)
         self._thread_local = threading.local()
 
@@ -255,6 +280,139 @@ class DongchediReputationAdapter:
                 retryable=True,
             )
         return match.group(1).replace(",", ""), circle_url
+
+    @staticmethod
+    def _attitude_count(
+        items: list[Any], *, part_id: str, names: set[str]
+    ) -> int | None:
+        """按稳定标签ID读取优缺点数量，名称仅作为接口兼容兜底。"""
+
+        candidate = next(
+            (
+                item
+                for item in items
+                if isinstance(item, dict) and str(item.get("part_id")) == part_id
+            ),
+            None,
+        )
+        if candidate is None:
+            candidate = next(
+                (
+                    item
+                    for item in items
+                    if isinstance(item, dict)
+                    and str(item.get("tag_name") or "").split("(", 1)[0] in names
+                ),
+                None,
+            )
+        if candidate is None:
+            return None
+        count = candidate.get("count")
+        if isinstance(count, bool):
+            return None
+        try:
+            value = int(count)
+        except (TypeError, ValueError):
+            return None
+        return value if value >= 0 else None
+
+    def _visit_negative_rate(
+        self, target: ReputationMappingTarget
+    ) -> tuple[str | None, str, int, int]:
+        """使用现有平台车型ID读取APP优缺点数量并计算整数差评率。"""
+
+        params = {
+            "series_id": target.platform_vehicle_id,
+            "car_id": "",
+            "only_owner": "0",
+            "year_id": "",
+            **NEGATIVE_RATE_APP_PARAMS,
+        }
+        try:
+            response = self._http_session().get(
+                NEGATIVE_RATE_API_URL,
+                params=params,
+                headers=NEGATIVE_RATE_HEADERS,
+                timeout=self.timeout_seconds,
+            )
+        except Exception as error:
+            raise ReputationAdapterError(
+                "REPUTATION_NEGATIVE_RATE_NETWORK_ERROR",
+                f"直接访问车型差评率接口失败：{error}",
+                retryable=True,
+            ) from error
+        source_url = str(response.url)
+        if response.status_code >= 500 or response.status_code == 429:
+            raise ReputationAdapterError(
+                "REPUTATION_NEGATIVE_RATE_SERVER_ERROR",
+                f"车型差评率接口返回HTTP {response.status_code}。",
+                retryable=True,
+            )
+        if response.status_code >= 400:
+            raise ReputationAdapterError(
+                "REPUTATION_NEGATIVE_RATE_STATUS_ERROR",
+                f"车型差评率接口返回HTTP {response.status_code}。",
+            )
+        try:
+            payload = response.json()
+        except (TypeError, ValueError) as error:
+            raise ReputationAdapterError(
+                "REPUTATION_NEGATIVE_RATE_RESPONSE_INVALID",
+                "车型差评率接口没有返回可解析的JSON。",
+                retryable=True,
+            ) from error
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, dict):
+            raise ReputationAdapterError(
+                "REPUTATION_NEGATIVE_RATE_DATA_MISSING",
+                "车型差评率接口缺少数据对象。",
+                retryable=True,
+            )
+        series = data.get("series_info")
+        actual_name = str(series.get("series_name") or "") if isinstance(series, dict) else ""
+        if not actual_name or _name_key(actual_name) != _name_key(target.platform_display_name):
+            raise ReputationAdapterError(
+                "REPUTATION_NEGATIVE_RATE_IDENTITY_MISMATCH",
+                "车型差评率接口返回的车型身份与当前映射不一致。",
+            )
+        tag_info_v2 = data.get("tag_info_v2")
+        items = (
+            tag_info_v2.get("hierarchical_tag_list")
+            if isinstance(tag_info_v2, dict)
+            else None
+        )
+        if not isinstance(items, list):
+            tag_info = data.get("tag_info")
+            items = tag_info.get("special_tag_list") if isinstance(tag_info, dict) else None
+        if not isinstance(items, list) or not items:
+            review_count_info = data.get("review_count_info")
+            total_review = (
+                review_count_info.get("total")
+                if isinstance(review_count_info, dict)
+                else None
+            )
+            if total_review == 0:
+                return None, source_url, 0, 0
+            raise ReputationAdapterError(
+                "REPUTATION_NEGATIVE_RATE_TAGS_MISSING",
+                "车型差评率接口缺少优缺点统计标签。",
+                retryable=True,
+            )
+        positive_count = self._attitude_count(items, part_id="3", names={"优点", "好评"})
+        negative_count = self._attitude_count(items, part_id="4", names={"缺点", "差评"})
+        if positive_count is None or negative_count is None:
+            raise ReputationAdapterError(
+                "REPUTATION_NEGATIVE_RATE_COUNTS_INVALID",
+                "车型差评率接口的优缺点数量不可解析。",
+                retryable=True,
+            )
+        total = positive_count + negative_count
+        if total == 0:
+            return None, source_url, positive_count, negative_count
+        rate = (
+            Decimal(negative_count) / Decimal(total) * Decimal(100)
+        ).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+        return f"{rate}%", source_url, positive_count, negative_count
 
     @staticmethod
     def _validate_identity(
@@ -425,6 +583,17 @@ class DongchediReputationAdapter:
                 circle_content_raw, circle_url = await asyncio.to_thread(
                     self._visit_circle_content, target
                 )
+            negative_rate_raw: str | None = None
+            negative_rate_url: str | None = None
+            negative_rate_positive_count: int | None = None
+            negative_rate_negative_count: int | None = None
+            if self.include_negative_rate:
+                (
+                    negative_rate_raw,
+                    negative_rate_url,
+                    negative_rate_positive_count,
+                    negative_rate_negative_count,
+                ) = await asyncio.to_thread(self._visit_negative_rate, target)
             capture = (
                 force_capture
                 or self.evidence_policy is None
@@ -483,6 +652,10 @@ class DongchediReputationAdapter:
                 height=height,
                 metric_rect=metric_rect,
                 duration_ms=round((time.monotonic() - started) * 1000),
+                negative_rate_raw=negative_rate_raw,
+                negative_rate_url=negative_rate_url,
+                negative_rate_positive_count=negative_rate_positive_count,
+                negative_rate_negative_count=negative_rate_negative_count,
             )
         finally:
             await context.close()
@@ -645,14 +818,30 @@ class DongchediReputationAdapter:
             body,
             duration_ms=round((time.monotonic() - started) * 1000),
         )
-        if not self.include_circle_content:
-            return result
-        circle_content_raw, circle_url = self._visit_circle_content(target)
+        circle_content_raw: str | None = None
+        circle_url: str | None = None
+        if self.include_circle_content:
+            circle_content_raw, circle_url = self._visit_circle_content(target)
+        negative_rate_raw: str | None = None
+        negative_rate_url: str | None = None
+        negative_rate_positive_count: int | None = None
+        negative_rate_negative_count: int | None = None
+        if self.include_negative_rate:
+            (
+                negative_rate_raw,
+                negative_rate_url,
+                negative_rate_positive_count,
+                negative_rate_negative_count,
+            ) = self._visit_negative_rate(target)
         return replace(
             result,
             circle_content_raw=circle_content_raw,
             circle_url=circle_url,
             duration_ms=round((time.monotonic() - started) * 1000),
+            negative_rate_raw=negative_rate_raw,
+            negative_rate_url=negative_rate_url,
+            negative_rate_positive_count=negative_rate_positive_count,
+            negative_rate_negative_count=negative_rate_negative_count,
         )
 
     async def _validate_browser_targets(

@@ -254,6 +254,7 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
         rank_base = Decimal(5 + (index % 5))
         volume_base = Decimal(500 + index * 37)
         circle_content_base = Decimal(5000 + index * 113)
+        negative_rate_base = Decimal(32 + (index % 8))
         pattern = index % 9
         status = "success"
         error_code = None
@@ -263,46 +264,57 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
             rank = _metric(rank_base, None, inverse=True)
             volume = _metric(volume_base, None)
             circle_content = _metric(circle_content_base, None)
+            negative_rate = _metric(negative_rate_base, None, inverse=True)
         elif pattern == 0:
             score = _metric(score_base + Decimal("0.12"), score_base)
             rank = _metric(rank_base - 1, rank_base, inverse=True)
             volume = _metric(volume_base + 120, volume_base)
             circle_content = _metric(circle_content_base + 45, circle_content_base)
+            negative_rate = _metric(negative_rate_base - 3, negative_rate_base, inverse=True)
         elif pattern == 1:
             score = _metric(score_base - Decimal("0.08"), score_base)
             rank = _metric(rank_base + 2, rank_base, inverse=True)
             volume = _metric(volume_base - 80, volume_base)
             circle_content = _metric(circle_content_base - 20, circle_content_base)
+            negative_rate = _metric(negative_rate_base + 4, negative_rate_base, inverse=True)
         elif pattern == 2:
             score = _metric(score_base + Decimal("0.05"), score_base)
             rank = _metric(rank_base + 1, rank_base, inverse=True)
             volume = _metric(volume_base, volume_base)
             circle_content = _metric(circle_content_base + 12, circle_content_base)
+            negative_rate = _metric(negative_rate_base + 1, negative_rate_base, inverse=True)
         elif pattern == 3:
             score = _metric(score_base, score_base)
             rank = _metric(rank_base, rank_base, inverse=True)
             volume = _metric(volume_base, volume_base)
             circle_content = _metric(circle_content_base, circle_content_base)
+            negative_rate = _metric(negative_rate_base, negative_rate_base, inverse=True)
         elif pattern == 4:
             score = _metric(score_base, score_base)
             rank = _metric(rank_base, rank_base, inverse=True)
             volume = _metric(volume_base + 300, volume_base)
             circle_content = _metric(circle_content_base + 180, circle_content_base)
+            negative_rate = _metric(negative_rate_base, negative_rate_base, inverse=True)
         elif pattern == 5:
             score = _metric(score_base, None)
             rank = _metric(rank_base, None, inverse=True)
             volume = _metric(volume_base, None)
             circle_content = _metric(circle_content_base, None)
+            negative_rate = _metric(negative_rate_base, None, inverse=True)
         elif pattern == 6:
             score = _metric(None, None, state="not_available", raw="暂无评分")
             rank = _metric(None, None, state="not_available", raw="暂无排名")
             volume = _metric(volume_base, volume_base)
             circle_content = _metric(circle_content_base, circle_content_base)
+            negative_rate = _metric(
+                None, None, state="not_available", raw="暂无差评率"
+            )
         elif pattern == 7:
             score = _metric(None, None, state="unknown")
             rank = _metric(None, None, state="unknown")
             volume = _metric(None, None, state="unknown")
             circle_content = _metric(None, None, state="unknown")
+            negative_rate = _metric(None, None, state="unknown")
             status = "failed"
             error_code = "SYNTHETIC_UNKNOWN"
             error_message = "合成场景：页面结构无法可靠解析。"
@@ -311,6 +323,7 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
             rank = _metric(None, None, state="auth_required")
             volume = _metric(None, None, state="auth_required")
             circle_content = _metric(None, None, state="auth_required")
+            negative_rate = _metric(None, None, state="auth_required")
             status = "failed"
             error_code = "AUTH_REQUIRED"
             error_message = "合成场景：共享平台会话需要更新。"
@@ -325,6 +338,7 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
                     "rank": rank,
                     "volume": volume,
                     "circle_content": circle_content,
+                    "negative_rate": negative_rate,
                 },
                 "evidence_required": True,
             }
@@ -1126,7 +1140,7 @@ class ReputationService:
         if raw is None:
             return None
         try:
-            return Decimal(str(raw).replace(",", "").strip())
+            return Decimal(str(raw).replace(",", "").replace("%", "").strip())
         except Exception:
             return None
 
@@ -1177,6 +1191,18 @@ class ReputationService:
             page.circle_content_raw, baseline.get("circle_content")
         )
         circle_content["source_url"] = page.circle_url
+        negative_rate = cls._official_metric(
+            page.negative_rate_raw,
+            baseline.get("negative_rate"),
+            inverse=True,
+        )
+        negative_rate.update(
+            {
+                "source_url": page.negative_rate_url,
+                "positive_count": page.negative_rate_positive_count,
+                "negative_count": page.negative_rate_negative_count,
+            }
+        )
         return {
             "score": cls._official_metric(page.score_raw, baseline.get("score")),
             "rank": cls._official_metric(
@@ -1187,6 +1213,7 @@ class ReputationService:
             ),
             "volume": cls._official_metric(page.volume_raw, baseline.get("volume")),
             "circle_content": circle_content,
+            "negative_rate": negative_rate,
         }
 
     @staticmethod
@@ -1286,6 +1313,7 @@ class ReputationService:
                 evidence_policy=evidence_policy,
                 prefer_http_first=False,
                 include_circle_content=True,
+                include_negative_rate=True,
             )
             try:
                 first = adapter.validate_sync(targets, root / f"attempt-1-{uuid7()}")
@@ -1369,7 +1397,13 @@ class ReputationService:
                 else:
                     metrics = {
                         name: _metric(None, None, state="unknown")
-                        for name in ("score", "rank", "volume", "circle_content")
+                        for name in (
+                            "score",
+                            "rank",
+                            "volume",
+                            "circle_content",
+                            "negative_rate",
+                        )
                     }
                     evidence_required = True
                     has_evidence = False
@@ -3099,6 +3133,7 @@ class ReputationService:
                 ("rank", "排名"),
                 ("volume", "口碑量"),
                 ("circle_content", "圈子内容量"),
+                ("negative_rate", "差评率"),
             ):
                 metric = result.metrics.get(key)
                 if not metric:
@@ -3154,6 +3189,7 @@ class ReputationService:
             "排名",
             "口碑量",
             "圈子内容量",
+            "差评率",
             "备注",
         ]
         sheet.append(headers)
@@ -3171,6 +3207,11 @@ class ReputationService:
                 result.metrics["rank"].get("raw") or "—",
                 result.metrics["volume"].get("raw") or "—",
                 result.metrics.get("circle_content", {}).get("raw") or "—",
+                (
+                    result.metrics["negative_rate"].get("raw") or "—"
+                    if "negative_rate" in result.metrics
+                    else "历史未采集"
+                ),
                 "",
             ]
             sheet.append(values)
@@ -3179,6 +3220,7 @@ class ReputationService:
                 (6, "rank"),
                 (7, "volume"),
                 (8, "circle_content"),
+                (9, "negative_rate"),
             ):
                 tone = result.metrics.get(metric_name, {}).get("tone")
                 sheet.cell(row_index, column).fill = (
@@ -3190,13 +3232,13 @@ class ReputationService:
                 preview = WorksheetImage(evidence.metric_region_path)
                 preview.width = 294
                 preview.height = 66
-                sheet.add_image(preview, f"I{row_index}")
+                sheet.add_image(preview, f"J{row_index}")
                 sheet.row_dimensions[row_index].height = 52
-        widths = [13, 12, 18, 22, 12, 12, 14, 16, 44]
+        widths = [13, 12, 18, 22, 12, 12, 14, 16, 12, 44]
         for index, width in enumerate(widths, start=1):
             sheet.column_dimensions[get_column_letter(index)].width = width
         sheet.freeze_panes = "E2"
-        sheet.auto_filter.ref = f"A1:I{len(results) + 1}"
+        sheet.auto_filter.ref = f"A1:J{len(results) + 1}"
         workbook.save(path)
 
     @staticmethod

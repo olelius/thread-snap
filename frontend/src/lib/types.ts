@@ -207,6 +207,9 @@ export type ReputationMetric = {
   direction: 'up' | 'down' | 'same' | 'none'
   tone: 'positive' | 'negative' | 'neutral'
   comparison_status: string
+  source_url?: string
+  positive_count?: number
+  negative_count?: number
 }
 
 export type ReputationEvidence = {
@@ -230,6 +233,7 @@ export type ReputationResult = {
   status: string
   metrics: Record<'score' | 'rank' | 'volume', ReputationMetric> & {
     circle_content?: ReputationMetric
+    negative_rate?: ReputationMetric
   }
   evidence_required: boolean
   attempt_count?: number

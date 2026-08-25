@@ -16,6 +16,21 @@
 
 ---
 
+## 2026-08-25 — 口碑巡检默认增加差评率指标
+**总目标**：复用现有懂车帝车型ID取得APP口碑标签中的差评率，并将其作为无需用户配置的默认巡检内容进入前日比较、详情、汇报和XLSX。
+**状态**：✅ APP接口采集、第五指标冻结、反向红绿比较、历史兼容、页面与导出均已完成。
+**干到哪里了**：
+- [x] 懂车帝适配器升级为`dongchedi-reputation-v6-negative-rate`；使用现有`platform_vehicle_id`作为APP接口`series_id`，按稳定标签身份读取好评数和差评数，以`差评数/(好评数+差评数)`四舍五入为整数百分比，并校验返回车系身份。只使用固定APP客户端参数和请求头，不增加用户配置、Cookie、令牌或设备指纹。
+- [x] 差评率作为第五个独立反向指标持久化并进入严格前日基线：下降为改善绿色、上升为恶化红色、持平中性；汇报、详情表格和固定版式XLSX同步增加该字段。旧批次保持不可变并显示“历史未采集”，评价总数为0时保存`not_available`语义。
+- [x] 对当前已发布范围版本`01a03455-be81-7f9d-b16b-46e46bd750d4`的27款车型逐项实测：26款有值，风云T7评价总数为0因而暂无比例，接口失败0项；零跑A10复核为`128/(214+128)=37%`。脱敏明细位于`artifacts/runtime/reputation-negative-rate/live-27-api-audit.json`。
+- [x] 隔离实例真实触发两个批次，SQLite中各27/27条结果均包含差评率对象且首批API与数据库JSON一致；真实页面确认表头1处、下降绿色、上升红色、控制台与页面错误均为0，XLSX第I列为“差评率”且首行值与API一致。证据位于`artifacts/runtime/reputation-negative-rate/isolated-20260825-verify/`。
+- [x] 完整127项后端测试、Ruff全仓检查、前端TypeScript检查、生产构建（2468 modules）和`git diff --check`通过。
+**下一步**：无；下一次正式巡检开始冻结差评率，第二个连续自然日开始显示有效红绿差值。
+**边界**：现有口碑指标区域PNG继续只证明网页可见的口碑分、排名和口碑量；差评率以APP接口来源URL及好评/差评计数追溯，不改写历史截图、历史结果或既有车型ID映射。
+**关联**：`src/threadsnap/reputation_dongchedi.py`、`src/threadsnap/reputation.py`、`frontend/src/features/reputation/reputation-detail-page.tsx`、`frontend/src/lib/types.ts`、`tests/test_reputation.py`、`CONTEXT.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/reputation-inspection.md`
+
+---
+
 ## 2026-08-25 — 口碑巡检新增圈子内容量指标
 **总目标**：使用口碑平台车型ID对应的圈子URL取得内容总量，并将其作为独立指标进入巡检表格、前日比较、汇报和XLSX。
 **状态**：✅ 轻量采集、身份校验、红绿比较、历史兼容、页面与导出均已完成。

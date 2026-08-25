@@ -44,19 +44,23 @@ class OfficialFakeAdapter:
     """支持证据策略和可控失败的正式巡检确定性适配器。"""
 
     score_overrides: dict[str, str] = {}
+    negative_rate_overrides: dict[str, str] = {}
     failures: set[str] = set()
     last_prefer_http_first: bool | None = None
+    last_include_negative_rate: bool | None = None
 
     def __init__(
         self,
         *_args,
         evidence_policy=None,
         prefer_http_first: bool = False,
+        include_negative_rate: bool = False,
         **_kwargs,
     ):
         self.evidence_policy = evidence_policy
         self.prefer_http_first = prefer_http_first
         type(self).last_prefer_http_first = prefer_http_first
+        type(self).last_include_negative_rate = include_negative_rate
 
     def validate_sync(self, targets, output_dir):
         output_dir.mkdir(parents=True)
@@ -70,6 +74,7 @@ class OfficialFakeAdapter:
                 )
                 continue
             score = self.score_overrides.get(target.vehicle_id, "3.80")
+            negative_rate = self.negative_rate_overrides.get(target.vehicle_id, "37%")
             measurement = {
                 "score_raw": score,
                 "rank_raw": "4",
@@ -107,6 +112,13 @@ class OfficialFakeAdapter:
                     height=240,
                     metric_rect={"x": 0, "y": 0, "width": 600, "height": 240},
                     duration_ms=25,
+                    negative_rate_raw=negative_rate,
+                    negative_rate_url=(
+                        "https://api.dcarapi.com/motor/car_score/api/v1/landing_page/"
+                        f"get_detail/?series_id={target.platform_vehicle_id}"
+                    ),
+                    negative_rate_positive_count=214,
+                    negative_rate_negative_count=128,
                 )
             )
         return values
@@ -238,6 +250,7 @@ class ReputationInspectionTest(unittest.TestCase):
         report = self.client.get(run["downloads"]["txt"])
         self.assertEqual(report.status_code, 200)
         self.assertIn("口碑巡检指标变动如下", report.content.decode("utf-8"))
+        self.assertIn("差评率", report.content.decode("utf-8"))
         self.assertNotIn("#E2F0D9", report.content.decode("utf-8"))
 
         xlsx = self.client.get(run["downloads"]["xlsx"])
@@ -249,14 +262,18 @@ class ReputationInspectionTest(unittest.TestCase):
         fills = {
             sheet.cell(row, column).fill.fgColor.rgb
             for row in range(2, 29)
-            for column in (5, 6, 7, 8)
+            for column in (5, 6, 7, 8, 9)
         }
         self.assertEqual(sheet["H1"].value, "圈子内容量")
+        self.assertEqual(sheet["I1"].value, "差评率")
         self.assertTrue(any(str(value).endswith("E2F0D9") for value in fills))
         self.assertTrue(any(str(value).endswith("F4CCCC") for value in fills))
         circle_fills = {sheet.cell(row, 8).fill.fgColor.rgb for row in range(2, 29)}
         self.assertTrue(any(str(value).endswith("E2F0D9") for value in circle_fills))
         self.assertTrue(any(str(value).endswith("F4CCCC") for value in circle_fills))
+        negative_rate_fills = {sheet.cell(row, 9).fill.fgColor.rgb for row in range(2, 29)}
+        self.assertTrue(any(str(value).endswith("E2F0D9") for value in negative_rate_fills))
+        self.assertTrue(any(str(value).endswith("F4CCCC") for value in negative_rate_fills))
         self.assertGreater(len(sheet._images), 0)
 
         archive = self.client.get(run["downloads"]["evidence_zip"])
@@ -757,6 +774,94 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual(url, "https://www.dongchedi.com/community/8985")
         self.assertEqual(requested, [url])
 
+    def test_dongchedi_negative_rate_reuses_series_id_and_app_counts(self) -> None:
+        """正式巡检直接复用平台车型ID，并由优缺点数量计算整数差评率。"""
+
+        requested: list[tuple[str, dict, dict]] = []
+
+        class Response:
+            status_code = 200
+            url = "https://api.dcarapi.com/motor/car_score/api/v1/landing_page/get_detail/"
+
+            @staticmethod
+            def json():
+                return {
+                    "status": 0,
+                    "data": {
+                        "series_info": {"series_name": "零跑A10"},
+                        "tag_info_v2": {
+                            "hierarchical_tag_list": [
+                                {"part_id": "3", "tag_name": "优点", "count": 214},
+                                {"part_id": "4", "tag_name": "缺点", "count": 128},
+                            ]
+                        },
+                    },
+                }
+
+        class Session:
+            def get(self, url, **kwargs):
+                requested.append((url, kwargs["params"], kwargs["headers"]))
+                return Response()
+
+        adapter = DongchediReputationAdapter(None, include_negative_rate=True)
+        adapter._thread_local.http = Session()
+        target = ReputationMappingTarget(
+            vehicle_id="dcd-9267",
+            platform_vehicle_id="9267",
+            platform_url="https://www.dongchedi.com/auto/series/score/9267-x-x-x-x-x",
+            platform_display_name="零跑A10",
+            mapping_hash="fixture",
+        )
+
+        rate, source_url, positive_count, negative_count = adapter._visit_negative_rate(target)
+
+        self.assertEqual(rate, "37%")
+        self.assertEqual((positive_count, negative_count), (214, 128))
+        self.assertIn("api.dcarapi.com", source_url)
+        self.assertEqual(requested[0][1]["series_id"], "9267")
+        self.assertEqual(requested[0][1]["aid"], "36")
+        self.assertEqual(requested[0][2]["x-tt-appid"], "36")
+
+    def test_dongchedi_negative_rate_marks_zero_reviews_not_available(self) -> None:
+        """接口明确零人评分且无标签时保留来源并返回暂无差评率。"""
+
+        class Response:
+            status_code = 200
+            url = "https://api.dcarapi.com/motor/car_score/api/v1/landing_page/get_detail/"
+
+            @staticmethod
+            def json():
+                return {
+                    "status": 0,
+                    "data": {
+                        "series_info": {"series_name": "风云T7"},
+                        "review_count_info": {"total": 0},
+                        "tag_info": None,
+                        "tag_info_v2": None,
+                    },
+                }
+
+        class Session:
+            @staticmethod
+            def get(_url, **_kwargs):
+                return Response()
+
+        adapter = DongchediReputationAdapter(None, include_negative_rate=True)
+        adapter._thread_local.http = Session()
+        target = ReputationMappingTarget(
+            vehicle_id="dcd-26120",
+            platform_vehicle_id="26120",
+            platform_url="https://www.dongchedi.com/auto/series/26120",
+            platform_display_name="风云T7",
+            mapping_hash="fixture",
+        )
+
+        rate, source_url, positive_count, negative_count = adapter._visit_negative_rate(target)
+
+        self.assertIsNone(rate)
+        self.assertEqual((positive_count, negative_count), (0, 0))
+        self.assertIn("api.dcarapi.com", source_url)
+
     def test_dongchedi_http_first_opens_browser_only_for_evidence_targets(self) -> None:
         """日常取数不启动浏览器，比较命中的目标才进入截图页面池。"""
 
@@ -870,8 +975,10 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         self.service = self.client.app.state.container.reputation
         self.service.adapter_factory = OfficialFakeAdapter
         OfficialFakeAdapter.score_overrides = {}
+        OfficialFakeAdapter.negative_rate_overrides = {}
         OfficialFakeAdapter.failures = set()
         OfficialFakeAdapter.last_prefer_http_first = None
+        OfficialFakeAdapter.last_include_negative_rate = None
         self._publish_scope()
 
     def tearDown(self) -> None:
@@ -1047,6 +1154,7 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         self.assertEqual(baseline["status"], "success")
         self.assertEqual(baseline["complete_evidence_count"], 27)
         self.assertFalse(OfficialFakeAdapter.last_prefer_http_first)
+        self.assertTrue(OfficialFakeAdapter.last_include_negative_rate)
         self.assertIsNone(baseline["report_planned_at"])
         report_due = self.service.check_schedule(self._at("2030-01-02", "12:01"))
         self.assertIn(baseline_id, report_due["report_run_ids"])
@@ -1056,6 +1164,10 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         self.assertTrue(Path(reported["downloads"]["txt"].split("/api/v1")[-1]).name)
 
         OfficialFakeAdapter.score_overrides = {"official-01": "3.90"}
+        OfficialFakeAdapter.negative_rate_overrides = {
+            "official-01": "41%",
+            "official-03": "32%",
+        }
         daily_due = self.service.check_schedule(self._at("2030-01-03", "12:00"))
         daily_id = daily_due["queued_run_ids"][0]
         daily = self.service.execute_run(daily_id)
@@ -1066,10 +1178,17 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         self.assertTrue(all(item["evidence_required"] for item in daily["results"]))
         self.assertTrue(all(item["evidence"] for item in daily["results"]))
         self.assertFalse(OfficialFakeAdapter.last_prefer_http_first)
+        self.assertTrue(OfficialFakeAdapter.last_include_negative_rate)
         changed = next(item for item in daily["results"] if item["vehicle_id"] == "official-01")
         self.assertEqual(changed["metrics"]["score"]["direction"], "up")
         self.assertEqual(changed["metrics"]["circle_content"]["raw"], "5000")
         self.assertEqual(changed["metrics"]["circle_content"]["direction"], "same")
+        self.assertEqual(changed["metrics"]["negative_rate"]["direction"], "up")
+        self.assertEqual(changed["metrics"]["negative_rate"]["tone"], "negative")
+        self.assertEqual(changed["metrics"]["negative_rate"]["positive_count"], 214)
+        improved = next(item for item in daily["results"] if item["vehicle_id"] == "official-03")
+        self.assertEqual(improved["metrics"]["negative_rate"]["direction"], "down")
+        self.assertEqual(improved["metrics"]["negative_rate"]["tone"], "positive")
 
         OfficialFakeAdapter.failures = {"official-02"}
         failed_due = self.service.check_schedule(self._at("2030-01-04", "12:00"))
