@@ -421,6 +421,7 @@ class ReputationService:
                     ReputationResult.id,
                 )
             ).all()
+            results = self._results_in_scope_order(db, run, list(results))
             evidence_by_result = {
                 item.result_id: item
                 for item in db.scalars(
@@ -466,6 +467,42 @@ class ReputationService:
             if root and root.source_type == "scheduled":
                 payload.update(self._chain_summary(db, root))
             return payload
+
+    @staticmethod
+    def _results_in_scope_order(
+        db: Session,
+        run: ReputationRun,
+        results: list[ReputationResult],
+    ) -> list[ReputationResult]:
+        """按批次冻结的车型映射顺序返回结果，旧批次保留原有排序兜底。"""
+
+        if not run.scope_version_id:
+            return results
+        version = db.get(ReputationScopeVersion, run.scope_version_id)
+        if not version:
+            return results
+        vehicles = (version.snapshot or {}).get("vehicles", [])
+        vehicle_order = {
+            str(vehicle.get("id")): index
+            for index, vehicle in enumerate(vehicles)
+            if vehicle.get("id")
+        }
+        if not vehicle_order:
+            return results
+        platform_order = {
+            str(platform_code): index
+            for index, platform_code in enumerate(run.platform_codes or [])
+        }
+        return sorted(
+            results,
+            key=lambda result: (
+                vehicle_order.get(result.vehicle_id, len(vehicle_order)),
+                platform_order.get(result.platform_code, len(platform_order)),
+                result.role_position,
+                result.vehicle_position,
+                result.id,
+            ),
+        )
 
     @staticmethod
     def _chain_summary(db: Session, root: ReputationRun) -> dict[str, Any]:
@@ -688,6 +725,7 @@ class ReputationService:
             scenario_id="real_validation_acceptance",
             input_hash=input_hash,
             run_type="baseline_initialization",
+            scope_version_id=version.id,
             planned_date=now.astimezone(ZoneInfo(self.settings.timezone)).date().isoformat(),
             status="success",
             platform_codes=[PLATFORM_CODE],

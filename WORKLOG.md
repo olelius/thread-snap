@@ -16,6 +16,20 @@
 
 ---
 
+## 2026-08-25 — 巡检详情沿用车型与映射顺序
+**总目标**：排名数据和页面证据按批次冻结时“车型与映射”的完整顺序显示，不再按重点或竞品角色重新分组。
+**状态**：✅ 详情接口、排名数据和页面证据已统一沿用车型与映射顺序，真实批次验收通过。
+**干到哪里了**：
+- [x] 详情接口按运行绑定的不可变范围版本 `snapshot.vehicles` 顺序排列结果，同车型多平台再按冻结平台顺序排列。
+- [x] 没有范围版本的旧测试批次保留原角色与组内序号排序兜底，不使用当前草稿改写历史批次顺序。
+- [x] 回归样本改为重点和竞品交错的车型映射顺序，并断言详情结果逐项一致。
+- [x] 后端完整123项测试、Ruff、TypeScript检查、生产构建（2468 modules）和`git diff --check`通过；Patchright确认实际批次`RP-S-20260825-5AF9`的API与DOM共27行均逐项匹配车型与映射顺序、控制台错误0，证据位于`artifacts/runtime/reputation-result-scope-order/`。
+**下一步**：无。
+**边界**：本次不修改既有批次、范围版本或当前草稿数据，也不增加临时排序控件。
+**关联**：`src/threadsnap/reputation.py`、`tests/test_reputation.py`、`CONTEXT.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/reputation-inspection.md`
+
+---
+
 ## 2026-08-25 — 移除新增车型的项目组默认值
 **总目标**：新增车型时由用户明确填写项目组归属，不预填或由接口静默补入“奇瑞项目组”。
 **状态**：✅ 已移除前端和接口默认值，空值门禁与真实页面验收通过。

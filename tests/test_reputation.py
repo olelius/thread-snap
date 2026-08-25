@@ -469,7 +469,12 @@ class ReputationInspectionTest(unittest.TestCase):
         with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=headers)
             writer.writeheader()
-            for index in range(27):
+            ordered_indexes: list[int] = []
+            for position in range(14):
+                ordered_indexes.append(position)
+                if position < 13:
+                    ordered_indexes.append(14 + position)
+            for index in ordered_indexes:
                 focus = index < 14
                 platform_id = str(20000 + index)
                 writer.writerow(
@@ -573,6 +578,10 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual(acceptance["source_type"], "real_acceptance")
         self.assertEqual(acceptance["status"], "success")
         self.assertEqual(len(acceptance["results"]), 27)
+        self.assertEqual(
+            [row["vehicle_id"] for row in acceptance["results"]],
+            [row["id"] for row in verified],
+        )
         self.assertEqual(acceptance["complete_evidence_count"], 27)
         compacted = self.client.app.state.container.reputation.compact_region_evidence()
         self.assertGreaterEqual(compacted["validation_attempts"], 27)
