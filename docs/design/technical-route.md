@@ -157,6 +157,7 @@
 - 隔离合成运行以 `runtime_mode=test`、显式能力开关和测试数据库标记三因子门禁，固定提供基线、日常混合、月末混合三场景；输出27行网页/XLSX、UTF-8 TXT、单张指标区域图和带清单校验值的按需证据ZIP。生产门禁不成立时创建操作返回不可发现响应，前端不显示按钮。
 - 前端在既有 React/Vite/TanStack Router/Query/shadcn/ui 外壳内增加 `/reputation` 和 `/reputation/runs/$runId`，保留 URL 视图状态、语义色与文字/箭头双编码、指标证据卡片、报告复制下载，以及服从 `prefers-reduced-motion` 的 180～300ms 位移/透明度动效。
 - 一次性范围初始化通过 `threadsnap reputation-init --file <CSV>` 执行；空模板和Schema位于 `docs/templates/reputation-scope-v1.csv` 与 `docs/templates/reputation-scope-v1.md`。页面已提供单平台四列Tab分隔映射的预览与原子保存，保存结果保持未验证。
+- 车型项目组归属保存在范围草稿及后续不可变版本的车型JSON中，通过 `PATCH /api/v1/reputation/scope/vehicles/{vehicle_id}` 按当前revision更新；字段不属于平台映射哈希，修改不使映射验证失效。既有草稿由版本化迁移补齐“奇瑞项目组”并递增revision，已发布版本保持不可变；读取旧快照缺失字段时按同一默认值解释。
 - 懂车帝27款页面样本、稳定车型身份合同、三次布局测量边界和指标选择器已经以真实页面验证关闭阶段门，能力响应为 `real_adapter_status=available`。固定12:00调度、同日补触发、非抢占容量、终态立即汇报、失败项补跑、关联链删除和按需证据包均已进入同一单进程生产闭环；映射验证本身仍不写正式巡检日期身份。
 - 首次真实联调提供后端 `reputation-real-acceptance --validation-run <id>` 运维命令：按已发布范围逐车型核对映射哈希，从一个或多个验证运行中选择最新成功的完整尝试，重新校验指标区域截图SHA-256后复制到独立批次目录，并创建 `real_acceptance` 来源的基线初始化批次、TXT和固定版式XLSX。该路径不重新打开页面、不跨尝试拼接指标与证据、对相同输入哈希幂等返回既有批次，也不写正式调度幂等身份；基线查询允许它在严格前一自然日范围内作为首次真实基线，若同日同时存在正式调度批次则始终优先冻结正式批次。
 

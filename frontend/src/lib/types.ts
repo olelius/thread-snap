@@ -342,6 +342,7 @@ export type ReputationScopeVehicle = {
   id: string
   series_name: string
   vehicle_name: string
+  project_group: string
   role: 'focus' | 'competitor'
   role_order: number
   enabled: boolean

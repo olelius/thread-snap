@@ -62,6 +62,7 @@ from .session_store import SessionStore
 FIXTURE_VERSION = "reputation-synthetic-v1"
 PLATFORM_CODE = "dongchedi"
 PLATFORM_NAME = "懂车帝"
+DEFAULT_PROJECT_GROUP = "奇瑞项目组"
 INSPECTION_TIME = time(12, 0)
 INSPECTION_TIME_TEXT = "12:00:00"
 SCENARIOS: dict[str, dict[str, str]] = {
@@ -118,6 +119,7 @@ class ScopeVehicleCreateRequest(BaseModel):
     revision: int
     series_name: str
     vehicle_name: str
+    project_group: str = DEFAULT_PROJECT_GROUP
     role: Literal["focus", "competitor"]
     platform_code: str = PLATFORM_CODE
     platform_vehicle_id: str
@@ -127,6 +129,11 @@ class ScopeVehicleCreateRequest(BaseModel):
 
 class ScopeVehicleRevisionRequest(BaseModel):
     revision: int
+
+
+class ScopeVehicleUpdateRequest(BaseModel):
+    revision: int
+    project_group: str
 
 
 @dataclass(frozen=True)
@@ -2073,6 +2080,9 @@ class ReputationService:
             referenced_ids = self._scope_reference_ids(db)
             vehicles = json.loads(json.dumps(data.get("vehicles", []), ensure_ascii=False))
             for vehicle in vehicles:
+                vehicle["project_group"] = str(
+                    vehicle.get("project_group") or DEFAULT_PROJECT_GROUP
+                )
                 vehicle["removal_mode"] = (
                     "disable" if vehicle.get("id") in referenced_ids else "delete"
                 )
@@ -2136,11 +2146,16 @@ class ReputationService:
         fields = {
             "series_name": value.series_name.strip(),
             "vehicle_name": value.vehicle_name.strip(),
+            "project_group": value.project_group.strip(),
             "platform_vehicle_id": value.platform_vehicle_id.strip(),
             "platform_display_name": value.platform_display_name.strip(),
         }
         if not all(fields.values()):
             raise DomainError("REPUTATION_SCOPE_VEHICLE_REQUIRED", "新增车型的名称和平台映射不能为空。")
+        if len(fields["project_group"]) > 80:
+            raise DomainError(
+                "REPUTATION_SCOPE_PROJECT_GROUP_TOO_LONG", "项目组归属不能超过80个字符。"
+            )
         try:
             normalized_url = normalize_series_url(value.platform_url, fields["platform_vehicle_id"])
         except ReputationAdapterError as error:
@@ -2171,6 +2186,7 @@ class ReputationService:
                     "id": f"rep-{uuid7()}",
                     "series_name": fields["series_name"],
                     "vehicle_name": fields["vehicle_name"],
+                    "project_group": fields["project_group"],
                     "role": value.role,
                     "role_order": role_order,
                     "enabled": True,
@@ -2187,6 +2203,36 @@ class ReputationService:
             self._normalize_role_orders(vehicles, value.role)
             draft.data = data
             draft.revision += 1
+        return self.get_scope()
+
+    def update_scope_vehicle(
+        self, vehicle_id: str, value: ScopeVehicleUpdateRequest
+    ) -> dict[str, Any]:
+        """更新车型所属项目组，不改变平台映射验证状态。"""
+
+        project_group = value.project_group.strip()
+        if not project_group:
+            raise DomainError("REPUTATION_SCOPE_PROJECT_GROUP_REQUIRED", "项目组归属不能为空。")
+        if len(project_group) > 80:
+            raise DomainError(
+                "REPUTATION_SCOPE_PROJECT_GROUP_TOO_LONG", "项目组归属不能超过80个字符。"
+            )
+        with self.sessions.begin() as db:
+            draft = self._require_scope_revision(
+                db.get(ReputationScopeDraft, "current"), value.revision
+            )
+            data = json.loads(json.dumps(draft.data, ensure_ascii=False))
+            vehicle = next(
+                (row for row in data.get("vehicles", []) if row.get("id") == vehicle_id), None
+            )
+            if not vehicle:
+                raise DomainError(
+                    "REPUTATION_SCOPE_VEHICLE_NOT_FOUND", "车型不存在。", status_code=404
+                )
+            if str(vehicle.get("project_group") or DEFAULT_PROJECT_GROUP) != project_group:
+                vehicle["project_group"] = project_group
+                draft.data = data
+                draft.revision += 1
         return self.get_scope()
 
     def remove_scope_vehicle(self, vehicle_id: str, revision: int) -> dict[str, Any]:
@@ -2298,6 +2344,7 @@ class ReputationService:
                     "id": row["seed_key"],
                     "series_name": row["series_name"],
                     "vehicle_name": row["vehicle_name"],
+                    "project_group": DEFAULT_PROJECT_GROUP,
                     "role": row["role"],
                     "role_order": role_order,
                     "enabled": True,
@@ -2781,8 +2828,18 @@ class ReputationService:
             )
             for item in shared_ids
         )
+        project_group_changed = sum(
+            str(current_by_id[item].get("project_group") or DEFAULT_PROJECT_GROUP)
+            != str(previous_by_id[item].get("project_group") or DEFAULT_PROJECT_GROUP)
+            for item in shared_ids
+        )
         has_changes = published is None or bool(
-            added_ids or disabled_ids or role_changed or mapping_changed or identity_changed
+            added_ids
+            or disabled_ids
+            or role_changed
+            or mapping_changed
+            or identity_changed
+            or project_group_changed
         )
         verified_all = bool(vehicles) and verified == len(vehicles)
         can_publish = verified_all and has_changes
@@ -2799,6 +2856,7 @@ class ReputationService:
             "role_changed_count": role_changed,
             "mapping_changed_count": mapping_changed,
             "identity_changed_count": identity_changed,
+            "project_group_changed_count": project_group_changed,
             "has_changes": has_changes,
             "can_publish": can_publish,
             "warning": (
