@@ -322,7 +322,6 @@ function ScopePanel({ query, adapterStatus, adapterMessage }: { query: ReturnTyp
           })}</TableBody>
         </Table>
       </div>
-      <div className='shrink-0 border-t bg-card/95 px-4 py-2.5 text-xs text-muted-foreground'>已验证 {verified}/{activeVehicles.length} · 新增车型在发布前可永久删除，已有历史车型仅停用并保留既有版本与批次。</div>
       </Card>
     </div>}
 
