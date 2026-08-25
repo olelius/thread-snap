@@ -53,6 +53,12 @@
   }
 }
 
+@layer components {
+  .reputation-sticky-head {
+    background: color-mix(in oklab, var(--muted) 35%, var(--card));
+  }
+}
+
 @keyframes run-row-highlight {
   0% { background-color: color-mix(in oklab, var(--primary) 22%, transparent); }
   100% { background-color: transparent; }
