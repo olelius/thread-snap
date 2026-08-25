@@ -119,7 +119,7 @@ class ScopeVehicleCreateRequest(BaseModel):
     revision: int
     series_name: str
     vehicle_name: str
-    project_group: str = DEFAULT_PROJECT_GROUP
+    project_group: str
     role: Literal["focus", "competitor"]
     platform_code: str = PLATFORM_CODE
     platform_vehicle_id: str
@@ -2146,7 +2146,10 @@ class ReputationService:
             "platform_display_name": value.platform_display_name.strip(),
         }
         if not all(fields.values()):
-            raise DomainError("REPUTATION_SCOPE_VEHICLE_REQUIRED", "新增车型的名称和平台映射不能为空。")
+            raise DomainError(
+                "REPUTATION_SCOPE_VEHICLE_REQUIRED",
+                "新增车型的名称、项目组归属和平台映射不能为空。",
+            )
         if len(fields["project_group"]) > 80:
             raise DomainError(
                 "REPUTATION_SCOPE_PROJECT_GROUP_TOO_LONG", "项目组归属不能超过80个字符。"
