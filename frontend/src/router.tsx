@@ -46,7 +46,10 @@ const reputationRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/reputation',
   component: lazyRouteComponent(() => import('@/features/reputation/reputation-page'), 'ReputationPage'),
-  validateSearch: (search: Record<string, unknown>) => ({ tab: oneOf(search.tab, ['runs', 'scope'] as const) ?? 'runs' }),
+  validateSearch: (search: Record<string, unknown>) => ({
+    tab: oneOf(search.tab, ['runs', 'scope'] as const) ?? 'runs',
+    page: optionalPositiveInteger(search.page),
+  }),
 })
 const reputationDetailRoute = createRoute({
   getParentRoute: () => rootRoute,

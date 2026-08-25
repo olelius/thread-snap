@@ -39,7 +39,7 @@ export function ReputationDetailPage() {
   })
   const remove = useMutation({
     mutationFn: () => api<{ status: string }>(`/reputation/runs/${runId}`, { method: 'DELETE' }),
-    onSuccess: (job) => { queryClient.invalidateQueries({ queryKey: ['reputation-runs'] }); toast.success(job.status === 'success' ? '正式巡检关联链已删除' : '删除作业已提交', { description: `作业状态：${job.status}` }); navigate({ to: '/reputation', search: { tab: 'runs' } }) },
+    onSuccess: (job) => { queryClient.invalidateQueries({ queryKey: ['reputation-runs'] }); toast.success(job.status === 'success' ? '正式巡检关联链已删除' : '删除作业已提交', { description: `作业状态：${job.status}` }); navigate({ to: '/reputation', search: { tab: 'runs', page: undefined } }) },
     onError: (error) => toast.error('删除失败', { description: errorMessage(error) }),
   })
 
@@ -53,7 +53,7 @@ export function ReputationDetailPage() {
     <PageHeader
       title={run.number}
       description={`${runDisplayType(run)} · ${run.planned_date} · ${run.platform_codes.length} 个平台 · ${run.planned_count} 款车型`}
-      eyebrow={<Button variant='ghost' size='sm' className='-ml-2 mb-1 h-7 text-xs text-muted-foreground' onClick={() => navigate({ to: '/reputation', search: { tab: 'runs' } })}><ArrowLeft className='size-3.5' />返回口碑巡检</Button>}
+      eyebrow={<Button variant='ghost' size='sm' className='-ml-2 mb-1 h-7 text-xs text-muted-foreground' onClick={() => navigate({ to: '/reputation', search: { tab: 'runs', page: undefined } })}><ArrowLeft className='size-3.5' />返回口碑巡检</Button>}
       actions={<><StatusBadge value={run.status} label={statusName(run.status)} />{run.source_type === 'scheduled' && <Badge variant='outline' className='border-cyan-500/25 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300'>正式调度</Badge>}{run.source_type === 'retry' && <Badge variant='outline'>失败项补跑</Badge>}{run.delayed && <Badge variant='outline' title='服务在计划时间之后恢复，并于同一自然日自动补触发。' className='border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300'>同日补触发</Badge>}{run.source_type === 'synthetic' && <Badge variant='outline' className='border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300'>合成测试</Badge>}{run.source_type === 'real_acceptance' && <Badge variant='outline' className='border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'>真实验收</Badge>}{run.source_type === 'scheduled' && <DropdownMenu><DropdownMenuTrigger asChild><Button variant='ghost' size='icon' className='size-8' aria-label='更多批次操作'><EllipsisVertical className='size-4' /></Button></DropdownMenuTrigger><DropdownMenuContent align='end'>{run.unresolved_count && ['partial_success', 'failed'].includes(run.status) ? <DropdownMenuItem disabled={retry.isPending} onSelect={() => retry.mutate()}><RotateCcw className='size-4' />补跑 {run.unresolved_count} 个失败项</DropdownMenuItem> : null}{run.unresolved_count && ['partial_success', 'failed'].includes(run.status) ? <DropdownMenuSeparator /> : null}<DropdownMenuItem variant='destructive' disabled={remove.isPending || !['success', 'partial_success', 'failed'].includes(run.status)} onSelect={() => { if (window.confirm('将整体删除该正式批次、全部补跑及交付文件，并保留日期墓碑。确认继续？')) remove.mutate() }}><Trash2 className='size-4' />删除关联链</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}</>}
     />
     <div className='grid shrink-0 gap-3 sm:grid-cols-2 xl:grid-cols-4'>

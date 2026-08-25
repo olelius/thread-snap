@@ -24,7 +24,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 
 const navigation = [
   { to: '/runs' as const, search: { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }, label: '提取列表', description: '批次与结果', icon: LayoutList },
-  { to: '/reputation' as const, search: { tab: 'runs' as const }, label: '口碑巡检', description: '排名与证据', icon: ChartNoAxesCombined },
+  { to: '/reputation' as const, search: { tab: 'runs' as const, page: undefined }, label: '口碑巡检', description: '排名与证据', icon: ChartNoAxesCombined },
   { to: '/config' as const, search: { tab: 'rules' as const }, label: '配置管理', description: '计划与来源', icon: Settings2 },
 ]
 
