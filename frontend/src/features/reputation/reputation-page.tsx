@@ -130,11 +130,14 @@ function RunsPanel({ query, schedule, onOpen }: { query: ReturnType<typeof useQu
   if (query.isError) return <Failure title='巡检批次加载失败' detail={errorMessage(query.error)} retry={() => query.refetch()} />
   const items = query.data?.items ?? []
   return (
-    <Card className='flex h-full min-h-0 flex-col overflow-hidden border-border/70 bg-card/90 py-0 shadow-sm backdrop-blur'>
-      <div className='flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-muted/20 px-4 py-3'>
+    <div className='flex h-full min-h-0 flex-col gap-3'>
+      <Card className='shrink-0 border-border/70 bg-card/90 py-0 shadow-sm backdrop-blur'>
+      <div className='flex flex-wrap items-center justify-between gap-3 px-4 py-3'>
         <div className='flex items-center gap-2 text-sm'><span className='grid size-8 place-items-center rounded-lg bg-primary/10 text-primary'><CalendarClock className='size-4' /></span><span><span className='block font-medium'>每日 {schedule?.inspection_time?.slice(0, 5) ?? '12:00'} 正式巡检</span><span className='block text-xs text-muted-foreground'>{schedule?.timezone ?? 'Asia/Shanghai'} · 巡检完成后立即生成汇报</span></span></div>
         <div className='max-w-xl text-right text-xs text-muted-foreground'>{schedule?.last_event ? `${schedule.last_event.planned_date} · ${schedule.last_event.message}` : '等待首个正式计划事件'}</div>
       </div>
+      </Card>
+      <Card className='flex min-h-0 flex-1 flex-col overflow-hidden border-border/70 bg-card/90 py-0 shadow-sm backdrop-blur'>
       <div className='min-h-0 flex-1 overflow-auto'>
         <Table className='min-w-[980px]'>
           <TableHeader><TableRow className='bg-muted/35'><TableHead className='pl-4'>巡检编号</TableHead><TableHead>类型</TableHead><TableHead>平台与范围</TableHead><TableHead>状态</TableHead><TableHead>处理进度</TableHead><TableHead>证据完整度</TableHead><TableHead>完成时间</TableHead><TableHead className='pr-4 text-right'>操作</TableHead></TableRow></TableHeader>
@@ -157,7 +160,8 @@ function RunsPanel({ query, schedule, onOpen }: { query: ReturnType<typeof useQu
         </Table>
       </div>
       <div className='shrink-0 border-t bg-card/95 px-4 py-3 text-sm text-muted-foreground'>共 {query.data?.total ?? 0} 个独立巡检批次</div>
-    </Card>
+      </Card>
+    </div>
   )
 }
 
@@ -289,8 +293,9 @@ function ScopePanel({ query, adapterStatus, adapterMessage }: { query: ReturnTyp
 
   return <div className='flex h-full min-h-0 flex-col gap-3'>
     {adapterStatus === 'not_configured' && adapterMessage && <Alert variant='destructive' className='shrink-0'><CircleAlert /><AlertTitle>真实采集器尚未就绪</AlertTitle><AlertDescription>{adapterMessage}</AlertDescription></Alert>}
-    {!scope.initialized ? <Card><CardHeader><CardTitle className='text-base'>车型范围尚未初始化</CardTitle><CardDescription>{scope.message} 初始化属于一次性运维动作，避免浏览器上传真实业务清单。</CardDescription></CardHeader><CardContent className='rounded-lg bg-muted/45 p-4 font-mono text-xs'>threadsnap reputation-init --file &lt;UTF-8-CSV&gt;</CardContent></Card> : <Card className='flex min-h-0 flex-1 flex-col overflow-hidden border-border/70 bg-card/90 py-0 shadow-sm'>
-      <div className='flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-card/95 px-4 py-3 backdrop-blur'>
+    {!scope.initialized ? <Card><CardHeader><CardTitle className='text-base'>车型范围尚未初始化</CardTitle><CardDescription>{scope.message} 初始化属于一次性运维动作，避免浏览器上传真实业务清单。</CardDescription></CardHeader><CardContent className='rounded-lg bg-muted/45 p-4 font-mono text-xs'>threadsnap reputation-init --file &lt;UTF-8-CSV&gt;</CardContent></Card> : <div className='flex min-h-0 flex-1 flex-col gap-3'>
+      <Card className='shrink-0 border-border/70 bg-card/90 py-0 shadow-sm'>
+      <div className='flex flex-wrap items-center justify-between gap-3 px-4 py-3'>
         <div className='flex min-w-0 items-center gap-3'>
           <span className='grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary'><CarFront className='size-4.5' /></span>
           <div className='min-w-0'>
@@ -305,6 +310,8 @@ function ScopePanel({ query, adapterStatus, adapterMessage }: { query: ReturnTyp
           <Button size='sm' disabled={publishDisabled} title={publishPreview?.warning} onClick={() => setPublishOpen(true)}><Rocket className='size-4' />发布变更</Button>
         </div>
       </div>
+      </Card>
+      <Card className='flex min-h-0 flex-1 flex-col overflow-hidden border-border/70 bg-card/90 py-0 shadow-sm'>
       <div className='min-h-0 flex-1 overflow-auto'>
         <Table className='min-w-[1240px]'>
           <TableHeader className='sticky top-0 z-10 bg-card shadow-[0_1px_0_hsl(var(--border))]'><TableRow className='bg-muted/35 hover:bg-muted/35'><TableHead className='w-24 pl-4'>角色顺序</TableHead><TableHead>内部车型 ID</TableHead><TableHead>车系</TableHead><TableHead>车型</TableHead><TableHead>平台展示名</TableHead><TableHead className='text-right'>口碑分</TableHead><TableHead className='text-right'>同级排名</TableHead><TableHead className='text-right'>口碑量</TableHead><TableHead>状态</TableHead><TableHead className='text-center'>证据</TableHead><TableHead className='text-center'>页面</TableHead><TableHead className='pr-4 text-right'>操作</TableHead></TableRow></TableHeader>
@@ -316,7 +323,8 @@ function ScopePanel({ query, adapterStatus, adapterMessage }: { query: ReturnTyp
         </Table>
       </div>
       <div className='shrink-0 border-t bg-card/95 px-4 py-2.5 text-xs text-muted-foreground'>已验证 {verified}/{activeVehicles.length} · 新增车型在发布前可永久删除，已有历史车型仅停用并保留既有版本与批次。</div>
-    </Card>}
+      </Card>
+    </div>}
 
     <Dialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (!open) setVehicleForm(emptyVehicleForm) }}><DialogContent className='sm:max-w-xl'><DialogHeader><DialogTitle className='flex items-center gap-2'><Plus className='size-5 text-primary' />新增车型</DialogTitle><DialogDescription>新增后先进入当前草稿并分配不可复用的内部车型 ID；完成真实页面验证并发布后，后续巡检才会包含该车型。</DialogDescription></DialogHeader><div className='grid gap-4 py-1 sm:grid-cols-2'><div className='space-y-2'><Label htmlFor='series-name'>车系</Label><Input id='series-name' value={vehicleForm.series_name} onChange={(event) => setVehicleForm((value) => ({ ...value, series_name: event.target.value }))} placeholder='例如：风云系' /></div><div className='space-y-2'><Label htmlFor='vehicle-name'>车型</Label><Input id='vehicle-name' value={vehicleForm.vehicle_name} onChange={(event) => setVehicleForm((value) => ({ ...value, vehicle_name: event.target.value }))} placeholder='例如：风云A9' /></div><div className='space-y-2'><Label>角色</Label><Select value={vehicleForm.role} onValueChange={(role: 'focus' | 'competitor') => setVehicleForm((value) => ({ ...value, role }))}><SelectTrigger className='w-full'><SelectValue /></SelectTrigger><SelectContent><SelectItem value='focus'>重点车型</SelectItem><SelectItem value='competitor'>竞品车型</SelectItem></SelectContent></Select></div><div className='space-y-2'><Label htmlFor='platform-id'>平台车型 ID</Label><Input id='platform-id' value={vehicleForm.platform_vehicle_id} onChange={(event) => setVehicleForm((value) => ({ ...value, platform_vehicle_id: event.target.value }))} placeholder='平台页面中的车型 ID' /></div><div className='space-y-2 sm:col-span-2'><Label htmlFor='platform-name'>平台展示名</Label><Input id='platform-name' value={vehicleForm.platform_display_name} onChange={(event) => setVehicleForm((value) => ({ ...value, platform_display_name: event.target.value }))} placeholder='页面实际展示的车型名称' /></div><div className='space-y-2 sm:col-span-2'><Label htmlFor='platform-url'>车型口碑页 URL</Label><Input id='platform-url' value={vehicleForm.platform_url} onChange={(event) => setVehicleForm((value) => ({ ...value, platform_url: event.target.value }))} placeholder='https://www.dongchedi.com/auto/series/score/…' /></div></div><DialogFooter><Button variant='outline' onClick={() => setCreateOpen(false)}>取消</Button><Button disabled={!canCreate || createMutation.isPending} onClick={() => createMutation.mutate()}>{createMutation.isPending ? <Loader2 className='size-4 animate-spin' /> : <Plus className='size-4' />}确认新增</Button></DialogFooter></DialogContent></Dialog>
 
