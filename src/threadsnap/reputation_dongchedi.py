@@ -851,8 +851,12 @@ class DongchediReputationAdapter:
         *,
         force_capture: bool = False,
         timeout_seconds: int | None = None,
+        on_result: Callable[
+            [int, ReputationMappingTarget, ReputationPageResult | Exception], None
+        ]
+        | None = None,
     ) -> list[ReputationPageResult | Exception]:
-        """只为指定目标启动浏览器；正式日检传入的就是已判定需截图项。"""
+        """只为指定目标启动浏览器，并在单项终态后立即回传结果。"""
 
         if not targets:
             return []
@@ -864,25 +868,37 @@ class DongchediReputationAdapter:
                 args=browser_launch_args(),
             )
 
-            async def bounded(target: ReputationMappingTarget) -> ReputationPageResult | Exception:
+            async def bounded(
+                index: int, target: ReputationMappingTarget
+            ) -> ReputationPageResult | Exception:
                 async with semaphore:
                     if auth_failed.is_set():
-                        return ReputationAdapterError(
+                        result: ReputationPageResult | Exception = ReputationAdapterError(
                             "AUTH_REQUIRED", "懂车帝共享Session需要更新。"
                         )
-                    try:
-                        return await self._visit(
-                            browser,
-                            target,
-                            output_dir,
-                            force_capture=force_capture,
-                        )
-                    except Exception as error:
-                        if isinstance(error, ReputationAdapterError) and error.code == "AUTH_REQUIRED":
-                            auth_failed.set()
-                        return error
+                    else:
+                        try:
+                            result = await self._visit(
+                                browser,
+                                target,
+                                output_dir,
+                                force_capture=force_capture,
+                            )
+                        except Exception as error:
+                            if (
+                                isinstance(error, ReputationAdapterError)
+                                and error.code == "AUTH_REQUIRED"
+                            ):
+                                auth_failed.set()
+                            result = error
+                if on_result:
+                    on_result(index, target, result)
+                return result
 
-            tasks = [asyncio.create_task(bounded(target)) for target in targets]
+            tasks = [
+                asyncio.create_task(bounded(index, target))
+                for index, target in enumerate(targets)
+            ]
             try:
                 done, pending = await asyncio.wait(
                     tasks,
@@ -897,6 +913,10 @@ class DongchediReputationAdapter:
                     "REPUTATION_BATCH_TIMEOUT",
                     "口碑巡检达到45分钟批次上限，未完成项已停止。",
                 )
+                if on_result:
+                    for index, task in enumerate(tasks):
+                        if task not in done:
+                            on_result(index, targets[index], timeout_error)
                 return [task.result() if task in done else timeout_error for task in tasks]
             finally:
                 await browser.close()
@@ -905,6 +925,10 @@ class DongchediReputationAdapter:
         self,
         targets: list[ReputationMappingTarget],
         output_dir: Path,
+        on_result: Callable[
+            [int, ReputationMappingTarget, ReputationPageResult | Exception], None
+        ]
+        | None = None,
     ) -> list[ReputationPageResult | Exception]:
         """并发轻量取数并完成比较，只把命中证据规则的项交给浏览器。"""
 
@@ -949,6 +973,11 @@ class DongchediReputationAdapter:
                 or self.evidence_policy(target, result.measurements[-1])
             )
         ]
+        capture_index_set = set(capture_indexes)
+        if on_result:
+            for index, (target, result) in enumerate(zip(targets, results, strict=True)):
+                if index not in capture_index_set:
+                    on_result(index, target, result)
         if not capture_indexes:
             return results
 
@@ -958,6 +987,15 @@ class DongchediReputationAdapter:
             output_dir,
             force_capture=True,
             timeout_seconds=remaining,
+            on_result=(
+                lambda local_index, _target, result: on_result(
+                    capture_indexes[local_index],
+                    targets[capture_indexes[local_index]],
+                    result,
+                )
+                if on_result
+                else None
+            ),
         )
         for index, browser_result in zip(capture_indexes, browser_results, strict=True):
             results[index] = browser_result
@@ -967,22 +1005,30 @@ class DongchediReputationAdapter:
         self,
         targets: list[ReputationMappingTarget],
         output_dir: Path,
+        on_result: Callable[
+            [int, ReputationMappingTarget, ReputationPageResult | Exception], None
+        ]
+        | None = None,
     ) -> list[ReputationPageResult | Exception]:
         """按输入顺序返回结果；HTTP与页面池并发都不影响持久化顺序。"""
 
         output_dir.mkdir(parents=True, exist_ok=False)
         if self.prefer_http_first:
-            return await self._validate_http_first(targets, output_dir)
-        return await self._validate_browser_targets(targets, output_dir)
+            return await self._validate_http_first(targets, output_dir, on_result=on_result)
+        return await self._validate_browser_targets(targets, output_dir, on_result=on_result)
 
     def validate_sync(
         self,
         targets: list[ReputationMappingTarget],
         output_dir: Path,
+        on_result: Callable[
+            [int, ReputationMappingTarget, ReputationPageResult | Exception], None
+        ]
+        | None = None,
     ) -> list[ReputationPageResult | Exception]:
         """供FastAPI同步路由和CLI调用的薄同步边界。"""
 
-        return asyncio.run(self.validate(targets, output_dir))
+        return asyncio.run(self.validate(targets, output_dir, on_result=on_result))
 
 
 def final_url_series_id(url: str) -> str | None:

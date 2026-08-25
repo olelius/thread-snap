@@ -1228,6 +1228,166 @@ class ReputationService:
         del run_type, schedule_type, role, metrics
         return True
 
+    def _persist_official_result(
+        self,
+        run_id: str,
+        target: ReputationMappingTarget,
+        vehicle: dict[str, Any],
+        baseline: dict[str, Any] | None,
+        result: ReputationPageResult | Exception,
+        attempt_count: int,
+        required_count: int,
+    ) -> dict[str, int]:
+        """幂等提交一个车型终态，并在事务完成后发布权威进度。"""
+
+        collected_at = datetime.now(timezone.utc)
+        with self.sessions.begin() as db:
+            run = db.get(ReputationRun, run_id)
+            if not run:
+                raise RuntimeError("口碑巡检批次在执行期间丢失")
+            row = db.scalar(
+                select(ReputationResult).where(
+                    ReputationResult.run_id == run_id,
+                    ReputationResult.vehicle_id == target.vehicle_id,
+                    ReputationResult.platform_code == PLATFORM_CODE,
+                )
+            )
+            if row:
+                db.execute(
+                    delete(ReputationEvidence).where(ReputationEvidence.result_id == row.id)
+                )
+
+            if isinstance(result, ReputationPageResult):
+                metrics = self._official_metrics(result, baseline)
+                evidence_required = self._needs_evidence(
+                    run.run_type, run.schedule_type, vehicle["role"], metrics
+                )
+                has_evidence = bool(
+                    result.metric_region_path
+                    and result.metric_region_sha256
+                    and result.metric_region_path.is_file()
+                    and _sha256(result.metric_region_path) == result.metric_region_sha256
+                )
+                row_status = "success"
+                error_code = None
+                error_message = None
+                if evidence_required and not has_evidence:
+                    row_status = "partial_success"
+                    error_code = "REPUTATION_EVIDENCE_MISSING"
+                    error_message = "指标已取得，但本项必需页面证据缺失。"
+                duration_ms = result.duration_ms
+            else:
+                metrics = {
+                    name: _metric(None, None, state="unknown")
+                    for name in (
+                        "score",
+                        "rank",
+                        "volume",
+                        "circle_content",
+                        "negative_rate",
+                    )
+                }
+                evidence_required = True
+                has_evidence = False
+                row_status = "failed"
+                parsed = self._validation_error(result)
+                error_code = parsed["code"]
+                error_message = parsed["message"]
+                duration_ms = None
+
+            values = {
+                "run_id": run_id,
+                "vehicle_id": target.vehicle_id,
+                "series_name": vehicle["series_name"],
+                "vehicle_name": vehicle["vehicle_name"],
+                "role": vehicle["role"],
+                "role_position": 0 if vehicle["role"] == "focus" else 1,
+                "vehicle_position": int(vehicle["role_order"]),
+                "platform_code": PLATFORM_CODE,
+                "platform_name": PLATFORM_NAME,
+                "status": row_status,
+                "metrics": metrics,
+                "evidence_required": evidence_required,
+                "mapping_snapshot": vehicle.get("mappings", {}).get(PLATFORM_CODE) or {},
+                "attempt_count": attempt_count,
+                "duration_ms": duration_ms,
+                "error_code": error_code,
+                "error_message": error_message,
+                "collected_at": collected_at,
+            }
+            if row is None:
+                row = ReputationResult(**values)
+                db.add(row)
+            else:
+                for name, value in values.items():
+                    setattr(row, name, value)
+            db.flush()
+            if isinstance(result, ReputationPageResult) and has_evidence and evidence_required:
+                db.add(
+                    ReputationEvidence(
+                        result_id=row.id,
+                        full_page_path=str(result.metric_region_path),
+                        metric_region_path=str(result.metric_region_path),
+                        full_page_sha256=str(result.metric_region_sha256),
+                        metric_region_sha256=str(result.metric_region_sha256),
+                        width=result.width,
+                        height=result.height,
+                    )
+                )
+                db.flush()
+
+            completed = int(
+                db.scalar(
+                    select(func.count())
+                    .select_from(ReputationResult)
+                    .where(
+                        ReputationResult.run_id == run_id,
+                        ReputationResult.status.in_(["success", "partial_success"]),
+                    )
+                )
+                or 0
+            )
+            failed = int(
+                db.scalar(
+                    select(func.count())
+                    .select_from(ReputationResult)
+                    .where(
+                        ReputationResult.run_id == run_id,
+                        ReputationResult.status == "failed",
+                    )
+                )
+                or 0
+            )
+            complete_evidence = int(
+                db.scalar(
+                    select(func.count())
+                    .select_from(ReputationEvidence)
+                    .join(ReputationResult, ReputationEvidence.result_id == ReputationResult.id)
+                    .where(ReputationResult.run_id == run_id)
+                )
+                or 0
+            )
+            run.completed_count = completed
+            run.failed_count = failed
+            run.required_evidence_count = required_count
+            run.complete_evidence_count = complete_evidence
+            status = run.status
+
+        summary = {
+            "completed_count": completed,
+            "failed_count": failed,
+            "required_evidence_count": required_count,
+            "complete_evidence_count": complete_evidence,
+        }
+        if self.event_publisher:
+            self.event_publisher(
+                "reputation.run.changed",
+                run_id,
+                status=status,
+                **summary,
+            )
+        return summary
+
     def execute_run(self, run_id: str) -> dict[str, Any]:
         """执行一个已持久化的正式或失败项补跑批次。"""
 
@@ -1283,6 +1443,34 @@ class ReputationService:
                 )
             )
 
+        required_count = len(targets)
+        with self.sessions.begin() as db:
+            run = db.get(ReputationRun, run_id)
+            if not run:
+                raise RuntimeError("口碑巡检批次在执行期间丢失")
+            db.execute(
+                delete(ReputationEvidence).where(
+                    ReputationEvidence.result_id.in_(
+                        select(ReputationResult.id).where(ReputationResult.run_id == run_id)
+                    )
+                )
+            )
+            db.execute(delete(ReputationResult).where(ReputationResult.run_id == run_id))
+            run.completed_count = 0
+            run.failed_count = 0
+            run.required_evidence_count = required_count
+            run.complete_evidence_count = 0
+        if self.event_publisher:
+            self.event_publisher(
+                "reputation.run.changed",
+                run_id,
+                status="running",
+                completed_count=0,
+                failed_count=0,
+                required_evidence_count=required_count,
+                complete_evidence_count=0,
+            )
+
         def evidence_policy(target: ReputationMappingTarget, measurement: dict[str, Any]) -> bool:
             vehicle = vehicles[target.vehicle_id]
             baseline = baseline_snapshot.get(f"{target.vehicle_id}|{PLATFORM_CODE}")
@@ -1302,6 +1490,22 @@ class ReputationService:
         root = self.settings.reputation_dir / run_id / "collection"
         root.mkdir(parents=True, exist_ok=True)
         storage_state = self.session_store.get_state(PLATFORM_CODE) if self.session_store else None
+        persisted_indexes: set[int] = set()
+
+        def persist(index: int, result: ReputationPageResult | Exception, attempt: int) -> None:
+            target = targets[index]
+            key = f"{target.vehicle_id}|{PLATFORM_CODE}"
+            self._persist_official_result(
+                run_id,
+                target,
+                vehicles[target.vehicle_id],
+                baseline_snapshot.get(key),
+                result,
+                attempt,
+                required_count,
+            )
+            persisted_indexes.add(index)
+
         if storage_state:
             deadline = monotonic() + 45 * 60
             adapter = self.adapter_factory(
@@ -1316,7 +1520,15 @@ class ReputationService:
                 include_negative_rate=True,
             )
             try:
-                first = adapter.validate_sync(targets, root / f"attempt-1-{uuid7()}")
+                first = adapter.validate_sync(
+                    targets,
+                    root / f"attempt-1-{uuid7()}",
+                    on_result=lambda index, _target, result: (
+                        None
+                        if isinstance(result, ReputationAdapterError) and result.retryable
+                        else persist(index, result, 1)
+                    ),
+                )
                 retry_indexes = [
                     index
                     for index, result in enumerate(first)
@@ -1326,7 +1538,11 @@ class ReputationService:
                 if retry_indexes and remaining > 0:
                     adapter.batch_timeout_seconds = remaining
                     retried = adapter.validate_sync(
-                        [targets[index] for index in retry_indexes], root / f"attempt-2-{uuid7()}"
+                        [targets[index] for index in retry_indexes],
+                        root / f"attempt-2-{uuid7()}",
+                        on_result=lambda index, _target, result: persist(
+                            retry_indexes[index], result, 2
+                        ),
                     )
                 elif retry_indexes:
                     retried = [
@@ -1353,105 +1569,21 @@ class ReputationService:
             ]
             attempt_counts = [1 for _ in targets]
 
+        for index, (result, attempt_count) in enumerate(
+            zip(final_results, attempt_counts, strict=True)
+        ):
+            if index not in persisted_indexes:
+                persist(index, result, attempt_count)
+
         finished = datetime.now(timezone.utc)
         with self.sessions.begin() as db:
             run = db.get(ReputationRun, run_id)
             if not run:
                 raise RuntimeError("口碑巡检批次在执行期间丢失")
-            db.execute(delete(ReputationEvidence).where(ReputationEvidence.result_id.in_(
-                select(ReputationResult.id).where(ReputationResult.run_id == run_id)
-            )))
-            db.execute(delete(ReputationResult).where(ReputationResult.run_id == run_id))
-            completed = 0
-            failed = 0
-            required = 0
-            complete_evidence = 0
-            for target, result, attempt_count in zip(
-                targets, final_results, attempt_counts, strict=True
-            ):
-                vehicle = vehicles[target.vehicle_id]
-                key = f"{target.vehicle_id}|{PLATFORM_CODE}"
-                baseline = baseline_snapshot.get(key)
-                if isinstance(result, ReputationPageResult):
-                    metrics = self._official_metrics(result, baseline)
-                    evidence_required = self._needs_evidence(
-                        run.run_type, run.schedule_type, vehicle["role"], metrics
-                    )
-                    has_evidence = bool(
-                        result.metric_region_path
-                        and result.metric_region_sha256
-                        and result.metric_region_path.is_file()
-                        and _sha256(result.metric_region_path) == result.metric_region_sha256
-                    )
-                    row_status = "success"
-                    error_code = None
-                    error_message = None
-                    if evidence_required and not has_evidence:
-                        row_status = "partial_success"
-                        error_code = "REPUTATION_EVIDENCE_MISSING"
-                        error_message = "指标已取得，但本项必需页面证据缺失。"
-                    completed += 1
-                    required += int(evidence_required)
-                    complete_evidence += int(evidence_required and has_evidence)
-                    duration_ms = result.duration_ms
-                else:
-                    metrics = {
-                        name: _metric(None, None, state="unknown")
-                        for name in (
-                            "score",
-                            "rank",
-                            "volume",
-                            "circle_content",
-                            "negative_rate",
-                        )
-                    }
-                    evidence_required = True
-                    has_evidence = False
-                    row_status = "failed"
-                    failed += 1
-                    required += int(evidence_required)
-                    parsed = self._validation_error(result)
-                    error_code = parsed["code"]
-                    error_message = parsed["message"]
-                    duration_ms = None
-                row = ReputationResult(
-                    run_id=run_id,
-                    vehicle_id=target.vehicle_id,
-                    series_name=vehicle["series_name"],
-                    vehicle_name=vehicle["vehicle_name"],
-                    role=vehicle["role"],
-                    role_position=0 if vehicle["role"] == "focus" else 1,
-                    vehicle_position=int(vehicle["role_order"]),
-                    platform_code=PLATFORM_CODE,
-                    platform_name=PLATFORM_NAME,
-                    status=row_status,
-                    metrics=metrics,
-                    evidence_required=evidence_required,
-                    mapping_snapshot=vehicle.get("mappings", {}).get(PLATFORM_CODE) or {},
-                    attempt_count=attempt_count,
-                    duration_ms=duration_ms,
-                    error_code=error_code,
-                    error_message=error_message,
-                    collected_at=finished,
-                )
-                db.add(row)
-                db.flush()
-                if isinstance(result, ReputationPageResult) and has_evidence and evidence_required:
-                    db.add(
-                        ReputationEvidence(
-                            result_id=row.id,
-                            full_page_path=str(result.metric_region_path),
-                            metric_region_path=str(result.metric_region_path),
-                            full_page_sha256=str(result.metric_region_sha256),
-                            metric_region_sha256=str(result.metric_region_sha256),
-                            width=result.width,
-                            height=result.height,
-                        )
-                    )
-            run.completed_count = completed
-            run.failed_count = failed
-            run.required_evidence_count = required
-            run.complete_evidence_count = complete_evidence
+            completed = run.completed_count
+            failed = run.failed_count
+            required = run.required_evidence_count
+            complete_evidence = run.complete_evidence_count
             run.finished_at = finished
             if completed == 0:
                 run.status = "failed"
@@ -1460,6 +1592,7 @@ class ReputationService:
             else:
                 run.status = "success"
             run.report_status = "waiting" if run.source_type == "scheduled" else "not_applicable"
+            final_status = run.status
             event = db.scalar(
                 select(ReputationScheduleEvent).where(ReputationScheduleEvent.run_id == run.id)
             )
@@ -1467,7 +1600,15 @@ class ReputationService:
                 event.status = run.status
                 event.message = "正式口碑巡检已到达终态，正在生成汇报。"
         if self.event_publisher:
-            self.event_publisher("reputation.run.changed", run_id, status=run.status)
+            self.event_publisher(
+                "reputation.run.changed",
+                run_id,
+                status=final_status,
+                completed_count=completed,
+                failed_count=failed,
+                required_evidence_count=required,
+                complete_evidence_count=complete_evidence,
+            )
         return self.get_run(run_id)
 
     def can_execute_official(self, run_id: str) -> bool:
