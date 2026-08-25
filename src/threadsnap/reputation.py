@@ -131,11 +131,6 @@ class ScopeVehicleRevisionRequest(BaseModel):
     revision: int
 
 
-class ScopeVehicleUpdateRequest(BaseModel):
-    revision: int
-    project_group: str
-
-
 @dataclass(frozen=True)
 class SyntheticVehicle:
     vehicle_id: str
@@ -2205,36 +2200,6 @@ class ReputationService:
             draft.revision += 1
         return self.get_scope()
 
-    def update_scope_vehicle(
-        self, vehicle_id: str, value: ScopeVehicleUpdateRequest
-    ) -> dict[str, Any]:
-        """更新车型所属项目组，不改变平台映射验证状态。"""
-
-        project_group = value.project_group.strip()
-        if not project_group:
-            raise DomainError("REPUTATION_SCOPE_PROJECT_GROUP_REQUIRED", "项目组归属不能为空。")
-        if len(project_group) > 80:
-            raise DomainError(
-                "REPUTATION_SCOPE_PROJECT_GROUP_TOO_LONG", "项目组归属不能超过80个字符。"
-            )
-        with self.sessions.begin() as db:
-            draft = self._require_scope_revision(
-                db.get(ReputationScopeDraft, "current"), value.revision
-            )
-            data = json.loads(json.dumps(draft.data, ensure_ascii=False))
-            vehicle = next(
-                (row for row in data.get("vehicles", []) if row.get("id") == vehicle_id), None
-            )
-            if not vehicle:
-                raise DomainError(
-                    "REPUTATION_SCOPE_VEHICLE_NOT_FOUND", "车型不存在。", status_code=404
-                )
-            if str(vehicle.get("project_group") or DEFAULT_PROJECT_GROUP) != project_group:
-                vehicle["project_group"] = project_group
-                draft.data = data
-                draft.revision += 1
-        return self.get_scope()
-
     def remove_scope_vehicle(self, vehicle_id: str, revision: int) -> dict[str, Any]:
         """未引用车型永久删除；已有历史引用的车型只停用。"""
 
@@ -2828,18 +2793,12 @@ class ReputationService:
             )
             for item in shared_ids
         )
-        project_group_changed = sum(
-            str(current_by_id[item].get("project_group") or DEFAULT_PROJECT_GROUP)
-            != str(previous_by_id[item].get("project_group") or DEFAULT_PROJECT_GROUP)
-            for item in shared_ids
-        )
         has_changes = published is None or bool(
             added_ids
             or disabled_ids
             or role_changed
             or mapping_changed
             or identity_changed
-            or project_group_changed
         )
         verified_all = bool(vehicles) and verified == len(vehicles)
         can_publish = verified_all and has_changes
@@ -2856,7 +2815,6 @@ class ReputationService:
             "role_changed_count": role_changed,
             "mapping_changed_count": mapping_changed,
             "identity_changed_count": identity_changed,
-            "project_group_changed_count": project_group_changed,
             "has_changes": has_changes,
             "can_publish": can_publish,
             "warning": (
