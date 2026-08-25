@@ -16,14 +16,27 @@
 
 ---
 
+## 2026-08-25 — 移除新增车型的项目组默认值
+**总目标**：新增车型时由用户明确填写项目组归属，不预填或由接口静默补入“奇瑞项目组”。
+**状态**：✅ 已移除前端和接口默认值，空值门禁与真实页面验收通过。
+**干到哪里了**：
+- [x] 新增车型表单的项目组归属初始值改为空；现有车型列表仍只读显示已保存归属。
+- [x] 新增车型接口取消项目组默认值，缺少字段或仅含空白均拒绝创建，保存时继续去除首尾空白并限制80字符。
+- [x] 后端完整123项测试、Ruff、TypeScript检查、生产构建（2468 modules）和`git diff --check`通过；Patchright确认弹窗项目组值为空、只缺该字段时确认按钮禁用、字段缺失返回422、仅空白返回400、控制台错误0，证据位于`artifacts/runtime/reputation-project-group-no-default/`。
+**下一步**：无。
+**边界**：既有27款“奇瑞项目组”数据不变；旧快照缺字段兼容和一次性CSV初始化回填规则不变。
+**关联**：`frontend/src/features/reputation/reputation-page.tsx`、`src/threadsnap/reputation.py`、`tests/test_reputation.py`、`CONTEXT.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/reputation-inspection.md`
+
+---
+
 ## 2026-08-25 — 将项目组归属改为新增时填写、列表只读
 **总目标**：纠正项目组归属交互；输入框只出现在“新增车型”对话框，车型列表只展示归属文本。
 **状态**：✅ 表格内联输入和逐车型修改接口已移除，新增表单与现有数据保留，真实页面验收通过。
 **干到哪里了**：
 - [x] “项目组归属”列改为普通文本，不再显示输入边框、保存按钮或逐行编辑状态；表格最小宽度同步收紧。
-- [x] 新增车型对话框继续提供1至80字符的项目组输入，默认“奇瑞项目组”，新车型创建后随范围草稿和版本快照保存。
+- [x] 新增车型对话框继续提供1至80字符的项目组输入，新车型创建后随范围草稿和版本快照保存；默认值已由后续条目移除。
 - [x] 删除未被需求支持的逐车型PATCH接口和项目组独立发布差异计数，并增加接口测试确认列表不能内联修改。
-- [x] 完整123项后端测试、Ruff、TypeScript检查、生产构建（2468 modules）和`git diff --check`通过；Patchright确认表格项目组输入框0个、只读“奇瑞项目组”单元格27个、新增对话框项目组输入1个且默认值正确、PATCH返回405、控制台错误0，证据位于`artifacts/runtime/reputation-project-group-readonly/`。
+- [x] 完整123项后端测试、Ruff、TypeScript检查、生产构建（2468 modules）和`git diff --check`通过；Patchright确认表格项目组输入框0个、只读“奇瑞项目组”单元格27个、新增对话框项目组输入1个、PATCH返回405、控制台错误0，证据位于`artifacts/runtime/reputation-project-group-readonly/`；输入默认值已由后续条目移除。
 **下一步**：无。
 **边界**：现有27款仍全部归属“奇瑞项目组”；本次不修改或发布实际范围数据。
 **关联**：`src/threadsnap/reputation.py`、`src/threadsnap/app.py`、`frontend/src/features/reputation/reputation-page.tsx`、`tests/test_reputation.py`、`CONTEXT.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/reputation-inspection.md`
@@ -36,7 +49,7 @@
 **干到哪里了**：
 - [x] 车型范围草稿与后续不可变版本增加 `project_group`；现有27款通过Alembic迁移回填“奇瑞项目组”并仅递增当前草稿revision，已发布版本1保持原快照不变。
 - [x] 新增车型请求保存1至80字符的项目组归属；列表只读显示该值，不提供逐车型修改接口。
-- [x] 新增车型表单默认“奇瑞项目组”，发布确认区逐车展示归属。
+- [x] 新增车型表单提供项目组输入，发布确认区逐车展示归属；输入默认值已由后续条目移除。
 - [x] 完整124项后端测试、Ruff、TypeScript检查、生产构建（2468 modules）和`git diff --check`通过；隔离旧库验证草稿revision从6升级到7且已发布快照不被改写。
 - [x] 实际数据库升级前已备份至`artifacts/runtime/reputation-project-group/threadsnap-pre-migration.db`（SHA-256 `e88d66fb897d6ebc405e59f0305e7126609a4296b882162227546273b2634e1e`）；现有27款全部回填“奇瑞项目组”，界面证据位于同目录。
 **下一步**：无。

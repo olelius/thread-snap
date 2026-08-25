@@ -187,7 +187,7 @@ type VehicleForm = {
 const emptyVehicleForm: VehicleForm = {
   series_name: '',
   vehicle_name: '',
-  project_group: '奇瑞项目组',
+  project_group: '',
   role: 'focus',
   platform_vehicle_id: '',
   platform_url: '',

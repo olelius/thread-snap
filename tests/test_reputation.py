@@ -345,19 +345,29 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual(
             {row["project_group"] for row in scope["vehicles"]}, {"奇瑞项目组"}
         )
+        create_payload = {
+            "revision": scope["revision"],
+            "series_name": "新增车系",
+            "vehicle_name": "新增车型",
+            "role": "competitor",
+            "platform_code": "dongchedi",
+            "platform_vehicle_id": "39999",
+            "platform_url": "https://www.dongchedi.com/auto/series/score/39999-x-x-x-x-x",
+            "platform_display_name": "新增车型页面",
+        }
+        missing_project_group = self.client.post(
+            "/api/v1/reputation/scope/vehicles", json=create_payload
+        )
+        self.assertEqual(missing_project_group.status_code, 422)
+        blank_project_group = self.client.post(
+            "/api/v1/reputation/scope/vehicles",
+            json={**create_payload, "project_group": "   "},
+        )
+        self.assertEqual(blank_project_group.status_code, 400)
+
         created_response = self.client.post(
             "/api/v1/reputation/scope/vehicles",
-            json={
-                "revision": scope["revision"],
-                "series_name": "新增车系",
-                "vehicle_name": "新增车型",
-                "project_group": "新能源项目组",
-                "role": "competitor",
-                "platform_code": "dongchedi",
-                "platform_vehicle_id": "39999",
-                "platform_url": "https://www.dongchedi.com/auto/series/score/39999-x-x-x-x-x",
-                "platform_display_name": "新增车型页面",
-            },
+            json={**create_payload, "project_group": "新能源项目组"},
         )
         self.assertEqual(created_response.status_code, 200, created_response.text)
         created_scope = created_response.json()
@@ -378,6 +388,7 @@ class ReputationInspectionTest(unittest.TestCase):
                 "revision": created_scope["revision"],
                 "series_name": "重复车系",
                 "vehicle_name": "重复车型",
+                "project_group": "新能源项目组",
                 "role": "focus",
                 "platform_vehicle_id": "39999",
                 "platform_url": "https://www.dongchedi.com/auto/series/score/39999-x-x-x-x-x",
