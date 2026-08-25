@@ -95,6 +95,8 @@ class OfficialFakeAdapter:
                     score_raw=score,
                     rank_raw="4",
                     volume_raw=str(500 + index),
+                    circle_content_raw=str(5000 + index),
+                    circle_url=f"https://www.dongchedi.com/community/{target.platform_vehicle_id}",
                     rank_scope="同级车评分",
                     measurements=[measurement] * 3,
                     full_page_path=metric,
@@ -235,7 +237,7 @@ class ReputationInspectionTest(unittest.TestCase):
         run = self.create_run("daily_mixed_changes")
         report = self.client.get(run["downloads"]["txt"])
         self.assertEqual(report.status_code, 200)
-        self.assertIn("口碑分及排名变动如下", report.content.decode("utf-8"))
+        self.assertIn("口碑巡检指标变动如下", report.content.decode("utf-8"))
         self.assertNotIn("#E2F0D9", report.content.decode("utf-8"))
 
         xlsx = self.client.get(run["downloads"]["xlsx"])
@@ -245,10 +247,16 @@ class ReputationInspectionTest(unittest.TestCase):
         sheet = workbook["口碑巡检"]
         self.assertEqual(sheet.max_row, 28)
         fills = {
-            sheet.cell(row, column).fill.fgColor.rgb for row in range(2, 29) for column in (5, 6, 7)
+            sheet.cell(row, column).fill.fgColor.rgb
+            for row in range(2, 29)
+            for column in (5, 6, 7, 8)
         }
+        self.assertEqual(sheet["H1"].value, "圈子内容量")
         self.assertTrue(any(str(value).endswith("E2F0D9") for value in fills))
         self.assertTrue(any(str(value).endswith("F4CCCC") for value in fills))
+        circle_fills = {sheet.cell(row, 8).fill.fgColor.rgb for row in range(2, 29)}
+        self.assertTrue(any(str(value).endswith("E2F0D9") for value in circle_fills))
+        self.assertTrue(any(str(value).endswith("F4CCCC") for value in circle_fills))
         self.assertGreater(len(sheet._images), 0)
 
         archive = self.client.get(run["downloads"]["evidence_zip"])
@@ -603,6 +611,8 @@ class ReputationInspectionTest(unittest.TestCase):
                             score_raw="3.80",
                             rank_raw="4",
                             volume_raw=str(500 + index),
+                            circle_content_raw=None,
+                            circle_url=None,
                             rank_scope="同级车评分",
                             measurements=[{"stable": True}] * 3,
                             full_page_path=full,
@@ -716,6 +726,37 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual(result.measurements[-1]["collection_method"], "http_ssr")
         self.assertIsNone(result.metric_region_path)
 
+    def test_dongchedi_circle_content_uses_matching_series_id_without_browser(self) -> None:
+        """圈子内容量必须由平台车型ID构造URL并校验最终圈子身份。"""
+
+        requested: list[str] = []
+
+        class Response:
+            url = "https://www.dongchedi.com/community/8985"
+            status_code = 200
+            content = "<html><body><span>共7,456条内容</span></body></html>".encode()
+
+        class Session:
+            def get(self, url, **_kwargs):
+                requested.append(url)
+                return Response()
+
+        adapter = DongchediReputationAdapter(None, include_circle_content=True)
+        adapter._thread_local.http = Session()
+        target = ReputationMappingTarget(
+            vehicle_id="dcd-8985",
+            platform_vehicle_id="8985",
+            platform_url="https://www.dongchedi.com/auto/series/score/8985-x-x-x-x-x",
+            platform_display_name="风云A9L",
+            mapping_hash="fixture",
+        )
+
+        count, url = adapter._visit_circle_content(target)
+
+        self.assertEqual(count, "7456")
+        self.assertEqual(url, "https://www.dongchedi.com/community/8985")
+        self.assertEqual(requested, [url])
+
     def test_dongchedi_http_first_opens_browser_only_for_evidence_targets(self) -> None:
         """日常取数不启动浏览器，比较命中的目标才进入截图页面池。"""
 
@@ -740,6 +781,8 @@ class ReputationInspectionTest(unittest.TestCase):
                     score_raw=measurement["score_raw"],
                     rank_raw="2",
                     volume_raw="500",
+                    circle_content_raw=None,
+                    circle_url=None,
                     rank_scope="同级车评分",
                     measurements=[measurement],
                     full_page_path=None,
@@ -771,6 +814,8 @@ class ReputationInspectionTest(unittest.TestCase):
                             score_raw="3.90",
                             rank_raw="2",
                             volume_raw="500",
+                            circle_content_raw=None,
+                            circle_url=None,
                             rank_scope="同级车评分",
                             measurements=[{"collection_method": "browser"}],
                             full_page_path=metric,
@@ -1023,6 +1068,8 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         self.assertFalse(OfficialFakeAdapter.last_prefer_http_first)
         changed = next(item for item in daily["results"] if item["vehicle_id"] == "official-01")
         self.assertEqual(changed["metrics"]["score"]["direction"], "up")
+        self.assertEqual(changed["metrics"]["circle_content"]["raw"], "5000")
+        self.assertEqual(changed["metrics"]["circle_content"]["direction"], "same")
 
         OfficialFakeAdapter.failures = {"official-02"}
         failed_due = self.service.check_schedule(self._at("2030-01-04", "12:00"))

@@ -16,6 +16,20 @@
 
 ---
 
+## 2026-08-25 — 口碑巡检新增圈子内容量指标
+**总目标**：使用口碑平台车型ID对应的圈子URL取得内容总量，并将其作为独立指标进入巡检表格、前日比较、汇报和XLSX。
+**状态**：✅ 轻量采集、身份校验、红绿比较、历史兼容、页面与导出均已完成。
+**干到哪里了**：
+- [x] 懂车帝适配器升级为`dongchedi-reputation-v5-circle-content`；正式执行项使用共享Session请求`/community/{platform_vehicle_id}`，校验最终圈子路径ID后解析“共N条内容”，请求占用既有执行项并发槽且不打开额外浏览器标签页。
+- [x] 圈子内容量作为第四个独立正向指标持久化，进入严格前日基线、差值方向、汇报和固定版式XLSX；上升浅绿、下降浅红、持平中性。旧批次保持不可变，详情新列显示“历史未采集”，首个新批次不回填历史值。
+- [x] 真实共享Session核验风云A9L平台车型ID`8985`对应`https://www.dongchedi.com/community/8985`，2026-08-25 17:27取得圈子内容量`7457`，脱敏结果位于`artifacts/runtime/reputation-circle-content/live-circle-result.json`。
+- [x] `python -m unittest tests.test_reputation`通过14项，Ruff、前端TypeScript检查、生产构建和`git diff --check`通过；真实历史批次页面确认新表头1处、27行均为“历史未采集”、控制台错误0，截图位于`artifacts/runtime/reputation-circle-content/ranking-history.png`。
+**下一步**：无；下一次正式巡检开始写入圈子内容量，第二个连续自然日开始显示有效红绿差值。
+**边界**：圈子内容量与口碑评价人数不合并；现有口碑指标区域PNG仍证明口碑分、排名和口碑量，圈子统计保存经身份校验的来源URL，不改写历史截图或历史结果。
+**关联**：`src/threadsnap/reputation_dongchedi.py`、`src/threadsnap/reputation.py`、`frontend/src/features/reputation/reputation-detail-page.tsx`、`tests/test_reputation.py`、`CONTEXT.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/reputation-inspection.md`
+
+---
+
 ## 2026-08-25 — 下移口碑证据截图顶部边界
 **总目标**：移除指标区域截图顶部误带入的平台装饰横条，同时完整保留车型身份和三项指标。
 **状态**：✅ 截图矩形、定向回归和单车型真实平台验收已完成。
