@@ -35,6 +35,16 @@ export function EventBridge() {
       client.invalidateQueries({ queryKey: ['posts'] })
       client.invalidateQueries({ queryKey: ['post'] })
     })
+    source.addEventListener('reputation.run.changed', (event) => {
+      client.invalidateQueries({ queryKey: ['reputation-runs'] })
+      const payload = JSON.parse((event as MessageEvent).data) as { resource_id?: string }
+      if (payload.resource_id) {
+        client.invalidateQueries({ queryKey: ['reputation-run', payload.resource_id] })
+      }
+    })
+    source.addEventListener('reputation.scope.changed', () => {
+      client.invalidateQueries({ queryKey: ['reputation-scope'] })
+    })
     const refreshAll = () => client.invalidateQueries()
     window.addEventListener('online', refreshAll)
     window.addEventListener('focus', refreshAll)

@@ -46,6 +46,8 @@ class OfficialFakeAdapter:
     score_overrides: dict[str, str] = {}
     negative_rate_overrides: dict[str, str] = {}
     failures: set[str] = set()
+    retry_once: set[str] = set()
+    progress_probe = None
     last_prefer_http_first: bool | None = None
     last_include_negative_rate: bool | None = None
 
@@ -59,39 +61,46 @@ class OfficialFakeAdapter:
     ):
         self.evidence_policy = evidence_policy
         self.prefer_http_first = prefer_http_first
+        self.validation_calls = 0
         type(self).last_prefer_http_first = prefer_http_first
         type(self).last_include_negative_rate = include_negative_rate
 
-    def validate_sync(self, targets, output_dir):
+    def validate_sync(self, targets, output_dir, on_result=None):
+        self.validation_calls += 1
         output_dir.mkdir(parents=True)
         values = []
         for index, target in enumerate(targets):
-            if target.vehicle_id in self.failures:
-                values.append(
-                    ReputationAdapterError(
-                        "REPUTATION_PAGE_FIXTURE_FAILURE", "确定性正式巡检失败。"
-                    )
+            if target.vehicle_id in self.retry_once and self.validation_calls == 1:
+                result = ReputationAdapterError(
+                    "REPUTATION_PAGE_FIXTURE_RETRY",
+                    "确定性正式巡检暂时失败。",
+                    retryable=True,
                 )
-                continue
-            score = self.score_overrides.get(target.vehicle_id, "3.80")
-            negative_rate = self.negative_rate_overrides.get(target.vehicle_id, "37%")
-            measurement = {
-                "score_raw": score,
-                "rank_raw": "4",
-                "volume_raw": str(500 + index),
-                "rank_scope": "同级车评分",
-            }
-            capture = self.evidence_policy is None or self.evidence_policy(target, measurement)
-            metric = None
-            digest = None
-            if capture:
-                target_dir = output_dir / target.vehicle_id
-                target_dir.mkdir()
-                metric = target_dir / "region.png"
-                Image.new("RGB", (600, 240), "white").save(metric)
-                digest = hashlib.sha256(metric.read_bytes()).hexdigest()
-            values.append(
-                ReputationPageResult(
+            elif target.vehicle_id in self.failures:
+                result = ReputationAdapterError(
+                    "REPUTATION_PAGE_FIXTURE_FAILURE", "确定性正式巡检失败。"
+                )
+            else:
+                score = self.score_overrides.get(target.vehicle_id, "3.80")
+                negative_rate = self.negative_rate_overrides.get(target.vehicle_id, "37%")
+                measurement = {
+                    "score_raw": score,
+                    "rank_raw": "4",
+                    "volume_raw": str(500 + index),
+                    "rank_scope": "同级车评分",
+                }
+                capture = self.evidence_policy is None or self.evidence_policy(
+                    target, measurement
+                )
+                metric = None
+                digest = None
+                if capture:
+                    target_dir = output_dir / target.vehicle_id
+                    target_dir.mkdir()
+                    metric = target_dir / "region.png"
+                    Image.new("RGB", (600, 240), "white").save(metric)
+                    digest = hashlib.sha256(metric.read_bytes()).hexdigest()
+                result = ReputationPageResult(
                     vehicle_id=target.vehicle_id,
                     platform_vehicle_id=target.platform_vehicle_id,
                     mapping_hash=target.mapping_hash,
@@ -120,7 +129,11 @@ class OfficialFakeAdapter:
                     negative_rate_positive_count=214,
                     negative_rate_negative_count=128,
                 )
-            )
+            values.append(result)
+            if on_result:
+                on_result(index, target, result)
+            if type(self).progress_probe:
+                type(self).progress_probe()
         return values
 
 
@@ -866,6 +879,7 @@ class ReputationInspectionTest(unittest.TestCase):
         """日常取数不启动浏览器，比较命中的目标才进入截图页面池。"""
 
         browser_targets: list[str] = []
+        completed_targets: list[str] = []
 
         class FixtureAdapter(DongchediReputationAdapter):
             def _visit_http(self, target):
@@ -900,17 +914,16 @@ class ReputationInspectionTest(unittest.TestCase):
                     duration_ms=10,
                 )
 
-            async def _validate_browser_targets(self, targets, output_dir, **_kwargs):
+            async def _validate_browser_targets(self, targets, output_dir, **kwargs):
                 browser_targets.extend(target.vehicle_id for target in targets)
                 values = []
-                for target in targets:
+                for index, target in enumerate(targets):
                     target_dir = output_dir / target.vehicle_id
                     target_dir.mkdir()
                     metric = target_dir / "region.png"
                     Image.new("RGB", (600, 240), "white").save(metric)
                     digest = hashlib.sha256(metric.read_bytes()).hexdigest()
-                    values.append(
-                        ReputationPageResult(
+                    result = ReputationPageResult(
                             vehicle_id=target.vehicle_id,
                             platform_vehicle_id=target.platform_vehicle_id,
                             mapping_hash=target.mapping_hash,
@@ -932,7 +945,9 @@ class ReputationInspectionTest(unittest.TestCase):
                             metric_rect={"x": 0, "y": 0, "width": 600, "height": 240},
                             duration_ms=20,
                         )
-                    )
+                    values.append(result)
+                    if kwargs.get("on_result"):
+                        kwargs["on_result"](index, target, result)
                 return values
 
         targets = [
@@ -951,8 +966,16 @@ class ReputationInspectionTest(unittest.TestCase):
             evidence_policy=lambda target, _measurement: target.vehicle_id == "vehicle-2",
             prefer_http_first=True,
         )
-        results = adapter.validate_sync(targets, self.root / "http-first")
+        results = adapter.validate_sync(
+            targets,
+            self.root / "http-first",
+            on_result=lambda _index, target, _result: completed_targets.append(
+                target.vehicle_id
+            ),
+        )
         self.assertEqual(browser_targets, ["vehicle-2"])
+        self.assertCountEqual(completed_targets, ["vehicle-1", "vehicle-2", "vehicle-3"])
+        self.assertEqual(len(completed_targets), 3)
         self.assertIsNone(results[0].metric_region_path)
         self.assertTrue(results[1].metric_region_path.is_file())
         self.assertIsNone(results[2].metric_region_path)
@@ -977,6 +1000,8 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         OfficialFakeAdapter.score_overrides = {}
         OfficialFakeAdapter.negative_rate_overrides = {}
         OfficialFakeAdapter.failures = set()
+        OfficialFakeAdapter.retry_once = set()
+        OfficialFakeAdapter.progress_probe = None
         OfficialFakeAdapter.last_prefer_http_first = None
         OfficialFakeAdapter.last_include_negative_rate = None
         self._publish_scope()
@@ -1128,6 +1153,71 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
             self.service.schedule_status()["last_event"]["message"],
             "正式口碑巡检已到达终态，汇报已生成。",
         )
+
+    def test_official_run_persists_linear_progress_before_terminal_state(self) -> None:
+        """每个车型终态都应先落库并发布进度，批次结束后才冻结汇报。"""
+
+        due = self.service.check_schedule(self._at("2030-01-02", "12:00"))
+        run_id = due["queued_run_ids"][0]
+        observed: list[tuple[int, int, int, int, str]] = []
+
+        def probe() -> None:
+            current = self.service.get_run(run_id)
+            observed.append(
+                (
+                    current["completed_count"] + current["failed_count"],
+                    len(current["results"]),
+                    current["required_evidence_count"],
+                    current["complete_evidence_count"],
+                    current["status"],
+                )
+            )
+
+        OfficialFakeAdapter.progress_probe = probe
+        finished = self.service.execute_run(run_id)
+
+        self.assertEqual(list(range(1, 28)), [item[0] for item in observed])
+        self.assertEqual(list(range(1, 28)), [item[1] for item in observed])
+        self.assertTrue(all(item[2] == 27 for item in observed))
+        self.assertEqual(list(range(1, 28)), [item[3] for item in observed])
+        self.assertTrue(all(item[4] == "running" for item in observed))
+        self.assertEqual("success", finished["status"])
+        events = [
+            event
+            for event in self.client.app.state.container.events.wait_after(0, timeout=0)
+            if event["type"] == "reputation.run.changed"
+            and event["resource_id"] == run_id
+        ]
+        self.assertEqual(0, events[0]["summary"]["completed_count"])
+        self.assertEqual(
+            list(range(1, 28)),
+            [event["summary"]["completed_count"] for event in events[1:28]],
+        )
+        self.assertEqual("success", events[-1]["summary"]["status"])
+
+    def test_retryable_item_counts_only_after_second_attempt_terminal(self) -> None:
+        """首轮暂时错误保持未完成，第二次尝试成功后才进入进度分子。"""
+
+        due = self.service.check_schedule(self._at("2030-01-02", "12:00"))
+        run_id = due["queued_run_ids"][0]
+        OfficialFakeAdapter.retry_once = {"official-01"}
+
+        finished = self.service.execute_run(run_id)
+
+        retried = next(
+            item for item in finished["results"] if item["vehicle_id"] == "official-01"
+        )
+        self.assertEqual(2, retried["attempt_count"])
+        self.assertEqual("success", retried["status"])
+        events = [
+            event
+            for event in self.client.app.state.container.events.wait_after(0, timeout=0)
+            if event["type"] == "reputation.run.changed"
+            and event["resource_id"] == run_id
+        ]
+        progress = events[1:-1]
+        self.assertEqual(list(range(1, 28)), [item["summary"]["completed_count"] for item in progress])
+        self.assertTrue(all(item["summary"]["failed_count"] == 0 for item in progress))
 
     def test_official_schedule_baseline_daily_retry_delete_and_missed_day(self) -> None:
         schedule = self.service.schedule_status()
