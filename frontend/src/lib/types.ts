@@ -358,7 +358,8 @@ export type ReputationScope = {
   source_sha256?: string
   updated_at?: string
   message?: string
-  last_vehicle_action?: 'deleted' | 'disabled'
+  last_vehicle_action?: 'deleted' | 'disabled' | 'updated' | 'unchanged'
+  last_vehicle_mapping_changed?: boolean
 }
 
 export type RunSourceOption = {

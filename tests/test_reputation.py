@@ -376,22 +376,90 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual(created["project_group"], "新能源项目组")
         self.assertEqual(created["removal_mode"], "delete")
         self.assertEqual(created["mappings"]["dongchedi"]["validation_status"], "unverified")
-        inline_edit = self.client.patch(
+
+        with self.client.app.state.container.sessions.begin() as db:
+            draft = db.get(ReputationScopeDraft, "current")
+            assert draft is not None
+            data = json.loads(json.dumps(draft.data, ensure_ascii=False))
+            stored = next(row for row in data["vehicles"] if row["id"] == created["id"])
+            stored["mappings"]["dongchedi"].update(
+                {
+                    "validation_status": "verified",
+                    "validated_at": "2030-01-01T00:00:00+00:00",
+                    "validated_mapping_hash": "fixture",
+                    "actual_name": "新增车型页面",
+                    "latest_metrics": {"score": "4.00", "rank": "2", "volume": "100"},
+                }
+            )
+            draft.data = data
+        verified_scope = self.client.get("/api/v1/reputation/scope").json()
+        edited_response = self.client.patch(
             f"/api/v1/reputation/scope/vehicles/{created['id']}",
-            json={"revision": created_scope["revision"], "project_group": "其他项目组"},
+            json={
+                "revision": verified_scope["revision"],
+                "series_name": "修改车系",
+                "vehicle_name": "修改车型",
+                "project_group": "其他项目组",
+                "role": "focus",
+                "platform_code": "dongchedi",
+                "platform_vehicle_id": "39999",
+                "platform_url": "https://www.dongchedi.com/auto/series/score/39999-x-x-x-x-x",
+                "platform_display_name": "新增车型页面",
+            },
         )
-        self.assertEqual(inline_edit.status_code, 405)
+        self.assertEqual(edited_response.status_code, 200, edited_response.text)
+        edited_scope = edited_response.json()
+        edited = next(row for row in edited_scope["vehicles"] if row["id"] == created["id"])
+        self.assertEqual(edited["series_name"], "修改车系")
+        self.assertEqual(edited["vehicle_name"], "修改车型")
+        self.assertEqual(edited["project_group"], "其他项目组")
+        self.assertEqual(edited["role"], "focus")
+        self.assertEqual(edited["role_order"], 15)
+        self.assertEqual(edited["mappings"]["dongchedi"]["validation_status"], "verified")
+        self.assertIn("latest_metrics", edited["mappings"]["dongchedi"])
+        self.assertFalse(edited_scope["last_vehicle_mapping_changed"])
+
+        stale_edit = self.client.patch(
+            f"/api/v1/reputation/scope/vehicles/{created['id']}",
+            json={
+                **create_payload,
+                "revision": verified_scope["revision"],
+                "project_group": "过期修改",
+            },
+        )
+        self.assertEqual(stale_edit.status_code, 409)
+
+        mapping_edit = self.client.patch(
+            f"/api/v1/reputation/scope/vehicles/{created['id']}",
+            json={
+                "revision": edited_scope["revision"],
+                "series_name": "修改车系",
+                "vehicle_name": "修改车型",
+                "project_group": "其他项目组",
+                "role": "focus",
+                "platform_code": "dongchedi",
+                "platform_vehicle_id": "39998",
+                "platform_url": "https://www.dongchedi.com/auto/series/score/39998-x-x-x-x-x",
+                "platform_display_name": "修改车型页面",
+            },
+        )
+        self.assertEqual(mapping_edit.status_code, 200, mapping_edit.text)
+        mapped_scope = mapping_edit.json()
+        mapped = next(row for row in mapped_scope["vehicles"] if row["id"] == created["id"])
+        self.assertEqual(mapped["mappings"]["dongchedi"]["validation_status"], "unverified")
+        self.assertNotIn("latest_metrics", mapped["mappings"]["dongchedi"])
+        self.assertTrue(mapped_scope["last_vehicle_mapping_changed"])
 
         duplicate = self.client.post(
             "/api/v1/reputation/scope/vehicles",
             json={
-                "revision": created_scope["revision"],
+                "revision": mapped_scope["revision"],
                 "series_name": "重复车系",
                 "vehicle_name": "重复车型",
                 "project_group": "新能源项目组",
                 "role": "focus",
-                "platform_vehicle_id": "39999",
-                "platform_url": "https://www.dongchedi.com/auto/series/score/39999-x-x-x-x-x",
+                "platform_vehicle_id": "39998",
+                "platform_url": "https://www.dongchedi.com/auto/series/score/39998-x-x-x-x-x",
                 "platform_display_name": "重复页面",
             },
         )
@@ -399,7 +467,7 @@ class ReputationInspectionTest(unittest.TestCase):
 
         removed = self.client.delete(
             f"/api/v1/reputation/scope/vehicles/{created['id']}",
-            params={"revision": created_scope["revision"]},
+            params={"revision": mapped_scope["revision"]},
         )
         self.assertEqual(removed.status_code, 200, removed.text)
         removed_scope = removed.json()
