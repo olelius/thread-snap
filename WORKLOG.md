@@ -16,6 +16,20 @@
 
 ---
 
+## 2026-08-25 — 证据查看器接入应用主题语义色
+**总目标**：消除固定黑色查看器与系统外壳的割裂，同时让浅色、深色和跟随系统主题都使用同一套语义色合同。
+**状态**：✅ 主题令牌改造及浅色、深色真实页面验收已完成。
+**干到哪里了**：
+- [x] Dialog容器、标题区、图片舞台、侧栏、指标卡、文字和边框全部改用`background/card/muted/border/foreground`主题令牌。
+- [x] 浅色主题下标题区与侧栏为白色、图片舞台为浅蓝灰；深色主题自动使用既有深色令牌，不硬编码白色或黑色。
+- [x] 品牌色仅使用`primary`表达证据图标、眉题、悬停和键盘焦点，成功证据继续使用带深色适配的语义绿色。
+- [x] TypeScript检查和生产构建（2468 modules）通过；Patchright分别切换浅色与深色主题，确认Dialog表面、文字、边框和语义色同步变化，两处入口图片加载和当前标签页行为正常且控制台错误0；浅色预览为`ranking-evidence-dialog.png`，深色预览为`evidence-card-dialog.png`。
+**下一步**：无。
+**边界**：不修改Dialog布局、证据内容、查看入口、采集或下载逻辑。
+**关联**：`frontend/src/features/reputation/reputation-detail-page.tsx`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/reputation-inspection.md`
+
+---
+
 ## 2026-08-25 — 证据查看器改为中性石墨灰配色
 **总目标**：降低证据Dialog大面积深蓝带来的压迫和单色感，让截图成为视觉主体并与系统浅色外壳自然衔接。
 **状态**：✅ 石墨灰分层、局部品牌蓝和真实页面预览验收已完成。
