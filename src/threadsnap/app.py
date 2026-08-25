@@ -39,6 +39,8 @@ from .reputation import (
     MappingValidationRequest,
     ReputationService,
     ScopePublishRequest,
+    ScopeVehicleCreateRequest,
+    ScopeVehicleRevisionRequest,
     SyntheticRunCreate,
 )
 from .reputation_scheduler import ReputationCoordinator
@@ -264,6 +266,29 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
     @router.get("/reputation/scope")
     def get_reputation_scope(request: Request) -> dict[str, Any]:
         return _container(request).reputation.get_scope()
+
+    @router.post("/reputation/scope/vehicles")
+    def create_reputation_scope_vehicle(
+        value: ScopeVehicleCreateRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        return _container(request).reputation.create_scope_vehicle(value)
+
+    @router.delete("/reputation/scope/vehicles/{vehicle_id}")
+    def remove_reputation_scope_vehicle(
+        vehicle_id: str,
+        revision: int,
+        request: Request,
+    ) -> dict[str, Any]:
+        return _container(request).reputation.remove_scope_vehicle(vehicle_id, revision)
+
+    @router.post("/reputation/scope/vehicles/{vehicle_id}/restore")
+    def restore_reputation_scope_vehicle(
+        vehicle_id: str,
+        value: ScopeVehicleRevisionRequest,
+        request: Request,
+    ) -> dict[str, Any]:
+        return _container(request).reputation.restore_scope_vehicle(vehicle_id, value)
 
     @router.post("/reputation/scope/mappings/preview")
     def preview_reputation_mappings(

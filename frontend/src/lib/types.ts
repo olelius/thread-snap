@@ -345,6 +345,7 @@ export type ReputationScopeVehicle = {
   role: 'focus' | 'competitor'
   role_order: number
   enabled: boolean
+  removal_mode: 'delete' | 'disable'
   mappings: Record<string, ReputationScopeMapping>
 }
 
@@ -356,6 +357,7 @@ export type ReputationScope = {
   source_sha256?: string
   updated_at?: string
   message?: string
+  last_vehicle_action?: 'deleted' | 'disabled'
 }
 
 export type RunSourceOption = {
