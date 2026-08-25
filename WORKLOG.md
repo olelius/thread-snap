@@ -16,6 +16,20 @@
 
 ---
 
+## 2026-08-25 — 统一口碑巡检新增表格视觉合同
+**总目标**：让巡检批次、车型与映射及批次排名数据表与应用既有表格保持同一视觉层级、对齐规则和交互反馈。
+**状态**：✅ 三张口碑表格已统一到既有表格规范，真实页面复核通过。
+**干到哪里了**：
+- [x] 确认新增页面本来已经复用公共 `Table` 组件，差异来自页面级样式：角色顺序误用高强调实心徽标、指标列居中、详情冻结列遮蔽表头与悬停底色、批次整行缺少键盘焦点。
+- [x] 角色顺序改为共享的低强调圆点、文字和等宽序号；口碑分、排名、口碑量统一右对齐，独立图标操作居中，文字操作右对齐，表头和卡片层级归一。
+- [x] 批次行补齐 `tabIndex`、焦点反馈和回车进入；详情冻结列表头与行悬停背景连续，不再形成白色断层。
+- [x] 前端生产构建通过（2468 modules），`git diff --check` 通过；Patchright 在 1680×1000 真实页面复核三张表格、键盘焦点与冻结列悬停，控制台错误 0，证据位于 `artifacts/runtime/reputation-table-style-alignment-20260825/`。
+**下一步**：无。
+**边界**：只统一表格视觉和既有交互合同，不修改巡检数据、角色语义、指标比较、映射验证或批次处理逻辑。
+**关联**：`frontend/src/features/reputation/reputation-page.tsx`、`frontend/src/features/reputation/reputation-detail-page.tsx`、`frontend/src/features/reputation/reputation-role-label.tsx`、`frontend/src/styles/index.css`、`docs/design/product-design.md`
+
+---
+
 ## 2026-08-25 — 移除车型与映射页采集器成功提示
 **总目标**：移除已经成为正常运行前提的“真实采集器已接入”常驻提示，减少无操作价值的信息占位。
 **状态**：✅ 正常接入状态不再显示提示卡，阻断性未就绪状态仍保留异常提示。
