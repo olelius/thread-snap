@@ -16,6 +16,20 @@
 
 ---
 
+## 2026-08-25 — 巡检全量截图与站内证据查看
+**总目标**：客户将口碑巡检证据范围改为全部车型平台执行项，并要求截图在站内Dialog查看而不是打开新标签页。
+**状态**：✅ 全量证据策略、直接浏览器链路、站内Dialog与真实页面验收已完成。
+**干到哪里了**：
+- [x] 普通日检、首次基线、月末、补跑和隔离合成场景统一将冻结范围内全部执行项标记为必需证据；当前单平台27款新批次分母为27。
+- [x] 正式巡检关闭HTTP优先分支，全部目标直接在原有受控浏览器页面上下文完成指标读取、三次稳定测量和唯一指标区域截图，未改变截图区域与文件合同。
+- [x] 排名表“查看截图”和页面证据卡片改为复用接近全屏的站内图片Dialog；旧批次零证据显示“历史未要求”，不改写或补拍历史数据。
+- [x] 3项针对性后端测试、Ruff、TypeScript检查和生产构建（2468 modules）通过；Patchright确认排名表与证据卡片均在当前标签页打开同一Dialog、图片成功加载、旧批次标签正确且控制台错误0，证据位于`artifacts/runtime/reputation-all-screenshots-dialog/`。
+**下一步**：无。
+**边界**：历史批次按创建时冻结规则保持不变；每项仍只保存一张指标区域PNG，证据包、XLSX、哈希与缺失语义沿用既有实现。
+**关联**：`src/threadsnap/reputation.py`、`frontend/src/features/reputation/reputation-page.tsx`、`frontend/src/features/reputation/reputation-detail-page.tsx`、`tests/test_reputation.py`、`CONTEXT.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/reputation-inspection.md`
+
+---
+
 ## 2026-08-25 — 复用新增对话框修改车型信息
 **总目标**：为车型与映射的每一行增加修改按钮，用同一个车型对话框维护已有草稿信息。
 **状态**：✅ 前后端编辑链路、映射失效规则和真实页面保存回滚验收已完成。

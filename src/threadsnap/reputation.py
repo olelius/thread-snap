@@ -59,7 +59,7 @@ from .reputation_dongchedi import (
 )
 from .session_store import SessionStore
 
-FIXTURE_VERSION = "reputation-synthetic-v1"
+FIXTURE_VERSION = "reputation-synthetic-v2-all-evidence"
 PLATFORM_CODE = "dongchedi"
 PLATFORM_NAME = "懂车帝"
 DEFAULT_PROJECT_GROUP = "奇瑞项目组"
@@ -72,11 +72,11 @@ SCENARIOS: dict[str, dict[str, str]] = {
     },
     "daily_mixed_changes": {
         "name": "日常混合变化",
-        "description": "覆盖上涨、下降、分化、无变化和异常分支。",
+        "description": "覆盖上涨、下降、分化、无变化、异常和27项全量证据。",
     },
     "month_end_mixed_changes": {
         "name": "月末混合变化",
-        "description": "沿用前日变化并验证27项全量页面证据。",
+        "description": "沿用前日变化、月末标识和27项全量页面证据。",
     },
 }
 
@@ -249,7 +249,6 @@ def _vehicles() -> list[SyntheticVehicle]:
 def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     baseline_mode = scenario_id == "baseline_initialization"
-    month_end = scenario_id == "month_end_mixed_changes"
     for index, vehicle in enumerate(_vehicles()):
         score_base = Decimal("3.80") + Decimal(index) / Decimal(100)
         rank_base = Decimal(5 + (index % 5))
@@ -304,12 +303,6 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
             status = "failed"
             error_code = "AUTH_REQUIRED"
             error_message = "合成场景：共享平台会话需要更新。"
-        changed_score_or_rank = any(
-            item["direction"] in {"up", "down"} for item in (score, rank)
-        )
-        evidence_required = baseline_mode or month_end or (
-            vehicle.role == "focus" and changed_score_or_rank
-        )
         rows.append(
             {
                 "vehicle": vehicle,
@@ -317,7 +310,7 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
                 "error_code": error_code,
                 "error_message": error_message,
                 "metrics": {"score": score, "rank": rank, "volume": volume},
-                "evidence_required": evidence_required,
+                "evidence_required": True,
             }
         )
     return rows
@@ -1182,13 +1175,10 @@ class ReputationService:
         role: str,
         metrics: dict[str, Any],
     ) -> bool:
-        if run_type == "baseline_initialization" or schedule_type == "month_end":
-            return True
-        return role == "focus" and any(
-            metrics[name].get("direction") in {"up", "down"}
-            or metrics[name].get("comparison_status") == "not_comparable"
-            for name in ("score", "rank")
-        )
+        """所有新巡检执行项都要求保留同源指标区域证据。"""
+
+        del run_type, schedule_type, role, metrics
+        return True
 
     def execute_run(self, run_id: str) -> dict[str, Any]:
         """执行一个已持久化的正式或失败项补跑批次。"""
@@ -1273,9 +1263,7 @@ class ReputationService:
                 timeout_seconds=90,
                 batch_timeout_seconds=45 * 60,
                 evidence_policy=evidence_policy,
-                prefer_http_first=(
-                    run_type != "baseline_initialization" and schedule_type != "month_end"
-                ),
+                prefer_http_first=False,
             )
             try:
                 first = adapter.validate_sync(targets, root / f"attempt-1-{uuid7()}")
@@ -1361,7 +1349,7 @@ class ReputationService:
                         name: _metric(None, None, state="unknown")
                         for name in ("score", "rank", "volume")
                     }
-                    evidence_required = run.run_type == "baseline_initialization" or run.schedule_type == "month_end"
+                    evidence_required = True
                     has_evidence = False
                     row_status = "failed"
                     failed += 1

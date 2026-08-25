@@ -211,8 +211,10 @@ class ReputationInspectionTest(unittest.TestCase):
 
         self.assertEqual(len(baseline["results"]), 27)
         self.assertEqual(baseline["required_evidence_count"], 27)
-        self.assertEqual(daily["required_evidence_count"], 6)
+        self.assertEqual(daily["required_evidence_count"], 27)
         self.assertEqual(month_end["required_evidence_count"], 27)
+        self.assertTrue(all(item["evidence_required"] for item in daily["results"]))
+        self.assertTrue(all(item["evidence"] for item in daily["results"]))
         self.assertEqual(daily["status"], "partial_success")
         tones = {
             metric["tone"] for result in daily["results"] for metric in result["metrics"].values()
@@ -254,8 +256,8 @@ class ReputationInspectionTest(unittest.TestCase):
         with zipfile.ZipFile(zip_path) as bundle:
             manifest = json.loads(bundle.read("manifest.json"))
             checksums = bundle.read("SHA256SUMS").decode("utf-8").splitlines()
-            self.assertEqual(len(manifest["items"]), 6)
-            self.assertEqual(len(checksums), 6)
+            self.assertEqual(len(manifest["items"]), 27)
+            self.assertEqual(len(checksums), 27)
             self.assertEqual(manifest["schema_version"], "reputation-evidence-region-v1")
             digest, name = checksums[0].split("  ", 1)
             self.assertEqual(hashlib.sha256(bundle.read(name)).hexdigest(), digest)
@@ -1000,9 +1002,11 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         daily = self.service.execute_run(daily_id)
         self.assertEqual(daily["run_type"], "daily")
         self.assertEqual(daily["baseline_date"], "2030-01-02")
-        self.assertEqual(daily["required_evidence_count"], 1)
-        self.assertEqual(daily["complete_evidence_count"], 1)
-        self.assertTrue(OfficialFakeAdapter.last_prefer_http_first)
+        self.assertEqual(daily["required_evidence_count"], 27)
+        self.assertEqual(daily["complete_evidence_count"], 27)
+        self.assertTrue(all(item["evidence_required"] for item in daily["results"]))
+        self.assertTrue(all(item["evidence"] for item in daily["results"]))
+        self.assertFalse(OfficialFakeAdapter.last_prefer_http_first)
         changed = next(item for item in daily["results"] if item["vehicle_id"] == "official-01")
         self.assertEqual(changed["metrics"]["score"]["direction"], "up")
 
