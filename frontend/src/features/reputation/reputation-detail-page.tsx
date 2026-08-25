@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { motion, useReducedMotion } from 'motion/react'
 import { useState } from 'react'
-import { ArrowDown, ArrowLeft, ArrowUp, Check, CircleAlert, Clipboard, Clock3, Download, EllipsisVertical, FileArchive, FileSpreadsheet, FileText, ImageIcon, Minus, RefreshCw, RotateCcw, ShieldCheck, Trash2 } from 'lucide-react'
+import { ArrowDown, ArrowLeft, ArrowUp, Check, CircleAlert, Clipboard, Clock3, Download, EllipsisVertical, FileArchive, FileSpreadsheet, FileText, ImageIcon, Minus, RefreshCw, RotateCcw, ShieldCheck, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
@@ -12,10 +12,9 @@ import type { ReputationMetric, ReputationResult, ReputationRun } from '@/lib/ty
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Progress } from '@/components/ui/progress'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -108,7 +107,66 @@ function EvidencePanel({ results, onViewEvidence }: { results: ReputationResult[
 }
 
 function ReputationEvidenceDialog({ result, onOpenChange }: { result?: ReputationResult; onOpenChange: (open: boolean) => void }) {
-  return <Dialog open={Boolean(result?.evidence)} onOpenChange={onOpenChange}><DialogContent className='h-[92svh] max-w-[96vw] grid-rows-[auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[96vw]'><DialogHeader className='border-b px-5 py-4 pr-14'><DialogTitle>{result?.vehicle_name} · 指标区域截图</DialogTitle><DialogDescription>{result ? `${result.series_name} · ${result.platform_name} · 巡检时同一页面上下文保存的原始区域 PNG` : '页面证据'}</DialogDescription></DialogHeader><ScrollArea className='min-h-0 bg-muted/35'><div className='grid min-h-full place-items-center p-4'>{result?.evidence && <img src={result.evidence.metric_region_url} alt={`${result.vehicle_name} 指标区域截图大图`} className='h-auto w-full max-w-[1440px] rounded-md border bg-white shadow-sm' />}</div></ScrollArea></DialogContent></Dialog>
+  const evidence = result?.evidence
+  const metrics = result ? [
+    { label: '口碑分', value: result.metrics.score.raw },
+    { label: '同级排名', value: result.metrics.rank.raw },
+    { label: '口碑量', value: result.metrics.volume.raw },
+  ] : []
+
+  return <Dialog open={Boolean(evidence)} onOpenChange={onOpenChange}>
+    <DialogContent showCloseButton={false} className='max-h-[92svh] w-[96vw] max-w-[1500px] gap-0 overflow-hidden border-slate-700/70 bg-slate-950 p-0 text-slate-100 shadow-[0_32px_90px_rgba(2,6,23,0.55)] sm:max-w-[1500px]'>
+      <DialogHeader className='relative overflow-hidden border-b border-white/10 bg-[linear-gradient(115deg,rgba(30,41,59,0.98),rgba(15,23,42,0.96))] px-6 py-5 pr-20 text-left'>
+        <div className='pointer-events-none absolute -top-20 right-24 size-44 rounded-full bg-indigo-500/20 blur-3xl' />
+        <div className='relative flex items-start gap-4'>
+          <div className='grid size-11 shrink-0 place-items-center rounded-xl border border-indigo-300/20 bg-indigo-400/10 shadow-inner shadow-indigo-300/10'>
+            <ImageIcon className='size-5 text-indigo-300' />
+          </div>
+          <div className='min-w-0'>
+            <div className='mb-1 flex flex-wrap items-center gap-2 text-[11px] font-medium tracking-[0.14em] text-indigo-300 uppercase'>
+              <span>页面证据</span><span className='size-1 rounded-full bg-slate-600' /><span>{result?.platform_name}</span>
+            </div>
+            <DialogTitle className='truncate text-xl leading-tight text-white sm:text-2xl'>{result?.vehicle_name} 指标区域截图</DialogTitle>
+            <DialogDescription className='mt-1.5 text-sm text-slate-400'>{result?.series_name} · 巡检时同一页面上下文保存的原始区域 PNG</DialogDescription>
+          </div>
+        </div>
+        <DialogClose className='absolute top-5 right-5 grid size-9 place-items-center rounded-lg border border-white/10 bg-white/5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:outline-none'>
+          <X className='size-4' /><span className='sr-only'>关闭</span>
+        </DialogClose>
+      </DialogHeader>
+
+      <div className='grid min-h-0 overflow-auto lg:grid-cols-[minmax(0,1fr)_250px] lg:overflow-hidden'>
+        <div className='relative grid min-h-64 place-items-center overflow-auto bg-[radial-gradient(circle_at_50%_0%,rgba(71,85,105,0.34),transparent_52%)] p-4 sm:p-6'>
+          <div className='pointer-events-none absolute inset-0 opacity-30 [background-image:linear-gradient(rgba(148,163,184,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.05)_1px,transparent_1px)] [background-size:24px_24px]' />
+          {evidence && <img src={evidence.metric_region_url} alt={`${result?.vehicle_name} 指标区域截图大图`} className='relative block h-auto max-h-[calc(92svh-9rem)] w-auto max-w-full rounded-xl border border-white/15 bg-white shadow-[0_18px_50px_rgba(0,0,0,0.38)]' />}
+        </div>
+
+        <aside className='border-t border-white/10 bg-slate-900/80 p-5 lg:overflow-auto lg:border-t-0 lg:border-l'>
+          <div className='flex items-center justify-between gap-3'>
+            <div className='text-xs font-medium tracking-wide text-slate-400'>证据概览</div>
+            <Badge className='border-emerald-400/20 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/10'><ShieldCheck className='size-3' />已留存</Badge>
+          </div>
+          <div className='mt-4 space-y-2'>
+            {metrics.map((metric) => <div key={metric.label} className='flex items-center justify-between rounded-lg border border-white/8 bg-white/[0.035] px-3 py-2.5'>
+              <span className='text-xs text-slate-400'>{metric.label}</span><span className='font-semibold tabular-nums text-slate-100'>{metric.value ?? '—'}</span>
+            </div>)}
+          </div>
+          <div className='mt-5 border-t border-white/10 pt-4'>
+            <div className='text-xs font-medium tracking-wide text-slate-400'>采集信息</div>
+            <dl className='mt-3 space-y-3 text-xs'>
+              <div className='flex justify-between gap-3'><dt className='text-slate-500'>角色</dt><dd className='text-right text-slate-300'>{result?.role === 'focus' ? '重点车型' : '竞品'}</dd></div>
+              <div className='flex justify-between gap-3'><dt className='text-slate-500'>采集时间</dt><dd className='text-right text-slate-300'>{result ? formatDate(result.collected_at) : '—'}</dd></div>
+              <div className='flex justify-between gap-3'><dt className='text-slate-500'>文件格式</dt><dd className='text-right text-slate-300'>PNG · 原始区域</dd></div>
+            </dl>
+          </div>
+          <div className='mt-5 border-t border-white/10 pt-4'>
+            <div className='text-xs text-slate-500'>完整性校验</div>
+            <div className='mt-2 break-all rounded-lg bg-black/20 p-3 font-mono text-[10px] leading-4 text-slate-400' title={evidence?.metric_region_sha256}>SHA-256<br />{evidence?.metric_region_sha256}</div>
+          </div>
+        </aside>
+      </div>
+    </DialogContent>
+  </Dialog>
 }
 
 function EvidenceMetric({ label, value }: { label: string; value?: string }) { return <div className='rounded-md bg-muted/45 p-2'><div className='text-muted-foreground'>{label}</div><div className='mt-0.5 font-semibold tabular-nums'>{value ?? '—'}</div></div> }
