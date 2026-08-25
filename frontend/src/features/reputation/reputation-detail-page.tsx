@@ -115,53 +115,53 @@ function ReputationEvidenceDialog({ result, onOpenChange }: { result?: Reputatio
   ] : []
 
   return <Dialog open={Boolean(evidence)} onOpenChange={onOpenChange}>
-    <DialogContent showCloseButton={false} className='max-h-[92svh] w-[96vw] max-w-[1500px] gap-0 overflow-hidden border-slate-700/70 bg-slate-950 p-0 text-slate-100 shadow-[0_32px_90px_rgba(2,6,23,0.55)] sm:max-w-[1500px]'>
-      <DialogHeader className='relative overflow-hidden border-b border-white/10 bg-[linear-gradient(115deg,rgba(30,41,59,0.98),rgba(15,23,42,0.96))] px-6 py-5 pr-20 text-left'>
-        <div className='pointer-events-none absolute -top-20 right-24 size-44 rounded-full bg-indigo-500/20 blur-3xl' />
+    <DialogContent showCloseButton={false} className='max-h-[92svh] w-[96vw] max-w-[1500px] gap-0 overflow-hidden border-zinc-700/80 bg-[#161719] p-0 text-zinc-100 shadow-[0_32px_90px_rgba(0,0,0,0.58)] sm:max-w-[1500px]'>
+      <DialogHeader className='relative overflow-hidden border-b border-white/10 bg-[linear-gradient(115deg,#292a2e_0%,#202125_68%,#24262c_100%)] px-6 py-5 pr-20 text-left'>
+        <div className='pointer-events-none absolute -top-20 right-24 size-44 rounded-full bg-blue-500/10 blur-3xl' />
         <div className='relative flex items-start gap-4'>
-          <div className='grid size-11 shrink-0 place-items-center rounded-xl border border-indigo-300/20 bg-indigo-400/10 shadow-inner shadow-indigo-300/10'>
-            <ImageIcon className='size-5 text-indigo-300' />
+          <div className='grid size-11 shrink-0 place-items-center rounded-xl border border-blue-300/20 bg-blue-400/10 shadow-inner shadow-blue-300/10'>
+            <ImageIcon className='size-5 text-blue-300' />
           </div>
           <div className='min-w-0'>
-            <div className='mb-1 flex flex-wrap items-center gap-2 text-[11px] font-medium tracking-[0.14em] text-indigo-300 uppercase'>
-              <span>页面证据</span><span className='size-1 rounded-full bg-slate-600' /><span>{result?.platform_name}</span>
+            <div className='mb-1 flex flex-wrap items-center gap-2 text-[11px] font-medium tracking-[0.14em] text-blue-300 uppercase'>
+              <span>页面证据</span><span className='size-1 rounded-full bg-zinc-600' /><span>{result?.platform_name}</span>
             </div>
             <DialogTitle className='truncate text-xl leading-tight text-white sm:text-2xl'>{result?.vehicle_name} 指标区域截图</DialogTitle>
-            <DialogDescription className='mt-1.5 text-sm text-slate-400'>{result?.series_name} · 巡检时同一页面上下文保存的原始区域 PNG</DialogDescription>
+            <DialogDescription className='mt-1.5 text-sm text-zinc-400'>{result?.series_name} · 巡检时同一页面上下文保存的原始区域 PNG</DialogDescription>
           </div>
         </div>
-        <DialogClose className='absolute top-5 right-5 grid size-9 place-items-center rounded-lg border border-white/10 bg-white/5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-indigo-400 focus-visible:outline-none'>
+        <DialogClose className='absolute top-5 right-5 grid size-9 place-items-center rounded-lg border border-white/10 bg-white/5 text-zinc-300 transition-colors hover:bg-white/10 hover:text-white focus-visible:ring-2 focus-visible:ring-blue-400 focus-visible:outline-none'>
           <X className='size-4' /><span className='sr-only'>关闭</span>
         </DialogClose>
       </DialogHeader>
 
       <div className='grid min-h-0 overflow-auto lg:grid-cols-[minmax(0,1fr)_250px] lg:overflow-hidden'>
-        <div className='relative grid min-h-64 place-items-center overflow-auto bg-[radial-gradient(circle_at_50%_0%,rgba(71,85,105,0.34),transparent_52%)] p-4 sm:p-6'>
-          <div className='pointer-events-none absolute inset-0 opacity-30 [background-image:linear-gradient(rgba(148,163,184,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(148,163,184,0.05)_1px,transparent_1px)] [background-size:24px_24px]' />
+        <div className='relative grid min-h-64 place-items-center overflow-auto bg-[#111214] bg-[radial-gradient(circle_at_50%_0%,rgba(255,255,255,0.065),transparent_54%)] p-4 sm:p-6'>
+          <div className='pointer-events-none absolute inset-0 opacity-30 [background-image:linear-gradient(rgba(255,255,255,0.045)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.045)_1px,transparent_1px)] [background-size:24px_24px]' />
           {evidence && <img src={evidence.metric_region_url} alt={`${result?.vehicle_name} 指标区域截图大图`} className='relative block h-auto max-h-[calc(92svh-9rem)] w-auto max-w-full rounded-xl border border-white/15 bg-white shadow-[0_18px_50px_rgba(0,0,0,0.38)]' />}
         </div>
 
-        <aside className='border-t border-white/10 bg-slate-900/80 p-5 lg:overflow-auto lg:border-t-0 lg:border-l'>
+        <aside className='border-t border-white/10 bg-[#1d1e21] p-5 lg:overflow-auto lg:border-t-0 lg:border-l'>
           <div className='flex items-center justify-between gap-3'>
-            <div className='text-xs font-medium tracking-wide text-slate-400'>证据概览</div>
+            <div className='text-xs font-medium tracking-wide text-zinc-400'>证据概览</div>
             <Badge className='border-emerald-400/20 bg-emerald-400/10 text-emerald-300 hover:bg-emerald-400/10'><ShieldCheck className='size-3' />已留存</Badge>
           </div>
           <div className='mt-4 space-y-2'>
-            {metrics.map((metric) => <div key={metric.label} className='flex items-center justify-between rounded-lg border border-white/8 bg-white/[0.035] px-3 py-2.5'>
-              <span className='text-xs text-slate-400'>{metric.label}</span><span className='font-semibold tabular-nums text-slate-100'>{metric.value ?? '—'}</span>
+            {metrics.map((metric) => <div key={metric.label} className='flex items-center justify-between rounded-lg border border-white/8 bg-[#242529] px-3 py-2.5'>
+              <span className='text-xs text-zinc-400'>{metric.label}</span><span className='font-semibold tabular-nums text-zinc-100'>{metric.value ?? '—'}</span>
             </div>)}
           </div>
           <div className='mt-5 border-t border-white/10 pt-4'>
-            <div className='text-xs font-medium tracking-wide text-slate-400'>采集信息</div>
+            <div className='text-xs font-medium tracking-wide text-zinc-400'>采集信息</div>
             <dl className='mt-3 space-y-3 text-xs'>
-              <div className='flex justify-between gap-3'><dt className='text-slate-500'>角色</dt><dd className='text-right text-slate-300'>{result?.role === 'focus' ? '重点车型' : '竞品'}</dd></div>
-              <div className='flex justify-between gap-3'><dt className='text-slate-500'>采集时间</dt><dd className='text-right text-slate-300'>{result ? formatDate(result.collected_at) : '—'}</dd></div>
-              <div className='flex justify-between gap-3'><dt className='text-slate-500'>文件格式</dt><dd className='text-right text-slate-300'>PNG · 原始区域</dd></div>
+              <div className='flex justify-between gap-3'><dt className='text-zinc-500'>角色</dt><dd className='text-right text-zinc-300'>{result?.role === 'focus' ? '重点车型' : '竞品'}</dd></div>
+              <div className='flex justify-between gap-3'><dt className='text-zinc-500'>采集时间</dt><dd className='text-right text-zinc-300'>{result ? formatDate(result.collected_at) : '—'}</dd></div>
+              <div className='flex justify-between gap-3'><dt className='text-zinc-500'>文件格式</dt><dd className='text-right text-zinc-300'>PNG · 原始区域</dd></div>
             </dl>
           </div>
           <div className='mt-5 border-t border-white/10 pt-4'>
-            <div className='text-xs text-slate-500'>完整性校验</div>
-            <div className='mt-2 break-all rounded-lg bg-black/20 p-3 font-mono text-[10px] leading-4 text-slate-400' title={evidence?.metric_region_sha256}>SHA-256<br />{evidence?.metric_region_sha256}</div>
+            <div className='text-xs text-zinc-500'>完整性校验</div>
+            <div className='mt-2 break-all rounded-lg bg-black/25 p-3 font-mono text-[10px] leading-4 text-zinc-400' title={evidence?.metric_region_sha256}>SHA-256<br />{evidence?.metric_region_sha256}</div>
           </div>
         </aside>
       </div>

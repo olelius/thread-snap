@@ -16,6 +16,20 @@
 
 ---
 
+## 2026-08-25 — 证据查看器改为中性石墨灰配色
+**总目标**：降低证据Dialog大面积深蓝带来的压迫和单色感，让截图成为视觉主体并与系统浅色外壳自然衔接。
+**状态**：✅ 石墨灰分层、局部品牌蓝和真实页面预览验收已完成。
+**干到哪里了**：
+- [x] 标题区、图片舞台和信息侧栏由同色深蓝调整为三个明度层级的中性石墨灰。
+- [x] 品牌蓝缩减到证据图标、眉题和键盘焦点；成功状态继续使用语义绿色，未增加装饰性色。
+- [x] 图片舞台网格和光晕改为无彩色白灰，侧栏指标卡使用独立灰阶表面，保持原布局和信息合同。
+- [x] TypeScript检查和生产构建（2468 modules）通过；Patchright确认两处入口图片加载、当前标签页行为和历史标签均正常，石墨灰三层表面对比清晰且控制台错误0，预览位于`artifacts/runtime/reputation-all-screenshots-dialog/ranking-evidence-dialog.png`。
+**下一步**：无。
+**边界**：不修改Dialog尺寸、证据内容、查看入口、采集或下载逻辑。
+**关联**：`frontend/src/features/reputation/reputation-detail-page.tsx`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/reputation-inspection.md`
+
+---
+
 ## 2026-08-25 — 重构口碑证据查看器视觉层级
 **总目标**：修正截图Dialog固定全屏高度导致的大面积空白和单调版式，在不改变证据内容及打开方式的前提下提升图片查看体验。
 **状态**：✅ 自适应布局、深色图片舞台、证据信息侧栏和真实页面视觉验收已完成。
