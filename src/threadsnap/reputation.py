@@ -62,6 +62,10 @@ from .session_store import SessionStore
 FIXTURE_VERSION = "reputation-synthetic-v1"
 PLATFORM_CODE = "dongchedi"
 PLATFORM_NAME = "懂车帝"
+INSPECTION_TIME = time(12, 0)
+REPORT_TIME = time(12, 30)
+INSPECTION_TIME_TEXT = "12:00:00"
+REPORT_TIME_TEXT = "12:30:00"
 SCENARIOS: dict[str, dict[str, str]] = {
     "baseline_initialization": {
         "name": "基线初始化",
@@ -783,7 +787,7 @@ class ReputationService:
             return len(rows) + len(reports)
 
     def check_schedule(self, now: datetime | None = None) -> dict[str, Any]:
-        """对账固定10:00巡检、跨日漏触发水位和10:30汇报时点。"""
+        """对账固定12:00巡检、跨日漏触发水位和12:30汇报时点。"""
 
         current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         zone = ZoneInfo(self.settings.timezone)
@@ -809,7 +813,7 @@ class ReputationService:
                         )
                     )
                     if not existing and not tombstone:
-                        planned = datetime.combine(cursor, time(10, 0), tzinfo=zone).astimezone(
+                        planned = datetime.combine(cursor, INSPECTION_TIME, tzinfo=zone).astimezone(
                             timezone.utc
                         )
                         db.add(
@@ -828,7 +832,7 @@ class ReputationService:
                 db.add(ReputationSchedulerState(id=1, last_checked_at=current))
 
         planned_at = datetime.combine(
-            local_now.date(), time(10, 0), tzinfo=zone
+            local_now.date(), INSPECTION_TIME, tzinfo=zone
         ).astimezone(timezone.utc)
         created_run_id = None
         if current >= planned_at:
@@ -968,7 +972,7 @@ class ReputationService:
             )
             run_number = f"RP-S-{day:%Y%m%d}-{run_id[-4:].upper()}"
             report_planned_at = datetime.combine(
-                day, time(10, 30), tzinfo=zone
+                day, REPORT_TIME, tzinfo=zone
             ).astimezone(timezone.utc)
             run = ReputationRun(
                 id=run_id,
@@ -1005,7 +1009,7 @@ class ReputationService:
                     message=(
                         "服务同日恢复，已创建延迟正式口碑巡检批次。"
                         if run.delayed
-                        else "已按10:00计划创建正式口碑巡检批次。"
+                        else "已按12:00计划创建正式口碑巡检批次。"
                     ),
                     scope_version_id=version.id,
                     run_id=run_id,
@@ -1362,7 +1366,7 @@ class ReputationService:
             )
             if event:
                 event.status = run.status
-                event.message = "正式口碑巡检已到达终态，等待10:30汇报。"
+                event.message = "正式口碑巡检已到达终态，等待12:30汇报。"
         if self.event_publisher:
             self.event_publisher("reputation.run.changed", run_id, status=run.status)
         return self.get_run(run_id)
@@ -1595,8 +1599,8 @@ class ReputationService:
             )
             return {
                 "timezone": self.settings.timezone,
-                "inspection_time": "10:00:00",
-                "report_time": "10:30:00",
+                "inspection_time": INSPECTION_TIME_TEXT,
+                "report_time": REPORT_TIME_TEXT,
                 "last_event": {
                     "planned_date": event.planned_date,
                     "run_type": event.run_type,
