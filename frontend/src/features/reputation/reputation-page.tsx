@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useSearch } from '@tanstack/react-router'
 import { motion, useReducedMotion } from 'motion/react'
-import { Activity, Beaker, CalendarClock, CarFront, ChartNoAxesCombined, CircleAlert, ExternalLink, FileCheck2, Gauge, Images, Loader2, Play, Plus, RefreshCw, Rocket, RotateCcw, ScanSearch, Settings2, Trash2 } from 'lucide-react'
+import { Activity, Beaker, CalendarClock, CarFront, ChartNoAxesCombined, ChevronLeft, ChevronRight, CircleAlert, ExternalLink, FileCheck2, Gauge, Images, Loader2, Play, Plus, RefreshCw, Rocket, RotateCcw, ScanSearch, Settings2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
@@ -26,11 +26,14 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
-type SearchState = { tab?: 'runs' | 'scope' }
+type SearchState = { tab?: 'runs' | 'scope'; page?: number }
+
+const REPUTATION_RUNS_PAGE_SIZE = 20
 
 export function ReputationPage() {
   const search = useSearch({ strict: false }) as SearchState
   const tab = search.tab ?? 'runs'
+  const runsPage = search.page ?? 1
   const navigate = useNavigate({ from: '/reputation' })
   const queryClient = useQueryClient()
   const reduceMotion = useReducedMotion()
@@ -41,8 +44,8 @@ export function ReputationPage() {
     queryFn: () => api<ReputationCapabilities>('/reputation/capabilities'),
   })
   const runs = useQuery({
-    queryKey: ['reputation-runs'],
-    queryFn: () => api<PageResult<ReputationRun>>('/reputation/runs?limit=100'),
+    queryKey: ['reputation-runs', runsPage],
+    queryFn: () => api<PageResult<ReputationRun>>(`/reputation/runs?offset=${(runsPage - 1) * REPUTATION_RUNS_PAGE_SIZE}&limit=${REPUTATION_RUNS_PAGE_SIZE}`),
     refetchInterval: (query) => query.state.data?.items.some((run) => ['queued', 'running'].includes(run.status) || run.report_status === 'waiting') ? 3_000 : false,
   })
   const schedule = useQuery({
@@ -66,6 +69,12 @@ export function ReputationPage() {
     },
     onError: (error) => toast.error('测试运行失败', { description: errorMessage(error) }),
   })
+  const runsTotalPages = Math.max(1, Math.ceil((runs.data?.total ?? 0) / REPUTATION_RUNS_PAGE_SIZE))
+  useEffect(() => {
+    if (runs.data && runsPage > runsTotalPages) {
+      navigate({ to: '/reputation', search: { tab: 'runs', page: runsTotalPages }, replace: true, resetScroll: false })
+    }
+  }, [navigate, runs.data, runsPage, runsTotalPages])
 
   return (
     <div className='flex h-full min-h-0 flex-col gap-4'>
@@ -80,7 +89,7 @@ export function ReputationPage() {
       />
 
       <div className='flex shrink-0 items-center justify-between gap-3'>
-        <Tabs value={tab} onValueChange={(value) => navigate({ to: '/reputation', search: { tab: value as 'runs' | 'scope' }, replace: true })}>
+        <Tabs value={tab} onValueChange={(value) => navigate({ to: '/reputation', search: { tab: value as 'runs' | 'scope', page: undefined }, replace: true })}>
           <TabsList>
             <TabsTrigger value='runs'><Activity />巡检批次</TabsTrigger>
             <TabsTrigger value='scope'><Settings2 />车型与映射</TabsTrigger>
@@ -97,7 +106,7 @@ export function ReputationPage() {
         className='min-h-0 flex-1 overflow-hidden'
       >
         {tab === 'runs'
-          ? <RunsPanel query={runs} schedule={schedule.data} onOpen={(id) => navigate({ to: '/reputation/runs/$runId', params: { runId: id }, search: { view: 'ranking' } })} />
+          ? <RunsPanel query={runs} schedule={schedule.data} page={runsPage} totalPages={runsTotalPages} onPageChange={(page) => navigate({ to: '/reputation', search: { tab: 'runs', page }, replace: true, resetScroll: false })} onOpen={(id) => navigate({ to: '/reputation/runs/$runId', params: { runId: id }, search: { view: 'ranking' } })} />
           : <ScopePanel query={scope} adapterStatus={capabilities.data?.real_adapter_status} adapterMessage={capabilities.data?.real_adapter_message} />}
       </motion.div>
 
@@ -125,7 +134,7 @@ export function ReputationPage() {
   )
 }
 
-function RunsPanel({ query, schedule, onOpen }: { query: ReturnType<typeof useQuery<PageResult<ReputationRun>>>; schedule?: ReputationSchedule; onOpen: (id: string) => void }) {
+function RunsPanel({ query, schedule, page, totalPages, onPageChange, onOpen }: { query: ReturnType<typeof useQuery<PageResult<ReputationRun>>>; schedule?: ReputationSchedule; page: number; totalPages: number; onPageChange: (page: number) => void; onOpen: (id: string) => void }) {
   if (query.isLoading) return <Card className='h-full py-0'><CardContent className='space-y-3 p-5'>{Array.from({ length: 7 }).map((_, index) => <Skeleton key={index} className='h-12 w-full' />)}</CardContent></Card>
   if (query.isError) return <Failure title='巡检批次加载失败' detail={errorMessage(query.error)} retry={() => query.refetch()} />
   const items = query.data?.items ?? []
@@ -159,7 +168,7 @@ function RunsPanel({ query, schedule, onOpen }: { query: ReturnType<typeof useQu
           </TableBody>
         </Table>
       </div>
-      <div className='shrink-0 border-t bg-card/95 px-4 py-3 text-sm text-muted-foreground'>共 {query.data?.total ?? 0} 个独立巡检批次</div>
+      {totalPages > 1 && <div className='flex shrink-0 items-center justify-end gap-2 border-t bg-card/95 px-4 py-3'><span className='mr-1 text-sm text-muted-foreground'>第 {page} / {totalPages} 页</span><Button variant='outline' size='icon' disabled={page <= 1} onClick={() => onPageChange(page - 1)} aria-label='上一页'><ChevronLeft className='size-4' /></Button><Button variant='outline' size='icon' disabled={page >= totalPages} onClick={() => onPageChange(page + 1)} aria-label='下一页'><ChevronRight className='size-4' /></Button></div>}
       </Card>
     </div>
   )

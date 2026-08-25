@@ -16,6 +16,20 @@
 
 ---
 
+## 2026-08-25 — 移除巡检批次总数底栏并接入按需分页
+**总目标**：删除巡检批次表格底部重复的总数提示，并让长期累积的批次通过简洁的服务端分页浏览。
+**状态**：✅ 总数底栏已移除，超过20条时才出现分页导航。
+**干到哪里了**：
+- [x] 删除“共 N 个独立巡检批次”底栏；当前只有2条数据时表格卡底部不再显示总数或单页分页。
+- [x] 巡检批次固定每页20条，页码写入URL并转换为后端 `offset/limit`；切换标签时重置页码，删除后页码越界时自动回到最后一个有效页。
+- [x] 只有总数超过20条时显示“第 X / Y 页”和上/下一页操作，不增加当前没有业务必要的每页数量选择器。
+- [x] 前端TypeScript检查和生产构建（2468 modules）通过；Patchright真实页面确认旧总数提示为0、单页分页按钮为0，并通过网络拦截构造21条总数验证第二页请求为 `offset=20&limit=20`、末页下一页禁用且控制台错误为0，证据位于 `artifacts/runtime/reputation-runs-pagination/`。
+**下一步**：无。
+**边界**：分页模拟只拦截浏览器响应，未修改生产数据库；本次不改变批次创建、筛选、排序、删除或详情逻辑。
+**关联**：`frontend/src/router.tsx`、`frontend/src/components/app-shell.tsx`、`frontend/src/features/reputation/reputation-page.tsx`、`frontend/src/features/reputation/reputation-detail-page.tsx`、`docs/design/product-design.md`、`docs/chains/reputation-inspection.md`
+
+---
+
 ## 2026-08-25 — 移除车型表格底部重复提示
 **总目标**：去掉车型与映射表格底部重复显示的验证分母和新增/历史车型删除规则说明。
 **状态**：✅ 提示条已移除，表格内容直接延伸到卡片底边。
