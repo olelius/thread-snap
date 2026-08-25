@@ -63,8 +63,8 @@ FIXTURE_VERSION = "reputation-synthetic-v2-all-evidence"
 PLATFORM_CODE = "dongchedi"
 PLATFORM_NAME = "懂车帝"
 DEFAULT_PROJECT_GROUP = "奇瑞项目组"
-INSPECTION_TIME = time(12, 0)
-INSPECTION_TIME_TEXT = "12:00:00"
+INSPECTION_TIME = time(10, 0)
+INSPECTION_TIME_TEXT = INSPECTION_TIME.isoformat()
 SCENARIOS: dict[str, dict[str, str]] = {
     "baseline_initialization": {
         "name": "基线初始化",
@@ -869,7 +869,7 @@ class ReputationService:
             return len(rows) + len(reports)
 
     def check_schedule(self, now: datetime | None = None) -> dict[str, Any]:
-        """对账固定12:00巡检、跨日漏触发水位和终态汇报。"""
+        """对账固定10:00巡检、跨日漏触发水位和终态汇报。"""
 
         current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         zone = ZoneInfo(self.settings.timezone)
@@ -1087,7 +1087,7 @@ class ReputationService:
                     message=(
                         "服务同日恢复，已创建延迟正式口碑巡检批次。"
                         if run.delayed
-                        else "已按12:00计划创建正式口碑巡检批次。"
+                        else "已按10:00计划创建正式口碑巡检批次。"
                     ),
                     scope_version_id=version.id,
                     run_id=run_id,

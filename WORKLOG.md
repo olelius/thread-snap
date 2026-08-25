@@ -16,6 +16,21 @@
 
 ---
 
+## 2026-08-25 — 口碑巡检时间调整为每日10:00
+**总目标**：把固定的每日正式口碑巡检计划点从北京时间12:00调整为10:00，同时保持终态立即汇报、时间只读和历史批次不可变。
+**状态**：✅ 后端调度、前端展示、测试和当前设计口径均已切换为每日10:00，真实服务已加载生效。
+**干到哪里了**：
+- [x] 后端唯一计划常量改为`10:00:00`，调度查建、计划时点范围冻结、同日补触发和月末替代日检均沿用该计划点；正式创建事件文案同步为10:00，汇报仍在批次终态后立即生成，不增加独立汇报时点或用户配置。
+- [x] 前端只读摘要从调度API展示“每日 10:00 正式巡检”，无API数据时的兜底也改为10:00；`CONTEXT.md`、产品设计、技术路线和口碑链档的当前口径已同步，链档保留此前12:00决策并追加本次变更记录。
+- [x] 口碑调度生命周期测试在09:59验证未到期、10:00验证创建、10:01验证幂等和终态汇报；`python -m unittest tests.test_reputation`通过18项，`ruff check src tests`、前端`npm run check`、生产构建（2468 modules）和`git diff --check`通过。
+- [x] 重启真实后端后，`/api/v1/reputation/schedule`返回`inspection_time=10:00:00`且`report_time=null`；真实页面显示10:00、控制台和页面错误均为0，数据库`PRAGMA integrity_check=ok`，材料位于`artifacts/runtime/reputation-schedule-10am/20260825-213651/`。
+- [x] 重启前后2026-08-25正式根批次和调度事件均保持1条；既有`RP-S-20260825-DAF2`仍保留其历史计划时刻12:00，未因新时间重复创建或追溯改写。后端与前端代理健康检查均为`ok`。
+**下一步**：下一自然日由真实协调器在北京时间10:00创建正式巡检批次。
+**边界**：时间仍为产品固定只读值，不进入帖子提取计划或新增编辑入口；新计划点只影响未来计划事件，历史批次和证据保持不变。
+**关联**：`src/threadsnap/reputation.py`、`frontend/src/features/reputation/reputation-page.tsx`、`tests/test_reputation.py`、`CONTEXT.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/reputation-inspection.md`、`artifacts/runtime/reputation-schedule-10am/20260825-213651/`
+
+---
+
 ## 2026-08-25 — 再次清除并由真实定时流程重跑今日巡检
 **总目标**：清除今日正式批次`RP-S-20260825-82C4`，完整释放同日调度身份，再由真实定时协调器创建并跑完新的今日批次。
 **状态**：✅ 旧批次已清除，新批次由真实定时流程补触发并以27/27成功终态完成。

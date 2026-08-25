@@ -982,7 +982,7 @@ class ReputationInspectionTest(unittest.TestCase):
 
 
 class OfficialReputationLifecycleTest(unittest.TestCase):
-    """验证12:00正式批次、终态产物、补跑与删除的组合生命周期。"""
+    """验证10:00正式批次、终态产物、补跑与删除的组合生命周期。"""
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -1125,7 +1125,7 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
                 )
             )
 
-        due = self.service.check_schedule(self._at("2030-01-02", "12:00"))
+        due = self.service.check_schedule(self._at("2030-01-02", "10:00"))
         run_id = due["queued_run_ids"][0]
         queued = self.service.get_run(run_id)
         self.assertEqual(queued["run_type"], "daily")
@@ -1140,7 +1140,7 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
 
     def test_coordinator_generates_report_in_same_terminal_tick(self) -> None:
         coordinator = ReputationCoordinator(self.service)
-        outcome = coordinator.tick(self._at("2030-01-02", "12:00"))
+        outcome = coordinator.tick(self._at("2030-01-02", "10:00"))
         run_id = outcome["queued_run_ids"][0]
         run = self.service.get_run(run_id)
 
@@ -1157,7 +1157,7 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
     def test_official_run_persists_linear_progress_before_terminal_state(self) -> None:
         """每个车型终态都应先落库并发布进度，批次结束后才冻结汇报。"""
 
-        due = self.service.check_schedule(self._at("2030-01-02", "12:00"))
+        due = self.service.check_schedule(self._at("2030-01-02", "10:00"))
         run_id = due["queued_run_ids"][0]
         observed: list[tuple[int, int, int, int, str]] = []
 
@@ -1198,7 +1198,7 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
     def test_retryable_item_counts_only_after_second_attempt_terminal(self) -> None:
         """首轮暂时错误保持未完成，第二次尝试成功后才进入进度分子。"""
 
-        due = self.service.check_schedule(self._at("2030-01-02", "12:00"))
+        due = self.service.check_schedule(self._at("2030-01-02", "10:00"))
         run_id = due["queued_run_ids"][0]
         OfficialFakeAdapter.retry_once = {"official-01"}
 
@@ -1221,20 +1221,20 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
 
     def test_official_schedule_baseline_daily_retry_delete_and_missed_day(self) -> None:
         schedule = self.service.schedule_status()
-        self.assertEqual(schedule["inspection_time"], "12:00:00")
+        self.assertEqual(schedule["inspection_time"], "10:00:00")
         self.assertIsNone(schedule["report_time"])
 
-        before = self.service.check_schedule(self._at("2030-01-02", "11:59"))
+        before = self.service.check_schedule(self._at("2030-01-02", "09:59"))
         self.assertIsNone(before["created_run_id"])
 
-        due = self.service.check_schedule(self._at("2030-01-02", "12:00"))
+        due = self.service.check_schedule(self._at("2030-01-02", "10:00"))
         self.assertEqual(len(due["queued_run_ids"]), 1)
         baseline_id = due["queued_run_ids"][0]
         self.assertTrue(
             self.client.app.state.container.worker._official_reputation_waiting("dongchedi")
         )
         self.assertTrue(self.service.can_execute_official(baseline_id))
-        duplicate = self.service.check_schedule(self._at("2030-01-02", "12:01"))
+        duplicate = self.service.check_schedule(self._at("2030-01-02", "10:01"))
         self.assertEqual(duplicate["created_run_id"], baseline_id)
         baseline = self.service.execute_run(baseline_id)
         self.assertFalse(
@@ -1246,9 +1246,9 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         self.assertFalse(OfficialFakeAdapter.last_prefer_http_first)
         self.assertTrue(OfficialFakeAdapter.last_include_negative_rate)
         self.assertIsNone(baseline["report_planned_at"])
-        report_due = self.service.check_schedule(self._at("2030-01-02", "12:01"))
+        report_due = self.service.check_schedule(self._at("2030-01-02", "10:01"))
         self.assertIn(baseline_id, report_due["report_run_ids"])
-        reported = self.service.generate_report(baseline_id, self._at("2030-01-02", "12:01"))
+        reported = self.service.generate_report(baseline_id, self._at("2030-01-02", "10:01"))
         self.assertEqual(reported["report_status"], "success")
         self.assertIsNone(reported["report_planned_at"])
         self.assertTrue(Path(reported["downloads"]["txt"].split("/api/v1")[-1]).name)
@@ -1258,7 +1258,7 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
             "official-01": "41%",
             "official-03": "32%",
         }
-        daily_due = self.service.check_schedule(self._at("2030-01-03", "12:00"))
+        daily_due = self.service.check_schedule(self._at("2030-01-03", "10:00"))
         daily_id = daily_due["queued_run_ids"][0]
         daily = self.service.execute_run(daily_id)
         self.assertEqual(daily["run_type"], "daily")
@@ -1281,12 +1281,12 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         self.assertEqual(improved["metrics"]["negative_rate"]["tone"], "positive")
 
         OfficialFakeAdapter.failures = {"official-02"}
-        failed_due = self.service.check_schedule(self._at("2030-01-04", "12:00"))
+        failed_due = self.service.check_schedule(self._at("2030-01-04", "10:00"))
         failed_id = failed_due["queued_run_ids"][0]
         failed = self.service.execute_run(failed_id)
         self.assertEqual(failed["status"], "partial_success")
         incomplete_report = self.service.generate_report(
-            failed_id, self._at("2030-01-04", "12:01")
+            failed_id, self._at("2030-01-04", "10:01")
         )
         self.assertIn("【不完整汇报】", incomplete_report["report_text"])
         self.assertNotIn("今日无口碑指标变化", incomplete_report["report_text"])
@@ -1322,7 +1322,7 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
             )
             self.assertEqual(event.status, "missed")
 
-        resumed = self.service.check_schedule(self._at("2030-01-06", "12:00"))
+        resumed = self.service.check_schedule(self._at("2030-01-06", "10:00"))
         resumed_run = self.service.get_run(resumed["queued_run_ids"][0])
         self.assertEqual(resumed_run["run_type"], "daily")
         self.assertEqual(resumed_run["baseline_date"], "2030-01-05")

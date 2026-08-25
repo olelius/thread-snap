@@ -142,7 +142,7 @@ function RunsPanel({ query, schedule, page, totalPages, onPageChange, onOpen }: 
     <div className='flex h-full min-h-0 flex-col gap-3'>
       <Card className='shrink-0 border-border/70 bg-card/90 py-0 shadow-sm backdrop-blur'>
       <div className='flex flex-wrap items-center justify-between gap-3 px-4 py-3'>
-        <div className='flex items-center gap-2 text-sm'><span className='grid size-8 place-items-center rounded-lg bg-primary/10 text-primary'><CalendarClock className='size-4' /></span><span><span className='block font-medium'>每日 {schedule?.inspection_time?.slice(0, 5) ?? '12:00'} 正式巡检</span><span className='block text-xs text-muted-foreground'>{schedule?.timezone ?? 'Asia/Shanghai'} · 巡检完成后立即生成汇报</span></span></div>
+        <div className='flex items-center gap-2 text-sm'><span className='grid size-8 place-items-center rounded-lg bg-primary/10 text-primary'><CalendarClock className='size-4' /></span><span><span className='block font-medium'>每日 {schedule?.inspection_time?.slice(0, 5) ?? '10:00'} 正式巡检</span><span className='block text-xs text-muted-foreground'>{schedule?.timezone ?? 'Asia/Shanghai'} · 巡检完成后立即生成汇报</span></span></div>
         <div className='max-w-xl text-right text-xs text-muted-foreground'>{schedule?.last_event ? `${schedule.last_event.planned_date} · ${schedule.last_event.message}` : '等待首个正式计划事件'}</div>
       </div>
       </Card>
