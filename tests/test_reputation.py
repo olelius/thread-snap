@@ -34,6 +34,7 @@ from threadsnap.reputation_dongchedi import (
     ReputationPageResult,
     normalize_series_url,
 )
+from threadsnap.reputation_scheduler import ReputationCoordinator
 
 
 class OfficialFakeAdapter:
@@ -561,7 +562,7 @@ class ReputationInspectionTest(unittest.TestCase):
 
 
 class OfficialReputationLifecycleTest(unittest.TestCase):
-    """验证12:00正式批次、12:30产物、补跑与删除的组合生命周期。"""
+    """验证12:00正式批次、终态产物、补跑与删除的组合生命周期。"""
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -713,10 +714,26 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         self.assertEqual(first["metrics"]["score"]["baseline_value"], "3.70")
         self.assertEqual(first["metrics"]["score"]["direction"], "up")
 
+    def test_coordinator_generates_report_in_same_terminal_tick(self) -> None:
+        coordinator = ReputationCoordinator(self.service)
+        outcome = coordinator.tick(self._at("2030-01-02", "12:00"))
+        run_id = outcome["queued_run_ids"][0]
+        run = self.service.get_run(run_id)
+
+        self.assertEqual(run["status"], "success")
+        self.assertEqual(run["report_status"], "success")
+        self.assertIsNone(run["report_planned_at"])
+        self.assertIsNotNone(run["report_generated_at"])
+        self.assertTrue(Path(run["downloads"]["txt"].split("/api/v1")[-1]).name)
+        self.assertEqual(
+            self.service.schedule_status()["last_event"]["message"],
+            "正式口碑巡检已到达终态，汇报已生成。",
+        )
+
     def test_official_schedule_baseline_daily_retry_delete_and_missed_day(self) -> None:
         schedule = self.service.schedule_status()
         self.assertEqual(schedule["inspection_time"], "12:00:00")
-        self.assertEqual(schedule["report_time"], "12:30:00")
+        self.assertIsNone(schedule["report_time"])
 
         before = self.service.check_schedule(self._at("2030-01-02", "11:59"))
         self.assertIsNone(before["created_run_id"])
@@ -738,10 +755,12 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         self.assertEqual(baseline["status"], "success")
         self.assertEqual(baseline["complete_evidence_count"], 27)
         self.assertFalse(OfficialFakeAdapter.last_prefer_http_first)
-        waiting = self.service.generate_report(baseline_id, self._at("2030-01-02", "12:29"))
-        self.assertEqual(waiting["report_status"], "waiting")
-        reported = self.service.generate_report(baseline_id, self._at("2030-01-02", "12:30"))
+        self.assertIsNone(baseline["report_planned_at"])
+        report_due = self.service.check_schedule(self._at("2030-01-02", "12:01"))
+        self.assertIn(baseline_id, report_due["report_run_ids"])
+        reported = self.service.generate_report(baseline_id, self._at("2030-01-02", "12:01"))
         self.assertEqual(reported["report_status"], "success")
+        self.assertIsNone(reported["report_planned_at"])
         self.assertTrue(Path(reported["downloads"]["txt"].split("/api/v1")[-1]).name)
 
         OfficialFakeAdapter.score_overrides = {"official-01": "3.90"}
@@ -762,7 +781,7 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         failed = self.service.execute_run(failed_id)
         self.assertEqual(failed["status"], "partial_success")
         incomplete_report = self.service.generate_report(
-            failed_id, self._at("2030-01-04", "12:30")
+            failed_id, self._at("2030-01-04", "12:01")
         )
         self.assertIn("【不完整汇报】", incomplete_report["report_text"])
         self.assertNotIn("今日无口碑指标变化", incomplete_report["report_text"])
