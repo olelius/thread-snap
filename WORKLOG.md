@@ -18,13 +18,16 @@
 
 ## 2026-08-26 — 修复舆情关系校验错误的纠错请求序列化
 **总目标**：让云端模型首次返回业务关系矛盾结果时，系统能够按既有上限正常构造并发送一次纠错请求，而不是被 Pydantic 异常上下文的 JSON 序列化再次打断。
-**状态**：✅ 本地修复与回归验证已完成；目标服务器未更新。
+**状态**：✅ 本地修复、目标服务器最小增量升级和内外网验证均已完成。
 **干到哪里了**：
 - [x] SSH 只读核对批次`20260826-160003-001`确认采集420/420成功、AI分析419项完成和1项失败；原始模型结果违反“非负面不得包含负面类型”的关系合同，随后在构造纠错请求时因`ValidationError.errors()`的`ctx.error`保留`ValueError`对象而触发`Object of type ValueError is not JSON serializable`。
 - [x] 纠错详情提取显式使用`include_context=False`，保留错误类型、位置和中文消息，同时排除不可序列化的异常实例；既有一次纠错调用上限、候选哈希、原始输入和严格工具合同保持不变。
 - [x] 回归测试使用真实`SentimentFeedback.model_validate()`构造“非负面但含负面类型”的`ValidationError`，证明纠错请求可生成、包含具体关系错误且不携带`ctx`异常对象；原有普通`ValueError`路径继续通过。
 - [x] 专项测试1项、后端完整回归136项、Ruff、compileall、pip check和`git diff --check`通过。
-**下一步**：本地修复已完成；远端需另行部署后才会对未来分析生效，既有失败记录保持不可变。
+- [x] 服务器从release`0.1.0-b599ad93203e`升级到`/opt/threadsnap/releases/0.1.0-8a7ede86679d`，`previous`保留旧release；新离线包SHA-256为`935b0b59ea088a5bfaf60bf0ed92d85713bcc60e7b331efdbb4b3709b829a643`，1004项内部校验通过。除ThreadSnap自身wheel外，138个依赖wheel、309个浏览器文件、485个RPM、12个模型文件及前端和部署文件均与旧包逐文件一致；两个应用wheel的唯一内容差异为`threadsnap/sentiment.py`。
+- [x] 升级前SQLite在线备份位于`/var/lib/threadsnap/backups/sentiment-validation-serialization/20260826-173654/`，SHA-256为`5f7fb01e2da02f33c3538915cc2237a3b6a62560297e9e56bd44ec8483ba0839`且完整性为`ok`；升级后Alembic仍为`b7d2f4a6c803`、数据库完整性为`ok`，历史失败分析保持原状态且未重跑。
+- [x] 服务器真实运行时重新构造同类`ValidationError`，纠错请求成功生成两条消息、保留`value_error`且不含`ctx`；完整`deploy/verify.sh`通过服务、Nginx、SPA、接口隔离、端口、Wayland Chromium、本地模型和凭证边界，四个服务均为`active`，公网临时隧道`/health`与SPA均返回HTTP 200。
+**下一步**：无；未来同类模型关系违约会进入既有一次纠错调用，既有失败记录保持不可变。
 **边界**：不放宽模型结果合同，不在本地改写矛盾结论，不增加第三次调用，不修改或自动重跑历史批次。
 **关联**：`src/threadsnap/sentiment.py`、`tests/test_backend.py`、`docs/chains/sentiment-analysis.md`、远端分析`01a03d15-f1b9-7bc8-a011-5fee2340c148`
 
