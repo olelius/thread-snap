@@ -18,15 +18,17 @@
 
 ## 2026-08-26 — 口碑内部车型身份平台中立化迁移
 **总目标**：把既有27款口碑车型从绑定懂车帝平台ID的 `dcd-*` 内部身份迁移为平台中立的 `rep-*` 身份，并保持验证、历史批次、前日基线和证据链完整。
-**状态**：✅ 当前草稿、已发布版本、历史验证、三个真实批次、证据路径和已生成证据包均已完成迁移并恢复服务。
+**状态**：✅ 本地与目标服务器的当前草稿、已发布版本、历史验证、真实批次、证据路径和已生成证据包均已完成迁移并恢复服务。
 **干到哪里了**：
 - [x] 迁移前使用SQLite在线备份并复制全部172个口碑文件；备份数据库 `PRAGMA integrity_check=ok`，SHA-256为 `0f8eee6284d20edd4e9bfae63da8e4ed5feb3be6b829f6ff847d2b3539a29372`，27项旧新ID映射、原始初始化清单的更正版及回滚材料位于 `artifacts/runtime/reputation-internal-id-normalization/20260826-133710/`。
 - [x] 精确迁移1份当前草稿、1份已发布范围、102条映射验证、81条巡检结果、批次目标键和前日基线；重算验证映射哈希及6次验证运行输入哈希，数据库所有表行数保持不变，口碑表中27个旧ID残留为0。
 - [x] 164个证据目录全部改为新ID；137个数据库引用文件均存在且SHA-256一致，另外27张未引用历史图只改目录身份而未删除；两个既有证据ZIP重建后CRC通过且不含旧ID，下载SHA-256分别为 `5c4ba49439979ec512b4490a262566e3a1123f5566e5ce58a9d191998ca7e463` 和 `157b468e11f00f1883c5098f8337cf899acf99bf3bafc8be52fa7820572ccf7d`。
 - [x] 真实后端和前端代理 `/health` 均为 `ok`；范围API返回修订17、27/27个 `rep-*` 唯一身份、0个 `dcd-*` 车型身份、27/27映射已验证且平台车型ID保持不变；三个批次详情均保持成功、27/27结果和27/27证据。
+- [x] 目标服务器按最小数据变更执行：不升级程序、不调整配置，只停后端约5秒并迁移27个旧身份、135个证据目录、1份已生成证据包及其数据库关联；保留6个既有 `rep-*` 新增车型。范围修订由9变为10，最终33/33身份均为唯一 `rep-*`，55条验证尝试、54条结果、54条证据及所有表行数保持不变，109个数据库引用文件存在且哈希一致，旧身份表行和目录均为0，数据库完整性与证据包CRC通过。
+- [x] 服务器迁移前数据库在线备份SHA-256为 `ad4191caf559d1ee33a6692deb71909c8935a087c54f044bced22d1f9cf4648a5`，完整口碑文件备份141个，审计与回滚材料位于 `/var/lib/threadsnap/backups/reputation-id-normalization/20260826-141911/`。迁移后 `threadsnap`、`threadsnap-wayland`、`threadsnap-nginx`、`threadsnap-cloudflared-quick` 均为 `active`，本机后端、Nginx与公网Quick Tunnel健康检查均为 `ok`；公网范围API连续返回修订10、33个 `rep-*`、0个 `dcd-*`。
 **下一步**：无。
 **边界**：原始业务输入CSV和迁移前证据包只在审计备份中保留，不改写其他模块的懂车帝帖子、评论或截图身份；以后初始化键和新增车型ID必须平台中立。
-**关联**：`CONTEXT.md`、`docs/design/product-design.md`、`artifacts/runtime/reputation-internal-id-normalization/20260826-133710/`
+**关联**：`CONTEXT.md`、`docs/design/product-design.md`、`artifacts/runtime/reputation-internal-id-normalization/20260826-133710/`、服务器审计目录 `/var/lib/threadsnap/backups/reputation-id-normalization/20260826-141911/`
 
 ---
 
