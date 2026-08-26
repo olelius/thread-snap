@@ -287,6 +287,7 @@ export type ReputationRun = {
   resolved_count?: number
   unresolved_count?: number
   linked_status?: string
+  linked_complete_evidence_count?: number
 }
 
 export type ReputationSchedule = {

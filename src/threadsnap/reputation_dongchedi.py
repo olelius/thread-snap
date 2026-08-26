@@ -22,7 +22,7 @@ from PIL import Image
 
 from .browser_runtime import browser_launch_args
 
-ADAPTER_VERSION = "dongchedi-reputation-v7-review-article-count"
+ADAPTER_VERSION = "dongchedi-reputation-v8-presale-not-available"
 VALIDATION_CONTRACT_VERSION = "dongchedi-reputation-mapping-v1"
 VIEWPORT = {"width": 1440, "height": 1000}
 NEGATIVE_RATE_API_URL = (
@@ -98,6 +98,7 @@ class ReputationPageResult:
     negative_rate_url: str | None = None
     negative_rate_positive_count: int | None = None
     negative_rate_negative_count: int | None = None
+    reputation_not_available: bool = False
 
 
 def normalize_series_url(url: str, expected_id: str | None = None) -> str:
@@ -158,7 +159,13 @@ def _cookies_from_state(state: dict[str, Any] | None) -> Cookies:
 def _metric_rect(measurement: dict[str, Any]) -> dict[str, float]:
     boxes = [
         value
-        for key in ("heading_box", "score_box", "volume_box", "rank_box")
+        for key in (
+            "heading_box",
+            "score_box",
+            "volume_box",
+            "rank_box",
+            "availability_box",
+        )
         if isinstance((value := measurement.get(key)), dict)
     ]
     if not boxes:
@@ -369,6 +376,37 @@ class DongchediReputationAdapter:
             )
 
     @staticmethod
+    def _confirmed_no_reputation_data(
+        *,
+        score_raw: str | None,
+        rank_raw: str | None,
+        volume_raw: str | None,
+        review_article_count_raw: str | None,
+        page_not_available: bool,
+        negative_rate_positive_count: int | None,
+        negative_rate_negative_count: int | None,
+        require_negative_rate_confirmation: bool,
+    ) -> bool:
+        """只在页面零评价状态与现有指标空值一致时确认平台暂无。"""
+
+        if not page_not_available or any(
+            value is not None
+            for value in (
+                score_raw,
+                rank_raw,
+                volume_raw,
+                review_article_count_raw,
+            )
+        ):
+            return False
+        if not require_negative_rate_confirmation:
+            return True
+        return (
+            negative_rate_positive_count == 0
+            and negative_rate_negative_count == 0
+        )
+
+    @staticmethod
     async def _measure(page: Page) -> dict[str, Any]:
         return await page.evaluate(
             """() => {
@@ -400,11 +438,34 @@ class DongchediReputationAdapter:
                 visible(e) && /^共\\s*[0-9,]+\\s*人评价$/.test(text(e)));
               const volumeText = text(volumeNode);
               let reviewArticleCount = null;
+              let reputationNotAvailable = false;
+              let hasOfficialPrice = null;
               try {
                 const nextData = JSON.parse(document.querySelector('#__NEXT_DATA__')?.textContent || '{}');
-                const count = nextData?.props?.pageProps?.reviewListData?.total_count;
+                const pageProps = nextData?.props?.pageProps || {};
+                const count = pageProps?.reviewListData?.total_count;
                 if (Number.isInteger(count) && count >= 0) reviewArticleCount = String(count);
+                const head = pageProps?.seriesHomeHead;
+                const totalScore = head?.total_score;
+                const totalReviewCount = head?.total_review_count;
+                hasOfficialPrice = head?.has_official_price;
+                reputationNotAvailable = typeof totalScore === 'number' && totalScore === 0 &&
+                  typeof totalReviewCount === 'number' && totalReviewCount === 0;
               } catch (_) {}
+              const ratingPlaceholderNode = reputationNotAvailable
+                ? [...document.querySelectorAll('span,div')]
+                    .filter((e) => visible(e) && text(e).includes('懂车分') && text(e).length <= 20)
+                    .sort((a, b) => {
+                      const ar = a.getBoundingClientRect();
+                      const br = b.getBoundingClientRect();
+                      return ar.width * ar.height - br.width * br.height;
+                    })[0] || null
+                : null;
+              const pricePlaceholderNode = reputationNotAvailable && hasOfficialPrice === false
+                ? [...document.querySelectorAll('span,div')].find((e) =>
+                    visible(e) && text(e) === '暂无报价')
+                : null;
+              const availabilityNode = ratingPlaceholderNode || pricePlaceholderNode;
               const rankScope = rankRoot ? '同级车评分' : '同级车评分';
               const scoreHero = [...document.querySelectorAll('.tw-text-common-yellow')]
                 .find((e) => visible(e) && /^\\d+(?:\\.\\d+)?$/.test(text(e)));
@@ -415,11 +476,13 @@ class DongchediReputationAdapter:
                   ? String(rows.indexOf(current) + 1) : null,
                 volume_raw: volumeText || null,
                 review_article_count_raw: reviewArticleCount,
+                reputation_not_available: reputationNotAvailable,
                 rank_scope: rankScope,
                 heading_box: box(heading),
                 score_box: box(scoreHero),
                 volume_box: box(volumeNode),
                 rank_box: box(rankRoot),
+                availability_box: box(availabilityNode),
                 document_width: Math.max(document.documentElement.scrollWidth, document.body?.scrollWidth || 0),
                 document_height: Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight || 0),
               };
@@ -440,11 +503,13 @@ class DongchediReputationAdapter:
             value.get("rank_raw"),
             value.get("volume_raw"),
             value.get("review_article_count_raw"),
+            value.get("reputation_not_available"),
             value.get("rank_scope"),
             rounded_box("heading_box"),
             rounded_box("score_box"),
             rounded_box("volume_box"),
             rounded_box("rank_box"),
+            rounded_box("availability_box"),
         )
 
     @staticmethod
@@ -524,14 +589,6 @@ class DongchediReputationAdapter:
             metric_rect = _metric_rect(current)
             review_article_count_raw = current.get("review_article_count_raw")
             review_article_count_url: str | None = None
-            if self.include_review_article_count:
-                if review_article_count_raw is None:
-                    raise ReputationAdapterError(
-                        "REPUTATION_REVIEW_ARTICLE_COUNT_MISSING",
-                        "口碑评分页未返回可识别的评价篇数。",
-                        retryable=True,
-                    )
-                review_article_count_url = page.url
             negative_rate_raw: str | None = None
             negative_rate_url: str | None = None
             negative_rate_positive_count: int | None = None
@@ -543,6 +600,28 @@ class DongchediReputationAdapter:
                     negative_rate_positive_count,
                     negative_rate_negative_count,
                 ) = await asyncio.to_thread(self._visit_negative_rate, target)
+            reputation_not_available = self._confirmed_no_reputation_data(
+                score_raw=str(score_raw) if score_raw is not None else None,
+                rank_raw=str(rank_raw) if rank_raw is not None else None,
+                volume_raw=volume_raw,
+                review_article_count_raw=(
+                    str(review_article_count_raw)
+                    if review_article_count_raw is not None
+                    else None
+                ),
+                page_not_available=bool(current.get("reputation_not_available")),
+                negative_rate_positive_count=negative_rate_positive_count,
+                negative_rate_negative_count=negative_rate_negative_count,
+                require_negative_rate_confirmation=self.include_negative_rate,
+            )
+            if self.include_review_article_count:
+                if review_article_count_raw is None and not reputation_not_available:
+                    raise ReputationAdapterError(
+                        "REPUTATION_REVIEW_ARTICLE_COUNT_MISSING",
+                        "口碑评分页未返回可识别的评价篇数。",
+                        retryable=True,
+                    )
+                review_article_count_url = page.url
             capture = (
                 force_capture
                 or self.evidence_policy is None
@@ -605,6 +684,7 @@ class DongchediReputationAdapter:
                 negative_rate_url=negative_rate_url,
                 negative_rate_positive_count=negative_rate_positive_count,
                 negative_rate_negative_count=negative_rate_negative_count,
+                reputation_not_available=reputation_not_available,
             )
         finally:
             await context.close()
@@ -616,20 +696,38 @@ class DongchediReputationAdapter:
         return " ".join(str(node.text_content()).split())
 
     @staticmethod
-    def _review_article_count(document: Any) -> str | None:
-        """从评分页服务端状态读取“全部评分”的评价篇数。"""
+    def _review_page_state(document: Any) -> tuple[str | None, bool]:
+        """读取评价篇数，并识别服务端明确给出的零评分、零评价状态。"""
 
         nodes = document.xpath("//script[@id='__NEXT_DATA__']/text()")
         if not nodes:
-            return None
+            return None, False
         try:
             payload = json.loads(str(nodes[0]))
-            count = payload["props"]["pageProps"]["reviewListData"]["total_count"]
+            page_props = payload["props"]["pageProps"]
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-            return None
-        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
-            return None
-        return str(count)
+            return None, False
+        review_list = page_props.get("reviewListData")
+        count = review_list.get("total_count") if isinstance(review_list, dict) else None
+        count_raw = (
+            str(count)
+            if isinstance(count, int) and not isinstance(count, bool) and count >= 0
+            else None
+        )
+        head = page_props.get("seriesHomeHead")
+        total_score = head.get("total_score") if isinstance(head, dict) else None
+        total_review_count = (
+            head.get("total_review_count") if isinstance(head, dict) else None
+        )
+        no_reputation_data = (
+            isinstance(total_score, (int, float))
+            and not isinstance(total_score, bool)
+            and total_score == 0
+            and isinstance(total_review_count, int)
+            and not isinstance(total_review_count, bool)
+            and total_review_count == 0
+        )
+        return count_raw, no_reputation_data
 
     @classmethod
     def _parse_http_page(
@@ -709,13 +807,14 @@ class DongchediReputationAdapter:
                 volume_text = text
                 volume_raw = match.group(1).replace(",", "")
                 break
-        review_article_count_raw = cls._review_article_count(document)
+        review_article_count_raw, reputation_not_available = cls._review_page_state(document)
         measurement = {
             "actual_name": actual_name,
             "score_raw": score_raw,
             "rank_raw": rank_raw,
             "volume_raw": volume_text,
             "review_article_count_raw": review_article_count_raw,
+            "reputation_not_available": reputation_not_available,
             "rank_scope": "同级车评分",
             "collection_method": "http_ssr",
         }
@@ -740,6 +839,7 @@ class DongchediReputationAdapter:
             height=0,
             metric_rect={},
             duration_ms=duration_ms,
+            reputation_not_available=reputation_not_available,
         )
 
     def _visit_http(self, target: ReputationMappingTarget) -> ReputationPageResult:
@@ -785,13 +885,6 @@ class DongchediReputationAdapter:
             body,
             duration_ms=round((time.monotonic() - started) * 1000),
         )
-        if self.include_review_article_count:
-            if result.review_article_count_raw is None:
-                raise ReputationAdapterError(
-                    "REPUTATION_REVIEW_ARTICLE_COUNT_MISSING",
-                    "口碑评分页未返回可识别的评价篇数。",
-                    retryable=True,
-                )
         negative_rate_raw: str | None = None
         negative_rate_url: str | None = None
         negative_rate_positive_count: int | None = None
@@ -803,13 +896,37 @@ class DongchediReputationAdapter:
                 negative_rate_positive_count,
                 negative_rate_negative_count,
             ) = self._visit_negative_rate(target)
+        reputation_not_available = self._confirmed_no_reputation_data(
+            score_raw=result.score_raw,
+            rank_raw=result.rank_raw,
+            volume_raw=result.volume_raw,
+            review_article_count_raw=result.review_article_count_raw,
+            page_not_available=result.reputation_not_available,
+            negative_rate_positive_count=negative_rate_positive_count,
+            negative_rate_negative_count=negative_rate_negative_count,
+            require_negative_rate_confirmation=self.include_negative_rate,
+        )
+        if self.include_review_article_count:
+            if result.review_article_count_raw is None and not reputation_not_available:
+                raise ReputationAdapterError(
+                    "REPUTATION_REVIEW_ARTICLE_COUNT_MISSING",
+                    "口碑评分页未返回可识别的评价篇数。",
+                    retryable=True,
+                )
         return replace(
             result,
             duration_ms=round((time.monotonic() - started) * 1000),
+            review_article_count_url=(
+                result.final_url
+                if result.review_article_count_raw is not None
+                or reputation_not_available
+                else None
+            ),
             negative_rate_raw=negative_rate_raw,
             negative_rate_url=negative_rate_url,
             negative_rate_positive_count=negative_rate_positive_count,
             negative_rate_negative_count=negative_rate_negative_count,
+            reputation_not_available=reputation_not_available,
         )
 
     async def _validate_browser_targets(

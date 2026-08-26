@@ -786,6 +786,133 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual(result.review_article_count_raw, "2093")
         self.assertEqual(result.review_article_count_url, target.platform_url)
 
+    def test_dongchedi_presale_zero_reviews_is_confirmed_not_available(self) -> None:
+        """未开售页零评分、零评价且全指标为空时应正常保存为平台暂无。"""
+
+        target = ReputationMappingTarget(
+            vehicle_id="rep-presale",
+            platform_vehicle_id="26120",
+            platform_url="https://www.dongchedi.com/auto/series/26120",
+            platform_display_name="风云T7",
+            mapping_hash="fixture",
+        )
+        content = """
+        <html><body><h1>风云T7</h1>
+          <span>暂无报价</span><span>预售价 10.99-12.99 万</span>
+          <script id="__NEXT_DATA__" type="application/json">
+            {"props":{"pageProps":{"seriesHomeHead":{
+              "series_id":26120,
+              "series_name":"风云T7",
+              "business_status":2,
+              "has_official_price":false,
+              "has_pre_price":true,
+              "total_score":0,
+              "total_review_count":0
+            }}}}
+          </script>
+        </body></html>
+        """.encode()
+
+        class PageResponse:
+            status_code = 200
+            url = target.platform_url
+
+        PageResponse.content = content
+
+        class RateResponse:
+            status_code = 200
+            url = "https://api.dcarapi.com/motor/car_score/api/v1/landing_page/get_detail/"
+
+            @staticmethod
+            def json():
+                return {
+                    "status": 0,
+                    "data": {
+                        "series_info": {"series_name": "风云T7"},
+                        "review_count_info": {"total": 0},
+                        "tag_info": None,
+                        "tag_info_v2": None,
+                    },
+                }
+
+        class Session:
+            @staticmethod
+            def get(url, **_kwargs):
+                return RateResponse() if "dcarapi.com" in url else PageResponse()
+
+        adapter = DongchediReputationAdapter(
+            None,
+            include_review_article_count=True,
+            include_negative_rate=True,
+        )
+        adapter._thread_local.http = Session()
+
+        result = adapter._visit_http(target)
+
+        self.assertTrue(result.reputation_not_available)
+        self.assertIsNone(result.score_raw)
+        self.assertIsNone(result.rank_raw)
+        self.assertIsNone(result.volume_raw)
+        self.assertIsNone(result.review_article_count_raw)
+        self.assertEqual(result.review_article_count_url, target.platform_url)
+        self.assertIsNone(result.negative_rate_raw)
+        self.assertEqual(result.negative_rate_positive_count, 0)
+        self.assertEqual(result.negative_rate_negative_count, 0)
+        metrics = self.client.app.state.container.reputation._official_metrics(result, None)
+        self.assertTrue(
+            all(
+                metric["comparison_status"] == "not_available"
+                for metric in metrics.values()
+            )
+        )
+
+    def test_dongchedi_missing_review_count_with_metrics_remains_an_error(self) -> None:
+        """已有口碑指标却缺评价篇数时仍按解析异常处理。"""
+
+        target = ReputationMappingTarget(
+            vehicle_id="rep-active",
+            platform_vehicle_id="26120",
+            platform_url="https://www.dongchedi.com/auto/series/26120",
+            platform_display_name="风云T7",
+            mapping_hash="fixture",
+        )
+        result = ReputationPageResult(
+            vehicle_id=target.vehicle_id,
+            platform_vehicle_id=target.platform_vehicle_id,
+            mapping_hash=target.mapping_hash,
+            final_url=target.platform_url,
+            actual_name=target.platform_display_name,
+            score_raw="3.90",
+            rank_raw="1",
+            volume_raw="12",
+            review_article_count_raw=None,
+            review_article_count_url=None,
+            rank_scope="同级车评分",
+            measurements=[],
+            full_page_path=None,
+            metric_region_path=None,
+            full_page_sha256=None,
+            metric_region_sha256=None,
+            width=0,
+            height=0,
+            metric_rect={},
+            duration_ms=1,
+            reputation_not_available=True,
+        )
+
+        self.assertFalse(
+            DongchediReputationAdapter._confirmed_no_reputation_data(
+                score_raw=result.score_raw,
+                rank_raw=result.rank_raw,
+                volume_raw=result.volume_raw,
+                review_article_count_raw=result.review_article_count_raw,
+                page_not_available=result.reputation_not_available,
+                negative_rate_positive_count=0,
+                negative_rate_negative_count=0,
+                require_negative_rate_confirmation=True,
+            )
+        )
+
     def test_dongchedi_negative_rate_reuses_series_id_and_app_counts(self) -> None:
         """正式巡检直接复用平台车型ID，并由优缺点数量计算整数差评率。"""
 
@@ -1298,6 +1425,12 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         linked = self.service.get_run(failed_id)
         self.assertEqual(linked["linked_status"], "success")
         self.assertEqual(linked["unresolved_count"], 0)
+        self.assertEqual(linked["linked_complete_evidence_count"], 27)
+        recovered = next(
+            item for item in linked["results"] if item["vehicle_id"] == "official-02"
+        )
+        self.assertEqual(recovered["status"], "success")
+        self.assertIsNotNone(recovered["evidence"])
         with self.assertRaisesRegex(Exception, "已经全部补跑成功"):
             self.service.retry_failed(failed_id)
 
