@@ -404,15 +404,18 @@ class WorkerService:
         with self.factory.begin() as db:
             run = db.get(ExtractionRun, run_id)
             assert run is not None
+            screenshot_task_ids: list[str] = []
             for task_id, result in results.items():
                 task = db.get(CircleTask, task_id)
                 if task:
                     self._apply_result(db, task, result)
+                    if bool((task.config_snapshot or {}).get("screenshot_enabled", True)):
+                        screenshot_task_ids.append(task_id)
             aggregate_run(db, run)
             summary_version = run.summary_version
             status = run.status
         if self.screenshot_service:
-            for task_id in results:
+            for task_id in screenshot_task_ids:
                 self.screenshot_service.mark_task_complete(task_id)
         if self.event_publisher:
             self.event_publisher(
@@ -445,6 +448,7 @@ class WorkerService:
             circle_id = task.circle_id
             known_urls = list(snapshot.get("known_post_urls") or [])
             source_indexes = dict(snapshot.get("source_indexes") or {})
+            screenshot_enabled = bool(snapshot.get("screenshot_enabled", True))
             persisted_post_ids = set(
                 db.scalars(
                     select(PostSnapshot.platform_post_id).where(
@@ -463,7 +467,12 @@ class WorkerService:
             if circle_id:
                 circle = db.get(Circle, circle_id)
                 needs_validation = bool(circle and circle.validation_status != "verified")
-        if self.screenshot_service and not known_urls and type(collector) is DongchediCollector:
+        if (
+            self.screenshot_service
+            and screenshot_enabled
+            and not known_urls
+            and type(collector) is DongchediCollector
+        ):
             self.screenshot_service.register_task(task_id)
         pending_records: list[dict[str, Any]] = []
         reported_failures = 0
@@ -526,7 +535,9 @@ class WorkerService:
                         {
                             "on_page_evidence": self.screenshot_service.capture_callback(task_id)
                         }
-                        if self.screenshot_service and type(collector) is DongchediCollector
+                        if self.screenshot_service
+                        and screenshot_enabled
+                        and type(collector) is DongchediCollector
                         else {}
                     ),
                 )
@@ -566,6 +577,7 @@ class WorkerService:
                                     )
                                 }
                                 if self.screenshot_service
+                                and screenshot_enabled
                                 and type(refreshed) is DongchediCollector
                                 else {}
                             ),
@@ -795,10 +807,18 @@ class WorkerService:
             )
             db.add(post)
             db.flush()
-            if self.screenshot_service:
+            screenshot_enabled = bool((task.config_snapshot or {}).get("screenshot_enabled", True))
+            if self.screenshot_service and screenshot_enabled:
                 self.screenshot_service.link_post(db, task.id, post)
             if self.sentiment_service:
-                self.sentiment_service.enqueue_for_post(db, post, task.platform_code)
+                self.sentiment_service.enqueue_for_post(
+                    db,
+                    post,
+                    task.platform_code,
+                    analysis_enabled=bool(
+                        (task.config_snapshot or {}).get("ai_analysis_enabled", True)
+                    ),
+                )
             next_order = max(next_order + 1, int(record.get("order_index", next_order)) + 1)
             for index, comment in enumerate(record.get("comments") or []):
                 db.add(

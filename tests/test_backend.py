@@ -41,6 +41,7 @@ from threadsnap.models import (
     PostSnapshot,
     ScheduleEvent,
     ScheduleNodeRule,
+    ScreenshotArtifactGroup,
     SentimentAnalysis,
     Vehicle,
 )
@@ -709,7 +710,6 @@ class ApiAndConfigTests(AppCase):
             "/api/v1/sentiment/config",
             json={
                 "revision": initial["revision"],
-                "enabled": initial["enabled"],
                 "api_base_url": initial["api_base_url"],
                 "model_code": initial["model_code"],
                 "cloud_concurrency": 16,
@@ -722,7 +722,6 @@ class ApiAndConfigTests(AppCase):
         )
         self.assertEqual(200, saved.status_code, saved.text)
         self.assertEqual(16, saved.json()["cloud_concurrency"])
-        self.assertTrue(saved.json()["enabled"])
         self.assertEqual("valid", saved.json()["validation_status"])
         self.assertEqual(initial["validated_at"], saved.json()["validated_at"])
         self.assertEqual(initial["subject"]["version"], saved.json()["subject"]["version"])
@@ -732,7 +731,6 @@ class ApiAndConfigTests(AppCase):
             "/api/v1/sentiment/config",
             json={
                 "revision": saved.json()["revision"],
-                "enabled": saved.json()["enabled"],
                 "api_base_url": saved.json()["api_base_url"],
                 "model_code": saved.json()["model_code"],
                 "subject": {
@@ -749,7 +747,6 @@ class ApiAndConfigTests(AppCase):
             "/api/v1/sentiment/config",
             json={
                 "revision": retained.json()["revision"],
-                "enabled": retained.json()["enabled"],
                 "api_base_url": retained.json()["api_base_url"],
                 "model_code": retained.json()["model_code"],
                 "cloud_concurrency": 65,
@@ -1007,7 +1004,6 @@ class ApiAndConfigTests(AppCase):
             "/api/v1/sentiment/config",
             json={
                 "revision": config["revision"],
-                "enabled": False,
                 "api_base_url": "",
                 "model_code": "paddlenlp-local-text-nano-v1",
                 "subject": {
@@ -1026,22 +1022,8 @@ class ApiAndConfigTests(AppCase):
         self.assertEqual(200, tested.status_code, tested.text)
         self.assertEqual(1, fake_local.validations)
         current = self.client.get("/api/v1/sentiment/config").json()
-        enabled = self.client.put(
-            "/api/v1/sentiment/config",
-            json={
-                "revision": current["revision"],
-                "enabled": True,
-                "api_base_url": current["api_base_url"],
-                "model_code": current["model_code"],
-                "subject": {
-                    "brand": current["subject"]["brand"],
-                    "products": current["subject"]["products"],
-                    "supplement": current["subject"]["supplement"],
-                },
-            },
-        )
-        self.assertEqual(200, enabled.status_code, enabled.text)
-        self.assertTrue(enabled.json()["enabled"])
+        self.assertEqual("valid", current["validation_status"])
+        self.assertNotIn("enabled", current)
 
         circle = self.save_verified_circle(name="风云A9")
         run = self.client.post(
@@ -1112,7 +1094,6 @@ class ApiAndConfigTests(AppCase):
             "/api/v1/sentiment/config",
             json={
                 "revision": initial["revision"],
-                "enabled": False,
                 "api_base_url": "https://qwen.example.test/compatible-mode/v1",
                 "api_key": "qwen-test-secret",
                 "model_code": HOSTED_MODEL_CODE,
@@ -1132,7 +1113,6 @@ class ApiAndConfigTests(AppCase):
             "/api/v1/sentiment/config",
             json={
                 "revision": qwen_saved.json()["revision"],
-                "enabled": False,
                 "api_base_url": "https://api.deepseek.com",
                 "api_key": "deepseek-test-secret",
                 "model_code": DEEPSEEK_MODEL_CODE,
@@ -1210,22 +1190,8 @@ class ApiAndConfigTests(AppCase):
         self.assertTrue(test_body["tools"][0]["function"]["strict"])
 
         current = self.client.get("/api/v1/sentiment/config").json()
-        enabled = self.client.put(
-            "/api/v1/sentiment/config",
-            json={
-                "revision": current["revision"],
-                "enabled": True,
-                "api_base_url": current["api_base_url"],
-                "model_code": current["model_code"],
-                "subject": {
-                    "brand": current["subject"]["brand"],
-                    "products": current["subject"]["products"],
-                    "supplement": current["subject"]["supplement"],
-                },
-            },
-        )
-        self.assertEqual(200, enabled.status_code, enabled.text)
-        self.assertTrue(enabled.json()["enabled"])
+        self.assertEqual("valid", current["validation_status"])
+        self.assertNotIn("enabled", current)
 
         circle = self.save_verified_circle(name="风云A9")
         run = self.client.post(
@@ -1297,7 +1263,6 @@ class ApiAndConfigTests(AppCase):
             "/api/v1/sentiment/config",
             json={
                 "revision": latest["revision"],
-                "enabled": False,
                 "api_base_url": latest["model_connections"][HOSTED_MODEL_CODE][
                     "api_base_url"
                 ],
@@ -1579,7 +1544,6 @@ class ApiAndConfigTests(AppCase):
             "/api/v1/sentiment/config",
             json={
                 "revision": config["revision"],
-                "enabled": False,
                 "api_base_url": "https://api.example.test/v1",
                 "api_key": "test-secret-key",
                 "model_code": "qwen3.5-omni-plus-2026-03-15",
@@ -1601,21 +1565,7 @@ class ApiAndConfigTests(AppCase):
             tested = self.client.post("/api/v1/sentiment/config/test")
         self.assertEqual(200, tested.status_code)
         current = self.client.get("/api/v1/sentiment/config").json()
-        enabled = self.client.put(
-            "/api/v1/sentiment/config",
-            json={
-                "revision": current["revision"],
-                "enabled": True,
-                "api_base_url": current["api_base_url"],
-                "model_code": current["model_code"],
-                "subject": {
-                    "brand": current["subject"]["brand"],
-                    "products": current["subject"]["products"],
-                    "supplement": current["subject"]["supplement"],
-                },
-            },
-        )
-        self.assertEqual(200, enabled.status_code)
+        self.assertNotIn("enabled", current)
 
         circle = self.save_verified_circle(name="A9L")
         run_response = self.client.post(
@@ -1688,13 +1638,12 @@ class ApiAndConfigTests(AppCase):
         self.assertEqual(200, restored.status_code)
         self.assertEqual("ai", restored.json()["source"])
 
-        # 启用中替换连接配置必须先保存并自动关闭，避免旧验证状态继续消费模型。
+        # 替换连接配置后自动进入待测试状态，避免旧验证状态继续消费模型。
         active_config = self.client.get("/api/v1/sentiment/config").json()
         rotated = self.client.put(
             "/api/v1/sentiment/config",
             json={
                 "revision": active_config["revision"],
-                "enabled": True,
                 "api_base_url": active_config["api_base_url"],
                 "api_key": "rotated-test-secret",
                 "model_code": active_config["model_code"],
@@ -1706,17 +1655,18 @@ class ApiAndConfigTests(AppCase):
             },
         )
         self.assertEqual(200, rotated.status_code)
-        self.assertFalse(rotated.json()["enabled"])
+        self.assertNotIn("enabled", rotated.json())
         self.assertEqual("unverified", rotated.json()["validation_status"])
         self.assertNotIn("rotated-test-secret", rotated.text)
 
-        # 关闭期间的新快照保持禁用，不得绕过开关复用同内容的历史 AI 或人工结论。
+        # 批次关闭 AI 时保持禁用，不得绕过批次开关复用历史 AI 或人工结论。
         second_run_response = self.client.post(
             "/api/v1/runs/manual",
             json={
                 "platform_code": "dongchedi",
                 "circle_ids": [circle.id],
                 "quantity": 1,
+                "ai_analysis_enabled": False,
                 "idempotency_key": "sentiment-disabled-run",
             },
         )
@@ -1834,6 +1784,110 @@ class ApiAndConfigTests(AppCase):
         self.assertTrue(
             all(item["reason"] == "字段格式或取值无效" for item in invalid.json()["details"])
         )
+
+    def test_batch_output_switches_are_versioned_and_gate_manual_work(self) -> None:
+        """规则开关进入不可变版本；手动关闭时不生成截图组且分析明确禁用。"""
+
+        circle = self.save_verified_circle(name="开关测试圈")
+        with self.container.sessions.begin() as db:
+            stored = db.get(Circle, circle.id)
+            assert stored is not None
+            stored.auto_enabled = True
+
+        first = self.client.put(
+            "/api/v1/extraction-plan",
+            json={
+                "revision": 1,
+                "rules": [
+                    {
+                        "id": "rule-output-switches",
+                        "name": "输出开关规则",
+                        "platform_quantities": {"dongchedi": 1},
+                        "circle_ids": [circle.id],
+                        "ai_analysis_enabled": True,
+                        "screenshot_enabled": True,
+                    }
+                ],
+                "nodes": [
+                    {
+                        "id": "node-output-switches",
+                        "weekdays": [0],
+                        "time": "08:30:00",
+                        "enabled": True,
+                        "rule_ids": ["rule-output-switches"],
+                    }
+                ],
+            },
+        )
+        self.assertEqual(200, first.status_code, first.text)
+        saved_rule = first.json()["rules"][0]
+        second_rule = {
+            "id": saved_rule["id"],
+            "name": saved_rule["name"],
+            "platform_quantities": saved_rule["platform_quantities"],
+            "circle_ids": saved_rule["circle_ids"],
+            "ai_analysis_enabled": False,
+            "screenshot_enabled": False,
+        }
+        saved_node = first.json()["nodes"][0]
+        second = self.client.put(
+            "/api/v1/extraction-plan",
+            json={
+                "revision": first.json()["revision"],
+                "rules": [second_rule],
+                "nodes": [
+                    {
+                        "id": saved_node["id"],
+                        "weekdays": saved_node["weekdays"],
+                        "time": saved_node["time"],
+                        "enabled": saved_node["enabled"],
+                        "rule_ids": saved_node["rule_ids"],
+                    }
+                ],
+            },
+        )
+        self.assertEqual(200, second.status_code, second.text)
+        self.assertEqual(2, second.json()["rules"][0]["version"])
+        scheduled = self.container.runs.create_scheduled(
+            datetime(2026, 8, 17, 0, 30, tzinfo=timezone.utc),
+            "node-output-switches",
+            second.json()["revision"],
+        )
+        assert scheduled is not None
+        scheduled_detail = self.container.runs.get_run(scheduled["id"])
+        self.assertFalse(scheduled_detail["ai_analysis_enabled"])
+        self.assertFalse(scheduled_detail["screenshot_enabled"])
+        self.assertFalse(scheduled_detail["tasks"][0]["ai_analysis_enabled"])
+        self.assertFalse(scheduled_detail["tasks"][0]["screenshot_enabled"])
+
+        manual = self.client.post(
+            "/api/v1/runs/manual",
+            json={
+                "platform_code": "dongchedi",
+                "circle_ids": [circle.id],
+                "quantity": 1,
+                "ai_analysis_enabled": False,
+                "screenshot_enabled": False,
+                "idempotency_key": "manual-output-switches",
+            },
+        )
+        self.assertEqual(202, manual.status_code, manual.text)
+        self.assertFalse(manual.json()["ai_analysis_enabled"])
+        self.assertFalse(manual.json()["screenshot_enabled"])
+        self.assertEqual("not_applicable", manual.json()["screenshot_summary"]["status"])
+        with self.container.sessions.begin() as db:
+            task = db.scalar(select(CircleTask).where(CircleTask.run_id == manual.json()["id"]))
+            assert task is not None
+            self.container.worker._store_records(db, task, [sample_record("switch-disabled")])
+            self.assertEqual(0, len(list(db.scalars(select(ScreenshotArtifactGroup)))))
+        with self.container.sessions() as db:
+            post = db.scalar(select(PostSnapshot).where(PostSnapshot.run_id == manual.json()["id"]))
+            assert post is not None
+            analysis = db.scalar(
+                select(SentimentAnalysis).where(SentimentAnalysis.post_id == post.id)
+            )
+            assert analysis is not None
+            self.assertEqual("analysis_disabled", analysis.status)
 
     def test_circle_batch_is_atomic_and_requires_validation_before_auto_enable(
         self,
@@ -2210,12 +2264,16 @@ class ApiAndConfigTests(AppCase):
                         "name": "合并规则 A",
                         "platform_quantities": {"dongchedi": 10},
                         "circle_ids": [circle.id],
+                        "ai_analysis_enabled": False,
+                        "screenshot_enabled": False,
                     },
                     {
                         "id": "rule-merge-b",
                         "name": "合并规则 B",
                         "platform_quantities": {"dongchedi": 30},
                         "circle_ids": [circle.id],
+                        "ai_analysis_enabled": True,
+                        "screenshot_enabled": True,
                     },
                 ],
                 "nodes": [
@@ -2248,6 +2306,10 @@ class ApiAndConfigTests(AppCase):
         detail = self.container.runs.get_run(run["id"])
         self.assertEqual(1, len(detail["tasks"]))
         self.assertEqual(30, detail["tasks"][0]["target_count"])
+        self.assertTrue(detail["tasks"][0]["ai_analysis_enabled"])
+        self.assertTrue(detail["tasks"][0]["screenshot_enabled"])
+        self.assertTrue(detail["ai_analysis_enabled"])
+        self.assertTrue(detail["screenshot_enabled"])
         self.assertEqual(30, detail["planned_count"])
         self.assertEqual(
             ["rule-merge-a", "rule-merge-b"],
@@ -2258,6 +2320,10 @@ class ApiAndConfigTests(AppCase):
             assert stored_run is not None
             self.assertIsNone(stored_run.extraction_rule_id)
             self.assertEqual(2, len(stored_run.config_snapshot["rules"]))
+            self.assertFalse(stored_run.config_snapshot["rules"][0]["ai_analysis_enabled"])
+            self.assertFalse(stored_run.config_snapshot["rules"][0]["screenshot_enabled"])
+            self.assertTrue(stored_run.config_snapshot["rules"][1]["ai_analysis_enabled"])
+            self.assertTrue(stored_run.config_snapshot["rules"][1]["screenshot_enabled"])
             self.assertEqual(
                 ["rule-merge-a", "rule-merge-b"],
                 [

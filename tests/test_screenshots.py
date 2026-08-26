@@ -48,10 +48,6 @@ class CaptureLayoutTests(unittest.TestCase):
         events: list[str] = []
 
         class FakePage:
-            def add_style_tag(self, *, content: str) -> None:
-                self.style = content
-                events.append("freeze")
-
             def evaluate(self, script: str) -> None:
                 self.script = script
                 events.append("scroll_top")
@@ -80,12 +76,9 @@ class CaptureLayoutTests(unittest.TestCase):
         cards = FakeCards()
         DongchediCollector._stabilize_capture_layout(page, cards, 1)
 
-        self.assertEqual(["freeze", "scroll_top", "top_reached"], events[:3])
+        self.assertEqual(["scroll_top", "top_reached", "measure"], events[:3])
         self.assertEqual(4, events.count("measure"))
         self.assertEqual(3, events.count("wait_250"))
-        self.assertIn("scroll-behavior:auto", page.style)
-        self.assertIn("scrollbar-width:none", page.style)
-        self.assertIn("::-webkit-scrollbar", page.style)
         self.assertIn("behavior:'instant'", page.script)
         self.assertIn("scrollY === 0", page.wait_script)
 
@@ -109,7 +102,9 @@ class ScreenshotArtifactTests(unittest.TestCase):
         self.engine.dispose()
         self.temporary.cleanup()
 
-    def create_task(self, *, status: str = "running", suffix: str = "1") -> tuple[str, str]:
+    def create_task(
+        self, *, status: str = "running", suffix: str = "1", ai_analysis_enabled: bool = True
+    ) -> tuple[str, str]:
         with self.factory.begin() as db:
             run = ExtractionRun(
                 number=f"20260823-000000-00{suffix}",
@@ -135,6 +130,7 @@ class ScreenshotArtifactTests(unittest.TestCase):
                 queue_sequence=1,
                 source_position=0,
                 target_count=2,
+                config_snapshot={"ai_analysis_enabled": ai_analysis_enabled},
             )
             db.add(task)
             db.flush()
@@ -268,6 +264,49 @@ class ScreenshotArtifactTests(unittest.TestCase):
         self.assertIn("version=1", first_url)
         self.assertIn("version=2", second_url)
         self.assertNotEqual(first_url, second_url)
+
+    def test_ai_disabled_screenshot_keeps_original_pixels_without_waiting(self) -> None:
+        """截图开启且 AI 关闭时直接形成原图成果，不伪造舆情或等待分析。"""
+
+        run_id, task_id = self.create_task(ai_analysis_enabled=False)
+        self.service.register_task(task_id)
+        self.service.persist_page(task_id, self.evidence_payload())
+        with self.factory.begin() as db:
+            task = db.get(CircleTask, task_id)
+            assert task is not None
+            for index, post_id in enumerate(("1001", "1002")):
+                post = PostSnapshot(
+                    run_id=task.run_id,
+                    circle_task_id=task.id,
+                    platform_post_id=post_id,
+                    url=f"https://www.dongchedi.com/ugc/article/{post_id}",
+                    title=f"帖子 {post_id}",
+                    visibility="visible",
+                    order_index=index,
+                    analysis_status="analysis_disabled",
+                    sentiment_updated_at=datetime.now(timezone.utc),
+                )
+                db.add(post)
+                db.flush()
+                self.service.link_post(db, task.id, post)
+            task.status = "success"
+            task.completed_count = 2
+        self.service.mark_task_complete(task_id)
+        self.assertTrue(self.service.process_once())
+
+        group = self.service.list_for_run(run_id, "/api/v1")["items"][0]
+        self.assertEqual((group["status"], group["negative_count"]), ("ready", 0))
+        with self.factory() as db:
+            evidence = db.scalar(select(CirclePageEvidence))
+            assert evidence is not None
+            original_path = Path(evidence.screenshot_path)
+        artifact_path = self.service.artifact_file(group["id"], 0)
+        self.assertEqual(original_path.read_bytes(), artifact_path.read_bytes())
+        with self.factory() as db:
+            sentiments = {
+                item.sentiment_result for item in db.scalars(select(ScreenshotArtifactItem))
+            }
+        self.assertEqual({"not_analyzed"}, sentiments)
 
     def test_successful_zero_result_generates_empty_artifact_and_failure_is_distinct(self) -> None:
         run_id, task_id = self.create_task(status="success")

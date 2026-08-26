@@ -297,16 +297,8 @@ class DongchediCollector:
 
     @staticmethod
     def _stabilize_capture_layout(page: Any, cards: Any, page_number: int) -> None:
-        """在全页截图所用的页首状态中冻结并确认卡片布局。"""
+        """回到页首并等待平台原始布局稳定，不向页面注入样式。"""
 
-        page.add_style_tag(
-            content=(
-                "html{scroll-behavior:auto!important;scrollbar-width:none!important}"
-                "html::-webkit-scrollbar,body::-webkit-scrollbar"
-                "{display:none!important;width:0!important;height:0!important}"
-                "*,*::before,*::after{animation:none!important;transition:none!important}"
-            )
-        )
         page.evaluate(
             """() => {
               window.scrollTo({top:0,left:0,behavior:'instant'});
@@ -319,9 +311,8 @@ class DongchediCollector:
             }"""
         )
         page.wait_for_function("() => scrollX === 0 && scrollY === 0")
-        # 懒加载遍历结束时页面位于底部；同时 Playwright 全页截图会隐藏滚动条。
-        # 先主动冻结到截图所用的无滚动条页首布局，再等待卡片稳定，避免截图阶段
-        # 可用宽度增加后逐卡重排，造成纵向误差向页面底部持续累积。
+        # 懒加载遍历结束时页面位于底部。只恢复平台原始页首状态并等待稳定；
+        # 不覆盖滚动条、动画、定位或其他页面 CSS，避免改变原图文字和布局。
         previous_layout: list[dict[str, float]] | None = None
         stable_samples = 0
         for _attempt in range(8):

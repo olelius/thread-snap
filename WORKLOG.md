@@ -16,6 +16,22 @@
 
 ---
 
+## 2026-08-26 — 按批次控制 AI 分析与圈子页面截图
+**总目标**：修复圈子原始截图顶部文字冲突，并把 AI 分析与圈子页面截图从全局/强制行为改为自动提取规则和手动批次的显式选项。
+**状态**：✅ 规则版本、手动提交、定时合并、Worker、截图渲染、迁移和真实页面均已完成验证。
+**干到哪里了**：
+- [x] 自动提取规则新增“AI 舆情分析”和“圈子页面截图”两个版本化开关；手动圈子发现新增同名开关，URL 清单保留 AI 开关且截图明确不可用。多规则命中同一来源时数量取最大值，两个开关分别按任一贡献规则开启即开启，并冻结到批次与圈子任务快照。
+- [x] “AI 舆情”配置页移除全局业务开关，只保留模型、连接、并发、判定对象和连接测试。批次关闭 AI 时帖子进入 `analysis_disabled`；批次要求 AI 但模型未验证或失效时进入可恢复的 `analysis_paused`，测试成功后恢复。
+- [x] 截图关闭的任务不注册页面证据、不传捕获回调、不关联卡片或生成成果；截图开启而 AI 关闭时不等待模型，直接生成无红框成果。零负面页面直接复制原始 PNG，专项测试证明成果与原图字节一致。
+- [x] 圈子捕获取消隐藏滚动条、禁用动画/过渡等注入 CSS，只回到平台原始页首并等待布局稳定。生产模式真实捕获风云 A9 首页得到30张卡片、`1425 × 11126`文档和 SHA-256 `73bcc8122d69130fd65cab7b4f548df7b9c0ed2e388c653e8924f1ce6d578e3b`，顶部导航、面包屑和圈子标题无文字冲突；证据位于`artifacts/runtime/extraction-output-switches-20260826-102834/`。
+- [x] SQLite 在线备份后升级到 Alembic `d8f4a2b6c901`，既有8个规则版本两个开关均按兼容默认值开启，升级前备份完整性`ok`且 SHA-256 为`3fd466dfdfe3d50c9ff22a92e37ae47844c14f36e32d29581ab3abcf596de0f4`。完整后端回归131项、截图专项9项、Ruff、compileall、pip check、前端TypeScript检查、生产构建和`git diff --check`均通过。
+- [x] 真实前端验证规则页两个开关均可见且默认开启，手动 Sheet 两个开关可见，URL 清单截图开关禁用，AI 配置页无全局开关；浏览器控制台和页面错误均为0。后端`127.0.0.1:8000/health`与前端`127.0.0.1:5173/`均返回200。
+**下一步**：无。
+**边界**：既有规则迁移后保持原行为；开关只影响新建批次，历史批次、原始证据和历史成果不追溯改写。截图关闭不补拍；AI 关闭但截图开启时不推断舆情，后续人工有效结论仍可生成新成果版本。
+**关联**：`docs/adr/0038-freeze-ai-and-screenshot-options-per-batch.md`、`src/threadsnap/migrations/versions/d8f4a2b6c901_extraction_output_switches.py`、`src/threadsnap/collectors/dongchedi.py`、`src/threadsnap/screenshots.py`、`src/threadsnap/sentiment.py`、`src/threadsnap/services.py`、`src/threadsnap/worker.py`、`frontend/src/features/config/config-page.tsx`、`frontend/src/features/runs/new-extraction-sheet.tsx`、`artifacts/runtime/extraction-output-switches-20260826-102834/`
+
+---
+
 ## 2026-08-25 — 口碑巡检时间调整为每日10:00
 **总目标**：把固定的每日正式口碑巡检计划点从北京时间12:00调整为10:00，同时保持终态立即汇报、时间只读和历史批次不可变。
 **状态**：✅ 后端调度、前端展示、测试和当前设计口径均已切换为每日10:00，真实服务已加载生效。
