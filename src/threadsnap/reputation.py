@@ -439,15 +439,19 @@ class ReputationService:
                 raise DomainError(
                     "REPUTATION_RUN_NOT_FOUND", "口碑巡检运行不存在。", status_code=404
                 )
-            results = db.scalars(
-                select(ReputationResult)
-                .where(ReputationResult.run_id == run_id)
-                .order_by(
-                    ReputationResult.role_position,
-                    ReputationResult.vehicle_position,
-                    ReputationResult.id,
-                )
-            ).all()
+            results = (
+                self._selected_chain_results(db, run)
+                if run.source_type == "scheduled"
+                else db.scalars(
+                    select(ReputationResult)
+                    .where(ReputationResult.run_id == run_id)
+                    .order_by(
+                        ReputationResult.role_position,
+                        ReputationResult.vehicle_position,
+                        ReputationResult.id,
+                    )
+                ).all()
+            )
             results = self._results_in_scope_order(db, run, list(results))
             evidence_by_result = {
                 item.result_id: item
@@ -494,6 +498,46 @@ class ReputationService:
             if root and root.source_type == "scheduled":
                 payload.update(self._chain_summary(db, root))
             return payload
+
+    @staticmethod
+    def _selected_chain_results(
+        db: Session, root: ReputationRun
+    ) -> list[ReputationResult]:
+        """为正式根批次逐车型选择关联链中当前最完整、同级最新的结果。"""
+
+        chain = db.scalars(
+            select(ReputationRun)
+            .where(or_(ReputationRun.id == root.id, ReputationRun.root_run_id == root.id))
+            .order_by(ReputationRun.created_at, ReputationRun.id)
+        ).all()
+        if not chain:
+            return []
+        chain_order = {item.id: index for index, item in enumerate(chain)}
+        candidates = db.scalars(
+            select(ReputationResult).where(
+                ReputationResult.run_id.in_([item.id for item in chain])
+            )
+        ).all()
+        status_priority = {"failed": 0, "partial_success": 1, "success": 2}
+        selected: dict[str, ReputationResult] = {}
+        for result in candidates:
+            key = f"{result.vehicle_id}|{result.platform_code}"
+            current = selected.get(key)
+            priority = (
+                status_priority.get(result.status, -1),
+                result.collected_at,
+                chain_order.get(result.run_id, -1),
+                result.id,
+            )
+            current_priority = (
+                status_priority.get(current.status, -1),
+                current.collected_at,
+                chain_order.get(current.run_id, -1),
+                current.id,
+            ) if current else None
+            if current_priority is None or priority > current_priority:
+                selected[key] = result
+        return list(selected.values())
 
     @staticmethod
     def _results_in_scope_order(
@@ -558,10 +602,24 @@ class ReputationService:
                     successful.add(f"{result.vehicle_id}|{result.platform_code}")
         resolved = len(set(root.target_keys) & successful)
         unresolved = max(0, len(root.target_keys) - resolved)
+        selected_results = ReputationService._selected_chain_results(db, root)
+        selected_evidence_count = int(
+            db.scalar(
+                select(func.count())
+                .select_from(ReputationEvidence)
+                .where(
+                    ReputationEvidence.result_id.in_(
+                        [result.id for result in selected_results]
+                    )
+                )
+            )
+            or 0
+        ) if selected_results else 0
         return {
             "resolved_count": resolved,
             "unresolved_count": unresolved,
             "linked_status": "success" if unresolved == 0 else "partial_success" if resolved else "failed",
+            "linked_complete_evidence_count": selected_evidence_count,
         }
 
     def create_synthetic(self, scenario_id: str) -> dict[str, Any]:

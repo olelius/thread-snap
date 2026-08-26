@@ -16,6 +16,21 @@
 
 ---
 
+## 2026-08-26 — 未开售车型口碑暂无状态与补跑链当前结果修复
+**总目标**：把页面确实尚无口碑数据的未开售车型显示为正常“页面暂无”，同时保留真正采集或解析失败的异常语义，并让补跑成功结果成为当前批次展示结果。
+**状态**：✅ 本地采集、补跑链聚合、列表与详情展示、数据库和真实页面验证均已完成；SSH 远端未更新。
+**干到哪里了**：
+- [x] 真实检查风云T7评分页确认车型身份正确、仅有预售价且无正式售价，页面评分和评价数均为0，五项展示指标缺失，负面评价接口正负样本均为0；原始页面测量与截图位于`artifacts/runtime/reputation-presale-no-data/`。
+- [x] 懂车帝口碑适配器升级为`dongchedi-reputation-v8-presale-not-available`：仅在页面五项均缺失、页面状态明确评分/评价数为0、启用负面率时接口计数也为0三组信号一致时返回`not_available`；已有任一指标或信号冲突仍按评价篇数缺失异常处理。
+- [x] 定时根批次详情按车型和平台从原批次及补跑链选择当前最佳结果，成功补跑可以替换当前展示中的旧失败行，但原批次状态及失败补跑继续保留为不可变审计记录；列表和详情分别展示当前链状态与原批次状态。
+- [x] 本地对`RP-S-20260826-C8A8`执行一次精确补跑，新批次`RP-R-20260826-082906-B6BB`成功；当前链为成功、27/27完整、27/27证据，风云T7五项均显示“页面暂无”、状态成功且证据可查看，页面与控制台错误均为0。
+- [x] 后端完整回归136项、Ruff、compileall、pip check、前端TypeScript检查、生产构建（2468 modules）和`git diff --check`通过；修复后数据库备份完整性为`ok`，审计摘要位于`artifacts/runtime/reputation-presale-no-data/20260826-162826/final-verification.json`。
+**下一步**：远端服务器代码与数据维持原状，待用户明确要求更新时再部署并补跑对应远端批次。
+**边界**：不把普通字段缺失一律降级为“页面暂无”；原始批次和历史补跑不覆盖、不删除；本次未连接或修改SSH服务器。
+**关联**：`src/threadsnap/reputation_dongchedi.py`、`src/threadsnap/reputation.py`、`frontend/src/features/reputation/reputation-page.tsx`、`frontend/src/features/reputation/reputation-detail-page.tsx`、`docs/adr/0039-use-score-page-review-article-count.md`
+
+---
+
 ## 2026-08-26 — 补齐 AI 配置逐字段未保存提示
 **总目标**：让后加入的“AI 舆情”受控配置复用每周计划等页面的未保存视觉合同，明确定位发生变化的配置卡片和具体字段。
 **状态**：✅ 字段级标识、卡片与标签汇总、恢复基线和离页保护均已完成真实页面验证。
