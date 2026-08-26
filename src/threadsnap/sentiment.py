@@ -1230,7 +1230,6 @@ class SentimentService:
             }
         return {
             "revision": config.revision,
-            "enabled": config.enabled,
             "api_base_url": active_base_url,
             "api_key_configured": bool(active_key),
             "model_code": config.model_code,
@@ -1290,25 +1289,9 @@ class SentimentService:
                 if value.cloud_concurrency is not None
                 else config.cloud_concurrency
             )
-            if (
-                value.enabled
-                and not connection_changed
-                and (
-                    config.validation_status != "valid"
-                    or (
-                        profile["provider"] == "hosted"
-                        and (not encrypted_key or not base_url)
-                    )
-                )
-            ):
-                raise DomainError(
-                    "SENTIMENT_CONFIG_NOT_VALIDATED",
-                    "连接配置必须先保存并通过连接测试，之后才能启用分析。",
-                    status_code=409,
-                )
-            was_enabled = config.enabled
-            # 连接参数一旦变化，保存新值并自动关闭；新连接测试通过后再显式开启。
-            config.enabled = value.enabled and not connection_changed
+            # 是否分析由提取规则或手动批次冻结；这里的内部 enabled 只表示
+            # 当前模型连接是否已经验证并可供这些批次消费。
+            config.enabled = config.validation_status == "valid" and not connection_changed
             if profile["provider"] == "hosted":
                 set_model_connection(
                     config,
@@ -1328,27 +1311,20 @@ class SentimentService:
                 config.validation_status = "unverified"
                 config.validation_error = None
                 config.validated_at = None
-            if was_enabled and not config.enabled:
+            if connection_changed:
                 db.execute(
                     update(SentimentAnalysis)
                     .where(SentimentAnalysis.status == "analysis_queued")
-                    .values(status="analysis_disabled", finished_at=utc_now())
+                    .values(
+                        status="analysis_paused",
+                        error_code="MODEL_CONFIG_ERROR",
+                        error_message="模型连接配置已变化，等待重新测试。",
+                    )
                 )
                 db.execute(
                     update(PostSnapshot)
                     .where(PostSnapshot.analysis_status == "analysis_queued")
-                    .values(analysis_status="analysis_disabled", sentiment_updated_at=utc_now())
-                )
-            elif not was_enabled and config.enabled:
-                db.execute(
-                    update(SentimentAnalysis)
-                    .where(SentimentAnalysis.status == "analysis_paused")
-                    .values(status="analysis_queued", error_code=None, error_message=None)
-                )
-                db.execute(
-                    update(PostSnapshot)
-                    .where(PostSnapshot.analysis_status == "analysis_paused")
-                    .values(analysis_status="analysis_queued", sentiment_updated_at=utc_now())
+                    .values(analysis_status="analysis_paused", sentiment_updated_at=utc_now())
                 )
             return self.config_dict(config)
 
@@ -1404,9 +1380,27 @@ class SentimentService:
             with self.factory.begin() as db:
                 config = db.get(SentimentConfig, config_id)
                 if config and config.revision == revision:
+                    config.enabled = False
                     config.validation_status = "invalid"
                     config.validation_error = str(exc)[:1000]
                     config.validated_at = utc_now()
+                    db.execute(
+                        update(SentimentAnalysis)
+                        .where(SentimentAnalysis.status == "analysis_queued")
+                        .values(
+                            status="analysis_paused",
+                            error_code="MODEL_CONFIG_ERROR",
+                            error_message="模型连接测试失败，等待重新测试。",
+                        )
+                    )
+                    db.execute(
+                        update(PostSnapshot)
+                        .where(PostSnapshot.analysis_status == "analysis_queued")
+                        .values(
+                            analysis_status="analysis_paused",
+                            sentiment_updated_at=utc_now(),
+                        )
+                    )
             raise DomainError("SENTIMENT_CONNECTION_FAILED", f"连接测试失败：{exc}") from exc
         with self.factory.begin() as db:
             config = db.get(SentimentConfig, config_id)
@@ -1417,21 +1411,39 @@ class SentimentService:
             config.validation_status = "valid"
             config.validation_error = None
             config.validated_at = utc_now()
+            config.enabled = True
+            db.execute(
+                update(SentimentAnalysis)
+                .where(SentimentAnalysis.status == "analysis_paused")
+                .values(status="analysis_queued", error_code=None, error_message=None)
+            )
+            db.execute(
+                update(PostSnapshot)
+                .where(PostSnapshot.analysis_status == "analysis_paused")
+                .values(analysis_status="analysis_queued", sentiment_updated_at=utc_now())
+            )
         return {"status": "valid", "request_id": request_id, "duration_ms": duration_ms}
 
-    def enqueue_for_post(self, db: Session, post: PostSnapshot, platform_code: str) -> None:
+    def enqueue_for_post(
+        self,
+        db: Session,
+        post: PostSnapshot,
+        platform_code: str,
+        *,
+        analysis_enabled: bool = True,
+    ) -> None:
         """新帖子入库时决定禁用、继承、精确复用或排队。"""
 
         config = self.ensure_default(db)
         input_hash = sentiment_input_hash(post, config.model_code)
-        if config.enabled and config.validation_status == "valid":
-            status = "analysis_queued"
-        elif config.validation_status == "invalid":
-            # 运行期间配置失效后，采集仍可能继续入库；这些任务应等待配置恢复，
-            # 不能混入用户主动关闭分析时产生的永久禁用任务。
-            status = "analysis_paused"
-        else:
+        if not analysis_enabled:
             status = "analysis_disabled"
+        elif config.enabled and config.validation_status == "valid":
+            status = "analysis_queued"
+        else:
+            # 批次明确要求分析但模型当前未验证或失效时保留为可恢复暂停；
+            # 只有批次开关关闭才形成永久禁用任务。
+            status = "analysis_paused"
         analysis = SentimentAnalysis(
             post_id=post.id,
             platform_code=platform_code,
@@ -1451,7 +1463,7 @@ class SentimentService:
         if status in {"analysis_disabled", "analysis_paused"}:
             if status == "analysis_paused":
                 analysis.error_code = "MODEL_CONFIG_ERROR"
-                analysis.error_message = "模型运行配置失效，等待重新测试。"
+                analysis.error_message = "模型运行配置尚未通过验证或已失效，等待重新测试。"
             post.analysis_status = status
             post.sentiment_updated_at = utc_now()
             db.add(analysis)

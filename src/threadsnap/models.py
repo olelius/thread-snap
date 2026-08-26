@@ -80,6 +80,8 @@ class ExtractionRuleVersion(Base):
     version: Mapped[int] = mapped_column(Integer, nullable=False)
     platform_quantities: Mapped[dict[str, int]] = mapped_column(JSON, nullable=False, default=dict)
     selected_circle_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    ai_analysis_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    screenshot_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
 
 

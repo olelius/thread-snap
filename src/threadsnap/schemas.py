@@ -16,6 +16,8 @@ class ExtractionRuleDraft(StrictModel):
     name: str = Field(min_length=1, max_length=120)
     platform_quantities: dict[str, int] = Field(default_factory=dict)
     circle_ids: list[str] = Field(default_factory=list)
+    ai_analysis_enabled: bool = True
+    screenshot_enabled: bool = True
 
 
 class ScheduleNodeDraft(StrictModel):
@@ -83,6 +85,8 @@ class ManualRunCreate(StrictModel):
     circle_urls: list[str] = Field(default_factory=list)
     quantity: int = Field(ge=1)
     known_post_urls: list[str] = Field(default_factory=list)
+    ai_analysis_enabled: bool = True
+    screenshot_enabled: bool = True
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=160)
 
 
@@ -110,7 +114,6 @@ class SentimentSubjectUpdate(StrictModel):
 
 class SentimentConfigUpdate(StrictModel):
     revision: int = Field(ge=1)
-    enabled: bool
     api_base_url: str = Field(max_length=2000)
     api_key: str | None = Field(default=None, min_length=8, max_length=4000)
     model_code: Literal[

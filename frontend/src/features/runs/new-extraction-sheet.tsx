@@ -15,6 +15,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Sheet, SheetClose, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
+import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 
 type Mode = 'circle_discovery' | 'url_list'
@@ -33,6 +34,8 @@ export function NewExtractionSheet() {
   const [selectedCircleIds, setSelectedCircleIds] = useState<string[]>([])
   const [circleUrls, setCircleUrls] = useState('')
   const [postUrls, setPostUrls] = useState('')
+  const [aiAnalysisEnabled, setAiAnalysisEnabled] = useState(true)
+  const [screenshotEnabled, setScreenshotEnabled] = useState(true)
   const vehicles = useQuery({ queryKey: ['vehicles'], queryFn: () => api<Vehicle[]>('/vehicles') })
   const circles = useMemo(() => vehicles.data?.flatMap((item) => item.circles) ?? [], [vehicles.data])
   const platformCircles = useMemo(() => circles.filter((circle) => circle.platform_code === platform), [circles, platform])
@@ -47,6 +50,8 @@ export function NewExtractionSheet() {
               circle_urls: lines(circleUrls),
               known_post_urls: [],
               quantity,
+              ai_analysis_enabled: aiAnalysisEnabled,
+              screenshot_enabled: screenshotEnabled,
               idempotency_key: crypto.randomUUID(),
             }
           : {
@@ -55,6 +60,8 @@ export function NewExtractionSheet() {
               circle_urls: [],
               known_post_urls: lines(postUrls),
               quantity,
+              ai_analysis_enabled: aiAnalysisEnabled,
+              screenshot_enabled: false,
               idempotency_key: crypto.randomUUID(),
             }
       return api<Run>('/runs/manual', { method: 'POST', body: JSON.stringify(body) })
@@ -75,6 +82,8 @@ export function NewExtractionSheet() {
     setCircleUrls('')
     setPostUrls('')
     setQuantity(30)
+    setAiAnalysisEnabled(true)
+    setScreenshotEnabled(true)
   }
 
   function toggleCircleGroup(groupCircleIds: string[], checked: boolean) {
@@ -180,6 +189,16 @@ export function NewExtractionSheet() {
             ) : (
               <div className='space-y-2'><Label htmlFor='post-urls'>帖子 URL 清单</Label><Textarea id='post-urls' rows={12} value={postUrls} onChange={(event) => setPostUrls(event.target.value)} placeholder='每行一个帖子 URL，重复链接会自动去重' /><p className='text-xs text-muted-foreground'>当前共识别 {lines(postUrls).length} 行非空输入。</p></div>
             )}
+            <div className='grid gap-3 sm:grid-cols-2'>
+              <label className='flex cursor-pointer items-center justify-between gap-3 rounded-xl border p-4'>
+                <span><span className='block text-sm font-medium'>AI 舆情分析</span><span className='mt-1 block text-xs text-muted-foreground'>为本批次新帖子创建 AI 分析任务</span></span>
+                <Switch checked={aiAnalysisEnabled} onCheckedChange={setAiAnalysisEnabled} />
+              </label>
+              <label className={`flex items-center justify-between gap-3 rounded-xl border p-4 ${mode === 'url_list' ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
+                <span><span className='block text-sm font-medium'>圈子页面截图</span><span className='mt-1 block text-xs text-muted-foreground'>{mode === 'url_list' ? 'URL 清单没有圈子列表页面' : '保留原始全页并生成负面框选成果'}</span></span>
+                <Switch checked={mode === 'circle_discovery' && screenshotEnabled} disabled={mode === 'url_list'} onCheckedChange={setScreenshotEnabled} />
+              </label>
+            </div>
             <Alert><AlertTitle>提交范围</AlertTitle><AlertDescription>切换模式会保留两边输入；关闭窗口会直接放弃，提交只包含当前选择的模式。</AlertDescription></Alert>
           </div>
         </ScrollArea>

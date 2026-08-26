@@ -16,6 +16,8 @@ export type ExtractionRule = {
   version: number
   platform_quantities: Record<string, number>
   circle_ids: string[]
+  ai_analysis_enabled: boolean
+  screenshot_enabled: boolean
   archived: boolean
   updated_at: string
 }
@@ -75,6 +77,8 @@ export type Run = {
   planned_count: number
   completed_count: number
   failed_count: number
+  ai_analysis_enabled: boolean
+  screenshot_enabled: boolean
   waiting_reason?: string
   error_message?: string
   related_run_id?: string
@@ -105,6 +109,8 @@ export type RunTask = {
   target_count: number
   completed_count: number
   failed_count: number
+  ai_analysis_enabled: boolean
+  screenshot_enabled: boolean
   error_code?: string
   error_message?: string
   stop_reason?: string
@@ -154,7 +160,6 @@ export type AnalysisStatus = 'analysis_queued' | 'analysis_running' | 'analysis_
 
 export type SentimentConfig = {
   revision: number
-  enabled: boolean
   api_base_url: string
   api_key_configured: boolean
   model_code: string

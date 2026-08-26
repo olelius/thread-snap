@@ -213,6 +213,8 @@ class ConfigService:
                     "version": rule.current_version,
                     "platform_quantities": version.platform_quantities,
                     "circle_ids": version.selected_circle_ids,
+                    "ai_analysis_enabled": version.ai_analysis_enabled,
+                    "screenshot_enabled": version.screenshot_enabled,
                     "archived": rule.archived,
                     "updated_at": rule.updated_at,
                 }
@@ -391,6 +393,8 @@ class ConfigService:
                             version=1,
                             platform_quantities=quantities,
                             selected_circle_ids=circle_ids,
+                            ai_analysis_enabled=draft.ai_analysis_enabled,
+                            screenshot_enabled=draft.screenshot_enabled,
                         )
                     )
                 else:
@@ -404,6 +408,8 @@ class ConfigService:
                         current is None
                         or current.platform_quantities != quantities
                         or current.selected_circle_ids != circle_ids
+                        or current.ai_analysis_enabled != draft.ai_analysis_enabled
+                        or current.screenshot_enabled != draft.screenshot_enabled
                     )
                     rule.name = draft.name.strip()
                     if changed:
@@ -414,6 +420,8 @@ class ConfigService:
                                 version=rule.current_version,
                                 platform_quantities=quantities,
                                 selected_circle_ids=circle_ids,
+                                ai_analysis_enabled=draft.ai_analysis_enabled,
+                                screenshot_enabled=draft.screenshot_enabled,
                             )
                         )
 
@@ -1059,6 +1067,9 @@ class RunService:
                     "platform_code": value.platform_code,
                     "quantity": quantity,
                     "requested_quantity": value.quantity,
+                    "ai_analysis_enabled": value.ai_analysis_enabled,
+                    "screenshot_enabled": value.screenshot_enabled and bool(circles),
+                    "requested_screenshot_enabled": value.screenshot_enabled,
                 },
             )
             db.add(run)
@@ -1084,6 +1095,8 @@ class RunService:
                         "vehicle_name": vehicle_name,
                         "source_name": vehicle_name,
                         "transient": item["transient"],
+                        "ai_analysis_enabled": value.ai_analysis_enabled,
+                        "screenshot_enabled": value.screenshot_enabled,
                     },
                 )
                 db.add(task)
@@ -1102,6 +1115,8 @@ class RunService:
                         config_snapshot={
                             "known_post_urls": normalized_posts,
                             "internal_concurrency": platform.internal_concurrency,
+                            "ai_analysis_enabled": value.ai_analysis_enabled,
+                            "screenshot_enabled": False,
                         },
                     )
                 )
@@ -1180,6 +1195,12 @@ class RunService:
                             current_versions[(rule.id, rule.current_version)].selected_circle_ids
                         )
                     ),
+                    "ai_analysis_enabled": current_versions[
+                        (rule.id, rule.current_version)
+                    ].ai_analysis_enabled,
+                    "screenshot_enabled": current_versions[
+                        (rule.id, rule.current_version)
+                    ].screenshot_enabled,
                 }
                 for rule in ordered_rules
             ]
@@ -1248,6 +1269,8 @@ class RunService:
                             "rule_id": snapshot["id"],
                             "rule_version": snapshot["version"],
                             "quantity": int(quantities[circle.platform_code]),
+                            "ai_analysis_enabled": bool(snapshot["ai_analysis_enabled"]),
+                            "screenshot_enabled": bool(snapshot["screenshot_enabled"]),
                         }
                     )
             if missing:
@@ -1304,6 +1327,16 @@ class RunService:
                     "schedule_node_id": schedule_node_id,
                     "schedule_revision": schedule_revision,
                     "rules": rule_snapshots,
+                    "ai_analysis_enabled": any(
+                        item["ai_analysis_enabled"]
+                        for items in contributions.values()
+                        for item in items
+                    ),
+                    "screenshot_enabled": any(
+                        item["screenshot_enabled"]
+                        for items in contributions.values()
+                        for item in items
+                    ),
                     "resolved_circles": [
                         {
                             "circle_id": circle.id,
@@ -1351,6 +1384,12 @@ class RunService:
                             "vehicle_name": circle.vehicle.name if circle.vehicle else None,
                             "source_name": circle.vehicle.name if circle.vehicle else None,
                             "source_rules": source_rules,
+                            "ai_analysis_enabled": any(
+                                item["ai_analysis_enabled"] for item in source_rules
+                            ),
+                            "screenshot_enabled": any(
+                                item["screenshot_enabled"] for item in source_rules
+                            ),
                         },
                     )
                 )
@@ -1976,6 +2015,12 @@ def run_dict_from_tasks(
     list_orders = list(
         dict.fromkeys(task.list_order for task in tasks if task.circle_url)
     )
+    ai_analysis_enabled = any(
+        bool((task.config_snapshot or {}).get("ai_analysis_enabled", True)) for task in tasks
+    )
+    screenshot_enabled = run.input_mode != "url_list" and any(
+        bool((task.config_snapshot or {}).get("screenshot_enabled", True)) for task in tasks
+    )
     return {
         "id": run.id,
         "number": run.number,
@@ -1998,6 +2043,8 @@ def run_dict_from_tasks(
         "planned_count": run.planned_count,
         "completed_count": run.completed_count,
         "failed_count": run.failed_count,
+        "ai_analysis_enabled": ai_analysis_enabled,
+        "screenshot_enabled": screenshot_enabled,
         "waiting_reason": run.waiting_reason,
         "error_message": run.error_message,
         "related_run_id": run.related_run_id,
@@ -2059,6 +2106,15 @@ def screenshot_summary(db: Session, run: ExtractionRun) -> dict[str, Any]:
 
     if run.input_mode == "url_list":
         return {"status": "not_applicable", "group_count": 0, "ready_count": 0}
+    enabled_task_exists = db.scalar(
+        select(CircleTask.id).where(CircleTask.run_id == run.id).limit(1)
+    )
+    if enabled_task_exists:
+        tasks = list(db.scalars(select(CircleTask).where(CircleTask.run_id == run.id)))
+        if not any(
+            bool((task.config_snapshot or {}).get("screenshot_enabled", True)) for task in tasks
+        ):
+            return {"status": "not_applicable", "group_count": 0, "ready_count": 0}
     chain_ids = related_run_ids(db, run.id)
     root_id = chain_ids[0] if chain_ids else run.id
     groups = list(
@@ -2093,6 +2149,7 @@ def screenshot_summary(db: Session, run: ExtractionRun) -> dict[str, Any]:
 
 
 def task_dict(item: CircleTask, live_source_names: dict[str, str] | None = None) -> dict[str, Any]:
+    snapshot = item.config_snapshot or {}
     return {
         "id": item.id,
         "platform_code": item.platform_code,
@@ -2108,6 +2165,8 @@ def task_dict(item: CircleTask, live_source_names: dict[str, str] | None = None)
         "target_count": item.target_count,
         "completed_count": item.completed_count,
         "failed_count": item.failed_count,
+        "ai_analysis_enabled": bool(snapshot.get("ai_analysis_enabled", True)),
+        "screenshot_enabled": bool(snapshot.get("screenshot_enabled", True)),
         "error_code": item.error_code,
         "error_message": item.error_message,
         "stop_reason": item.stop_reason,

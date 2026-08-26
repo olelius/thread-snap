@@ -91,7 +91,8 @@
 5. `docs/adr/0025-add-deepseek-cloud-text-sentiment-option.md`；
 6. `docs/adr/0027-use-bounded-clean-correction-and-structural-recovery.md`；
 7. `docs/research/sentiment-analysis-poc-plan.md`；
-8. 执行 PoC 时读取 Git 外的 `artifacts/poc/inputs/sentiment-analysis/` 真实样本。
+8. `docs/adr/0038-freeze-ai-and-screenshot-options-per-batch.md`；
+9. 执行 PoC 时读取 Git 外的 `artifacts/poc/inputs/sentiment-analysis/` 真实样本。
 
 ### 3.6 圈子页面证据与关联截图成果设计、PoC 或实现
 
@@ -103,9 +104,10 @@
 4. `docs/chains/sentiment-analysis.md`；
 5. `docs/adr/0026-use-synchronized-page-evidence-and-related-screenshot-artifacts.md`；
 6. `docs/adr/0031-render-negative-artifacts-on-full-page-evidence.md`；
-7. `docs/research/circle-screenshot-poc-plan.md`；
-8. `docs/research/circle-screenshot-poc-results.md`；
-9. 执行 PoC 时读取 Git 外的 `artifacts/poc/inputs/circle-screenshot/` 真实样本。
+7. `docs/adr/0038-freeze-ai-and-screenshot-options-per-batch.md`；
+8. `docs/research/circle-screenshot-poc-plan.md`；
+9. `docs/research/circle-screenshot-poc-results.md`；
+10. 执行 PoC 时读取 Git 外的 `artifacts/poc/inputs/circle-screenshot/` 真实样本。
 
 ### 3.7 垂媒口碑巡检设计、PoC 或实现
 
@@ -159,6 +161,7 @@
 | `docs/adr/0035-prioritize-official-reputation-runs-without-preemption.md` | 每日正式口碑巡检在平台容量队列中非抢占优先，补跑和其他任务保持普通FIFO |
 | `docs/adr/0036-isolate-synthetic-reputation-test-runs.md` | 手动合成口碑运行只存在于隔离测试环境，复用正式处理链但不污染正式批次、基线或调度 |
 | `docs/adr/0037-retain-only-reputation-metric-region-evidence.md` | 口碑巡检在稳定DOM边界上只保留一张指标区域PNG，并由前端、XLSX和证据包复用 |
+| `docs/adr/0038-freeze-ai-and-screenshot-options-per-batch.md` | AI 分析与圈子页面截图按规则版本或手动批次冻结，原始页面捕获不注入改像素 CSS |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 

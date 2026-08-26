@@ -56,7 +56,7 @@ function ConfigTabLabel({ children, dirty }: { children: ReactNode; dirty?: bool
 }
 
 function editableRulesSignature(rules?: ExtractionPlan['rules']) {
-  return JSON.stringify((rules ?? []).map(({ id, name, platform_quantities, circle_ids }) => ({ id, name, platform_quantities, circle_ids: [...circle_ids].sort() })))
+  return JSON.stringify((rules ?? []).map(({ id, name, platform_quantities, circle_ids, ai_analysis_enabled, screenshot_enabled }) => ({ id, name, platform_quantities, circle_ids: [...circle_ids].sort(), ai_analysis_enabled, screenshot_enabled })))
 }
 
 function editableNodesSignature(nodes?: ExtractionPlan['nodes']) {
@@ -65,7 +65,7 @@ function editableNodesSignature(nodes?: ExtractionPlan['nodes']) {
 
 function editableRuleSignature(rule?: ExtractionPlan['rules'][number]) {
   if (!rule) return ''
-  return JSON.stringify({ name: rule.name, platform_quantities: rule.platform_quantities, circle_ids: [...rule.circle_ids].sort() })
+  return JSON.stringify({ name: rule.name, platform_quantities: rule.platform_quantities, circle_ids: [...rule.circle_ids].sort(), ai_analysis_enabled: rule.ai_analysis_enabled, screenshot_enabled: rule.screenshot_enabled })
 }
 
 function editableNodeSignature(node?: ExtractionPlan['nodes'][number]) {
@@ -161,7 +161,7 @@ function usePlanWorkspace(onReveal: (tab: PlanSection, targetId?: string) => voi
       if (!query.data) throw new Error('提取配置尚未加载完成。')
       const rules = section === 'rules' ? current.rules : query.data.rules
       const nodes = section === 'schedule' ? current.nodes : query.data.nodes
-      return api<ExtractionPlan>('/extraction-plan', { method: 'PUT', body: JSON.stringify({ revision: current.revision, rules: rules.map(({ id, name, platform_quantities, circle_ids }) => ({ id, name, platform_quantities, circle_ids })), nodes: nodes.map(({ id, weekdays: days, time, enabled, rule_ids }) => ({ id, weekdays: days, time, enabled, rule_ids })) }) })
+      return api<ExtractionPlan>('/extraction-plan', { method: 'PUT', body: JSON.stringify({ revision: current.revision, rules: rules.map(({ id, name, platform_quantities, circle_ids, ai_analysis_enabled, screenshot_enabled }) => ({ id, name, platform_quantities, circle_ids, ai_analysis_enabled, screenshot_enabled })), nodes: nodes.map(({ id, weekdays: days, time, enabled, rule_ids }) => ({ id, weekdays: days, time, enabled, rule_ids })) }) })
     },
     onSuccess: (value, { section }) => {
       setDraft((current) => ({ ...structuredClone(value), rules: section === 'schedule' && rulesDirty && current ? current.rules : structuredClone(value.rules), nodes: section === 'rules' && scheduleDirty && current ? current.nodes : structuredClone(value.nodes) }))
@@ -314,7 +314,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
   const filteredRules = draft.rules.filter((rule) => !search || `${rule.name} ${rule.id} ${rule.circle_ids.map((id) => { const circle = allCircles.find((item) => item.id === id); return circle ? sourceName(circle) : '' }).join(' ')}`.toLocaleLowerCase('zh-CN').includes(search))
 
   function createRule() {
-    const rule: ExtractionPlan['rules'][number] = { id: crypto.randomUUID(), name: `新规则 ${draft!.rules.length + 1}`, version: 1, platform_quantities: {}, circle_ids: [], archived: false, updated_at: new Date().toISOString() }
+    const rule: ExtractionPlan['rules'][number] = { id: crypto.randomUUID(), name: `新规则 ${draft!.rules.length + 1}`, version: 1, platform_quantities: {}, circle_ids: [], ai_analysis_enabled: true, screenshot_enabled: true, archived: false, updated_at: new Date().toISOString() }
     setSelectedRuleId(rule.id)
     setRuleSearch('')
     updateRules([...draft!.rules, rule])
@@ -353,7 +353,18 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
         <Card className='min-h-[440px] overflow-hidden border-border/70 bg-card/88 py-0 xl:min-h-0'>
           {selectedRule ? <div className='flex h-full min-h-0 flex-col' id={`rule-editor-${selectedRule.id}`}>
             <CardHeader className='shrink-0 rounded-t-xl border-b bg-card p-4'><div className='flex items-start gap-3'><div className='min-w-0 flex-1'><Label htmlFor={`rule-${selectedRule.id}`}>规则名称</Label><Input id={`rule-${selectedRule.id}`} data-dirty={ruleNameDirty || undefined} className={cn('mt-2', ruleNameDirty && dirtyFieldClass)} value={selectedRule.name} onChange={(event) => updateRule(selectedRule.id, (item) => ({ ...item, name: event.target.value }))} /></div><Button variant='ghost' size='icon' disabled={savedNodes.some((node) => node.rule_ids.includes(selectedRule.id))} onClick={removeSelectedRule} aria-label={savedNodes.some((node) => node.rule_ids.includes(selectedRule.id)) ? '规则仍被计划节点引用' : '删除规则'}><Trash2 className='size-4' /></Button></div><CardDescription>ID {selectedRule.id.slice(0, 8)} · 当前版本 {selectedRule.version} · 已选 {selectedRule.circle_ids.length} 个来源{changedRuleIds.has(selectedRule.id) && ' · 尚未保存'}</CardDescription></CardHeader>
-            <CardContent className='min-h-0 flex-1 space-y-3 overflow-y-auto p-4'>{allPlatforms.map((platform) => {
+            <CardContent className='min-h-0 flex-1 space-y-3 overflow-y-auto p-4'>
+              <div className='grid gap-3 rounded-xl border bg-background/55 p-3 sm:grid-cols-2'>
+                <label className='flex cursor-pointer items-center justify-between gap-3 rounded-lg border bg-card/70 p-3'>
+                  <span><span className='block text-sm font-medium'>AI 舆情分析</span><span className='mt-0.5 block text-xs text-muted-foreground'>为本规则提取的新帖子创建 AI 分析任务</span></span>
+                  <Switch checked={selectedRule.ai_analysis_enabled} data-dirty={selectedRule.ai_analysis_enabled !== (baselineSelectedRule?.ai_analysis_enabled ?? true) || undefined} className={cn(selectedRule.ai_analysis_enabled !== (baselineSelectedRule?.ai_analysis_enabled ?? true) && dirtyControlClass)} onCheckedChange={(ai_analysis_enabled) => updateRule(selectedRule.id, (item) => ({ ...item, ai_analysis_enabled }))} />
+                </label>
+                <label className='flex cursor-pointer items-center justify-between gap-3 rounded-lg border bg-card/70 p-3'>
+                  <span><span className='block text-sm font-medium'>圈子页面截图</span><span className='mt-0.5 block text-xs text-muted-foreground'>保留原始全页并生成负面框选成果</span></span>
+                  <Switch checked={selectedRule.screenshot_enabled} data-dirty={selectedRule.screenshot_enabled !== (baselineSelectedRule?.screenshot_enabled ?? true) || undefined} className={cn(selectedRule.screenshot_enabled !== (baselineSelectedRule?.screenshot_enabled ?? true) && dirtyControlClass)} onCheckedChange={(screenshot_enabled) => updateRule(selectedRule.id, (item) => ({ ...item, screenshot_enabled }))} />
+                </label>
+              </div>
+              {allPlatforms.map((platform) => {
               const platformCircles = enabledCircles.filter((circle) => circle.platform_code === platform.code)
               const selectedCount = platformCircles.filter((circle) => selectedRule.circle_ids.includes(circle.id)).length
               const platformChecked = selectedCount === 0 ? false : selectedCount === platformCircles.length ? true : 'indeterminate'
@@ -600,7 +611,7 @@ type TemplateField = { tag: string; field: string; type: string; description: st
 
 function sentimentSignature(value?: SentimentConfig) {
   if (!value) return ''
-  return JSON.stringify({ enabled: value.enabled, api_base_url: value.api_base_url, model_code: value.model_code, cloud_concurrency: value.cloud_concurrency, subject: { brand: value.subject.brand, products: value.subject.products, supplement: value.subject.supplement ?? '' } })
+  return JSON.stringify({ api_base_url: value.api_base_url, model_code: value.model_code, cloud_concurrency: value.cloud_concurrency, subject: { brand: value.subject.brand, products: value.subject.products, supplement: value.subject.supplement ?? '' } })
 }
 
 const sentimentModelNames: Record<string, string> = {
@@ -621,7 +632,7 @@ function SentimentPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => 
   const dirty = Boolean(draft && query.data) && (sentimentSignature(draft) !== sentimentSignature(query.data) || Boolean(apiKey.trim()))
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange])
   const save = useMutation({
-    mutationFn: () => api<SentimentConfig>('/sentiment/config', { method: 'PUT', body: JSON.stringify({ revision: draft?.revision, enabled: draft?.enabled, api_base_url: draft?.api_base_url, api_key: apiKey.trim() || undefined, model_code: draft?.model_code, cloud_concurrency: draft?.cloud_concurrency, subject: { brand: draft?.subject.brand, products: draft?.subject.products, supplement: draft?.subject.supplement || undefined } }) }),
+    mutationFn: () => api<SentimentConfig>('/sentiment/config', { method: 'PUT', body: JSON.stringify({ revision: draft?.revision, api_base_url: draft?.api_base_url, api_key: apiKey.trim() || undefined, model_code: draft?.model_code, cloud_concurrency: draft?.cloud_concurrency, subject: { brand: draft?.subject.brand, products: draft?.subject.products, supplement: draft?.subject.supplement || undefined } }) }),
     onSuccess: (value) => { setDraft(structuredClone(value)); setApiKey(''); client.setQueryData(['sentiment-config'], value); toast.success('AI 舆情配置已保存') },
     onError: (error) => toast.error('保存失败', { description: errorMessage(error) }),
   })
@@ -632,7 +643,6 @@ function SentimentPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => 
   })
   if (!draft || !query.data) return <Card><CardContent className='p-8 text-sm text-muted-foreground'>正在加载 AI 舆情配置…</CardContent></Card>
   const discard = () => { setDraft(structuredClone(query.data)); setApiKey(''); onDirtyChange(false) }
-  const connectionDirty = Boolean(apiKey.trim()) || draft.api_base_url !== query.data.api_base_url || draft.model_code !== query.data.model_code
   const validationLabel = draft.validation_status === 'valid' ? '已通过' : draft.validation_status === 'invalid' ? '未通过' : '待测试'
   const validationTarget = localModel ? '本地模型' : '连接'
   const selectModel = (model_code: string) => {
@@ -640,7 +650,6 @@ function SentimentPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => 
     setApiKey('')
     setDraft({
       ...draft,
-      enabled: false,
       model_code,
       api_base_url: connection.api_base_url,
       api_key_configured: connection.api_key_configured,
@@ -651,7 +660,6 @@ function SentimentPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => 
   }
   const updateBaseUrl = (api_base_url: string) => setDraft({
     ...draft,
-    enabled: false,
     api_base_url,
     model_connections: {
       ...draft.model_connections,
@@ -663,17 +671,16 @@ function SentimentPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => 
     validation_status: 'unverified',
   })
   return <div className='space-y-5'>
-    <ConfigSectionToolbar icon={<BrainCircuit className='size-4.5' />} title='AI 舆情' summary={`${draft.enabled ? '已启用' : '已停用'} · ${validationTarget}${validationLabel}`} description={localModel ? '每条新入库帖子只在本机分析标题和正文；图片、视频不参与模型推理。' : deepSeekModel ? '每条新入库帖子以一次 DeepSeek 云端文字请求分析标题和正文；媒体不发送给模型。' : '每条新入库帖子以一次千问在线多模态请求分析；保存配置本身不会调用模型。'}>
+    <ConfigSectionToolbar icon={<BrainCircuit className='size-4.5' />} title='AI 舆情' summary={`${validationTarget}${validationLabel}`} description={localModel ? '在提取规则或手动批次开启 AI 分析后，只在本机分析标题和正文。' : deepSeekModel ? '在提取规则或手动批次开启 AI 分析后，使用 DeepSeek 分析标题和正文。' : '在提取规则或手动批次开启 AI 分析后，使用千问完成多模态分析。'}>
       <Button variant='outline' disabled={!dirty || save.isPending} onClick={discard}><RotateCcw className='size-4' />放弃修改</Button>
       <Button disabled={!dirty || save.isPending} onClick={() => save.mutate()}>{save.isPending ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}保存 AI 配置</Button>
     </ConfigSectionToolbar>
     <div className='grid gap-5 xl:grid-cols-2'>
       <Card><CardHeader><CardTitle>模型连接</CardTitle><CardDescription>{localModel ? '本地轻量模型随 ThreadSnap 运行，不使用 API Key，也不产生 Token 费用。' : '云端模型使用受控连接；API Key 只写入加密存储，页面不会再次读取明文。'}</CardDescription></CardHeader><CardContent className='space-y-5'>
-        <div className='flex items-center justify-between rounded-lg border p-3'><div><div className='text-sm font-medium'>启用自动分析</div><div className='text-xs text-muted-foreground'>只影响后续新帖子；关闭时排队任务转为已禁用</div></div><Switch checked={draft.enabled} disabled={connectionDirty || draft.validation_status !== 'valid'} onCheckedChange={(enabled) => setDraft({ ...draft, enabled })} /></div>
         <div><Label>模型</Label><Select value={draft.model_code} onValueChange={selectModel}><SelectTrigger className='mt-2'><SelectValue /></SelectTrigger><SelectContent>{draft.available_models.map((model) => <SelectItem key={model} value={model}>{sentimentModelNames[model] ?? model}</SelectItem>)}</SelectContent></Select></div>
         {textOnlyModel && <Alert><BrainCircuit className='size-4' /><AlertTitle>仅文字分析</AlertTitle><AlertDescription>{localModel ? '只在本机读取标题和正文；不会刷新或提交图片、视频 URL。' : '只向 DeepSeek 提交标题、正文和判定对象；不会刷新或提交图片、视频 URL。'}媒体仍保留在帖子详情中供人工查看。</AlertDescription></Alert>}
         <div><Label htmlFor='sentiment-cloud-concurrency'>同时分析任务数</Label><div className='mt-2 flex flex-wrap items-center gap-2'><Input id='sentiment-cloud-concurrency' className='w-28' type='number' disabled={localModel} min={draft.cloud_concurrency_range.min} max={draft.cloud_concurrency_range.max} value={localModel ? 1 : draft.cloud_concurrency} onChange={(event) => setDraft({ ...draft, cloud_concurrency: Math.min(draft.cloud_concurrency_range.max, Math.max(draft.cloud_concurrency_range.min, Number(event.target.value))) })} />{!localModel && [4, 8, 16, 32].map((value) => <Button key={value} type='button' size='sm' variant={draft.cloud_concurrency === value ? 'default' : 'outline'} onClick={() => setDraft({ ...draft, cloud_concurrency: value })}>{value}</Button>)}</div><p className='mt-1.5 text-xs text-muted-foreground'>{localModel ? '本地模型固定单路推理；切回云端后恢复已保存的云端并发。' : `最多同时发起 ${draft.cloud_concurrency} 个云端 AI 请求；允许范围 ${draft.cloud_concurrency_range.min}～${draft.cloud_concurrency_range.max}，保存后对后续任务立即生效。`}</p></div>
-        {!localModel && <><div><Label htmlFor='sentiment-base-url'>OpenAI 兼容 Base URL</Label><Input id='sentiment-base-url' className='mt-2' value={draft.api_base_url} placeholder={deepSeekModel ? 'https://api.deepseek.com' : 'https://HOST/compatible-mode/v1'} onChange={(event) => updateBaseUrl(event.target.value)} /><p className='mt-1.5 text-xs text-muted-foreground'>仅支持公网 HTTPS。{deepSeekModel ? 'DeepSeek 或其代理服务将接收 API Key、判定对象和帖子文字，不接收媒体 URL。' : '千问或其代理服务将接收 API Key、帖子文字和媒体 URL。'}</p></div><div><Label htmlFor='sentiment-api-key'>API Key</Label><Input id='sentiment-api-key' className='mt-2' type='password' autoComplete='new-password' value={apiKey} placeholder={draft.api_key_configured ? '已配置；留空表示不替换' : '请输入 API Key'} onChange={(event) => { setApiKey(event.target.value); setDraft({ ...draft, enabled: false, validation_status: 'unverified' }) }} /></div></>}
+        {!localModel && <><div><Label htmlFor='sentiment-base-url'>OpenAI 兼容 Base URL</Label><Input id='sentiment-base-url' className='mt-2' value={draft.api_base_url} placeholder={deepSeekModel ? 'https://api.deepseek.com' : 'https://HOST/compatible-mode/v1'} onChange={(event) => updateBaseUrl(event.target.value)} /><p className='mt-1.5 text-xs text-muted-foreground'>仅支持公网 HTTPS。{deepSeekModel ? 'DeepSeek 或其代理服务将接收 API Key、判定对象和帖子文字，不接收媒体 URL。' : '千问或其代理服务将接收 API Key、帖子文字和媒体 URL。'}</p></div><div><Label htmlFor='sentiment-api-key'>API Key</Label><Input id='sentiment-api-key' className='mt-2' type='password' autoComplete='new-password' value={apiKey} placeholder={draft.api_key_configured ? '已配置；留空表示不替换' : '请输入 API Key'} onChange={(event) => { setApiKey(event.target.value); setDraft({ ...draft, validation_status: 'unverified' }) }} /></div></>}
         <div className='flex flex-wrap items-center justify-between gap-3 rounded-lg border p-3'><div><StatusBadge value={draft.validation_status === 'valid' ? 'success' : draft.validation_status === 'invalid' ? 'failed' : 'unknown'} label={`${validationTarget}${validationLabel}`} /><div className='mt-1 text-xs text-muted-foreground'>{draft.validated_at ? `最近测试：${formatDate(draft.validated_at)}` : '尚未测试'}{draft.validation_error ? ` · ${draft.validation_error}` : ''}</div></div><Button variant='outline' disabled={dirty || (!localModel && (!draft.api_base_url || !draft.api_key_configured)) || test.isPending} onClick={() => test.mutate()}>{test.isPending ? <Loader2 className='size-4 animate-spin' /> : <RefreshCw className='size-4' />}{localModel ? '测试本地模型' : '测试连接'}</Button></div>
       </CardContent></Card>
       <Card><CardHeader><CardTitle>舆情判定对象</CardTitle><CardDescription>{localModel ? '本地模型优先识别已配置名称；必须覆盖的别名请逐行加入重点产品。' : '云端模型结合文字上下文识别常见别名、品牌服务及实际相关性，后端不做关键词重判。'}</CardDescription></CardHeader><CardContent className='space-y-5'>

@@ -4,7 +4,7 @@
 
 - 功能范围 owner：`docs/design/product-design.md`。
 - 技术路线 owner：`docs/design/technical-route.md`。
-- 架构决策：`docs/adr/0022-use-hosted-multimodal-api-for-sentiment-feedback.md`、`docs/adr/0023-use-validated-runtime-config-for-sentiment-service.md`、`docs/adr/0024-add-local-text-sentiment-option.md`、`docs/adr/0025-add-deepseek-cloud-text-sentiment-option.md`、`docs/adr/0028-configure-bounded-sentiment-cloud-concurrency.md`、`docs/adr/0029-use-model-specific-strict-output-adapters.md`、`docs/adr/0030-treat-provider-strict-output-as-untrusted.md`。
+- 架构决策：`docs/adr/0022-use-hosted-multimodal-api-for-sentiment-feedback.md`、`docs/adr/0023-use-validated-runtime-config-for-sentiment-service.md`、`docs/adr/0024-add-local-text-sentiment-option.md`、`docs/adr/0025-add-deepseek-cloud-text-sentiment-option.md`、`docs/adr/0028-configure-bounded-sentiment-cloud-concurrency.md`、`docs/adr/0029-use-model-specific-strict-output-adapters.md`、`docs/adr/0030-treat-provider-strict-output-as-untrusted.md`、`docs/adr/0038-freeze-ai-and-screenshot-options-per-batch.md`。
 - PoC 执行 owner：`docs/research/sentiment-analysis-poc-plan.md`。
 - 当前阶段：使用者要求最终分析失败以 0 为正常验收目标。真实 420 条批次证明 DeepSeek Beta Strict Tool 仍可连续两次返回非法 JSON，提供方 Strict 只作为第一层降错而非信任边界。DeepSeek 语法错误现进入通用结构恢复，只有不改变语义字符且唯一通过完整合同的候选才能成功；目标批次已恢复为 420/420 完成、0 失败。
 - 当前关键路径：模型配置提供千问云端多模态、DeepSeek 云端文字与本地轻量文字三个受控选项。千问 Worker 继续在含视频请求前按 `video_id` 直接 HTTP 刷新临时 URL；DeepSeek 和本地 Worker 只处理标题和正文，不进入媒体解析，其中 DeepSeek 使用独立加密云端连接，本地路径不进入外部 API。完整离线包必须携带已转换的 UIE-Senta-Nano 与 UTC-Nano，目标机不联网下载模型。
@@ -17,10 +17,10 @@
 - 视频必须分别处理画面和音频。ThreadSnap 优先直传 URL，不下载、中转、转码、抽帧或 ASR。
 - 每次失败候选原始响应和最终严格通过的结构化结果同时保留；程序只校验合同与覆盖，不判定模型是否“答对”。DeepSeek 当前生产路径由提供方 Strict Tool 降低结构偏差，并由本地通用结构候选承担最终语法门禁；候选只能改变 JSON 结构字符并须唯一通过完整合同，其他违约不在本地改写。
 - 有效结果为负面、非负面或不相关；完整 AI 反馈可以成为默认有效结论，人工修正和继承人工结果优先且追加保存。人工复核随机发生，不设置强制比例或多人一致性流程。
-- 关联圈子截图成果直接读取每个证据化帖子的当前有效结果，优先级仍为人工修正、继承人工结果、完整 AI 结果；不从截图 OCR，也不追加第二次模型判断。成果等待全部证据化帖子具有有效结果后生成，负面项框选整张卡片；人工结论变化或 AI 恢复会创建新的不可变成果版本，详见 `docs/chains/circle-screenshot-artifacts.md`。
+- 开启 AI 的关联圈子截图成果直接读取每个证据化帖子的当前有效结果，优先级仍为人工修正、继承人工结果、完整 AI 结果；不从截图 OCR，也不追加第二次模型判断。该路径等待全部证据化帖子具有有效结果后生成并框选负面卡片；关闭 AI 但开启截图的批次不等待模型，先生成无红框原图，后续人工结论变化可以创建新的不可变成果版本，详见 `docs/chains/circle-screenshot-artifacts.md`。
 - 同帖内容未实质变化时继承人工判定；无人工结果时只精确复用版本和输入完全一致的完整 AI 结果。任何历史批次保持不可变。
 - PoC 是 URL 获取、模态覆盖、结构、耗时、用量、成本和失败分布报告，不设置准确率、召回率、误判率或漏判上限。
-- 第一版以加密运行时配置、受控模型下拉和显式模型测试启用分析；千问与 DeepSeek 的 URL/Key 分槽加密保存，云端允许安全校验后的公网 HTTPS 代理，但代理必须实现所选模型的生产输出协议：千问 JSON Object 或 DeepSeek Beta Strict Tool；本地不要求 URL/Key 且不开放自由本地端点；不增加余额查询。
+- 第一版以自动提取规则或手动批次的 AI 开关决定是否分析；模型配置只维护加密连接、受控模型、并发、判定对象和显式可用性测试，不再提供全局业务开关。千问与 DeepSeek 的 URL/Key 分槽加密保存，云端允许安全校验后的公网 HTTPS 代理，但代理必须实现所选模型的生产输出协议：千问 JSON Object 或 DeepSeek Beta Strict Tool；本地不要求 URL/Key 且不开放自由本地端点；不增加余额查询。
 - 列表分别筛选有效舆情结果与分析状态；人工入口只在详情的全局 Dialog 中提供，无有效结论时称“人工判定”，已有结论时称“人工修正”。运行、排队和暂停时禁止，完成、部分、失败和禁用时允许。
 - 图片由浏览器按需直连快照 URL；打开含视频的详情 Sheet 时，前端自动触发后端使用快照 `video_id` 通过授权与播放信息 HTTP 接口刷新当前临时 URL，再由浏览器直连媒体 CDN并使用 `preload="auto"` 预缓冲。刷新过程不加载原帖页面或启动 Chromium，ThreadSnap 不为展示下载或代理；第一版不提供重新分析和历史回刷。
 - 同一稳定媒体的多个查询、已知路径时效签名或等价懂车帝 CDN 主机 URL 只提交和展示一次；播放地址刷新返回最高码率地址，同一清晰度优先使用支持浏览器连续 Range 播放的备用 CDN，缺失时回退主地址，原始快照不改写。模型 Worker 对含视频任务也在请求前按快照 `video_id` 刷新当前临时 URL，避免把已过期快照 URL 送入模型。千问 JSON 的字段、层级、类型、枚举、索引和哈希必须原生符合完整合同；DeepSeek 严格工具参数只生成模型负责的七个语义字段，文字状态以及未接收媒体的数量与 `not_requested` 事实由后端补齐。
@@ -63,6 +63,7 @@
 | 2026-08-22 | 截图成果复用当前有效舆情结论并实行严格生成门槛 | 避免截图 OCR 或第二模型产生双重口径；所有证据化帖子都有有效结论后，单条和多条负面框选才具备完整分母 |
 | 2026-08-21 | 暂缓处理批次详情空列表刷新与本地推理资源争用 | 数据库和接口均确认目标批次实际有 30 条；前端首次取得 0 条后不会跟随批次进度刷新，本地 Taskflow 推理期间帖子接口又偶发延迟 10.8～14.1 秒。使用者要求先登记，不在当前任务修改运行代码 |
 | 2026-08-21 | 以数据版本刷新详情并限制本地推理 CPU 预算 | 使用者重新安排该项；`summary_version` 进入帖子查询缓存键，运行批次持续查询，Taskflow 固定 2 个 CPU 数学线程。2 线程本机组合基准中模型验证 5.25 秒，23 次并发列表查询 0 失败、P95 81.5 毫秒，锁竞争另由 SQLite 15 秒有界等待处理 |
+| 2026-08-26 | AI 业务开关下沉到规则版本和手动批次 | 模型连接是否可用与本次提取是否需要分析是两个维度；关闭批次永久禁用，要求分析但连接不可用的批次暂停并在测试成功后恢复 |
 
 ## 未决项
 

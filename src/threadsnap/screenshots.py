@@ -471,6 +471,10 @@ class ScreenshotService:
             )
             tasks = [db.get(CircleTask, item.circle_task_id) for item in contributions]
             tasks = [task for task in tasks if task is not None]
+            task_ai_enabled = {
+                task.id: bool((task.config_snapshot or {}).get("ai_analysis_enabled", True))
+                for task in tasks
+            }
             if any(task.status not in TERMINAL_TASK_STATUSES for task in tasks):
                 with nullcontext():
                     group.status = "evidence_running"
@@ -501,7 +505,17 @@ class ScreenshotService:
             for item, post, evidence in rows:
                 deduped.setdefault(post.platform_post_id, (item, post, evidence))
             selected = list(deduped.values())
-            if any(post.sentiment_result is None for _item, post, _evidence in selected):
+            effective_sentiments = [
+                post.sentiment_result
+                if post.sentiment_result is not None
+                else (
+                    "not_analyzed"
+                    if not task_ai_enabled.get(item.circle_task_id, True)
+                    else None
+                )
+                for item, post, _evidence in selected
+            ]
+            if any(sentiment is None for sentiment in effective_sentiments):
                 with nullcontext():
                     group.status = "waiting_for_sentiment"
                     group.error_message = None
@@ -522,7 +536,7 @@ class ScreenshotService:
                 {
                     "post_id": post.id,
                     "platform_post_id": post.platform_post_id,
-                    "sentiment": post.sentiment_result,
+                    "sentiment": effective_sentiments[index],
                     "sentiment_updated_at": (
                         post.sentiment_updated_at.isoformat() if post.sentiment_updated_at else None
                     ),
@@ -534,7 +548,7 @@ class ScreenshotService:
                     "captured_at": evidence.captured_at.isoformat(),
                     "rect": [item.x, item.y, item.width, item.height],
                 }
-                for item, post, evidence in selected
+                for index, (item, post, evidence) in enumerate(selected)
             ]
             input_sha = _sha256_bytes(
                 json.dumps(
@@ -576,7 +590,7 @@ class ScreenshotService:
                     input_sha256=input_sha,
                     item_count=len(selected),
                     negative_count=sum(
-                        post.sentiment_result == "negative" for _item, post, _evidence in selected
+                        item["sentiment"] == "negative" for item in inputs
                     ),
                     tiles=rendered["tiles"],
                     items=rendered["items"],
@@ -668,9 +682,15 @@ class ScreenshotService:
             with Image.open(source_path) as source:
                 canvas = source.convert("RGB")
                 draw = ImageDraw.Draw(canvas)
+                has_negative = False
                 for selected_index, item, post in page_cards:
                     left, top, right, bottom = _recover_card_crop_box(source, item)
-                    if post.sentiment_result == "negative":
+                    effective_sentiment = inputs[selected_index].get(
+                        "sentiment",
+                        getattr(post, "sentiment_result", None),
+                    )
+                    if effective_sentiment == "negative":
+                        has_negative = True
                         draw.rectangle(
                             (
                                 left + 2,
@@ -686,7 +706,7 @@ class ScreenshotService:
                             "post_id": post.id,
                             "platform_post_id": post.platform_post_id,
                             "title": post.title,
-                            "sentiment_result": post.sentiment_result,
+                            "sentiment_result": effective_sentiment,
                             "run_number": inputs[selected_index]["run_number"],
                             "captured_at": inputs[selected_index]["captured_at"],
                             "tile_index": tile_index,
@@ -696,7 +716,11 @@ class ScreenshotService:
                         }
                     )
             tile_path = output_dir / f"tile-{tile_index + 1:04d}.png"
-            canvas.save(tile_path, format="PNG", optimize=True)
+            if has_negative:
+                canvas.save(tile_path, format="PNG", optimize=True)
+            else:
+                # 没有负面标记时成果就是原始页面本身，直接复制文件，避免无意义重编码。
+                shutil.copyfile(source_path, tile_path)
             tiles.append(
                 {
                     "index": tile_index,
