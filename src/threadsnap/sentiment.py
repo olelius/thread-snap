@@ -682,7 +682,11 @@ def build_output_correction_request(
 
     if isinstance(exc, ValidationError):
         detail = json.dumps(
-            exc.errors(include_url=False, include_input=False),
+            exc.errors(
+                include_url=False,
+                include_input=False,
+                include_context=False,
+            ),
             ensure_ascii=False,
             separators=(",", ":"),
         )

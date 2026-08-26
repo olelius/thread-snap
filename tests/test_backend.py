@@ -1455,6 +1455,29 @@ class ApiAndConfigTests(AppCase):
         self.assertIn("相关结果必须包含 sentiment", message)
         self.assertNotIn(raw, message)
 
+        invalid_payload = {
+            "subject_relevance": True,
+            "matched_subjects": ["瑞虎8"],
+            "sentiment": "non_negative",
+            "primary_category": "product_criticism",
+            "secondary_categories": [],
+            "evidence": ["正文评价油耗。"],
+            "summary": "内容整体偏中性。",
+        }
+        completed = complete_deepseek_tool_payload(invalid_payload, post)
+        with self.assertRaises(ValidationError) as caught:
+            SentimentFeedback.model_validate(completed)
+
+        validation_correction = build_output_correction_request(
+            request,
+            json.dumps(invalid_payload, ensure_ascii=False),
+            caught.exception,
+            input_mode="text_only",
+        )
+        validation_message = validation_correction["messages"][1]["content"]
+        self.assertIn("非负面结果不得包含负面类型", validation_message)
+        self.assertNotIn('"ctx"', validation_message)
+
     def test_bootstrap_refreshes_available_adapter_version(self) -> None:
         with self.container.sessions.begin() as db:
             platform = db.get(PlatformConfig, "dongchedi")
