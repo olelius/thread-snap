@@ -253,7 +253,7 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
         score_base = Decimal("3.80") + Decimal(index) / Decimal(100)
         rank_base = Decimal(5 + (index % 5))
         volume_base = Decimal(500 + index * 37)
-        circle_content_base = Decimal(5000 + index * 113)
+        review_article_count_base = Decimal(5000 + index * 113)
         negative_rate_base = Decimal(32 + (index % 8))
         pattern = index % 9
         status = "success"
@@ -263,49 +263,49 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
             score = _metric(score_base, None)
             rank = _metric(rank_base, None, inverse=True)
             volume = _metric(volume_base, None)
-            circle_content = _metric(circle_content_base, None)
+            review_article_count = _metric(review_article_count_base, None)
             negative_rate = _metric(negative_rate_base, None, inverse=True)
         elif pattern == 0:
             score = _metric(score_base + Decimal("0.12"), score_base)
             rank = _metric(rank_base - 1, rank_base, inverse=True)
             volume = _metric(volume_base + 120, volume_base)
-            circle_content = _metric(circle_content_base + 45, circle_content_base)
+            review_article_count = _metric(review_article_count_base + 45, review_article_count_base)
             negative_rate = _metric(negative_rate_base - 3, negative_rate_base, inverse=True)
         elif pattern == 1:
             score = _metric(score_base - Decimal("0.08"), score_base)
             rank = _metric(rank_base + 2, rank_base, inverse=True)
             volume = _metric(volume_base - 80, volume_base)
-            circle_content = _metric(circle_content_base - 20, circle_content_base)
+            review_article_count = _metric(review_article_count_base - 20, review_article_count_base)
             negative_rate = _metric(negative_rate_base + 4, negative_rate_base, inverse=True)
         elif pattern == 2:
             score = _metric(score_base + Decimal("0.05"), score_base)
             rank = _metric(rank_base + 1, rank_base, inverse=True)
             volume = _metric(volume_base, volume_base)
-            circle_content = _metric(circle_content_base + 12, circle_content_base)
+            review_article_count = _metric(review_article_count_base + 12, review_article_count_base)
             negative_rate = _metric(negative_rate_base + 1, negative_rate_base, inverse=True)
         elif pattern == 3:
             score = _metric(score_base, score_base)
             rank = _metric(rank_base, rank_base, inverse=True)
             volume = _metric(volume_base, volume_base)
-            circle_content = _metric(circle_content_base, circle_content_base)
+            review_article_count = _metric(review_article_count_base, review_article_count_base)
             negative_rate = _metric(negative_rate_base, negative_rate_base, inverse=True)
         elif pattern == 4:
             score = _metric(score_base, score_base)
             rank = _metric(rank_base, rank_base, inverse=True)
             volume = _metric(volume_base + 300, volume_base)
-            circle_content = _metric(circle_content_base + 180, circle_content_base)
+            review_article_count = _metric(review_article_count_base + 180, review_article_count_base)
             negative_rate = _metric(negative_rate_base, negative_rate_base, inverse=True)
         elif pattern == 5:
             score = _metric(score_base, None)
             rank = _metric(rank_base, None, inverse=True)
             volume = _metric(volume_base, None)
-            circle_content = _metric(circle_content_base, None)
+            review_article_count = _metric(review_article_count_base, None)
             negative_rate = _metric(negative_rate_base, None, inverse=True)
         elif pattern == 6:
             score = _metric(None, None, state="not_available", raw="暂无评分")
             rank = _metric(None, None, state="not_available", raw="暂无排名")
             volume = _metric(volume_base, volume_base)
-            circle_content = _metric(circle_content_base, circle_content_base)
+            review_article_count = _metric(review_article_count_base, review_article_count_base)
             negative_rate = _metric(
                 None, None, state="not_available", raw="暂无差评率"
             )
@@ -313,7 +313,7 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
             score = _metric(None, None, state="unknown")
             rank = _metric(None, None, state="unknown")
             volume = _metric(None, None, state="unknown")
-            circle_content = _metric(None, None, state="unknown")
+            review_article_count = _metric(None, None, state="unknown")
             negative_rate = _metric(None, None, state="unknown")
             status = "failed"
             error_code = "SYNTHETIC_UNKNOWN"
@@ -322,7 +322,7 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
             score = _metric(None, None, state="auth_required")
             rank = _metric(None, None, state="auth_required")
             volume = _metric(None, None, state="auth_required")
-            circle_content = _metric(None, None, state="auth_required")
+            review_article_count = _metric(None, None, state="auth_required")
             negative_rate = _metric(None, None, state="auth_required")
             status = "failed"
             error_code = "AUTH_REQUIRED"
@@ -337,7 +337,7 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
                     "score": score,
                     "rank": rank,
                     "volume": volume,
-                    "circle_content": circle_content,
+                    "review_article_count": review_article_count,
                     "negative_rate": negative_rate,
                 },
                 "evidence_required": True,
@@ -1187,10 +1187,10 @@ class ReputationService:
         cls, page: ReputationPageResult, baseline_row: dict[str, Any] | None
     ) -> dict[str, Any]:
         baseline = (baseline_row or {}).get("metrics", {})
-        circle_content = cls._official_metric(
-            page.circle_content_raw, baseline.get("circle_content")
+        review_article_count = cls._official_metric(
+            page.review_article_count_raw, baseline.get("review_article_count")
         )
-        circle_content["source_url"] = page.circle_url
+        review_article_count["source_url"] = page.review_article_count_url
         negative_rate = cls._official_metric(
             page.negative_rate_raw,
             baseline.get("negative_rate"),
@@ -1212,7 +1212,7 @@ class ReputationService:
                 scope=page.rank_scope,
             ),
             "volume": cls._official_metric(page.volume_raw, baseline.get("volume")),
-            "circle_content": circle_content,
+            "review_article_count": review_article_count,
             "negative_rate": negative_rate,
         }
 
@@ -1283,7 +1283,7 @@ class ReputationService:
                         "score",
                         "rank",
                         "volume",
-                        "circle_content",
+                        "review_article_count",
                         "negative_rate",
                     )
                 }
@@ -1516,7 +1516,7 @@ class ReputationService:
                 batch_timeout_seconds=45 * 60,
                 evidence_policy=evidence_policy,
                 prefer_http_first=False,
-                include_circle_content=True,
+                include_review_article_count=True,
                 include_negative_rate=True,
             )
             try:
@@ -3273,7 +3273,7 @@ class ReputationService:
                 ("score", "口碑分"),
                 ("rank", "排名"),
                 ("volume", "口碑量"),
-                ("circle_content", "圈子内容量"),
+                ("review_article_count", "口碑评价篇数"),
                 ("negative_rate", "差评率"),
             ):
                 metric = result.metrics.get(key)
@@ -3329,7 +3329,7 @@ class ReputationService:
             "口碑分",
             "排名",
             "口碑量",
-            "圈子内容量",
+            "口碑评价篇数",
             "差评率",
             "备注",
         ]
@@ -3347,7 +3347,7 @@ class ReputationService:
                 result.metrics["score"].get("raw") or "—",
                 result.metrics["rank"].get("raw") or "—",
                 result.metrics["volume"].get("raw") or "—",
-                result.metrics.get("circle_content", {}).get("raw") or "—",
+                result.metrics.get("review_article_count", {}).get("raw") or "—",
                 (
                     result.metrics["negative_rate"].get("raw") or "—"
                     if "negative_rate" in result.metrics
@@ -3360,7 +3360,7 @@ class ReputationService:
                 (5, "score"),
                 (6, "rank"),
                 (7, "volume"),
-                (8, "circle_content"),
+                (8, "review_article_count"),
                 (9, "negative_rate"),
             ):
                 tone = result.metrics.get(metric_name, {}).get("tone")

@@ -109,8 +109,8 @@ class OfficialFakeAdapter:
                     score_raw=score,
                     rank_raw="4",
                     volume_raw=str(500 + index),
-                    circle_content_raw=str(5000 + index),
-                    circle_url=f"https://www.dongchedi.com/community/{target.platform_vehicle_id}",
+                    review_article_count_raw=str(5000 + index),
+                    review_article_count_url=target.platform_url,
                     rank_scope="同级车评分",
                     measurements=[measurement] * 3,
                     full_page_path=metric,
@@ -277,7 +277,7 @@ class ReputationInspectionTest(unittest.TestCase):
             for row in range(2, 29)
             for column in (5, 6, 7, 8, 9)
         }
-        self.assertEqual(sheet["H1"].value, "圈子内容量")
+        self.assertEqual(sheet["H1"].value, "口碑评价篇数")
         self.assertEqual(sheet["I1"].value, "差评率")
         self.assertTrue(any(str(value).endswith("E2F0D9") for value in fills))
         self.assertTrue(any(str(value).endswith("F4CCCC") for value in fills))
@@ -641,8 +641,8 @@ class ReputationInspectionTest(unittest.TestCase):
                             score_raw="3.80",
                             rank_raw="4",
                             volume_raw=str(500 + index),
-                            circle_content_raw=None,
-                            circle_url=None,
+                            review_article_count_raw=None,
+                            review_article_count_url=None,
                             rank_scope="同级车评分",
                             measurements=[{"stable": True}] * 3,
                             full_page_path=full,
@@ -756,23 +756,9 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual(result.measurements[-1]["collection_method"], "http_ssr")
         self.assertIsNone(result.metric_region_path)
 
-    def test_dongchedi_circle_content_uses_matching_series_id_without_browser(self) -> None:
-        """圈子内容量必须由平台车型ID构造URL并校验最终圈子身份。"""
+    def test_dongchedi_review_article_count_comes_from_score_page_next_data(self) -> None:
+        """评价篇数读取评分页“全部评分”列表总量，不发起圈子页面请求。"""
 
-        requested: list[str] = []
-
-        class Response:
-            url = "https://www.dongchedi.com/community/8985"
-            status_code = 200
-            content = "<html><body><span>共7,456条内容</span></body></html>".encode()
-
-        class Session:
-            def get(self, url, **_kwargs):
-                requested.append(url)
-                return Response()
-
-        adapter = DongchediReputationAdapter(None, include_circle_content=True)
-        adapter._thread_local.http = Session()
         target = ReputationMappingTarget(
             vehicle_id="dcd-8985",
             platform_vehicle_id="8985",
@@ -780,12 +766,25 @@ class ReputationInspectionTest(unittest.TestCase):
             platform_display_name="风云A9L",
             mapping_hash="fixture",
         )
+        content = """
+        <html><body><h1>懂风云A9L</h1>
+          <span>共2,047人评价</span>
+          <div class="rank-wrapper"><ul><li class="tw-text-common-yellow">
+            <span class="car-name">风云A9L</span><span class="score-wrapper">3.76</span>
+          </li></ul></div>
+          <script id="__NEXT_DATA__" type="application/json">
+            {"props":{"pageProps":{"reviewListData":{"total_count":2093}}}}
+          </script>
+        </body></html>
+        """.encode()
 
-        count, url = adapter._visit_circle_content(target)
+        result = DongchediReputationAdapter._parse_http_page(
+            target, target.platform_url, content, duration_ms=12
+        )
 
-        self.assertEqual(count, "7456")
-        self.assertEqual(url, "https://www.dongchedi.com/community/8985")
-        self.assertEqual(requested, [url])
+        self.assertEqual(result.volume_raw, "2047")
+        self.assertEqual(result.review_article_count_raw, "2093")
+        self.assertEqual(result.review_article_count_url, target.platform_url)
 
     def test_dongchedi_negative_rate_reuses_series_id_and_app_counts(self) -> None:
         """正式巡检直接复用平台车型ID，并由优缺点数量计算整数差评率。"""
@@ -900,8 +899,8 @@ class ReputationInspectionTest(unittest.TestCase):
                     score_raw=measurement["score_raw"],
                     rank_raw="2",
                     volume_raw="500",
-                    circle_content_raw=None,
-                    circle_url=None,
+                    review_article_count_raw=None,
+                    review_article_count_url=None,
                     rank_scope="同级车评分",
                     measurements=[measurement],
                     full_page_path=None,
@@ -932,8 +931,8 @@ class ReputationInspectionTest(unittest.TestCase):
                             score_raw="3.90",
                             rank_raw="2",
                             volume_raw="500",
-                            circle_content_raw=None,
-                            circle_url=None,
+                            review_article_count_raw=None,
+                            review_article_count_url=None,
                             rank_scope="同级车评分",
                             measurements=[{"collection_method": "browser"}],
                             full_page_path=metric,
@@ -1271,8 +1270,8 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         self.assertTrue(OfficialFakeAdapter.last_include_negative_rate)
         changed = next(item for item in daily["results"] if item["vehicle_id"] == "official-01")
         self.assertEqual(changed["metrics"]["score"]["direction"], "up")
-        self.assertEqual(changed["metrics"]["circle_content"]["raw"], "5000")
-        self.assertEqual(changed["metrics"]["circle_content"]["direction"], "same")
+        self.assertEqual(changed["metrics"]["review_article_count"]["raw"], "5000")
+        self.assertEqual(changed["metrics"]["review_article_count"]["direction"], "same")
         self.assertEqual(changed["metrics"]["negative_rate"]["direction"], "up")
         self.assertEqual(changed["metrics"]["negative_rate"]["tone"], "negative")
         self.assertEqual(changed["metrics"]["negative_rate"]["positive_count"], 214)

@@ -121,7 +121,8 @@
 6. `docs/adr/0035-prioritize-official-reputation-runs-without-preemption.md`；
 7. `docs/adr/0036-isolate-synthetic-reputation-test-runs.md`；
 8. `docs/adr/0037-retain-only-reputation-metric-region-evidence.md`；
-9. 执行平台适配或页面证据 PoC 时读取该工作线约定的 Git 外真实样本。
+9. `docs/adr/0039-use-score-page-review-article-count.md`；
+10. 执行平台适配或页面证据 PoC 时读取该工作线约定的 Git 外真实样本。
 
 ## 4. 已接受 ADR
 
@@ -162,6 +163,7 @@
 | `docs/adr/0036-isolate-synthetic-reputation-test-runs.md` | 手动合成口碑运行只存在于隔离测试环境，复用正式处理链但不污染正式批次、基线或调度 |
 | `docs/adr/0037-retain-only-reputation-metric-region-evidence.md` | 口碑巡检在稳定DOM边界上只保留一张指标区域PNG，并由前端、XLSX和证据包复用 |
 | `docs/adr/0038-freeze-ai-and-screenshot-options-per-batch.md` | AI 分析与圈子页面截图按规则版本或手动批次冻结，原始页面捕获不注入改像素 CSS |
+| `docs/adr/0039-use-score-page-review-article-count.md` | 口碑第四指标读取评分页评价文章总数，清除并替代车型圈子帖子总量 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 

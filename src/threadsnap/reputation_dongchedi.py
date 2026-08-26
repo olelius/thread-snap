@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import re
 import threading
 import time
@@ -21,7 +22,7 @@ from PIL import Image
 
 from .browser_runtime import browser_launch_args
 
-ADAPTER_VERSION = "dongchedi-reputation-v6-negative-rate"
+ADAPTER_VERSION = "dongchedi-reputation-v7-review-article-count"
 VALIDATION_CONTRACT_VERSION = "dongchedi-reputation-mapping-v1"
 VIEWPORT = {"width": 1440, "height": 1000}
 NEGATIVE_RATE_API_URL = (
@@ -46,8 +47,6 @@ SERIES_URL_RE = re.compile(
     r"^https://www\.dongchedi\.com/auto/series/(?:score/)?(?P<id>\d+)(?:-x-x-x-x-x)?/?(?:\?.*)?$"
 )
 VOLUME_RE = re.compile(r"共\s*([0-9,]+)\s*人评价")
-CIRCLE_CONTENT_RE = re.compile(r"共\s*([0-9,]+)\s*条内容")
-CIRCLE_PATH_RE = re.compile(r"^/community/(?P<id>\d+)/?$")
 
 
 class ReputationAdapterError(RuntimeError):
@@ -83,8 +82,8 @@ class ReputationPageResult:
     score_raw: str | None
     rank_raw: str | None
     volume_raw: str | None
-    circle_content_raw: str | None
-    circle_url: str | None
+    review_article_count_raw: str | None
+    review_article_count_url: str | None
     rank_scope: str
     measurements: list[dict[str, Any]]
     full_page_path: Path | None
@@ -194,7 +193,7 @@ class DongchediReputationAdapter:
         batch_timeout_seconds: int = 45 * 60,
         evidence_policy: Callable[[ReputationMappingTarget, dict[str, Any]], bool] | None = None,
         prefer_http_first: bool = False,
-        include_circle_content: bool = False,
+        include_review_article_count: bool = False,
         include_negative_rate: bool = False,
     ) -> None:
         self.storage_state = storage_state
@@ -204,7 +203,7 @@ class DongchediReputationAdapter:
         self.batch_timeout_seconds = max(1, int(batch_timeout_seconds))
         self.evidence_policy = evidence_policy
         self.prefer_http_first = prefer_http_first
-        self.include_circle_content = include_circle_content
+        self.include_review_article_count = include_review_article_count
         self.include_negative_rate = include_negative_rate
         self.cookies = _cookies_from_state(storage_state)
         self._thread_local = threading.local()
@@ -218,68 +217,6 @@ class DongchediReputationAdapter:
             session.cookies.update(self.cookies)
             self._thread_local.http = session
         return session
-
-    def _visit_circle_content(self, target: ReputationMappingTarget) -> tuple[str, str]:
-        """通过同一平台车型ID直接读取圈子内容总量，不启动额外浏览器页面。"""
-
-        circle_url = f"https://www.dongchedi.com/community/{target.platform_vehicle_id}"
-        try:
-            response = self._http_session().get(
-                circle_url,
-                timeout=self.timeout_seconds,
-                allow_redirects=True,
-            )
-        except Exception as error:
-            raise ReputationAdapterError(
-                "REPUTATION_CIRCLE_NETWORK_ERROR",
-                f"直接访问车型圈子页面失败：{error}",
-                retryable=True,
-            ) from error
-        final_url = str(response.url)
-        body = bytes(response.content or b"")
-        if "/login-required" in urlsplit(final_url).path or b"login-required" in body[:200_000].lower():
-            raise ReputationAdapterError("AUTH_REQUIRED", "懂车帝共享Session需要更新。")
-        if response.status_code >= 500 or response.status_code == 429:
-            raise ReputationAdapterError(
-                "REPUTATION_CIRCLE_SERVER_ERROR",
-                f"车型圈子页面返回HTTP {response.status_code}。",
-                retryable=True,
-            )
-        if response.status_code >= 400:
-            raise ReputationAdapterError(
-                "REPUTATION_CIRCLE_STATUS_ERROR",
-                f"车型圈子页面返回HTTP {response.status_code}。",
-            )
-        final_path = urlsplit(final_url).path
-        circle_match = CIRCLE_PATH_RE.match(final_path)
-        if not circle_match or circle_match.group("id") != target.platform_vehicle_id:
-            raise ReputationAdapterError(
-                "REPUTATION_CIRCLE_IDENTITY_REDIRECT",
-                "圈子页面跳转后的稳定车型ID与口碑巡检车型ID不一致。",
-            )
-        if not body:
-            raise ReputationAdapterError(
-                "REPUTATION_CIRCLE_DOCUMENT_EMPTY",
-                "车型圈子页面返回空文档。",
-                retryable=True,
-            )
-        try:
-            document = html.fromstring(body.decode("utf-8"))
-            text = " ".join(document.text_content().split())
-        except (TypeError, UnicodeDecodeError, ValueError) as error:
-            raise ReputationAdapterError(
-                "REPUTATION_CIRCLE_DOCUMENT_INVALID",
-                "车型圈子页面没有返回可解析的HTML文档。",
-                retryable=True,
-            ) from error
-        match = CIRCLE_CONTENT_RE.search(text)
-        if not match:
-            raise ReputationAdapterError(
-                "REPUTATION_CIRCLE_CONTENT_MISSING",
-                "车型圈子页面未返回可识别的内容总量。",
-                retryable=True,
-            )
-        return match.group(1).replace(",", ""), circle_url
 
     @staticmethod
     def _attitude_count(
@@ -462,6 +399,12 @@ class DongchediReputationAdapter:
               const volumeNode = [...document.querySelectorAll('span,div')].find((e) =>
                 visible(e) && /^共\\s*[0-9,]+\\s*人评价$/.test(text(e)));
               const volumeText = text(volumeNode);
+              let reviewArticleCount = null;
+              try {
+                const nextData = JSON.parse(document.querySelector('#__NEXT_DATA__')?.textContent || '{}');
+                const count = nextData?.props?.pageProps?.reviewListData?.total_count;
+                if (Number.isInteger(count) && count >= 0) reviewArticleCount = String(count);
+              } catch (_) {}
               const rankScope = rankRoot ? '同级车评分' : '同级车评分';
               const scoreHero = [...document.querySelectorAll('.tw-text-common-yellow')]
                 .find((e) => visible(e) && /^\\d+(?:\\.\\d+)?$/.test(text(e)));
@@ -471,6 +414,7 @@ class DongchediReputationAdapter:
                 rank_raw: scoreText && scoreText !== '-' && current
                   ? String(rows.indexOf(current) + 1) : null,
                 volume_raw: volumeText || null,
+                review_article_count_raw: reviewArticleCount,
                 rank_scope: rankScope,
                 heading_box: box(heading),
                 score_box: box(scoreHero),
@@ -495,6 +439,7 @@ class DongchediReputationAdapter:
             value.get("score_raw"),
             value.get("rank_raw"),
             value.get("volume_raw"),
+            value.get("review_article_count_raw"),
             value.get("rank_scope"),
             rounded_box("heading_box"),
             rounded_box("score_box"),
@@ -577,12 +522,16 @@ class DongchediReputationAdapter:
                     "口碑分与同级排名的可用状态不一致。",
                 )
             metric_rect = _metric_rect(current)
-            circle_content_raw: str | None = None
-            circle_url: str | None = None
-            if self.include_circle_content:
-                circle_content_raw, circle_url = await asyncio.to_thread(
-                    self._visit_circle_content, target
-                )
+            review_article_count_raw = current.get("review_article_count_raw")
+            review_article_count_url: str | None = None
+            if self.include_review_article_count:
+                if review_article_count_raw is None:
+                    raise ReputationAdapterError(
+                        "REPUTATION_REVIEW_ARTICLE_COUNT_MISSING",
+                        "口碑评分页未返回可识别的评价篇数。",
+                        retryable=True,
+                    )
+                review_article_count_url = page.url
             negative_rate_raw: str | None = None
             negative_rate_url: str | None = None
             negative_rate_positive_count: int | None = None
@@ -640,8 +589,8 @@ class DongchediReputationAdapter:
                 score_raw=str(score_raw) if score_raw is not None else None,
                 rank_raw=str(rank_raw) if rank_raw is not None else None,
                 volume_raw=volume_raw,
-                circle_content_raw=circle_content_raw,
-                circle_url=circle_url,
+                review_article_count_raw=review_article_count_raw,
+                review_article_count_url=review_article_count_url,
                 rank_scope=str(current.get("rank_scope") or "同级车评分"),
                 measurements=measurements,
                 full_page_path=metric_path,
@@ -665,6 +614,22 @@ class DongchediReputationAdapter:
         """读取 SSR 节点的可见文本，并折叠布局空白。"""
 
         return " ".join(str(node.text_content()).split())
+
+    @staticmethod
+    def _review_article_count(document: Any) -> str | None:
+        """从评分页服务端状态读取“全部评分”的评价篇数。"""
+
+        nodes = document.xpath("//script[@id='__NEXT_DATA__']/text()")
+        if not nodes:
+            return None
+        try:
+            payload = json.loads(str(nodes[0]))
+            count = payload["props"]["pageProps"]["reviewListData"]["total_count"]
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            return None
+        return str(count)
 
     @classmethod
     def _parse_http_page(
@@ -744,11 +709,13 @@ class DongchediReputationAdapter:
                 volume_text = text
                 volume_raw = match.group(1).replace(",", "")
                 break
+        review_article_count_raw = cls._review_article_count(document)
         measurement = {
             "actual_name": actual_name,
             "score_raw": score_raw,
             "rank_raw": rank_raw,
             "volume_raw": volume_text,
+            "review_article_count_raw": review_article_count_raw,
             "rank_scope": "同级车评分",
             "collection_method": "http_ssr",
         }
@@ -761,8 +728,8 @@ class DongchediReputationAdapter:
             score_raw=score_raw,
             rank_raw=rank_raw,
             volume_raw=volume_raw,
-            circle_content_raw=None,
-            circle_url=None,
+            review_article_count_raw=review_article_count_raw,
+            review_article_count_url=(final_url if review_article_count_raw is not None else None),
             rank_scope="同级车评分",
             measurements=[measurement],
             full_page_path=None,
@@ -818,10 +785,13 @@ class DongchediReputationAdapter:
             body,
             duration_ms=round((time.monotonic() - started) * 1000),
         )
-        circle_content_raw: str | None = None
-        circle_url: str | None = None
-        if self.include_circle_content:
-            circle_content_raw, circle_url = self._visit_circle_content(target)
+        if self.include_review_article_count:
+            if result.review_article_count_raw is None:
+                raise ReputationAdapterError(
+                    "REPUTATION_REVIEW_ARTICLE_COUNT_MISSING",
+                    "口碑评分页未返回可识别的评价篇数。",
+                    retryable=True,
+                )
         negative_rate_raw: str | None = None
         negative_rate_url: str | None = None
         negative_rate_positive_count: int | None = None
@@ -835,8 +805,6 @@ class DongchediReputationAdapter:
             ) = self._visit_negative_rate(target)
         return replace(
             result,
-            circle_content_raw=circle_content_raw,
-            circle_url=circle_url,
             duration_ms=round((time.monotonic() - started) * 1000),
             negative_rate_raw=negative_rate_raw,
             negative_rate_url=negative_rate_url,
