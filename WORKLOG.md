@@ -18,7 +18,7 @@
 
 ## 2026-08-26 — 口碑第四指标改为评价篇数并清除旧数据
 **总目标**：把口碑详情中的第四数量指标替换为评分页“全部评分”的口碑评价篇数，并彻底清除原车型圈子帖子总量的采集代码、业务数据和派生产物。
-**状态**：✅ 采集、比较、前端、汇报、XLSX、迁移和本地既有数据均已切换完成。
+**状态**：✅ 采集、比较、前端、汇报、XLSX、迁移及本地与目标服务器既有数据均已切换完成。
 **干到哪里了**：
 - [x] 已确认评分页服务端状态 `props.pageProps.reviewListData.total_count` 对应“全部评分·共N篇”；保存的真实哈弗大狗页面解析为评价篇数2092、评价人数2047，证明两者是独立指标。
 - [x] 真实适配器升级为 `dongchedi-reputation-v7-review-article-count`：评价篇数在同一评分页三次稳定测量中读取并保存评分页来源URL；删除车型圈子页请求、路径身份校验、错误码和相关字段，不再增加额外HTTP请求。
@@ -26,7 +26,10 @@
 - [x] Alembic `a6c9e2f4b701` 递归清除81条既有结果和2份有效基线中的旧键，删除旧TXT、XLSX后按新模板重建3个历史终态批次；当前库旧结果键0、旧基线键0，3份XLSX的H列表头均为“口碑评价篇数”，数据库完整性为`ok`。
 - [x] 升级前SQLite在线备份和口碑文件备份位于`artifacts/runtime/review-article-count-20260826/20260826-145506-before-cleanup/`，数据库SHA-256为`68437c4d2824fd93b7e4acc66e4e58d48bf8f5188205c117f5898921e97e8c15`。
 - [x] 后端完整回归131项、Ruff、compileall、pip check、前端TypeScript检查、生产构建（2468 modules）和`git diff --check`通过。
-**下一步**：完成Git收尾后升级目标服务器，先备份服务器数据库与口碑派生产物，再执行同一迁移和新模板重建验证。
+- [x] 干净提交`9b2beb8ab11baf7e70bb8bcbf652168d10230948`已部署为服务器release `/opt/threadsnap/releases/0.1.0-9b2beb8ab11b`；服务器54条结果和1份有效基线旧键均为0，两份历史终态TXT、XLSX已按新模板重建，H列表头均为“口碑评价篇数”，数据库完整性为`ok`。
+- [x] 服务器升级前在线备份数据库及141个口碑文件，数据库SHA-256为`e2008bbfc448bfcae62d83355aebb0f4fc1c5f31ef31ee48304bd97a6647ac67`，审计与回滚材料位于`/var/lib/threadsnap/backups/review-article-count/20260826-150822/`；离线包SHA-256为`b2f1633e0f412082bac98078c62c350b1f44bc25e08601abf91dbfc9cb8f96c5`。
+- [x] 服务器`threadsnap`、`threadsnap-nginx`、`threadsnap-wayland`、`threadsnap-cloudflared-quick`均为`active`；本机后端、Nginx及公网Quick Tunnel `/health`均为`ok`，公网SPA返回HTTP 200。
+**下一步**：无。
 **边界**：旧值与新指标业务语义不同，不迁移、不回填、不作为首个新批次基线；论坛帖子提取模块的圈子配置、任务和页面证据保持不变。
 **关联**：`docs/adr/0039-use-score-page-review-article-count.md`、`src/threadsnap/reputation_dongchedi.py`、`src/threadsnap/migrations/versions/a6c9e2f4b701_review_article_count.py`、`artifacts/runtime/review-article-count-20260826/`
 
