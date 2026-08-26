@@ -101,7 +101,8 @@ function MetricCell({ metric, inverseLabel = false }: { metric: ReputationMetric
   if (!metric.raw) return <div><span className='text-sm text-muted-foreground'>—</span><div className='mt-1 text-[11px] text-muted-foreground'>{stateName(metric.comparison_status)}</div></div>
   const comparable = metric.comparison_status === 'comparable'
   const changeLabel = metric.direction === 'same' ? (inverseLabel ? '名次持平' : '较前日持平') : inverseLabel ? (metric.tone === 'positive' ? '名次上升' : '名次下降') : (metric.direction === 'up' ? '较前日上升' : '较前日下降')
-  return <div className={cn('inline-flex min-w-24 flex-col rounded-md border px-2 py-1.5', tone)}><span className='font-semibold tabular-nums'>{metric.raw}</span>{comparable ? <span className='mt-0.5 flex items-center gap-1 text-[11px]'><Icon className='size-3' />{changeLabel}{metric.direction !== 'same' && metric.delta ? ` ${metric.delta.replace(/[+-]/, '')}` : ''}</span> : <span className='mt-0.5 text-[11px] opacity-75'>{stateName(metric.comparison_status)}</span>}</div>
+  const delta = metric.delta == null ? '' : String(metric.delta)
+  return <div className={cn('inline-flex min-w-24 flex-col rounded-md border px-2 py-1.5', tone)}><span className='font-semibold tabular-nums'>{metric.raw}</span>{comparable ? <span className='mt-0.5 flex items-center gap-1 text-[11px]'><Icon className='size-3' />{changeLabel}{metric.direction !== 'same' && delta ? ` ${delta.replace(/[+-]/, '')}` : ''}</span> : <span className='mt-0.5 text-[11px] opacity-75'>{stateName(metric.comparison_status)}</span>}</div>
 }
 
 function EvidencePanel({ results, onViewEvidence }: { results: ReputationResult[]; onViewEvidence: (result: ReputationResult) => void }) {
