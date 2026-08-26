@@ -16,6 +16,22 @@
 
 ---
 
+## 2026-08-26 — 口碑第四指标改为评价篇数并清除旧数据
+**总目标**：把口碑详情中的第四数量指标替换为评分页“全部评分”的口碑评价篇数，并彻底清除原车型圈子帖子总量的采集代码、业务数据和派生产物。
+**状态**：✅ 采集、比较、前端、汇报、XLSX、迁移和本地既有数据均已切换完成。
+**干到哪里了**：
+- [x] 已确认评分页服务端状态 `props.pageProps.reviewListData.total_count` 对应“全部评分·共N篇”；保存的真实哈弗大狗页面解析为评价篇数2092、评价人数2047，证明两者是独立指标。
+- [x] 真实适配器升级为 `dongchedi-reputation-v7-review-article-count`：评价篇数在同一评分页三次稳定测量中读取并保存评分页来源URL；删除车型圈子页请求、路径身份校验、错误码和相关字段，不再增加额外HTTP请求。
+- [x] 后端指标键、前日比较、合成场景、正文汇报、固定XLSX及前端表格统一为 `review_article_count` / “口碑评价篇数”；首个新批次没有历史基线，后续按前日冻结值比较。
+- [x] Alembic `a6c9e2f4b701` 递归清除81条既有结果和2份有效基线中的旧键，删除旧TXT、XLSX后按新模板重建3个历史终态批次；当前库旧结果键0、旧基线键0，3份XLSX的H列表头均为“口碑评价篇数”，数据库完整性为`ok`。
+- [x] 升级前SQLite在线备份和口碑文件备份位于`artifacts/runtime/review-article-count-20260826/20260826-145506-before-cleanup/`，数据库SHA-256为`68437c4d2824fd93b7e4acc66e4e58d48bf8f5188205c117f5898921e97e8c15`。
+- [x] 后端完整回归131项、Ruff、compileall、pip check、前端TypeScript检查、生产构建（2468 modules）和`git diff --check`通过。
+**下一步**：完成Git收尾后升级目标服务器，先备份服务器数据库与口碑派生产物，再执行同一迁移和新模板重建验证。
+**边界**：旧值与新指标业务语义不同，不迁移、不回填、不作为首个新批次基线；论坛帖子提取模块的圈子配置、任务和页面证据保持不变。
+**关联**：`docs/adr/0039-use-score-page-review-article-count.md`、`src/threadsnap/reputation_dongchedi.py`、`src/threadsnap/migrations/versions/a6c9e2f4b701_review_article_count.py`、`artifacts/runtime/review-article-count-20260826/`
+
+---
+
 ## 2026-08-26 — 口碑内部车型身份平台中立化迁移
 **总目标**：把既有27款口碑车型从绑定懂车帝平台ID的 `dcd-*` 内部身份迁移为平台中立的 `rep-*` 身份，并保持验证、历史批次、前日基线和证据链完整。
 **状态**：✅ 本地与目标服务器的当前草稿、已发布版本、历史验证、真实批次、证据路径和已生成证据包均已完成迁移并恢复服务。
