@@ -16,6 +16,25 @@
 
 ---
 
+## 2026-08-26 — 修复口碑负数差值导致详情页崩溃
+**总目标**：修复旧指标清理迁移对口碑指标字符串叶子的错误类型转换，并让历史批次和未来批次都保持稳定的指标文本合同。
+**状态**：✅ 代码、修复迁移、本地与目标服务器既有数据及真实页面均已完成，进入自动Git收尾。
+**干到哪里了**：
+- [x] 对比全部3个本地批次后确认：8月24日无基线差值，8月25日90个差值均为字符串，8月26日的瑞虎8和吉利银河M9口碑量差值 `"-1"` 被转成整数 `-1`，触发前端对数字调用 `.replace()`。
+- [x] 根因定位为 `a6c9e2f4b701` 在递归清除旧键时对每个字符串叶子再次执行 `json.loads()`；`"-1"` 会变成整数而 `"+1"` 保持字符串，因此只在负数变化项暴露。
+- [x] 原迁移改为只在数据库JSON容器边界解码；新增 `b7d2f4a6c803` 修复既有结果和冻结基线的 `raw/value/baseline_raw/baseline_value/delta` 文本类型，前端同时把运行时差值显式转成字符串后展示。
+- [x] 使用迁移前数据库分别验证从 `d8f4a2b6c901` 经过修正原迁移到新head、以及从已受影响的 `a6c9e2f4b701` 执行修复迁移，两条路径均为head `b7d2f4a6c803`、错误类型0、旧键0、数据库完整性 `ok`。
+- [x] 本地业务库升级后又从升级前在线备份精确恢复10个结果字段和6个冻结基线字段的原始文本精度；当前数据库完整性为 `ok`。
+- [x] 后端完整回归134项、Ruff、compileall、pip check、前端TypeScript检查、生产构建（2468 modules）和`git diff --check`通过；新增测试明确证明新批次负数差值仍保存为字符串 `"-1"`。
+- [x] 本地真实详情页HTTP 200，批次与瑞虎8正常显示，错误边界、页面异常和控制台错误均为0；验证截图位于`artifacts/runtime/reputation-metric-text-fix/local-fixed-page.png`。
+- [x] 目标服务器升级到release `/opt/threadsnap/releases/0.1.0-5e13e5f12f5c`，Alembic为`b7d2f4a6c803`；从原升级前备份精确恢复6个结果字段和2个冻结基线字段，54条结果的指标文本错误类型为0，数据库完整性为`ok`，新生成负数差值类型为字符串。
+- [x] 服务器升级前数据库备份位于`/var/lib/threadsnap/backups/reputation-metric-text/20260826-153823/`且SHA-256校验通过；四个服务均为`active`，公网`/health`与详情页HTTP 200，批次`RP-S-20260826-C3A9`无错误边界、页面异常或控制台错误，瑞虎8和吉利银河M9均返回字符串差值`"-1"`。
+**下一步**：无。
+**边界**：不改变指标数值、比较方向、历史批次身份、证据或新指标口径；计数型 `positive_count/negative_count` 继续保持整数。
+**关联**：`src/threadsnap/migrations/versions/a6c9e2f4b701_review_article_count.py`、`src/threadsnap/migrations/versions/b7d2f4a6c803_normalize_reputation_metric_text.py`、`frontend/src/features/reputation/reputation-detail-page.tsx`、`docs/memories/json-migration-container-boundary.md`、`artifacts/runtime/reputation-metric-text-fix/`
+
+---
+
 ## 2026-08-26 — 口碑第四指标改为评价篇数并清除旧数据
 **总目标**：把口碑详情中的第四数量指标替换为评分页“全部评分”的口碑评价篇数，并彻底清除原车型圈子帖子总量的采集代码、业务数据和派生产物。
 **状态**：✅ 采集、比较、前端、汇报、XLSX、迁移及本地与目标服务器既有数据均已切换完成。

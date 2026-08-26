@@ -32,7 +32,6 @@ def _decode(value: Any) -> Any:
 def _scrub(value: Any) -> Any:
     """递归清除已经退役的口碑指标键，不把旧值映射为新指标。"""
 
-    value = _decode(value)
     if isinstance(value, dict):
         return {
             key: _scrub(item)
@@ -53,16 +52,18 @@ def upgrade() -> None:
 
     bind = op.get_bind()
     for row in bind.execute(sa.text("SELECT id, metrics FROM reputation_results")):
-        cleaned = _scrub(row.metrics)
-        if cleaned != _decode(row.metrics):
+        original = _decode(row.metrics)
+        cleaned = _scrub(original)
+        if cleaned != original:
             bind.execute(
                 sa.text("UPDATE reputation_results SET metrics=:metrics WHERE id=:id"),
                 {"id": row.id, "metrics": _json_text(cleaned)},
             )
 
     for row in bind.execute(sa.text("SELECT id, baseline_snapshot FROM reputation_runs")):
-        cleaned = _scrub(row.baseline_snapshot)
-        if cleaned != _decode(row.baseline_snapshot):
+        original = _decode(row.baseline_snapshot)
+        cleaned = _scrub(original)
+        if cleaned != original:
             bind.execute(
                 sa.text(
                     "UPDATE reputation_runs SET baseline_snapshot=:snapshot WHERE id=:id"
