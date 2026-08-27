@@ -32,11 +32,23 @@ import { cn } from '@/lib/utils'
 
 type SearchState = { view?: 'links' | 'screenshots'; page?: number; pageSize?: 20 | 50 | 100; title?: string; sources?: string; visibility?: 'visible' | 'hidden' | 'unknown'; sentiment?: SentimentResult; analysisStatus?: AnalysisStatus; sort?: 'source' | 'published_at' | 'reply_count' | 'like_count'; direction?: 'asc' | 'desc'; post?: string }
 type PostSwitch = { id: string; direction: 'previous' | 'next' }
+type RunDetailKind = 'extraction' | 'recurring'
 
 export function RunDetailPage() {
+  return <RunDetail kind='extraction' />
+}
+
+export function RecurringRunDetailPage() {
+  return <RunDetail kind='recurring' />
+}
+
+function RunDetail({ kind }: { kind: RunDetailKind }) {
+  const recurring = kind === 'recurring'
+  const listPath = recurring ? '/recurring-runs' as const : '/runs' as const
+  const detailPath = recurring ? '/recurring-runs/$runId' as const : '/runs/$runId' as const
   const { runId } = useParams({ strict: false }) as { runId: string }
   const rawSearch = useSearch({ strict: false }) as SearchState
-  const navigate = useNavigate({ from: '/runs/$runId' })
+  const navigate = useNavigate()
   const client = useQueryClient()
   const search = {
     ...rawSearch,
@@ -122,10 +134,23 @@ export function RunDetailPage() {
   }, [])
 
   function patch(values: Partial<SearchState>, options?: { resetScroll?: boolean }) {
+    const next = { ...rawSearch, ...values }
     navigate({
-      to: '/runs/$runId',
+      to: detailPath,
       params: { runId },
-      search: (previous) => ({ ...previous, ...values }),
+      search: {
+        view: next.view,
+        page: next.page,
+        pageSize: next.pageSize,
+        title: next.title,
+        sources: next.sources,
+        visibility: next.visibility,
+        sentiment: next.sentiment,
+        analysisStatus: next.analysisStatus,
+        sort: next.sort,
+        direction: next.direction,
+        post: next.post,
+      },
       replace: true,
       resetScroll: options?.resetScroll ?? false,
     })
@@ -134,7 +159,7 @@ export function RunDetailPage() {
   const retry = useMutation({ mutationFn: () => api<Run>(`/runs/${runId}/retry`, { method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() } }), onSuccess: async (value) => { await client.invalidateQueries({ queryKey: ['runs'] }); toast.success('失败项已重新提交', { description: `新批次 ${value.number}` }) }, onError: (error) => toast.error('重新提取失败', { description: errorMessage(error) }) })
   const exportRun = useMutation({ mutationFn: (templateVersionId: string) => api<{ id: string }>(`/runs/${runId}/exports`, { method: 'POST', body: JSON.stringify({ template_version_id: templateVersionId }) }), onSuccess: (value) => { window.open(`/api/v1/exports/${value.id}/download`, '_blank', 'noopener'); toast.success('Excel 导出已生成') }, onError: (error) => toast.error('导出失败', { description: errorMessage(error) }) })
   const endAuthWait = useMutation({ mutationFn: () => api<Run>(`/runs/${runId}/end-auth-wait`, { method: 'POST' }), onSuccess: async (value) => { client.setQueryData(['run', runId], value); await client.invalidateQueries({ queryKey: ['runs'] }); toast.success('本次提取已结束') }, onError: (error) => toast.error('结束提取失败', { description: errorMessage(error) }) })
-  const deleteRun = useMutation({ mutationFn: () => api<{ message: string }>(`/runs/${runId}`, { method: 'DELETE' }), onSuccess: async () => { client.removeQueries({ queryKey: ['run', runId] }); await client.invalidateQueries({ queryKey: ['runs'] }); toast.success('批次及关联快照已永久删除'); navigate({ to: '/runs', search: emptyRunsSearch }) }, onError: (error) => toast.error('删除批次失败', { description: errorMessage(error) }) })
+  const deleteRun = useMutation({ mutationFn: () => api<{ message: string }>(`/runs/${runId}`, { method: 'DELETE' }), onSuccess: async () => { client.removeQueries({ queryKey: ['run', runId] }); await client.invalidateQueries({ queryKey: ['runs'] }); toast.success('批次及关联快照已永久删除'); navigate({ to: listPath, search: emptyRunsSearch }) }, onError: (error) => toast.error('删除批次失败', { description: errorMessage(error) }) })
 
   async function copyText(text: string) {
     try { await navigator.clipboard.writeText(text); toast.success('已复制到剪贴板') }
@@ -209,7 +234,7 @@ export function RunDetailPage() {
     <div className='flex h-full min-h-0 flex-col gap-4 overflow-y-auto xl:overflow-hidden'>
       <div className='shrink-0 space-y-4'>
         <PageHeader
-          eyebrow={<Button variant='ghost' size='sm' className='-ml-2 h-7 px-2 text-xs' onClick={() => navigate({ to: '/runs', search: emptyRunsSearch })}><ArrowLeft className='size-3.5' />返回提取列表</Button>}
+          eyebrow={<Button variant='ghost' size='sm' className='-ml-2 h-7 px-2 text-xs' onClick={() => navigate({ to: listPath, search: emptyRunsSearch })}><ArrowLeft className='size-3.5' />返回{recurring ? '循环计划列表' : '提取列表'}</Button>}
           title={run.data ? `批次 ${run.data.number}` : '批次链接详情'}
           description='结果按原始来源位置稳定合并；搜索、筛选、排序和分页均由后端对完整结果集执行。'
           actions={<>
@@ -217,7 +242,7 @@ export function RunDetailPage() {
             {run.data?.tasks?.length ? <Button variant='outline' size='sm' onClick={() => setTasksOpen(true)}><ListTree className='size-4' />来源任务 <span className='text-xs text-muted-foreground'>{run.data.tasks.length}</span></Button> : null}
             {run.data?.status === 'waiting_for_auth' && <><Button variant='outline' size='sm' onClick={() => setAuthOpen(true)}><KeyRound className='size-4' />去认证</Button><AlertDialog><AlertDialogTrigger asChild><Button variant='outline' size='sm'><CircleStop className='size-4' />结束本次提取</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>结束本次提取？</AlertDialogTitle><AlertDialogDescription>已有结果将保留，批次按实际结果结束并释放平台队列；之后仍可重新提取失败项。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => endAuthWait.mutate()}>确认结束</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></>}
             {canRetry && <AlertDialog><AlertDialogTrigger asChild><Button variant='outline' size='sm'>重新提取失败项</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>重新提取失败项？</AlertDialogTitle><AlertDialogDescription>系统会保留原批次快照，只把失败 URL 创建为关联补提批次。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => retry.mutate()}>确认重新提取</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
-            {canDelete && <AlertDialog><AlertDialogTrigger asChild><Button variant='ghost' size='sm' className='text-destructive hover:text-destructive'><Trash2 className='size-4' />永久删除</Button></AlertDialogTrigger><AlertDialogContent aria-busy={deleteRun.isPending} onEscapeKeyDown={(event) => { if (deleteRun.isPending) event.preventDefault() }}><AlertDialogHeader><AlertDialogTitle>{deleteRun.isPending ? '正在永久删除批次…' : '永久删除该批次？'}</AlertDialogTitle><AlertDialogDescription>{deleteRun.isPending ? '正在清理批次数据和关联文件；若其他批次仍在共用截图成果，系统还会重新生成当前成果。完成后将自动返回提取列表。' : '批次、帖子快照、一级评论、页面证据和已生成导出记录都会一并删除；关联截图成果将按剩余贡献重新生成。此操作不可撤回。'}</AlertDialogDescription></AlertDialogHeader>{deleteRun.isPending && <div role='status' aria-live='polite' className='flex items-center gap-3 rounded-lg border border-border/70 bg-muted/35 p-3 text-sm text-muted-foreground'><LoaderCircle className='size-4 shrink-0 animate-spin motion-reduce:animate-none' /><span>正在执行删除与关联内容整理，请勿关闭页面…</span></div>}<AlertDialogFooter><AlertDialogCancel disabled={deleteRun.isPending}>取消</AlertDialogCancel><AlertDialogAction disabled={deleteRun.isPending} aria-busy={deleteRun.isPending} onClick={(event) => { event.preventDefault(); if (!deleteRun.isPending) deleteRun.mutate() }}>{deleteRun.isPending ? <><LoaderCircle className='size-4 animate-spin motion-reduce:animate-none' />正在永久删除</> : '确认永久删除'}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
+            {canDelete && <AlertDialog><AlertDialogTrigger asChild><Button variant='ghost' size='sm' className='text-destructive hover:text-destructive'><Trash2 className='size-4' />永久删除</Button></AlertDialogTrigger><AlertDialogContent aria-busy={deleteRun.isPending} onEscapeKeyDown={(event) => { if (deleteRun.isPending) event.preventDefault() }}><AlertDialogHeader><AlertDialogTitle>{deleteRun.isPending ? '正在永久删除批次…' : '永久删除该批次？'}</AlertDialogTitle><AlertDialogDescription>{deleteRun.isPending ? `正在清理批次数据和关联文件；若其他批次仍在共用截图成果，系统还会重新生成当前成果。完成后将自动返回${recurring ? '循环计划列表' : '提取列表'}。` : '批次、帖子快照、一级评论、页面证据和已生成导出记录都会一并删除；关联截图成果将按剩余贡献重新生成。此操作不可撤回。'}</AlertDialogDescription></AlertDialogHeader>{deleteRun.isPending && <div role='status' aria-live='polite' className='flex items-center gap-3 rounded-lg border border-border/70 bg-muted/35 p-3 text-sm text-muted-foreground'><LoaderCircle className='size-4 shrink-0 animate-spin motion-reduce:animate-none' /><span>正在执行删除与关联内容整理，请勿关闭页面…</span></div>}<AlertDialogFooter><AlertDialogCancel disabled={deleteRun.isPending}>取消</AlertDialogCancel><AlertDialogAction disabled={deleteRun.isPending} aria-busy={deleteRun.isPending} onClick={(event) => { event.preventDefault(); if (!deleteRun.isPending) deleteRun.mutate() }}>{deleteRun.isPending ? <><LoaderCircle className='size-4 animate-spin motion-reduce:animate-none' />正在永久删除</> : '确认永久删除'}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
           </>}
         />
       {run.isLoading ? <Skeleton className='h-20 rounded-xl' /> : run.data && <div className='grid gap-2 sm:grid-cols-2 xl:grid-cols-5'>{[

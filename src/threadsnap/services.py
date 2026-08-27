@@ -1660,6 +1660,7 @@ class RunService:
         number: str | None = None,
         statuses: list[str] | None = None,
         trigger_type: str | None = None,
+        trigger_types: list[str] | None = None,
         list_order: str | None = None,
         created_from: datetime | None = None,
         created_to: datetime | None = None,
@@ -1672,6 +1673,8 @@ class RunService:
                 conditions.append(ExtractionRun.status.in_(statuses))
             if trigger_type:
                 conditions.append(ExtractionRun.trigger_type == trigger_type)
+            if trigger_types:
+                conditions.append(ExtractionRun.trigger_type.in_(set(trigger_types)))
             if list_order:
                 conditions.extend(
                     [
