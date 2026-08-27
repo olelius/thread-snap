@@ -66,6 +66,34 @@ class CollectorRegistryTests(unittest.TestCase):
 
 
 class YicheKnownFactsTests(unittest.TestCase):
+    @staticmethod
+    def _page_with_document(status: int, content: str):
+        """构造只覆盖主文档分类顺序的最小浏览器页。"""
+
+        class Response:
+            def __init__(self, response_status: int) -> None:
+                self.status = response_status
+
+        class Page:
+            url = "https://baa.yiche.com/sample/"
+
+            def on(self, _event: str, _handler: object) -> None:
+                return None
+
+            def remove_listener(self, _event: str, _handler: object) -> None:
+                return None
+
+            def goto(self, _url: str, **_kwargs: object) -> Response:
+                return Response(status)
+
+            def wait_for_timeout(self, _milliseconds: int) -> None:
+                return None
+
+            def content(self) -> str:
+                return content
+
+        return Page()
+
     def test_comment_request_keeps_only_content_identity(self) -> None:
         self.assertEqual(
             "1001",
@@ -115,6 +143,34 @@ class YicheKnownFactsTests(unittest.TestCase):
             require_content_page(control, url="https://baa.yiche.com/sample/")
         self.assertEqual("https://baa.yiche.com/sample/", caught.exception.trigger_url)
         self.assertEqual([], caught.exception.records)
+
+    def test_http_203_waf_document_still_enters_authentication_wait(self) -> None:
+        control = """
+        <script src="https://turing.captcha.qcloud.com/TCaptcha.js"></script>
+        <script>TencentCaptcha('fixture-app-id'); window.__captcha = true;</script>
+        <form action="/WafCaptcha"></form>
+        """
+        collector = YicheCollector(storage_state=None, concurrency=1)
+
+        with self.assertRaises(AuthenticationRequired) as caught:
+            collector._navigate(
+                self._page_with_document(203, control),
+                "https://baa.yiche.com/sample/",
+            )
+
+        self.assertEqual("https://baa.yiche.com/sample/", caught.exception.trigger_url)
+
+    def test_http_203_non_waf_document_remains_http_error(self) -> None:
+        collector = YicheCollector(storage_state=None, concurrency=1)
+
+        with self.assertRaises(CollectorFailure) as caught:
+            collector._navigate(
+                self._page_with_document(203, "<html><body>fixture content</body></html>"),
+                "https://baa.yiche.com/sample/",
+            )
+
+        self.assertEqual("HTTP_ERROR", caught.exception.code)
+        self.assertIn("203", caught.exception.message)
 
     def test_empty_rate_limit_and_signed_api_business_errors_are_distinct(self) -> None:
         with self.assertRaises(CollectorFailure) as empty:

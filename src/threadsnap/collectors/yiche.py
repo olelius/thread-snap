@@ -237,6 +237,10 @@ class YicheCollector:
             )
             page.wait_for_timeout(1500)
             status = response.status if response else None
+            content = page.content()
+            # 腾讯 WAF 实测可能以 203 返回；控制文档身份必须先于通用 HTTP 分类。
+            if is_waf_captcha(content):
+                require_content_page(content, url=url)
             if status == 429:
                 raise CollectorFailure("RATE_LIMITED", "易车页面返回限流状态，请稍后重试。")
             if status in {401, 403}:
@@ -245,7 +249,6 @@ class YicheCollector:
                 raise CollectorFailure("HTTP_RESPONSE_MISSING", "易车页面没有返回主文档响应。")
             if status != 200:
                 raise CollectorFailure("HTTP_ERROR", f"易车页面返回 HTTP {status}。")
-            content = page.content()
             require_content_page(content, url=url)
             events: list[ApiEvent] = []
             for item in responses:
