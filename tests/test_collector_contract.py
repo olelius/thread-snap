@@ -50,7 +50,7 @@ class CollectorRegistryTests(unittest.TestCase):
         self.assertEqual("available", spec.adapter_status)
         self.assertTrue(spec.supports_page_evidence)
 
-    def test_yiche_spec_is_dormant_at_conservative_bounds(self) -> None:
+    def test_yiche_spec_is_available_at_conservative_bounds(self) -> None:
         spec = get_platform_spec("yiche")
 
         self.assertEqual("易车", spec.display_name)
@@ -61,7 +61,7 @@ class CollectorRegistryTests(unittest.TestCase):
             spec.max_concurrency,
         ))
         self.assertFalse(spec.default_enabled)
-        self.assertEqual("not_integrated", spec.adapter_status)
+        self.assertEqual("available", spec.adapter_status)
         self.assertFalse(spec.supports_page_evidence)
 
 
