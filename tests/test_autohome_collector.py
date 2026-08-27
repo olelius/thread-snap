@@ -8,6 +8,7 @@ import unittest
 from threadsnap.collectors import CollectorFailure, get_platform_spec
 from threadsnap.collectors.autohome import (
     AutohomeCollector,
+    VideoMediaResolution,
     normalize_post_url,
     parse_circle_url,
 )
@@ -130,6 +131,9 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertEqual(["https://img.example/a.jpg"], record["image_urls"])
         self.assertEqual("VIDEO-1", record["raw_status"]["video_id"])
         self.assertEqual([], record["video_urls"])
+        self.assertEqual(
+            "response_not_observed", record["raw_status"]["video_url_resolution"]
+        )
         self.assertEqual(10, len(record["comments"]))
         self.assertEqual("用户1", record["comments"][0]["author"])
         self.assertTrue(record["raw_status"]["comments_complete"])
@@ -197,12 +201,118 @@ class AutohomeContractTests(unittest.TestCase):
 
         self.assertEqual("POST_CONTENT_MISSING", caught.exception.code)
 
+    def test_verified_video_media_response_can_prove_content(self) -> None:
+        document = """
+        <html><body><script>
+        window['__BBSINFO__'] = {"bbsId":8232,"bbs":"c"}
+        window['__TOPICINFO__'] = {topicId: 115934382, topicDelete: 0};
+        window.__VIDEOINFO__ = {"videoid":"VIDEO-ONLY"};
+        </script><div data-vid="VIDEO-ONLY"></div>
+        <span data-page-count="1"></span><a class="athm-page__next disabled"></a>
+        </body></html>
+        """.encode()
+
+        class CollectorWithFrozenMediaResponse(AutohomeCollector):
+            def _video_media_response(self, video_id: str) -> VideoMediaResolution:
+                return VideoMediaResolution(
+                    video_id=video_id,
+                    video_urls=(
+                        "https://media.example.test/video.mp4?signature=temporary",
+                        "https://media.example.test/video.mp4?signature=temporary",
+                    ),
+                    response_kind="frozen-test-response",
+                )
+
+        collector = CollectorWithFrozenMediaResponse(None)
+        collector._get = lambda url, **_: FakeResponse(document, url)  # type: ignore[method-assign]
+
+        record = collector.fetch_post(
+            "https://club.autohome.com.cn/bbs/thread/dee662/115934382-1.html",
+            candidate={
+                "bbs_id": 8232,
+                "bbs_type": "c",
+                "is_delete": 0,
+                "club_delete_flag": 0,
+                "video_id_hint": "VIDEO-ONLY",
+            },
+        )
+
+        assert record is not None
+        self.assertIsNone(record["content"])
+        self.assertEqual([], record["image_urls"])
+        self.assertEqual(
+            ["https://media.example.test/video.mp4?signature=temporary"],
+            record["video_urls"],
+        )
+        self.assertEqual("visible", record["visibility"])
+        self.assertEqual("resolved", record["raw_status"]["video_url_resolution"])
+        self.assertEqual(
+            "frozen-test-response", record["raw_status"]["video_media_response_kind"]
+        )
+
+    def test_video_media_response_rejects_mismatched_id_and_relative_url(self) -> None:
+        with self.assertRaises(CollectorFailure) as mismatched:
+            AutohomeCollector._parse_video_media_response(
+                "EXPECTED",
+                VideoMediaResolution(
+                    video_id="OTHER",
+                    video_urls=("https://media.example.test/video.mp4",),
+                    response_kind="frozen-test-response",
+                ),
+            )
+        with self.assertRaises(CollectorFailure) as invalid_url:
+            AutohomeCollector._parse_video_media_response(
+                "EXPECTED",
+                VideoMediaResolution(
+                    video_id="EXPECTED",
+                    video_urls=("/video.mp4",),
+                    response_kind="frozen-test-response",
+                ),
+            )
+
+        self.assertEqual("POST_VIDEO_ID_MISMATCH", mismatched.exception.code)
+        self.assertEqual("PLATFORM_RESPONSE_INVALID", invalid_url.exception.code)
+
+    def test_fewer_than_ten_comments_with_more_pages_is_incomplete(self) -> None:
+        document = """
+        <html><body><script>
+        window['__BBSINFO__'] = {"bbsId":8232,"bbs":"c"}
+        window['__TOPICINFO__'] = {topicId: 115934382, topicDelete: 0};
+        </script>
+        <div class="post-container">正文</div>
+        <ul id="js-reply-list-container">
+          <li class="js-reply-floor-container" data-reply-id="r1">
+            <div class="reply-detail">第一页一级回复</div>
+          </li>
+        </ul>
+        <span data-page-count="2">共2页</span>
+        <a class="athm-page__next" data-page="2">下一页</a>
+        </body></html>
+        """.encode()
+        collector = AutohomeCollector(None)
+        collector._get = lambda url, **_: FakeResponse(document, url)  # type: ignore[method-assign]
+
+        with self.assertRaises(CollectorFailure) as caught:
+            collector.fetch_post(
+                "https://club.autohome.com.cn/bbs/thread/dee662/115934382-1.html",
+                candidate={
+                    "bbs_id": 8232,
+                    "bbs_type": "c",
+                    "is_delete": 0,
+                    "club_delete_flag": 0,
+                },
+            )
+
+        self.assertEqual("POST_COMMENTS_INCOMPLETE", caught.exception.code)
+
     def test_explicit_delete_flag_maps_to_hidden(self) -> None:
         document = """
         <html><body><script>
         window['__BBSINFO__'] = {"bbsId":8232,"bbs":"c"}
         window['__TOPICINFO__'] = {topicId: 115934382, topicDelete: 1};
-        </script><div class="post-container">仍可见的历史正文</div></body></html>
+        </script><div class="post-container">仍可见的历史正文</div>
+        <span data-page-count="1"></span><a class="athm-page__next disabled"></a>
+        </body></html>
         """.encode()
         collector = AutohomeCollector(None)
         collector._get = lambda url, **_: FakeResponse(document, url)  # type: ignore[method-assign]

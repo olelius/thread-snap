@@ -9,9 +9,10 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable
-from urllib.parse import parse_qs, unquote_plus, urljoin
+from urllib.parse import parse_qs, unquote_plus, urljoin, urlsplit
 from zoneinfo import ZoneInfo
 
 from curl_cffi import requests
@@ -60,6 +61,15 @@ CONTROL_MARKERS = {
     "rate_limited": ("请求频繁", "访问过于频繁", "rate limit", "too many requests"),
     "login": ("passport.autohome.com.cn", "登录汽车之家", "请先登录"),
 }
+
+
+@dataclass(frozen=True)
+class VideoMediaResolution:
+    """已验证平台响应经汽车之家适配层归一化后的最小媒体合同。"""
+
+    video_id: str
+    video_urls: tuple[str, ...]
+    response_kind: str
 
 
 def parse_circle_url(url: str) -> CircleSource:
@@ -262,6 +272,60 @@ class AutohomeCollector:
                 if attempt < 2:
                     time.sleep(0.5 * (attempt + 1))
         raise CollectorFailure("PLATFORM_NETWORK_ERROR", f"访问汽车之家失败：{last_error}")
+
+    def _video_media_response(self, video_id: str) -> VideoMediaResolution | None:
+        """返回已验证平台响应的归一化结果；当前固化证据未包含该响应。
+
+        已保存的详情 HTML 只证明页面把 ``data-vid`` 交给外部 AHVP 播放器，
+        详情脚本本身没有播放器请求或最终媒体 URL。平台响应端点和字段通过真实
+        证据确认后，应在此处完成请求及平台字段解析，再返回强类型结果；在此之
+        前保持无网络请求，避免把视频 ID 或猜测出来的 URL 当作媒体。
+        """
+
+        _ = video_id
+        return None
+
+    @staticmethod
+    def _parse_video_media_response(
+        expected_video_id: str, response: VideoMediaResolution | None
+    ) -> tuple[list[str], str, str | None]:
+        """校验适配层媒体响应，只接受同一视频 ID 的绝对 HTTP(S) 播放地址。"""
+
+        if response is None:
+            return [], "response_not_observed", None
+        if not isinstance(response, VideoMediaResolution):
+            raise CollectorFailure(
+                "PLATFORM_RESPONSE_INVALID", "汽车之家视频媒体响应未满足适配器合同。"
+            )
+        if response.video_id.strip() != expected_video_id:
+            raise CollectorFailure(
+                "POST_VIDEO_ID_MISMATCH", "汽车之家视频媒体响应与详情视频 ID 不一致。"
+            )
+        if not response.response_kind.strip():
+            raise CollectorFailure(
+                "PLATFORM_RESPONSE_INVALID", "汽车之家视频媒体响应缺少来源类型。"
+            )
+        urls: list[str] = []
+        for raw_url in response.video_urls:
+            value = str(raw_url or "").strip()
+            parsed = urlsplit(value)
+            if (
+                parsed.scheme not in {"http", "https"}
+                or not parsed.hostname
+                or parsed.username is not None
+                or parsed.password is not None
+            ):
+                raise CollectorFailure(
+                    "PLATFORM_RESPONSE_INVALID",
+                    "汽车之家视频媒体响应包含无效播放地址。",
+                )
+            if value not in urls:
+                urls.append(value)
+        return (
+            urls,
+            "resolved" if urls else "response_without_media",
+            response.response_kind.strip(),
+        )
 
     @staticmethod
     def _detect_control(response: requests.Response) -> None:
@@ -517,6 +581,12 @@ class AutohomeCollector:
         hinted_video_id = str((candidate or {}).get("video_id_hint") or "").strip() or None
         if hinted_video_id and video_id != hinted_video_id:
             raise CollectorFailure("POST_VIDEO_ID_MISMATCH", "汽车之家列表与详情视频 ID 不一致。")
+        if video_id:
+            video_urls, video_url_resolution, video_media_response_kind = (
+                self._parse_video_media_response(video_id, self._video_media_response(video_id))
+            )
+        else:
+            video_urls, video_url_resolution, video_media_response_kind = [], None, None
 
         author = _js_string(topic_block, "topicMemberName")
         author_id = _js_int(topic_block, "topicMemberId")
@@ -532,7 +602,7 @@ class AutohomeCollector:
         list_is_delete = (candidate or {}).get("is_delete")
         list_delete_flag = (candidate or {}).get("club_delete_flag")
         # 标题和未解析的视频 ID 都不是正文或实际媒体证明。
-        content_proven = bool(content or image_urls)
+        content_proven = bool(content or image_urls or video_urls)
         delete_flags = (topic_delete, list_is_delete, list_delete_flag)
         if any(value is not None and value != 0 for value in delete_flags):
             visibility = "hidden"
@@ -542,6 +612,11 @@ class AutohomeCollector:
             visibility = "unknown"
         if not content_proven:
             raise CollectorFailure("POST_CONTENT_MISSING", "汽车之家帖子没有返回真实正文或媒体证明。")
+        if not comments_complete:
+            raise CollectorFailure(
+                "POST_COMMENTS_INCOMPLETE",
+                "汽车之家帖子不足十条一级评论且详情页未返回完整终止证明。",
+            )
         return {
             "platform_post_id": post_id,
             "url": normalized_url,
@@ -550,8 +625,7 @@ class AutohomeCollector:
             "published_at": published_at,
             "content": content,
             "image_urls": image_urls,
-            # 最终播放 URL 尚无真实合同，只保留 video_id 和元数据，不生成占位链接。
-            "video_urls": [],
+            "video_urls": video_urls,
             "reply_count": (candidate or {}).get("reply_count"),
             "like_count": None,
             "section": "dynamic",
@@ -565,7 +639,8 @@ class AutohomeCollector:
                 "list_club_delete_flag": list_delete_flag,
                 "topic_member_id": str(author_id) if author_id is not None else None,
                 "video_id": video_id,
-                "video_url_resolution": "not_verified" if video_id else None,
+                "video_url_resolution": video_url_resolution,
+                "video_media_response_kind": video_media_response_kind,
                 "video_info": video_info or None,
                 "reply_raw_statuses": reply_statuses,
                 "comments_complete": comments_complete,
