@@ -299,7 +299,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
     const platform = allPlatforms.find((item) => item.code === circle.platform_code)
     if (checked && platform && quantities[platform.code] === undefined) quantities[platform.code] = defaultQuantity(platform)
     if (!ids.some((id) => allCircles.find((item) => item.id === id)?.platform_code === circle.platform_code)) delete quantities[circle.platform_code]
-    return { ...rule, circle_ids: ids, platform_quantities: quantities }
+    return { ...rule, circle_ids: ids, platform_quantities: quantities, screenshot_enabled: checked && platform && !platform.capabilities.page_evidence ? false : rule.screenshot_enabled }
   })
   const togglePlatform = (ruleId: string, platform: Platform, checked: boolean) => updateRule(ruleId, (rule) => {
     const platformIds = enabledCircles.filter((circle) => circle.platform_code === platform.code).map((circle) => circle.id)
@@ -307,7 +307,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
     const quantities = { ...rule.platform_quantities }
     if (checked && platformIds.length && quantities[platform.code] === undefined) quantities[platform.code] = defaultQuantity(platform)
     if (!ids.some((id) => allCircles.find((circle) => circle.id === id)?.platform_code === platform.code)) delete quantities[platform.code]
-    return { ...rule, circle_ids: ids, platform_quantities: quantities }
+    return { ...rule, circle_ids: ids, platform_quantities: quantities, screenshot_enabled: checked && !platform.capabilities.page_evidence ? false : rule.screenshot_enabled }
   })
   const toggleListOrder = (ruleId: string, platform: Platform, listOrder: Circle['list_order'], checked: boolean) => updateRule(ruleId, (rule) => {
     const sourceIds = enabledCircles.filter((circle) => circle.platform_code === platform.code && circle.list_order === listOrder).map((circle) => circle.id)
@@ -315,7 +315,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
     const quantities = { ...rule.platform_quantities }
     if (checked && sourceIds.length && quantities[platform.code] === undefined) quantities[platform.code] = defaultQuantity(platform)
     if (!ids.some((id) => allCircles.find((circle) => circle.id === id)?.platform_code === platform.code)) delete quantities[platform.code]
-    return { ...rule, circle_ids: ids, platform_quantities: quantities }
+    return { ...rule, circle_ids: ids, platform_quantities: quantities, screenshot_enabled: checked && !platform.capabilities.page_evidence ? false : rule.screenshot_enabled }
   })
 
   const baselineRules = new Map((query.data?.rules ?? []).map((rule) => [rule.id, rule]))
@@ -325,6 +325,11 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
   const savedNodes = [...(query.data?.nodes ?? []), ...(query.data?.recurring_nodes ?? [])]
   const selectedRule = draft.rules.find((rule) => rule.id === selectedRuleId)
   const baselineSelectedRule = selectedRule ? baselineRules.get(selectedRule.id) : undefined
+  const selectedRuleEvidenceUnavailable = Boolean(selectedRule?.circle_ids.some((id) => {
+    const circle = allCircles.find((item) => item.id === id)
+    const platform = allPlatforms.find((item) => item.code === circle?.platform_code)
+    return platform && !platform.capabilities.page_evidence
+  }))
   const ruleNameDirty = Boolean(selectedRule) && selectedRule?.name !== (baselineSelectedRule?.name ?? '')
   const search = ruleSearch.trim().toLocaleLowerCase('zh-CN')
   const filteredRules = draft.rules.filter((rule) => !search || `${rule.name} ${rule.id} ${rule.circle_ids.map((id) => { const circle = allCircles.find((item) => item.id === id); return circle ? sourceName(circle) : '' }).join(' ')}`.toLocaleLowerCase('zh-CN').includes(search))
@@ -376,8 +381,8 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
                   <Switch checked={selectedRule.ai_analysis_enabled} data-dirty={selectedRule.ai_analysis_enabled !== (baselineSelectedRule?.ai_analysis_enabled ?? true) || undefined} className={cn(selectedRule.ai_analysis_enabled !== (baselineSelectedRule?.ai_analysis_enabled ?? true) && dirtyControlClass)} onCheckedChange={(ai_analysis_enabled) => updateRule(selectedRule.id, (item) => ({ ...item, ai_analysis_enabled }))} />
                 </label>
                 <label className='flex cursor-pointer items-center justify-between gap-3 rounded-lg border bg-card/70 p-3'>
-                  <span><span className='block text-sm font-medium'>圈子页面截图</span><span className='mt-0.5 block text-xs text-muted-foreground'>保留原始全页并生成负面框选成果</span></span>
-                  <Switch checked={selectedRule.screenshot_enabled} data-dirty={selectedRule.screenshot_enabled !== (baselineSelectedRule?.screenshot_enabled ?? true) || undefined} className={cn(selectedRule.screenshot_enabled !== (baselineSelectedRule?.screenshot_enabled ?? true) && dirtyControlClass)} onCheckedChange={(screenshot_enabled) => updateRule(selectedRule.id, (item) => ({ ...item, screenshot_enabled }))} />
+                  <span><span className='block text-sm font-medium'>圈子页面截图</span><span className='mt-0.5 block text-xs text-muted-foreground'>{selectedRuleEvidenceUnavailable ? '所选平台尚未实现圈子页面证据' : '保留原始全页并生成负面框选成果'}</span></span>
+                  <Switch checked={!selectedRuleEvidenceUnavailable && selectedRule.screenshot_enabled} disabled={selectedRuleEvidenceUnavailable} data-dirty={selectedRule.screenshot_enabled !== (baselineSelectedRule?.screenshot_enabled ?? true) || undefined} className={cn(selectedRule.screenshot_enabled !== (baselineSelectedRule?.screenshot_enabled ?? true) && dirtyControlClass)} onCheckedChange={(screenshot_enabled) => updateRule(selectedRule.id, (item) => ({ ...item, screenshot_enabled }))} />
                 </label>
               </div>
               {allPlatforms.map((platform) => {

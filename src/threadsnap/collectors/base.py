@@ -135,9 +135,3 @@ class Collector(Protocol):
         urls: list[str],
         on_progress: ProgressCallback | None = None,
     ) -> dict[str, Any]: ...
-
-    def resolve_record_video_urls(
-        self,
-        raw_status: dict[str, Any],
-        stored_urls: list[str] | None = None,
-    ) -> list[str] | None: ...

@@ -40,14 +40,29 @@ export function NewExtractionSheet() {
   const platforms = useQuery({ queryKey: ['platforms'], queryFn: () => api<Platform[]>('/platforms') })
   const availablePlatforms = platforms.data?.filter((item) => item.adapter_status === 'available' && item.enabled) ?? []
   const selectedPlatform = availablePlatforms.find((item) => item.code === platform)
-  useEffect(() => {
-    if (availablePlatforms.length && !selectedPlatform) {
-      setPlatform(availablePlatforms[0].code)
-      setSelectedCircleIds([])
-    }
-  }, [availablePlatforms, selectedPlatform])
   const circles = useMemo(() => vehicles.data?.flatMap((item) => item.circles) ?? [], [vehicles.data])
   const platformCircles = useMemo(() => circles.filter((circle) => circle.platform_code === platform), [circles, platform])
+
+  useEffect(() => {
+    if (!platforms.data?.length) return
+    const selected = platforms.data.find((item) => item.code === platform)
+    if (selected?.adapter_status === 'available' && selected.enabled) return
+    const fallback = platforms.data.find((item) => item.adapter_status === 'available' && item.enabled)
+    if (fallback) selectPlatform(fallback.code)
+  }, [platform, platforms.data])
+
+  useEffect(() => {
+    if (!selectedPlatform) return
+    setQuantity((value) => Math.min(Math.max(value, selectedPlatform.quantity_range.min), selectedPlatform.quantity_range.max))
+  }, [selectedPlatform])
+
+  function selectPlatform(nextPlatform: string) {
+    if (nextPlatform === platform) return
+    setPlatform(nextPlatform)
+    setSelectedCircleIds([])
+    setCircleUrls('')
+    setPostUrls('')
+  }
 
   const submit = useMutation({
     mutationFn: () => {
@@ -60,7 +75,7 @@ export function NewExtractionSheet() {
               known_post_urls: [],
               quantity,
               ai_analysis_enabled: aiAnalysisEnabled,
-              screenshot_enabled: screenshotEnabled,
+              screenshot_enabled: Boolean(selectedPlatform?.capabilities.page_evidence) && screenshotEnabled,
               idempotency_key: crypto.randomUUID(),
             }
           : {
@@ -138,7 +153,7 @@ export function NewExtractionSheet() {
           <div className='space-y-6 p-6'>
             <div className='space-y-2'>
               <Label>平台</Label>
-              <Select value={platform} onValueChange={(value) => { setPlatform(value); setSelectedCircleIds([]) }}>
+              <Select value={platform} onValueChange={selectPlatform}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>{availablePlatforms.map((item) => <SelectItem key={item.code} value={item.code}>{item.display_name}</SelectItem>)}</SelectContent>
               </Select>
@@ -205,7 +220,7 @@ export function NewExtractionSheet() {
                 <Switch checked={aiAnalysisEnabled} onCheckedChange={setAiAnalysisEnabled} />
               </label>
               <label className={`flex items-center justify-between gap-3 rounded-xl border p-4 ${mode === 'url_list' || !selectedPlatform?.capabilities.page_evidence ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
-                <span><span className='block text-sm font-medium'>圈子页面截图</span><span className='mt-1 block text-xs text-muted-foreground'>{mode === 'url_list' ? 'URL 清单没有圈子列表页面' : selectedPlatform?.capabilities.page_evidence ? '保留原始全页并生成负面框选成果' : '当前平台尚未验证页面截图合同'}</span></span>
+                <span><span className='block text-sm font-medium'>圈子页面截图</span><span className='mt-1 block text-xs text-muted-foreground'>{mode === 'url_list' ? 'URL 清单没有圈子列表页面' : !selectedPlatform?.capabilities.page_evidence ? `${selectedPlatform?.display_name ?? '当前平台'}尚未实现圈子页面证据` : '保留原始全页并生成负面框选成果'}</span></span>
                 <Switch checked={mode === 'circle_discovery' && Boolean(selectedPlatform?.capabilities.page_evidence) && screenshotEnabled} disabled={mode === 'url_list' || !selectedPlatform?.capabilities.page_evidence} onCheckedChange={setScreenshotEnabled} />
               </label>
             </div>

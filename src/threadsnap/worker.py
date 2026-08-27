@@ -269,6 +269,12 @@ class WorkerService:
                 job.error_message = "圈子配置已经不存在。"
                 job.finished_at = utc_now()
                 missing = True
+            elif platform.adapter_status != "available":
+                job.status = "failed"
+                job.error_code = "PLATFORM_NOT_INTEGRATED"
+                job.error_message = "该平台尚未通过正式可用门，圈子验证已停止。"
+                job.finished_at = utc_now()
+                missing = True
             else:
                 if platform.adapter_status != "available":
                     job.status = "failed"

@@ -35,7 +35,7 @@ from .collectors import (
 from .config import Settings
 from .errors import DomainError
 from .ids import uuid7
-from .models import Circle
+from .models import Circle, PlatformConfig
 from .session_store import SessionStore
 from .worker import WorkerService
 
@@ -195,6 +195,14 @@ class BrowserAuthManager:
             raise DomainError(
                 "PLATFORM_NOT_INTEGRATED", "该平台暂未接入认证流程。", status_code=409
             ) from exc
+        with self.worker.factory() as db:
+            platform = db.get(PlatformConfig, platform_code)
+            if not platform or platform.adapter_status != "available":
+                raise DomainError(
+                    "PLATFORM_NOT_INTEGRATED",
+                    "该平台尚未通过正式可用门，当前不能创建认证任务。",
+                    status_code=409,
+                )
         await self.cleanup_expired()
         active = next(
             (

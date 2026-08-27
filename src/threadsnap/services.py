@@ -113,7 +113,12 @@ def bootstrap_database(db: Session) -> None:
             db.add(item)
         else:
             spec = get_platform_spec(item.code)
+            existing.display_name = spec.display_name
             existing.adapter_version = spec.adapter_version
+            existing.min_quantity = spec.min_quantity
+            existing.max_quantity = spec.max_quantity
+            existing.min_concurrency = spec.min_concurrency
+            existing.max_concurrency = spec.max_concurrency
             # 注册表声明未接入时绝不把数据库门禁提前切为可用。
             if spec.adapter_status != "available":
                 existing.adapter_status = "not_integrated"
@@ -645,6 +650,15 @@ class ConfigService:
             platform = platforms.get(row.platform_code)
             if not platform:
                 errors.append({"row": index + 1, "field": "platform_code", "reason": "平台不存在"})
+                continue
+            if platform.adapter_status != "available":
+                errors.append(
+                    {
+                        "row": index + 1,
+                        "field": "platform_code",
+                        "reason": f"{platform.display_name}尚未通过正式可用门，当前不能配置来源",
+                    }
+                )
                 continue
             if row.section != "dynamic":
                 errors.append(

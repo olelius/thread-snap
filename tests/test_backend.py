@@ -2331,6 +2331,7 @@ class ApiAndConfigTests(AppCase):
                         "name": "多平台规则",
                         "platform_quantities": {"dongchedi": 10, "autohome": 20},
                         "circle_ids": [dongchedi_circle.id, autohome_circle.id],
+                        "screenshot_enabled": False,
                     }
                 ],
                 "nodes": [

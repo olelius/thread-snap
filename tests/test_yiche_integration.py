@@ -7,7 +7,9 @@ from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 
-from threadsnap.models import Circle
+from threadsnap.collectors.yiche import _parse_time
+from threadsnap.models import Circle, ExtractionRun, PlatformConfig, ValidationJob
+from threadsnap.services import bootstrap_database
 
 try:
     from .test_backend import AppCase
@@ -23,15 +25,25 @@ def yiche_record(post_id: str) -> dict:
         "url": f"https://baa.yiche.com/sample/thread-{post_id}.html",
         "title": f"易车样本{post_id}",
         "author": "样本作者",
-        "published_at": datetime(2026, 8, 27, 2, 30, tzinfo=timezone.utc),
+        "published_at": _parse_time("2026-08-27 10:30:00"),
         "content": "结构化正文",
         "image_urls": ["https://media.example.test/sample.jpg"],
         "video_urls": [],
         "reply_count": 1,
         "like_count": 2,
         "section": "dynamic",
-        "visibility": "unknown",
-        "raw_status": {"forum_id": 9001, "post_type": 1},
+        "visibility": "visible",
+        "raw_status": {
+            "forum_id": 9001,
+            "post_type": 1,
+            "document_http_status": 200,
+            "document_classification": "content",
+            "detail_identity_verified": True,
+            "comment_api_status": "success",
+            "comment_api_business_status": "1",
+            "comment_identity_verified": True,
+            "comment_termination": "have_next_false",
+        },
         "comments": [
             {
                 "platform_comment_id": f"c-{post_id}",
@@ -54,6 +66,9 @@ class FakeYicheCollector:
         order = "latest_publish" if "index-0-1-" in url else "latest_reply"
         return {
             "external_id": "sample",
+            "forum_id": 9001,
+            "seo_name": "sample",
+            "forum_name": "样本社区",
             "name": "样本社区",
             "url": url,
             "sort": order,
@@ -95,9 +110,100 @@ class FakeYicheCollector:
         return None
 
 
+class YicheReleaseGateTests(AppCase):
+    def test_unreleased_adapter_cannot_enter_config_run_or_auth(self) -> None:
+        platform = next(
+            item for item in self.client.get("/api/v1/platforms").json() if item["code"] == "yiche"
+        )
+        self.assertEqual("not_integrated", platform["adapter_status"])
+        self.assertFalse(platform["enabled"])
+        self.assertFalse(platform["capabilities"]["page_evidence"])
+
+        enabled = self.client.put(
+            "/api/v1/platforms/yiche",
+            json={"enabled": True, "internal_concurrency": 1},
+        )
+        self.assertEqual(409, enabled.status_code)
+        self.assertEqual("PLATFORM_NOT_INTEGRATED", enabled.json()["code"])
+
+        configured = self.client.put(
+            "/api/v1/circles/batch",
+            json={
+                "rows": [
+                    {
+                        "platform_code": "yiche",
+                        "url": "https://baa.yiche.com/sample/",
+                        "vehicle_name": "未发布样本",
+                    }
+                ],
+                "deleted_ids": [],
+            },
+        )
+        self.assertEqual(400, configured.status_code)
+        self.assertEqual("CIRCLE_BATCH_INVALID", configured.json()["code"])
+
+        auth = self.client.post("/api/v1/platforms/yiche/auth/tasks")
+        self.assertEqual(409, auth.status_code)
+        self.assertEqual("PLATFORM_NOT_INTEGRATED", auth.json()["code"])
+
+        manual = self.client.post(
+            "/api/v1/runs/manual",
+            json={
+                "platform_code": "yiche",
+                "circle_urls": ["https://baa.yiche.com/sample/"],
+                "quantity": 1,
+                "screenshot_enabled": False,
+                "idempotency_key": "unreleased-yiche",
+            },
+        )
+        self.assertEqual(409, manual.status_code)
+        self.assertEqual("PLATFORM_NOT_INTEGRATED", manual.json()["code"])
+
+    def test_bootstrap_downgrades_unreleased_adapter(self) -> None:
+        with self.container.sessions.begin() as db:
+            platform = db.get(PlatformConfig, "yiche")
+            assert platform is not None
+            platform.adapter_status = "available"
+            platform.enabled = True
+        with self.container.sessions.begin() as db:
+            bootstrap_database(db)
+        with self.container.sessions() as db:
+            platform = db.get(PlatformConfig, "yiche")
+            assert platform is not None
+            self.assertEqual("not_integrated", platform.adapter_status)
+            self.assertFalse(platform.enabled)
+
+    def test_worker_fails_legacy_validation_job_after_release_gate_closes(self) -> None:
+        with self.container.sessions.begin() as db:
+            circle = Circle(
+                platform_code="yiche",
+                external_id="sample",
+                url="https://baa.yiche.com/sample/",
+                source_kind="configured",
+            )
+            db.add(circle)
+            db.flush()
+            job = ValidationJob(circle_id=circle.id)
+            db.add(job)
+            db.flush()
+            job_id = job.id
+
+        self.assertTrue(self.container.worker.process_once())
+        with self.container.sessions() as db:
+            job = db.get(ValidationJob, job_id)
+            assert job is not None
+            self.assertEqual("failed", job.status)
+            self.assertEqual("PLATFORM_NOT_INTEGRATED", job.error_code)
+
+
 class YichePublicFlowTests(AppCase):
     def setUp(self) -> None:
         super().setUp()
+        # 仅用于证明发布门关闭后的公共链复用，不改变生产发布标志。
+        with self.container.sessions.begin() as db:
+            platform = db.get(PlatformConfig, "yiche")
+            assert platform is not None
+            platform.adapter_status = "available"
         enabled = self.client.put(
             "/api/v1/platforms/yiche",
             json={"enabled": True, "internal_concurrency": 8},
@@ -162,7 +268,8 @@ class YichePublicFlowTests(AppCase):
         posts = self.client.get(f"/api/v1/runs/{run['id']}/posts").json()["items"]
         self.assertEqual(1, len(posts))
         detail = self.client.get(f"/api/v1/runs/{run['id']}/posts/{posts[0]['id']}").json()
-        self.assertEqual("unknown", detail["visibility"])
+        self.assertEqual("visible", detail["visibility"])
+        self.assertTrue(detail["published_at"].startswith("2026-08-27T02:30:00"))
         self.assertEqual("一级评论", detail["comments"][0]["content"])
 
         tag = next(
@@ -179,6 +286,63 @@ class YichePublicFlowTests(AppCase):
         exported = self.container.templates.create_export(run["id"], version["version_id"])
         output = load_workbook(self.container.templates.export_path(exported["id"])).active
         self.assertEqual("易车样本7001", output["A1"].value)
+
+    def test_yiche_normalizes_unsupported_page_evidence_for_manual_and_plan(self) -> None:
+        circle = self.save_yiche_sources()[0]
+        manual = self.client.post(
+            "/api/v1/runs/manual",
+            json={
+                "platform_code": "yiche",
+                "circle_ids": [circle.id],
+                "quantity": 1,
+                "screenshot_enabled": True,
+                "idempotency_key": "yiche-page-evidence-manual",
+            },
+        )
+        self.assertEqual(202, manual.status_code, manual.text)
+        self.assertFalse(manual.json()["screenshot_enabled"])
+        with self.container.sessions() as db:
+            stored = db.get(ExtractionRun, manual.json()["id"])
+            assert stored is not None
+            self.assertTrue(stored.config_snapshot["requested_screenshot_enabled"])
+            self.assertFalse(stored.config_snapshot["screenshot_enabled"])
+
+        plan = self.client.put(
+            "/api/v1/extraction-plan",
+            json={
+                "revision": 1,
+                "rules": [
+                    {
+                        "id": "yiche-evidence-rule",
+                        "name": "易车截图边界",
+                        "platform_quantities": {"yiche": 1},
+                        "circle_ids": [circle.id],
+                        "screenshot_enabled": True,
+                    }
+                ],
+                "nodes": [
+                    {
+                        "id": "yiche-evidence-node",
+                        "weekdays": [4],
+                        "time": "11:00:00",
+                        "enabled": True,
+                        "rule_ids": ["yiche-evidence-rule"],
+                    }
+                ],
+                "recurring_nodes": [],
+            },
+        )
+        self.assertEqual(200, plan.status_code, plan.text)
+        self.assertTrue(plan.json()["rules"][0]["screenshot_enabled"])
+        scheduled = self.container.runs.create_scheduled(
+            datetime(2026, 8, 14, 3, 0, tzinfo=timezone.utc),
+            "yiche-evidence-node",
+            plan.json()["revision"],
+        )
+        assert scheduled is not None
+        detail = self.container.runs.get_run(scheduled["id"])
+        self.assertFalse(detail["screenshot_enabled"])
+        self.assertFalse(detail["tasks"][0]["screenshot_enabled"])
 
     def test_weekly_and_recurring_runs_share_yiche_fifo(self) -> None:
         circle = self.save_yiche_sources()[0]
@@ -233,3 +397,4 @@ class YichePublicFlowTests(AppCase):
             "/api/v1/runs?trigger_types=scheduled&trigger_types=recurring"
         ).json()["items"]
         self.assertTrue(all(item["status"] == "success" for item in states))
+

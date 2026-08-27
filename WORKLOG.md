@@ -18,15 +18,16 @@
 
 ## 2026-08-27 — 实现易车社区适配器与公共接入闭环
 **总目标**：在不复制批次、调度、存储、API、前端和导出能力的前提下，以真实易车页面证据接入第二个平台帖子采集。
-**状态**：✅ 平台中立契约、易车适配器和本地公共闭环已实现并通过开发门禁；真实500条冻结清单与正式运行门禁属于后续验收，尚未执行，未宣称平台最终验收完成。
+**状态**：✅ 平台中立契约、易车适配器、发布后公共链及独立Review修复均已通过本地门禁。真实500条冻结清单与正式运行门未执行，`adapter_status=not_integrated`，平台仍为 `not_integrated` 且不可启用。
 **干到哪里了**：
 - [x] 新增显式 collector registry/Protocol，把错误、来源身份、URL规范化、认证入口、页面证据能力和媒体刷新边界收敛为平台契约；懂车帝继续使用原适配器和既有安全范围。
-- [x] 易车适配器按真实页面的两个列表顺序、50条列表响应、`thread-<digits>` 三重身份、结构化正文、原图、直连MP4、最多10条一级评论和 `unknown` 可见状态映射；动态签名不逆向，使用 Patchright 页面引导并监听真实XHR。
+- [x] 易车适配器按真实页面的两个列表顺序、50条列表响应、圈子与帖子联合身份、结构化正文、原图、直连MP4和最多10条一级评论映射；动态签名不逆向，使用 Patchright 页面引导并监听真实XHR。
 - [x] TencentCaptcha/WAF、平台业务码、429、空响应、错帖、私有区混淆和未验证评论翻页组合均失败关闭；挑战页不计有效结果，认证等待保留已完成检查点。
-- [x] services、worker、auth 和前端已改用平台定义，易车默认停用、并发固定1；配置来源、手动提取、每周/循环计划、平台FIFO、详情、主评论与XLSX复用既有公共链。
-- [x] 脱敏冻结fixture与15项易车专项/闭环测试通过；真实Git外详情样本离线复核为身份一致、正文332字、图片6张、状态unknown，视频样本解析到1条MP4。
-- [x] 项目虚拟环境全后端157项测试通过；`src tests` Ruff、compileall、pip check、前端TypeScript检查与生产构建、差异空白检查及提交候选敏感模式扫描通过。仓库全量Ruff另命中6处既有PoC导入排序问题，本任务未修改该历史范围。
-**下一步**：独立复核本实现提交；随后以事前冻结的500个不同有效URL从头执行易车正式 `500 / 500`、真实页面配置/任务/XLSX闭环和环境证据；补齐当前未观察的0条、10+及多页评论覆盖或如实保留缺口。
+- [x] services、worker、auth 和前端已改用平台定义；易车代码注册但发布门为false，bootstrap会把历史误开放状态降回 `not_integrated`，配置、任务、认证和Worker运行入口均遵守该门。发布后配置来源、手动提取、每周/循环计划、平台FIFO、详情、主评论与XLSX复用既有公共链。
+- [x] Review补齐：评论API业务错误优先检查、请求contentId身份、可靠终止证明和业务码分类；圈子冻结 `forum_id + seo_name + forum_name`，现有external_id继续保存slug；列表冻结首个total；详情核对最终URL与圈子；易车本地时间按Asia/Shanghai解释；完整成功链标记visible并保存脱敏证明。
+- [x] 易车尚无页面证据能力，后端手动与计划明确拒绝截图，前端按平台能力禁用并说明；手动切换平台同时清除已选圈子和两类URL输入，避免隐藏旧平台输入。
+- [x] 本地门禁：`python -m unittest discover -s tests -v` 为 `170 / 170 OK`（110.118s）；`ruff check src tests`、`compileall -q src tests`、`pip check`、前端 `npm run check`、`npm run build`（2468 modules）均通过。
+**下一步**：独立复核本实现修复提交；随后以事前冻结的500个不同有效URL从头执行易车正式 `500 / 500`、真实页面配置/任务/XLSX闭环和环境证据；补齐当前未观察的0条、10+及多页评论覆盖或如实保留缺口。
 **边界**：未把动态请求头、追踪ID、真实业务清单、页面原文或Session写入Git；未实现口碑指标；未用 `hasMore`/`totalPage` 的不可靠值终止；未把本地fixture或单样本解析升级为正式500条通过。
 **关联**：`src/threadsnap/collectors/base.py`、`src/threadsnap/collectors/yiche.py`、`docs/chains/later-platform-delivery.md`、`docs/research/later-platform-onboarding-plan.md`
 
