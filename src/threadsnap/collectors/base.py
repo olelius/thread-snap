@@ -116,6 +116,8 @@ class Collector(Protocol):
     display_name: str
     adapter_version: str
     concurrency: int
+    supports_page_evidence: bool
+    supports_live_video_resolution: bool
 
     def validate_circle(self, circle_url: str) -> dict[str, Any]: ...
 
@@ -133,3 +135,9 @@ class Collector(Protocol):
         urls: list[str],
         on_progress: ProgressCallback | None = None,
     ) -> dict[str, Any]: ...
+
+    def resolve_record_video_urls(
+        self,
+        raw_status: dict[str, Any],
+        stored_urls: list[str] | None = None,
+    ) -> list[str] | None: ...

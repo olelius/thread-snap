@@ -30,6 +30,10 @@ from .dongchedi import (
 from .dongchedi import (
     parse_circle_url as parse_dongchedi_circle_url,
 )
+from .yiche import ADAPTER_VERSION as YICHE_VERSION
+from .yiche import YicheCollector
+from .yiche import normalize_post_url as normalize_yiche_post_url
+from .yiche import parse_circle_url as parse_yiche_circle_url
 
 CollectorFactory = Callable[..., Collector]
 CircleParser = Callable[[str], CircleSource]
@@ -114,11 +118,19 @@ PLATFORM_ADAPTERS: dict[str, PlatformAdapterSpec] = {
     "yiche": PlatformAdapterSpec(
         code="yiche",
         display_name="易车",
+        # 真实 500/500 正式验收前保持未接入；解析器可供冻结样本和测试直接复用。
         adapter_status="not_integrated",
-        adapter_version=None,
-        collector_factory=None,
-        parse_circle_url=None,
-        normalize_post_url=None,
+        adapter_version=YICHE_VERSION,
+        collector_factory=YicheCollector,
+        parse_circle_url=parse_yiche_circle_url,
+        normalize_post_url=normalize_yiche_post_url,
+        max_quantity=500,
+        max_concurrency=1,
+        supports_authentication=True,
+        supports_page_evidence=False,
+        supports_live_video_resolution=False,
+        login_url="https://baa.yiche.com/",
+        auth_probe_circle_url="https://baa.yiche.com/",
     ),
 }
 

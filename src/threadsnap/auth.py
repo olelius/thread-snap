@@ -23,6 +23,7 @@ from patchright.async_api import (
     async_playwright,
 )
 from patchright.async_api import Error as PlaywrightError
+from sqlalchemy import select
 
 from .browser_runtime import browser_launch_args
 from .collectors import (
@@ -34,6 +35,7 @@ from .collectors import (
 from .config import Settings
 from .errors import DomainError
 from .ids import uuid7
+from .models import Circle
 from .session_store import SessionStore
 from .worker import WorkerService
 
@@ -192,7 +194,7 @@ class BrowserAuthManager:
         if not spec.supports_authentication or not spec.login_url:
             raise DomainError(
                 "PLATFORM_NOT_INTEGRATED", "该平台暂未接入认证流程。", status_code=409
-            )
+            ) from exc
         await self.cleanup_expired()
         active = next(
             (
@@ -218,6 +220,24 @@ class BrowserAuthManager:
         )
         self.tasks[task.id] = task
         return self.task_dict(task)
+
+    def _validation_probe_url(self, platform_code: str) -> str:
+        """优先用已保存真实圈子做认证门禁，无来源时才退回平台根入口。"""
+
+        spec = get_platform_spec(platform_code)
+        fallback = spec.auth_probe_circle_url or spec.login_url
+        if not fallback:
+            raise CollectorFailure(
+                "AUTH_VALIDATION_UNAVAILABLE", "该平台缺少认证会话校验入口。"
+            )
+        with self.worker.factory() as db:
+            circle_url = db.scalar(
+                select(Circle.url)
+                .where(Circle.platform_code == platform_code)
+                .order_by(Circle.first_validated_at.is_(None), Circle.updated_at.desc())
+                .limit(1)
+            )
+        return str(circle_url or fallback)
 
     def get(self, task_id: str) -> dict[str, Any]:
         task = self.tasks.get(task_id)
@@ -499,12 +519,9 @@ class BrowserAuthManager:
             task.page_status = "validating"
             await websocket.send_json({"type": "validating", "message": "正在校验平台会话…"})
             state = await task.context.storage_state()
+            probe_url = self._validation_probe_url(task.platform_code)
             try:
                 spec = get_platform_spec(task.platform_code)
-                if not spec.auth_probe_circle_url:
-                    raise CollectorFailure(
-                        "AUTH_VALIDATION_UNAVAILABLE", "该平台缺少认证会话校验入口。"
-                    )
                 # 保留懂车帝测试注入缝；平台资格、入口与其余适配器仍由 registry 决定。
                 collector = (
                     DongchediCollector(state, concurrency=1)
@@ -515,10 +532,8 @@ class BrowserAuthManager:
                         browser_headless=self.settings.auth_browser_headless,
                     )
                 )
-                await asyncio.to_thread(
-                    collector.validate_circle,
-                    spec.auth_probe_circle_url,
-                )
+                validator = getattr(collector, "validate_auth", collector.validate_circle)
+                await asyncio.to_thread(validator, probe_url)
             except (AuthenticationRequired, CollectorFailure) as exc:
                 task.page_status = "ready"
                 task.error_code = "AUTH_VALIDATION_FAILED"

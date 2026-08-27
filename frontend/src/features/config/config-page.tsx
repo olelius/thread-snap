@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { AuthDialog } from '@/features/auth/auth-dialog'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
-import { ApiError, api, errorMessage, formatDate, queryString } from '@/lib/api'
+import { ApiError, api, errorMessage, formatDate, platformName, queryString } from '@/lib/api'
 import type { Circle, ExtractionPlan, Platform, SentimentConfig, SessionStatus, Template, Vehicle } from '@/lib/types'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
@@ -664,7 +664,7 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
         <Button variant='outline' disabled={dirty || unverifiedCount === 0 || bulkValidation.isPending} onClick={() => bulkValidation.mutate()} title={pendingAcceptanceCount ? `${pendingAcceptanceCount} 个待验收平台来源将在平台接入后验证` : undefined}>
           {bulkValidation.isPending ? <Loader2 className='size-4 animate-spin' /> : <RefreshCw className='size-4' />}验证全部待验证（{unverifiedCount}）
         </Button>
-        <Button variant='outline' onClick={() => commitRows([...rows, { id: '', platform_code: 'dongchedi', external_id: '', url: '', vehicle_name: '未命名来源', auto_enabled: false, section: 'dynamic', list_order: 'latest_reply', validation_status: 'unverified' }])}><Plus className='size-4' />新增来源</Button>
+        <Button variant='outline' disabled={!availablePlatforms.length} onClick={() => commitRows([...rows, { id: '', platform_code: availablePlatforms[0]?.code ?? '', external_id: '', url: '', vehicle_name: '未命名来源', auto_enabled: false, section: 'dynamic', list_order: 'latest_reply', validation_status: 'unverified' }])}><Plus className='size-4' />新增来源</Button>
         <Button variant='outline' disabled={!dirty || saving} onClick={discard}><RotateCcw className='size-4' />放弃修改</Button>
         <Button disabled={!dirty || saving} onClick={save}>{saving ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}保存当前标签{dirty ? ` (${changeCount})` : ''}</Button>
     </ConfigSectionToolbar>
@@ -684,7 +684,7 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
           <TableCell><Select value={row.platform_code} onValueChange={(platform_code) => update(index, { platform_code, auto_enabled: false })}><SelectTrigger data-dirty={platformDirty || undefined} className={cn(platformDirty && dirtyFieldClass)}><SelectValue /></SelectTrigger><SelectContent>{sourcePlatforms.map((item) => <SelectItem key={item.code} value={item.code}>{item.display_name}{item.adapter_status !== 'available' ? '（待验收）' : ''}</SelectItem>)}</SelectContent></Select></TableCell>
           <TableCell><Input value={row.vehicle_name ?? ''} data-dirty={vehicleDirty || undefined} className={cn(vehicleDirty && dirtyFieldClass)} onChange={(event) => { const vehicle_name = event.target.value; update(index, { vehicle_name, vehicle_id: vehicle_name === baseline?.vehicle_name ? baseline?.vehicle_id : undefined }) }} placeholder='例如：风云A9最新发布' /></TableCell>
           <TableCell><Input value={row.url} data-dirty={urlDirty || undefined} className={cn(urlDirty && dirtyFieldClass)} onChange={(event) => update(index, { url: event.target.value })} placeholder='圈子 URL' /></TableCell>
-          <TableCell><Badge variant='outline' className='font-normal'>{listOrderName(row.list_order || (row.url.includes('/dongtai-release') ? 'latest_publish' : 'latest_reply'))}</Badge></TableCell>
+          <TableCell><Badge variant='outline' className='font-normal'>{listOrderName(row.list_order || 'latest_reply')}</Badge></TableCell>
           <TableCell>{row.name || (row.id ? '等待验证' : '保存后验证')}</TableCell>
           <TableCell><div className='space-y-1'><StatusBadge value={row.validation_status === 'verified' ? 'success' : row.validation_status === 'failed' ? 'failed' : 'unknown'} label={{ verified: '已验证', failed: '验证失败', unverified: '未验证' }[row.validation_status] ?? row.validation_status} />{row.id && !integrated && <div className='text-xs text-muted-foreground'>平台接入验收后可验证</div>}{row.id && integrated && !row.first_validated_at && row.validation_status !== 'verified' && <div className='text-xs text-muted-foreground'>首次通过后自动参与</div>}</div></TableCell>
           <TableCell><Switch checked={row.auto_enabled} disabled={!integrated || row.validation_status !== 'verified'} data-dirty={autoDirty || undefined} className={cn(autoDirty && dirtyControlClass)} onCheckedChange={(auto_enabled) => update(index, { auto_enabled })} /></TableCell>

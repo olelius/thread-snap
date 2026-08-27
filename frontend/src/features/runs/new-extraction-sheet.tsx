@@ -142,6 +142,7 @@ export function NewExtractionSheet() {
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>{availablePlatforms.map((item) => <SelectItem key={item.code} value={item.code}>{item.display_name}</SelectItem>)}</SelectContent>
               </Select>
+              {!selectedPlatform && !platforms.isLoading && <p className='text-xs text-destructive'>当前没有可用平台，请先在配置中启用已接入平台。</p>}
             </div>
             <RadioGroup value={mode} onValueChange={(value) => setMode(value as Mode)} className='grid grid-cols-2 gap-3'>
               <Label htmlFor='mode-circle' className='flex cursor-pointer gap-3 rounded-xl border p-4 has-[[data-state=checked]]:border-primary has-[[data-state=checked]]:bg-primary/5'>
@@ -213,7 +214,7 @@ export function NewExtractionSheet() {
         </ScrollArea>
         <SheetFooter className='border-t bg-background/95 p-4 backdrop-blur'>
           <SheetClose asChild><Button variant='outline'>关闭</Button></SheetClose>
-          <Button disabled={currentEmpty || submit.isPending} onClick={() => submit.mutate()}>
+          <Button disabled={currentEmpty || !selectedPlatform?.enabled || submit.isPending} onClick={() => submit.mutate()}>
             {submit.isPending && <Loader2 className='size-4 animate-spin' />}
             提交提取
           </Button>
