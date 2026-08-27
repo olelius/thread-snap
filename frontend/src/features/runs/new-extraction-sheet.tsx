@@ -1,9 +1,9 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, CircleDot, FileText, Loader2, Plus, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, errorMessage } from '@/lib/api'
-import type { Circle, Run, Vehicle } from '@/lib/types'
+import type { Circle, Platform, Run, Vehicle } from '@/lib/types'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -37,6 +37,15 @@ export function NewExtractionSheet() {
   const [aiAnalysisEnabled, setAiAnalysisEnabled] = useState(true)
   const [screenshotEnabled, setScreenshotEnabled] = useState(true)
   const vehicles = useQuery({ queryKey: ['vehicles'], queryFn: () => api<Vehicle[]>('/vehicles') })
+  const platforms = useQuery({ queryKey: ['platforms'], queryFn: () => api<Platform[]>('/platforms') })
+  const availablePlatforms = platforms.data?.filter((item) => item.adapter_status === 'available' && item.enabled) ?? []
+  const selectedPlatform = availablePlatforms.find((item) => item.code === platform)
+  useEffect(() => {
+    if (availablePlatforms.length && !selectedPlatform) {
+      setPlatform(availablePlatforms[0].code)
+      setSelectedCircleIds([])
+    }
+  }, [availablePlatforms, selectedPlatform])
   const circles = useMemo(() => vehicles.data?.flatMap((item) => item.circles) ?? [], [vehicles.data])
   const platformCircles = useMemo(() => circles.filter((circle) => circle.platform_code === platform), [circles, platform])
 
@@ -129,9 +138,9 @@ export function NewExtractionSheet() {
           <div className='space-y-6 p-6'>
             <div className='space-y-2'>
               <Label>平台</Label>
-              <Select value={platform} onValueChange={setPlatform}>
+              <Select value={platform} onValueChange={(value) => { setPlatform(value); setSelectedCircleIds([]) }}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent><SelectItem value='dongchedi'>懂车帝</SelectItem></SelectContent>
+                <SelectContent>{availablePlatforms.map((item) => <SelectItem key={item.code} value={item.code}>{item.display_name}</SelectItem>)}</SelectContent>
               </Select>
             </div>
             <RadioGroup value={mode} onValueChange={(value) => setMode(value as Mode)} className='grid grid-cols-2 gap-3'>
@@ -184,7 +193,7 @@ export function NewExtractionSheet() {
                   </div>
                 </div>
                 <div className='space-y-2'><Label htmlFor='circle-urls'>临时圈子链接</Label><Textarea id='circle-urls' rows={5} value={circleUrls} onChange={(event) => setCircleUrls(event.target.value)} placeholder='每行一个圈子 URL' /><p className='text-xs text-muted-foreground'>临时链接验证成功后只进入手动圈子历史。</p></div>
-                <div className='space-y-2'><Label htmlFor='quantity'>每圈有效结果目标数</Label><Input id='quantity' type='number' min={1} max={2000} value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} /></div>
+                <div className='space-y-2'><Label htmlFor='quantity'>每圈有效结果目标数</Label><Input id='quantity' type='number' min={selectedPlatform?.quantity_range.min ?? 1} max={selectedPlatform?.quantity_range.max ?? 2000} value={quantity} onChange={(event) => setQuantity(Number(event.target.value))} /></div>
               </div>
             ) : (
               <div className='space-y-2'><Label htmlFor='post-urls'>帖子 URL 清单</Label><Textarea id='post-urls' rows={12} value={postUrls} onChange={(event) => setPostUrls(event.target.value)} placeholder='每行一个帖子 URL，重复链接会自动去重' /><p className='text-xs text-muted-foreground'>当前共识别 {lines(postUrls).length} 行非空输入。</p></div>
@@ -194,9 +203,9 @@ export function NewExtractionSheet() {
                 <span><span className='block text-sm font-medium'>AI 舆情分析</span><span className='mt-1 block text-xs text-muted-foreground'>为本批次新帖子创建 AI 分析任务</span></span>
                 <Switch checked={aiAnalysisEnabled} onCheckedChange={setAiAnalysisEnabled} />
               </label>
-              <label className={`flex items-center justify-between gap-3 rounded-xl border p-4 ${mode === 'url_list' ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
-                <span><span className='block text-sm font-medium'>圈子页面截图</span><span className='mt-1 block text-xs text-muted-foreground'>{mode === 'url_list' ? 'URL 清单没有圈子列表页面' : '保留原始全页并生成负面框选成果'}</span></span>
-                <Switch checked={mode === 'circle_discovery' && screenshotEnabled} disabled={mode === 'url_list'} onCheckedChange={setScreenshotEnabled} />
+              <label className={`flex items-center justify-between gap-3 rounded-xl border p-4 ${mode === 'url_list' || !selectedPlatform?.capabilities.page_evidence ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}>
+                <span><span className='block text-sm font-medium'>圈子页面截图</span><span className='mt-1 block text-xs text-muted-foreground'>{mode === 'url_list' ? 'URL 清单没有圈子列表页面' : selectedPlatform?.capabilities.page_evidence ? '保留原始全页并生成负面框选成果' : '当前平台尚未验证页面截图合同'}</span></span>
+                <Switch checked={mode === 'circle_discovery' && Boolean(selectedPlatform?.capabilities.page_evidence) && screenshotEnabled} disabled={mode === 'url_list' || !selectedPlatform?.capabilities.page_evidence} onCheckedChange={setScreenshotEnabled} />
               </label>
             </div>
             <Alert><AlertTitle>提交范围</AlertTitle><AlertDescription>切换模式会保留两边输入；关闭窗口会直接放弃，提交只包含当前选择的模式。</AlertDescription></Alert>

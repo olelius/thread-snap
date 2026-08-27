@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import re
 from collections.abc import Iterable
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -13,12 +12,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from .collectors.dongchedi import (
-    ADAPTER_VERSION,
-    CollectorFailure,
-    normalize_post_url,
-    parse_circle_url,
-)
+from .collectors import CollectorFailure, get_platform_spec, platform_specs
 from .errors import DomainError
 from .models import (
     Circle,
@@ -100,36 +94,30 @@ def bootstrap_database(db: Session) -> None:
 
     defaults = [
         PlatformConfig(
-            code="dongchedi",
-            display_name="懂车帝",
-            adapter_status="available",
-            enabled=True,
-            internal_concurrency=2,
-            min_quantity=1,
-            max_quantity=2000,
-            min_concurrency=1,
-            max_concurrency=8,
-            adapter_version=ADAPTER_VERSION,
-        ),
-        PlatformConfig(
-            code="autohome",
-            display_name="汽车之家",
-            adapter_status="not_integrated",
-            enabled=False,
-        ),
-        PlatformConfig(
-            code="yiche",
-            display_name="易车",
-            adapter_status="not_integrated",
-            enabled=False,
-        ),
+            code=spec.code,
+            display_name=spec.display_name,
+            adapter_status=spec.adapter_status,
+            enabled=spec.default_enabled,
+            internal_concurrency=spec.default_concurrency,
+            min_quantity=spec.min_quantity,
+            max_quantity=spec.max_quantity,
+            min_concurrency=spec.min_concurrency,
+            max_concurrency=spec.max_concurrency,
+            adapter_version=spec.adapter_version,
+        )
+        for spec in platform_specs()
     ]
     for item in defaults:
         existing = db.get(PlatformConfig, item.code)
         if not existing:
             db.add(item)
-        elif item.code == "dongchedi":
-            existing.adapter_version = ADAPTER_VERSION
+        else:
+            spec = get_platform_spec(item.code)
+            existing.adapter_version = spec.adapter_version
+            # 注册表声明未接入时绝不把数据库门禁提前切为可用。
+            if spec.adapter_status != "available":
+                existing.adapter_status = "not_integrated"
+                existing.enabled = False
     if not db.get(ScheduleConfig, 1):
         db.add(ScheduleConfig(id=1, timezone_name="Asia/Shanghai", revision=1))
 
@@ -149,6 +137,7 @@ class ConfigService:
 
     @staticmethod
     def platform_dict(item: PlatformConfig) -> dict[str, Any]:
+        spec = get_platform_spec(item.code)
         return {
             "code": item.code,
             "display_name": item.display_name,
@@ -161,6 +150,12 @@ class ConfigService:
                 "max": item.max_concurrency,
             },
             "adapter_version": item.adapter_version,
+            "capabilities": {
+                "source_configuration": spec.parse_circle_url is not None,
+                "authentication": spec.supports_authentication,
+                "page_evidence": spec.supports_page_evidence,
+                "live_video_resolution": spec.supports_live_video_resolution,
+            },
         }
 
     def update_platform(self, code: str, value: PlatformConfigUpdate) -> dict[str, Any]:
@@ -670,18 +665,17 @@ class ConfigService:
                     }
                 )
             try:
-                if row.platform_code == "dongchedi":
-                    source = parse_circle_url(row.url)
-                    external_id, url, list_order = (
-                        source.external_id,
-                        source.url,
-                        source.list_order,
+                parser = get_platform_spec(row.platform_code).parse_circle_url
+                if parser is None:
+                    raise CollectorFailure(
+                        "PLATFORM_NOT_INTEGRATED", f"{platform.display_name}暂无来源 URL 合同。"
                     )
-                else:
-                    match = re.search(r"(\d+)", row.url)
-                    if not match:
-                        raise CollectorFailure("CIRCLE_URL_INVALID", "圈子链接中缺少圈子 ID。")
-                    external_id, url, list_order = match.group(1), row.url.strip(), "latest_reply"
+                source = parser(row.url)
+                external_id, url, list_order = (
+                    source.external_id,
+                    source.url,
+                    source.list_order,
+                )
             except CollectorFailure as exc:
                 errors.append({"row": index + 1, "field": "url", "reason": exc.message})
                 continue
@@ -1043,6 +1037,7 @@ class RunService:
                     status_code=409,
                 )
             quantity = min(max(value.quantity, platform.min_quantity), platform.max_quantity)
+            spec = get_platform_spec(value.platform_code)
             circles: list[dict[str, Any]] = []
             seen: set[tuple[str, str]] = set()
             for circle_id in value.circle_ids:
@@ -1069,15 +1064,16 @@ class RunService:
                 )
             for raw_url in value.circle_urls:
                 try:
-                    if value.platform_code == "dongchedi":
-                        source = parse_circle_url(raw_url)
-                        external_id, url, list_order = (
-                            source.external_id,
-                            source.url,
-                            source.list_order,
+                    if spec.parse_circle_url is None:
+                        raise CollectorFailure(
+                            "PLATFORM_NOT_INTEGRATED", f"{platform.display_name}暂无来源 URL 合同。"
                         )
-                    else:
-                        external_id, url, list_order = raw_url, raw_url, "latest_reply"
+                    source = spec.parse_circle_url(raw_url)
+                    external_id, url, list_order = (
+                        source.external_id,
+                        source.url,
+                        source.list_order,
+                    )
                 except CollectorFailure as exc:
                     raise DomainError(exc.code, exc.message) from exc
                 source_key = (external_id, list_order)
@@ -1105,7 +1101,11 @@ class RunService:
             normalized_posts: list[str] = []
             for raw_url in value.known_post_urls:
                 try:
-                    _, normalized = normalize_post_url(raw_url)
+                    if spec.normalize_post_url is None:
+                        raise CollectorFailure(
+                            "PLATFORM_NOT_INTEGRATED", f"{platform.display_name}暂无帖子 URL 合同。"
+                        )
+                    _, normalized = spec.normalize_post_url(raw_url)
                 except CollectorFailure as exc:
                     raise DomainError(exc.code, exc.message) from exc
                 if normalized not in normalized_posts:
@@ -1128,7 +1128,9 @@ class RunService:
                     "quantity": quantity,
                     "requested_quantity": value.quantity,
                     "ai_analysis_enabled": value.ai_analysis_enabled,
-                    "screenshot_enabled": value.screenshot_enabled and bool(circles),
+                    "screenshot_enabled": (
+                        value.screenshot_enabled and bool(circles) and spec.supports_page_evidence
+                    ),
                     "requested_screenshot_enabled": value.screenshot_enabled,
                 },
             )
@@ -1156,7 +1158,9 @@ class RunService:
                         "source_name": vehicle_name,
                         "transient": item["transient"],
                         "ai_analysis_enabled": value.ai_analysis_enabled,
-                        "screenshot_enabled": value.screenshot_enabled,
+                        "screenshot_enabled": (
+                            value.screenshot_enabled and spec.supports_page_evidence
+                        ),
                     },
                 )
                 db.add(task)
@@ -1451,7 +1455,8 @@ class RunService:
                             ),
                             "screenshot_enabled": any(
                                 item["screenshot_enabled"] for item in source_rules
-                            ),
+                            )
+                            and get_platform_spec(circle.platform_code).supports_page_evidence,
                         },
                     )
                 )
@@ -2100,6 +2105,9 @@ def run_dict_from_tasks(
         "queue_position": queue_position,
         "platform_count": len({task.platform_code for task in tasks}),
         "platform_codes": sorted({task.platform_code for task in tasks}),
+        "waiting_platform_codes": sorted(
+            {task.platform_code for task in tasks if task.status == "waiting_for_auth"}
+        ),
         "circle_count": len(tasks),
         "circle_names": [task.circle_name or task.external_id for task in tasks[:3]],
         "source_names": [task_source_name(task, live_source_names) for task in tasks[:3]],

@@ -1493,6 +1493,54 @@ class ApiAndConfigTests(AppCase):
             assert platform is not None
         self.assertEqual(ADAPTER_VERSION, platform.adapter_version)
 
+    def test_autohome_registry_contract_keeps_gate_closed_until_temporary_test_enable(
+        self,
+    ) -> None:
+        """汽车之家已有真实输入合同，但正式 500/500 前仍保持未接入。"""
+
+        platforms = {item["code"]: item for item in self.client.get("/api/v1/platforms").json()}
+        autohome = platforms["autohome"]
+        self.assertEqual("not_integrated", autohome["adapter_status"])
+        self.assertFalse(autohome["enabled"])
+        self.assertTrue(autohome["capabilities"]["source_configuration"])
+        self.assertFalse(autohome["capabilities"]["page_evidence"])
+        self.assertFalse(autohome["capabilities"]["live_video_resolution"])
+
+        blocked = self.client.post(
+            "/api/v1/runs/manual",
+            json={
+                "platform_code": "autohome",
+                "circle_urls": [
+                    "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post"
+                ],
+                "quantity": 3,
+                "screenshot_enabled": True,
+                "idempotency_key": "autohome-formal-gate-closed",
+            },
+        )
+        self.assertEqual(409, blocked.status_code)
+
+        with self.container.sessions.begin() as db:
+            platform = db.get(PlatformConfig, "autohome")
+            assert platform is not None
+            platform.adapter_status = "available"
+            platform.enabled = True
+        created = self.client.post(
+            "/api/v1/runs/manual",
+            json={
+                "platform_code": "autohome",
+                "circle_urls": [
+                    "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post"
+                ],
+                "quantity": 3,
+                "screenshot_enabled": True,
+                "idempotency_key": "autohome-temporary-test-enable",
+            },
+        )
+        self.assertEqual(202, created.status_code, created.text)
+        self.assertFalse(created.json()["screenshot_enabled"])
+        self.assertEqual(["autohome"], created.json()["platform_codes"])
+
     def test_sentiment_config_worker_filters_detail_and_manual_revision(self) -> None:
         """覆盖配置、单次分析、三态列表、详情依据和人工优先的组合路径。"""
 

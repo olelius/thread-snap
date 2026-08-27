@@ -139,7 +139,7 @@ function RunListPage({ kind }: { kind: RunListKind }) {
           <div className='flex items-center gap-2'><Select value={String(search.pageSize)} onValueChange={(value) => patch({ pageSize: Number(value) as 20 | 50 | 100, page: 1 })}><SelectTrigger className='w-28'><SelectValue /></SelectTrigger><SelectContent><SelectItem value='20'>每页 20</SelectItem><SelectItem value='50'>每页 50</SelectItem><SelectItem value='100'>每页 100</SelectItem></SelectContent></Select><Button variant='outline' size='icon' disabled={(search.page ?? 1) <= 1} onClick={() => patch({ page: (search.page ?? 1) - 1 })} aria-label='上一页'><ChevronLeft className='size-4' /></Button><Button variant='outline' size='icon' disabled={(search.page ?? 1) >= totalPages} onClick={() => patch({ page: (search.page ?? 1) + 1 })} aria-label='下一页'><ChevronRight className='size-4' /></Button></div>
         </div>
       </div>
-      <AuthDialog open={Boolean(authRun)} onOpenChange={(open) => !open && setAuthRun(undefined)} runId={authRun?.id} freshOnOpen />
+      <AuthDialog open={Boolean(authRun)} onOpenChange={(open) => !open && setAuthRun(undefined)} platformCode={authRun?.waiting_platform_codes?.[0] ?? authRun?.platform_codes?.[0]} runId={authRun?.id} freshOnOpen />
     </div>
   )
 }
