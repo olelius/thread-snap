@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useBlocker, useNavigate, useSearch } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArchiveRestore, BrainCircuit, CalendarClock, CarFront, Check, ChevronDown, ChevronsUpDown, CirclePlus, Copy, Download, KeyRound, Loader2, Plus, RefreshCw, RotateCcw, Save, Settings2, Trash2, Upload } from 'lucide-react'
+import { ArchiveRestore, BrainCircuit, CalendarClock, CarFront, Check, ChevronDown, ChevronsUpDown, CirclePlus, Copy, Download, KeyRound, Loader2, Plus, RefreshCw, Repeat2, RotateCcw, Save, Settings2, Trash2, Upload } from 'lucide-react'
 import { toast } from 'sonner'
 import { AuthDialog } from '@/features/auth/auth-dialog'
 import { PageHeader } from '@/components/page-header'
@@ -28,9 +28,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Textarea } from '@/components/ui/textarea'
 import { cn } from '@/lib/utils'
 
-const tabValues = ['rules', 'schedule', 'platforms', 'circles', 'history', 'templates', 'sentiment'] as const
+const tabValues = ['rules', 'schedule', 'recurring', 'platforms', 'circles', 'history', 'templates', 'sentiment'] as const
 type Tab = typeof tabValues[number]
 const weekdays = ['一', '二', '三', '四', '五', '六', '日']
+const normalizeTimeInput = (value: string) => value.length === 5 ? `${value}:00` : value
 
 type CircleBatchResult = { items: Circle[]; saved_count: number; deleted_count: number }
 type ValidationJob = { id: string; circle_id: string; status: string; error_message?: string }
@@ -63,6 +64,10 @@ function editableNodesSignature(nodes?: ExtractionPlan['nodes']) {
   return JSON.stringify((nodes ?? []).map(({ id, weekdays: days, time, enabled, rule_ids }) => ({ id, weekdays: [...days].sort(), time, enabled, rule_ids: [...rule_ids] })))
 }
 
+function editableRecurringNodesSignature(nodes?: ExtractionPlan['recurring_nodes']) {
+  return JSON.stringify((nodes ?? []).map(({ id, weekdays: days, start_time, end_time, interval_minutes, enabled, rule_ids }) => ({ id, weekdays: [...days].sort(), start_time, end_time, interval_minutes, enabled, rule_ids: [...rule_ids] })))
+}
+
 function editableRuleSignature(rule?: ExtractionPlan['rules'][number]) {
   if (!rule) return ''
   return JSON.stringify({ name: rule.name, platform_quantities: rule.platform_quantities, circle_ids: [...rule.circle_ids].sort(), ai_analysis_enabled: rule.ai_analysis_enabled, screenshot_enabled: rule.screenshot_enabled })
@@ -71,6 +76,11 @@ function editableRuleSignature(rule?: ExtractionPlan['rules'][number]) {
 function editableNodeSignature(node?: ExtractionPlan['nodes'][number]) {
   if (!node) return ''
   return JSON.stringify({ weekdays: [...node.weekdays].sort(), time: node.time, enabled: node.enabled, rule_ids: [...node.rule_ids] })
+}
+
+function editableRecurringNodeSignature(node?: ExtractionPlan['recurring_nodes'][number]) {
+  if (!node) return ''
+  return JSON.stringify({ weekdays: [...node.weekdays].sort(), start_time: node.start_time, end_time: node.end_time, interval_minutes: node.interval_minutes, enabled: node.enabled, rule_ids: [...node.rule_ids] })
 }
 
 const dirtyFieldClass = 'border-amber-500/70 ring-2 ring-amber-500/15 focus-visible:border-amber-500 focus-visible:ring-amber-500/25'
@@ -118,7 +128,7 @@ function rowsAsVehicles(rows: Circle[]) {
   return [...vehicles.values()]
 }
 
-type PlanSection = 'rules' | 'schedule'
+type PlanSection = 'rules' | 'schedule' | 'recurring'
 
 function usePlanWorkspace(onReveal: (tab: PlanSection, targetId?: string) => void) {
   const client = useQueryClient()
@@ -135,14 +145,16 @@ function usePlanWorkspace(onReveal: (tab: PlanSection, targetId?: string) => voi
       if (!current || !previousServer) return structuredClone(nextServer)
       const keepRules = editableRulesSignature(current.rules) !== editableRulesSignature(previousServer.rules)
       const keepNodes = editableNodesSignature(current.nodes) !== editableNodesSignature(previousServer.nodes)
-      const preserveRevision = (keepRules || keepNodes) && current.revision !== nextServer.revision
-      return { ...structuredClone(nextServer), revision: preserveRevision ? current.revision : nextServer.revision, rules: keepRules ? current.rules : structuredClone(nextServer.rules), nodes: keepNodes ? current.nodes : structuredClone(nextServer.nodes) }
+      const keepRecurringNodes = editableRecurringNodesSignature(current.recurring_nodes) !== editableRecurringNodesSignature(previousServer.recurring_nodes)
+      const preserveRevision = (keepRules || keepNodes || keepRecurringNodes) && current.revision !== nextServer.revision
+      return { ...structuredClone(nextServer), revision: preserveRevision ? current.revision : nextServer.revision, rules: keepRules ? current.rules : structuredClone(nextServer.rules), nodes: keepNodes ? current.nodes : structuredClone(nextServer.nodes), recurring_nodes: keepRecurringNodes ? current.recurring_nodes : structuredClone(nextServer.recurring_nodes) }
     })
     serverBaseline.current = structuredClone(nextServer)
   }, [query.data])
 
   const rulesDirty = Boolean(draft && query.data) && editableRulesSignature(draft?.rules) !== editableRulesSignature(query.data?.rules)
   const scheduleDirty = Boolean(draft && query.data) && editableNodesSignature(draft?.nodes) !== editableNodesSignature(query.data?.nodes)
+  const recurringDirty = Boolean(draft && query.data) && editableRecurringNodesSignature(draft?.recurring_nodes) !== editableRecurringNodesSignature(query.data?.recurring_nodes)
 
   function revealPlanError(error: unknown) {
     if (!(error instanceof ApiError)) return
@@ -151,7 +163,8 @@ function usePlanWorkspace(onReveal: (tab: PlanSection, targetId?: string) => voi
     const ruleId = details.find((item) => typeof item.rule_id === 'string')?.rule_id
     const nodeDetail = details.find((item) => typeof item.node_id === 'string' || Array.isArray(item.node_ids))
     const nodeId = typeof nodeDetail?.node_id === 'string' ? nodeDetail.node_id : Array.isArray(nodeDetail?.node_ids) && typeof nodeDetail.node_ids[0] === 'string' ? nodeDetail.node_ids[0] : undefined
-    const targetTab: PlanSection = nodeId ? 'schedule' : 'rules'
+    const recurringNode = nodeId && (draft?.recurring_nodes.some((node) => node.id === nodeId) || query.data?.recurring_nodes.some((node) => node.id === nodeId))
+    const targetTab: PlanSection = nodeId ? recurringNode ? 'recurring' : 'schedule' : 'rules'
     const targetId = nodeId ?? (typeof ruleId === 'string' ? ruleId : undefined)
     onReveal(targetTab, targetId)
   }
@@ -161,12 +174,13 @@ function usePlanWorkspace(onReveal: (tab: PlanSection, targetId?: string) => voi
       if (!query.data) throw new Error('提取配置尚未加载完成。')
       const rules = section === 'rules' ? current.rules : query.data.rules
       const nodes = section === 'schedule' ? current.nodes : query.data.nodes
-      return api<ExtractionPlan>('/extraction-plan', { method: 'PUT', body: JSON.stringify({ revision: current.revision, rules: rules.map(({ id, name, platform_quantities, circle_ids, ai_analysis_enabled, screenshot_enabled }) => ({ id, name, platform_quantities, circle_ids, ai_analysis_enabled, screenshot_enabled })), nodes: nodes.map(({ id, weekdays: days, time, enabled, rule_ids }) => ({ id, weekdays: days, time, enabled, rule_ids })) }) })
+      const recurringNodes = section === 'recurring' ? current.recurring_nodes : query.data.recurring_nodes
+      return api<ExtractionPlan>('/extraction-plan', { method: 'PUT', body: JSON.stringify({ revision: current.revision, rules: rules.map(({ id, name, platform_quantities, circle_ids, ai_analysis_enabled, screenshot_enabled }) => ({ id, name, platform_quantities, circle_ids, ai_analysis_enabled, screenshot_enabled })), nodes: nodes.map(({ id, weekdays: days, time, enabled, rule_ids }) => ({ id, weekdays: days, time, enabled, rule_ids })), recurring_nodes: recurringNodes.map(({ id, weekdays: days, start_time, end_time, interval_minutes, enabled, rule_ids }) => ({ id, weekdays: days, start_time, end_time, interval_minutes, enabled, rule_ids })) }) })
     },
     onSuccess: (value, { section }) => {
-      setDraft((current) => ({ ...structuredClone(value), rules: section === 'schedule' && rulesDirty && current ? current.rules : structuredClone(value.rules), nodes: section === 'rules' && scheduleDirty && current ? current.nodes : structuredClone(value.nodes) }))
+      setDraft((current) => ({ ...structuredClone(value), rules: section !== 'rules' && rulesDirty && current ? current.rules : structuredClone(value.rules), nodes: section !== 'schedule' && scheduleDirty && current ? current.nodes : structuredClone(value.nodes), recurring_nodes: section !== 'recurring' && recurringDirty && current ? current.recurring_nodes : structuredClone(value.recurring_nodes) }))
       client.setQueryData(['extraction-plan'], value)
-      toast.success(section === 'rules' ? '自动提取规则已保存' : '每周计划已保存')
+      toast.success(section === 'rules' ? '自动提取规则已保存' : section === 'schedule' ? '每周计划已保存' : '循环计划已保存')
     },
     onError: (error) => { revealPlanError(error); toast.error('保存失败', { description: errorMessage(error) }) },
   })
@@ -186,19 +200,20 @@ function usePlanWorkspace(onReveal: (tab: PlanSection, targetId?: string) => voi
 
   function discardSection(section: PlanSection) {
     if (!draft || !query.data) return
-    const otherSectionDirty = section === 'rules'
-      ? editableNodesSignature(draft.nodes) !== editableNodesSignature(query.data.nodes)
-      : editableRulesSignature(draft.rules) !== editableRulesSignature(query.data.rules)
+    const otherSectionDirty = (section !== 'rules' && rulesDirty)
+      || (section !== 'schedule' && scheduleDirty)
+      || (section !== 'recurring' && recurringDirty)
     setDraft({
       ...draft,
       revision: otherSectionDirty ? draft.revision : query.data.revision,
       rules: section === 'rules' ? structuredClone(query.data.rules) : draft.rules,
       nodes: section === 'schedule' ? structuredClone(query.data.nodes) : draft.nodes,
+      recurring_nodes: section === 'recurring' ? structuredClone(query.data.recurring_nodes) : draft.recurring_nodes,
     })
     if (!otherSectionDirty) setRevisionConflict(false)
   }
 
-  return { query, draft, setDraft, rulesDirty, scheduleDirty, dirty: rulesDirty || scheduleDirty, save, discardSection, revisionConflict, setRevisionConflict, reloadServerPlan, replacePlan }
+  return { query, draft, setDraft, rulesDirty, scheduleDirty, recurringDirty, dirty: rulesDirty || scheduleDirty || recurringDirty, save, discardSection, revisionConflict, setRevisionConflict, reloadServerPlan, replacePlan }
 }
 
 type PlanWorkspace = ReturnType<typeof usePlanWorkspace>
@@ -209,7 +224,7 @@ export function ConfigPage() {
   const plan = usePlanWorkspace((targetTab, targetId) => {
     navigate({ to: '/config', search: { tab: targetTab }, replace: true, resetScroll: false })
     window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
-      const target = targetId ? document.getElementById(targetTab === 'rules' ? `rule-editor-${targetId}` : `schedule-node-${targetId}`) : undefined
+      const target = targetId ? document.getElementById(targetTab === 'rules' ? `rule-editor-${targetId}` : targetTab === 'recurring' ? `recurring-node-${targetId}` : `schedule-node-${targetId}`) : undefined
       target?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
       target?.querySelector<HTMLElement>('input, button')?.focus({ preventScroll: true })
     }))
@@ -232,16 +247,17 @@ export function ConfigPage() {
     <div className='flex h-full min-h-0 flex-col'>
       <div className='shrink-0'><PageHeader title='配置管理' description='每项配置只在唯一归属页面编辑；跨页区域只展示摘要和跳转入口。' /></div>
       <Tabs className='mt-4 flex min-h-0 flex-1 flex-col' value={tab} onValueChange={(value) => navigate({ to: '/config', search: { tab: value as Tab }, replace: true, resetScroll: false })}>
-        <div className='shrink-0 overflow-x-auto'><TabsList className='h-10 min-w-max bg-muted/65 p-1'><TabsTrigger value='rules'><ConfigTabLabel dirty={plan.rulesDirty}>自动提取规则</ConfigTabLabel></TabsTrigger><TabsTrigger value='schedule'><ConfigTabLabel dirty={plan.scheduleDirty}>每周计划</ConfigTabLabel></TabsTrigger><TabsTrigger value='platforms'><ConfigTabLabel dirty={platformDirty}>平台配置</ConfigTabLabel></TabsTrigger><TabsTrigger value='circles'><ConfigTabLabel dirty={circleDirty}>来源与圈子</ConfigTabLabel></TabsTrigger><TabsTrigger value='history'>手动圈子历史</TabsTrigger><TabsTrigger value='templates'>导出模板</TabsTrigger><TabsTrigger value='sentiment'><ConfigTabLabel dirty={sentimentDirty}>AI 舆情</ConfigTabLabel></TabsTrigger></TabsList></div>
+        <div className='shrink-0 overflow-x-auto'><TabsList className='h-10 min-w-max bg-muted/65 p-1'><TabsTrigger value='rules'><ConfigTabLabel dirty={plan.rulesDirty}>自动提取规则</ConfigTabLabel></TabsTrigger><TabsTrigger value='schedule'><ConfigTabLabel dirty={plan.scheduleDirty}>每周计划</ConfigTabLabel></TabsTrigger><TabsTrigger value='recurring'><ConfigTabLabel dirty={plan.recurringDirty}>循环计划</ConfigTabLabel></TabsTrigger><TabsTrigger value='platforms'><ConfigTabLabel dirty={platformDirty}>平台配置</ConfigTabLabel></TabsTrigger><TabsTrigger value='circles'><ConfigTabLabel dirty={circleDirty}>来源与圈子</ConfigTabLabel></TabsTrigger><TabsTrigger value='history'>手动圈子历史</TabsTrigger><TabsTrigger value='templates'>导出模板</TabsTrigger><TabsTrigger value='sentiment'><ConfigTabLabel dirty={sentimentDirty}>AI 舆情</ConfigTabLabel></TabsTrigger></TabsList></div>
         <TabsContent forceMount value='rules' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><RulesPanel workspace={plan} /></TabsContent>
         <TabsContent forceMount value='schedule' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><SchedulePanel workspace={plan} /></TabsContent>
+        <TabsContent forceMount value='recurring' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><RecurringSchedulePanel workspace={plan} /></TabsContent>
         <TabsContent forceMount value='platforms' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><PlatformPanel onDirtyChange={setPlatformDirty} /></TabsContent>
         <TabsContent forceMount value='circles' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden xl:overflow-hidden'><CirclePanel onDirtyChange={setCircleDirty} /></TabsContent>
         <TabsContent forceMount value='history' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><HistoryPanel /></TabsContent>
         <TabsContent forceMount value='templates' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><TemplatePanel /></TabsContent>
         <TabsContent forceMount value='sentiment' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><SentimentPanel onDirtyChange={setSentimentDirty} /></TabsContent>
       </Tabs>
-      <AlertDialog open={plan.revisionConflict} onOpenChange={plan.setRevisionConflict}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>服务器提取配置已有更新</AlertDialogTitle><AlertDialogDescription>当前标签的草稿仍保留。可以继续留在页面核对，或放弃规则和计划草稿并加载服务器最新版本。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel onClick={() => plan.setRevisionConflict(false)}>保留当前草稿</AlertDialogCancel><AlertDialogAction onClick={plan.reloadServerPlan}>放弃草稿并重新加载</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+      <AlertDialog open={plan.revisionConflict} onOpenChange={plan.setRevisionConflict}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>服务器提取配置已有更新</AlertDialogTitle><AlertDialogDescription>当前标签的草稿仍保留。可以继续留在页面核对，或放弃规则和两类计划草稿并加载服务器最新版本。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel onClick={() => plan.setRevisionConflict(false)}>保留当前草稿</AlertDialogCancel><AlertDialogAction onClick={plan.reloadServerPlan}>放弃草稿并重新加载</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
       <AlertDialog open={blocker.status === 'blocked'}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -306,7 +322,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
   const changedRuleIds = new Set(draft.rules.filter((rule) => editableRuleSignature(rule) !== editableRuleSignature(baselineRules.get(rule.id))).map((rule) => rule.id))
   const removedRules = [...baselineRules.keys()].filter((id) => !draft.rules.some((rule) => rule.id === id)).length
   const changeCount = changedRuleIds.size + removedRules
-  const savedNodes = query.data?.nodes ?? []
+  const savedNodes = [...(query.data?.nodes ?? []), ...(query.data?.recurring_nodes ?? [])]
   const selectedRule = draft.rules.find((rule) => rule.id === selectedRuleId)
   const baselineSelectedRule = selectedRule ? baselineRules.get(selectedRule.id) : undefined
   const ruleNameDirty = Boolean(selectedRule) && selectedRule?.name !== (baselineSelectedRule?.name ?? '')
@@ -330,7 +346,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
 
   return <div className='space-y-5 xl:h-full xl:min-h-0'>
     <fieldset disabled={save.isPending} className='m-0 min-w-0 space-y-5 border-0 p-0 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:gap-5 xl:space-y-0'>
-      <ConfigSectionToolbar icon={<CalendarClock className='size-4.5' />} title='自动提取规则' summary={`${draft.rules.length} 条规则${rulesDirty ? ` · ${changeCount} 项未保存` : ''}`} description='定义提取范围和每个来源的目标数；保存时与服务器现有每周计划统一校验。'>
+      <ConfigSectionToolbar icon={<CalendarClock className='size-4.5' />} title='自动提取规则' summary={`${draft.rules.length} 条规则${rulesDirty ? ` · ${changeCount} 项未保存` : ''}`} description='定义提取范围和每个来源的目标数；保存时与服务器现有每周计划和循环计划统一校验。'>
         <Button variant='outline' onClick={createRule}><Plus className='size-4' />新建规则</Button>
         <Button variant='outline' disabled={!rulesDirty || save.isPending} onClick={() => discardSection('rules')}><RotateCcw className='size-4' />放弃修改</Button>
         <Button disabled={!rulesDirty || save.isPending} onClick={() => save.mutate({ section: 'rules', current: draft })}>{save.isPending ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}{save.isPending ? '正在保存' : `保存当前标签${rulesDirty ? ` (${changeCount})` : ''}`}</Button>
@@ -438,8 +454,91 @@ function SchedulePanel({ workspace }: { workspace: PlanWorkspace }) {
         const enabledDirty = Boolean(baselineNode) && node.enabled !== baselineNode?.enabled
         const timeDirty = Boolean(baselineNode) && node.time !== baselineNode?.time
         const ruleIdsDirty = Boolean(baselineNode) && JSON.stringify(node.rule_ids) !== JSON.stringify(baselineNode?.rule_ids)
-        return <Card id={`schedule-node-${node.id}`} key={node.id} data-dirty={nodeDirty || undefined} className='border-border/70 bg-card/88'><CardContent className='grid gap-4 p-4 xl:grid-cols-[5rem_auto_1fr_170px_260px_auto] xl:items-center'><Badge variant={nodeDirty ? 'outline' : 'secondary'} className={cn('w-fit gap-1.5 font-normal', nodeDirty && 'border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-300')}>节点 {index + 1}{nodeDirty && <span className='size-1.5 rounded-full bg-amber-500' aria-label={isNew ? '新增节点' : '本节点有未保存修改'} />}</Badge><Switch checked={node.enabled} data-dirty={enabledDirty || undefined} className={cn(enabledDirty && dirtyControlClass)} onCheckedChange={(enabled) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, enabled } : item))} aria-label='启用计划节点' /><div className='flex flex-wrap gap-1.5'>{weekdays.map((label, dayIndex) => { const dayDirty = Boolean(baselineNode) && node.weekdays.includes(dayIndex) !== (baselineNode?.weekdays.includes(dayIndex) ?? false); return <Button key={label} type='button' variant={node.weekdays.includes(dayIndex) ? 'default' : 'outline'} size='icon' data-dirty={dayDirty || undefined} className={cn('size-8 rounded-full', dayDirty && dirtyControlClass)} onClick={() => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, weekdays: item.weekdays.includes(dayIndex) ? item.weekdays.filter((day) => day !== dayIndex) : [...item.weekdays, dayIndex].sort() } : item))} aria-label={`星期${label}`}>{label}</Button> })}</div><Input type='time' step={1} value={node.time} data-dirty={timeDirty || undefined} className={cn(timeDirty && dirtyFieldClass)} onChange={(event) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, time: event.target.value.length === 5 ? `${event.target.value}:00` : event.target.value } : item))} /><RuleMultiCombobox rules={savedRules} values={node.rule_ids} disabled={save.isPending} dirty={ruleIdsDirty} onChange={(rule_ids) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, rule_ids } : item))} /><Button variant='ghost' size='icon' onClick={() => updateNodes(draft.nodes.filter((item) => item.id !== node.id))} aria-label='删除计划节点'><Trash2 className='size-4' /></Button></CardContent></Card>
+        return <Card id={`schedule-node-${node.id}`} key={node.id} data-dirty={nodeDirty || undefined} className='border-border/70 bg-card/88'><CardContent className='grid gap-4 p-4 xl:grid-cols-[5rem_auto_1fr_170px_260px_auto] xl:items-center'><Badge variant={nodeDirty ? 'outline' : 'secondary'} className={cn('w-fit gap-1.5 font-normal', nodeDirty && 'border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-300')}>节点 {index + 1}{nodeDirty && <span className='size-1.5 rounded-full bg-amber-500' aria-label={isNew ? '新增节点' : '本节点有未保存修改'} />}</Badge><Switch checked={node.enabled} data-dirty={enabledDirty || undefined} className={cn(enabledDirty && dirtyControlClass)} onCheckedChange={(enabled) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, enabled } : item))} aria-label='启用计划节点' /><div className='flex flex-wrap gap-1.5'>{weekdays.map((label, dayIndex) => { const dayDirty = Boolean(baselineNode) && node.weekdays.includes(dayIndex) !== (baselineNode?.weekdays.includes(dayIndex) ?? false); return <Button key={label} type='button' variant={node.weekdays.includes(dayIndex) ? 'default' : 'outline'} size='icon' data-dirty={dayDirty || undefined} className={cn('size-8 rounded-full', dayDirty && dirtyControlClass)} onClick={() => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, weekdays: item.weekdays.includes(dayIndex) ? item.weekdays.filter((day) => day !== dayIndex) : [...item.weekdays, dayIndex].sort() } : item))} aria-label={`星期${label}`}>{label}</Button> })}</div><Input type='time' step={1} value={node.time} data-dirty={timeDirty || undefined} className={cn(timeDirty && dirtyFieldClass)} onChange={(event) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, time: normalizeTimeInput(event.target.value) } : item))} /><RuleMultiCombobox rules={savedRules} values={node.rule_ids} disabled={save.isPending} dirty={ruleIdsDirty} onChange={(rule_ids) => updateNodes(draft.nodes.map((item) => item.id === node.id ? { ...item, rule_ids } : item))} /><Button variant='ghost' size='icon' onClick={() => updateNodes(draft.nodes.filter((item) => item.id !== node.id))} aria-label='删除计划节点'><Trash2 className='size-4' /></Button></CardContent></Card>
       }) : <Card className='border-dashed bg-card/70'><CardContent className='p-10 text-center text-sm text-muted-foreground'><CalendarClock className='mx-auto mb-3 size-8 text-primary/60' />尚未配置每周计划节点。</CardContent></Card>}</div>
+    </fieldset>
+  </div>
+}
+
+function timeValueToSeconds(value: string) {
+  const parts = value.split(':').map(Number)
+  if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) return Number.NaN
+  return parts[0] * 3600 + parts[1] * 60 + parts[2]
+}
+
+function secondsToTime(value: number) {
+  const hour = Math.floor(value / 3600)
+  const minute = Math.floor((value % 3600) / 60)
+  const second = value % 60
+  return [hour, minute, second].map((part) => String(part).padStart(2, '0')).join(':')
+}
+
+function recurringSchedulePreview(node: ExtractionPlan['recurring_nodes'][number]) {
+  const start = timeValueToSeconds(node.start_time)
+  const end = timeValueToSeconds(node.end_time)
+  const step = node.interval_minutes * 60
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start >= end || step <= 0) return '请设置有效的同日时间段和正整数分钟间隔'
+  const count = Math.floor((end - start) / step) + 1
+  const last = start + (count - 1) * step
+  return `每个所选日触发 ${count} 次 · ${last === end ? '包含结束时刻' : `最后一次 ${secondsToTime(last)}，不触发结束时刻`}`
+}
+
+function RecurringSchedulePanel({ workspace }: { workspace: PlanWorkspace }) {
+  const { query, draft, setDraft, recurringDirty, save, discardSection } = workspace
+  if (!draft) return <Card><CardContent className='p-10 text-center text-sm text-muted-foreground'>正在加载循环计划…</CardContent></Card>
+
+  const savedRules = query.data?.rules ?? []
+  const baselineNodes = new Map((query.data?.recurring_nodes ?? []).map((node) => [node.id, node]))
+  const changedNodeIds = new Set(draft.recurring_nodes.filter((node) => editableRecurringNodeSignature(node) !== editableRecurringNodeSignature(baselineNodes.get(node.id))).map((node) => node.id))
+  const removedNodes = [...baselineNodes.keys()].filter((id) => !draft.recurring_nodes.some((node) => node.id === id)).length
+  const changeCount = changedNodeIds.size + removedNodes
+  const updateNodes = (recurring_nodes: ExtractionPlan['recurring_nodes']) => setDraft({ ...draft, recurring_nodes })
+  const updateNode = (nodeId: string, values: Partial<ExtractionPlan['recurring_nodes'][number]>) => updateNodes(draft.recurring_nodes.map((node) => node.id === nodeId ? { ...node, ...values } : node))
+  const createNode = () => {
+    if (!savedRules.length) return
+    updateNodes([...draft.recurring_nodes, { id: crypto.randomUUID(), weekdays: [0, 1, 2, 3, 4], start_time: '09:00:00', end_time: '18:00:00', interval_minutes: 60, enabled: false, rule_ids: [savedRules[0].id], updated_at: new Date().toISOString() }])
+  }
+
+  return <div className='space-y-5'>
+    <fieldset disabled={save.isPending} className='m-0 min-w-0 space-y-5 border-0 p-0'>
+      <ConfigSectionToolbar icon={<Repeat2 className='size-4.5' />} title='循环计划' summary={`${draft.recurring_nodes.length} 个节点${recurringDirty ? ` · ${changeCount} 项未保存` : ''}`} description='在所选星期的同日时间段内按分钟间隔触发；开始必触发，结束仅在间隔恰好命中时触发。'>
+        <Button variant='outline' disabled={!savedRules.length} onClick={createNode}><CirclePlus className='size-4' />新增节点</Button>
+        <Button variant='outline' disabled={!recurringDirty || save.isPending} onClick={() => discardSection('recurring')}><RotateCcw className='size-4' />放弃修改</Button>
+        <Button disabled={!recurringDirty || save.isPending} onClick={() => save.mutate({ section: 'recurring', current: draft })}>{save.isPending ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}{save.isPending ? '正在保存' : `保存当前标签${recurringDirty ? ` (${changeCount})` : ''}`}</Button>
+      </ConfigSectionToolbar>
+
+      {!savedRules.length && <Alert className='border-amber-500/30 bg-amber-500/5'><Repeat2 className='size-4' /><AlertTitle>还没有已保存的自动提取规则</AlertTitle><AlertDescription>请先在“自动提取规则”标签创建并保存规则，再新增循环计划节点。</AlertDescription></Alert>}
+
+      <div className='space-y-3'>{draft.recurring_nodes.length ? draft.recurring_nodes.map((node, index) => {
+        const baselineNode = baselineNodes.get(node.id)
+        const isNew = !baselineNode
+        const nodeDirty = changedNodeIds.has(node.id)
+        const enabledDirty = Boolean(baselineNode) && node.enabled !== baselineNode?.enabled
+        const startDirty = Boolean(baselineNode) && node.start_time !== baselineNode?.start_time
+        const endDirty = Boolean(baselineNode) && node.end_time !== baselineNode?.end_time
+        const intervalDirty = Boolean(baselineNode) && node.interval_minutes !== baselineNode?.interval_minutes
+        const ruleIdsDirty = Boolean(baselineNode) && JSON.stringify(node.rule_ids) !== JSON.stringify(baselineNode?.rule_ids)
+        return <Card id={`recurring-node-${node.id}`} key={node.id} data-dirty={nodeDirty || undefined} className='border-border/70 bg-card/88'>
+          <CardContent className='grid min-w-0 gap-4 p-4 xl:grid-cols-[5rem_auto_minmax(12rem,0.9fr)_minmax(20rem,1.5fr)_minmax(10rem,0.8fr)_auto] xl:items-center'>
+            <Badge variant={nodeDirty ? 'outline' : 'secondary'} className={cn('w-fit gap-1.5 font-normal', nodeDirty && 'border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-300')}>节点 {index + 1}{nodeDirty && <span className='size-1.5 rounded-full bg-amber-500' aria-label={isNew ? '新增节点' : '本节点有未保存修改'} />}</Badge>
+            <Switch checked={node.enabled} data-dirty={enabledDirty || undefined} className={cn(enabledDirty && dirtyControlClass)} onCheckedChange={(enabled) => updateNode(node.id, { enabled })} aria-label='启用循环计划节点' />
+            <div className='flex flex-wrap gap-1.5'>{weekdays.map((label, dayIndex) => {
+              const dayDirty = Boolean(baselineNode) && node.weekdays.includes(dayIndex) !== (baselineNode?.weekdays.includes(dayIndex) ?? false)
+              return <Button key={label} type='button' variant={node.weekdays.includes(dayIndex) ? 'default' : 'outline'} size='icon' data-dirty={dayDirty || undefined} className={cn('size-8 rounded-full', dayDirty && dirtyControlClass)} onClick={() => updateNode(node.id, { weekdays: node.weekdays.includes(dayIndex) ? node.weekdays.filter((day) => day !== dayIndex) : [...node.weekdays, dayIndex].sort() })} aria-label={`星期${label}`}>{label}</Button>
+            })}</div>
+            <div className='min-w-0'>
+              <div className='grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_7rem]'>
+                <div><Label htmlFor={`recurring-start-${node.id}`} className='text-xs text-muted-foreground'>开始时间</Label><Input id={`recurring-start-${node.id}`} type='time' step={1} value={node.start_time} data-dirty={startDirty || undefined} className={cn('mt-1', startDirty && dirtyFieldClass)} onChange={(event) => updateNode(node.id, { start_time: normalizeTimeInput(event.target.value) })} /></div>
+                <div><Label htmlFor={`recurring-end-${node.id}`} className='text-xs text-muted-foreground'>结束时间</Label><Input id={`recurring-end-${node.id}`} type='time' step={1} value={node.end_time} data-dirty={endDirty || undefined} className={cn('mt-1', endDirty && dirtyFieldClass)} onChange={(event) => updateNode(node.id, { end_time: normalizeTimeInput(event.target.value) })} /></div>
+                <div><Label htmlFor={`recurring-interval-${node.id}`} className='text-xs text-muted-foreground'>间隔（分钟）</Label><Input id={`recurring-interval-${node.id}`} type='number' min={1} max={1440} step={1} value={node.interval_minutes} data-dirty={intervalDirty || undefined} className={cn('mt-1 tabular-nums', intervalDirty && dirtyFieldClass)} onChange={(event) => updateNode(node.id, { interval_minutes: Number(event.target.value) })} /></div>
+              </div>
+              <p className='mt-1.5 text-xs text-muted-foreground'>{recurringSchedulePreview(node)}</p>
+            </div>
+            <RuleMultiCombobox rules={savedRules} values={node.rule_ids} disabled={save.isPending} dirty={ruleIdsDirty} onChange={(rule_ids) => updateNode(node.id, { rule_ids })} />
+            <Button variant='ghost' size='icon' onClick={() => updateNodes(draft.recurring_nodes.filter((item) => item.id !== node.id))} aria-label='删除循环计划节点'><Trash2 className='size-4' /></Button>
+          </CardContent>
+        </Card>
+      }) : <Card className='border-dashed bg-card/70'><CardContent className='p-10 text-center text-sm text-muted-foreground'><Repeat2 className='mx-auto mb-3 size-8 text-primary/60' />尚未配置循环计划节点。</CardContent></Card>}</div>
     </fieldset>
   </div>
 }

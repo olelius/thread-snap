@@ -24,7 +24,7 @@ type SearchState = {
   pageSize?: 20 | 50 | 100
   number?: string
   status?: 'queued' | 'running' | 'waiting_for_auth' | 'success' | 'partial_success' | 'failed'
-  trigger?: 'manual' | 'scheduled'
+  trigger?: 'manual' | 'scheduled' | 'recurring'
   listOrder?: 'latest_reply' | 'latest_publish'
   from?: string
   to?: string
@@ -89,12 +89,12 @@ export function RunsPage() {
   return (
     <div className='flex h-full min-h-0 flex-col gap-4'>
       <div className='shrink-0 space-y-4'>
-        <PageHeader title='提取列表' description='查看手动与定时提取批次，状态变化由 SSE 通知并回查权威接口。' actions={<NewExtractionSheet />} />
+        <PageHeader title='提取列表' description='查看手动、定时与循环计划批次，状态变化由 SSE 通知并回查权威接口。' actions={<NewExtractionSheet />} />
         <Card className='border-border/70 bg-card/88 py-0 shadow-sm backdrop-blur'>
           <CardContent className='grid gap-3 p-3 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-[minmax(220px,1fr)_160px_160px_160px_150px_150px_auto]'>
             <Input value={search.number ?? ''} onChange={(event) => patch({ number: event.target.value || undefined, page: 1 })} placeholder='搜索批次编号' aria-label='搜索批次编号' />
             <Select value={search.status ?? 'all'} onValueChange={(value) => patch({ status: value === 'all' ? undefined : value as SearchState['status'], page: 1 })}><SelectTrigger><SelectValue placeholder='全部状态' /></SelectTrigger><SelectContent><SelectItem value='all'>全部状态</SelectItem><SelectItem value='queued'>排队中</SelectItem><SelectItem value='running'>提取中</SelectItem><SelectItem value='waiting_for_auth'>等待平台认证</SelectItem><SelectItem value='success'>成功</SelectItem><SelectItem value='partial_success'>部分成功</SelectItem><SelectItem value='failed'>失败</SelectItem></SelectContent></Select>
-            <Select value={search.trigger ?? 'all'} onValueChange={(value) => patch({ trigger: value === 'all' ? undefined : value as SearchState['trigger'], page: 1 })}><SelectTrigger><SelectValue placeholder='全部触发方式' /></SelectTrigger><SelectContent><SelectItem value='all'>全部触发方式</SelectItem><SelectItem value='manual'>手动触发</SelectItem><SelectItem value='scheduled'>定时提取</SelectItem></SelectContent></Select>
+            <Select value={search.trigger ?? 'all'} onValueChange={(value) => patch({ trigger: value === 'all' ? undefined : value as SearchState['trigger'], page: 1 })}><SelectTrigger><SelectValue placeholder='全部触发方式' /></SelectTrigger><SelectContent><SelectItem value='all'>全部触发方式</SelectItem><SelectItem value='manual'>手动触发</SelectItem><SelectItem value='scheduled'>定时提取</SelectItem><SelectItem value='recurring'>循环计划</SelectItem></SelectContent></Select>
             <Select value={search.listOrder ?? 'all'} onValueChange={(value) => patch({ listOrder: value === 'all' ? undefined : value as SearchState['listOrder'], page: 1 })}><SelectTrigger><SelectValue placeholder='全部列表类型' /></SelectTrigger><SelectContent><SelectItem value='all'>全部列表类型</SelectItem><SelectItem value='latest_reply'>最新回复</SelectItem><SelectItem value='latest_publish'>最新发布</SelectItem></SelectContent></Select>
             <Input type='date' value={search.from ?? ''} onChange={(event) => patch({ from: event.target.value || undefined, page: 1 })} aria-label='开始日期' />
             <Input type='date' value={search.to ?? ''} onChange={(event) => patch({ to: event.target.value || undefined, page: 1 })} aria-label='结束日期' />

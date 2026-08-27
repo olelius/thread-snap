@@ -40,6 +40,7 @@ from .models import (
     Vehicle,
     utc_now,
 )
+from .schedule_times import schedule_node_trigger_times
 from .schemas import (
     CircleBatchUpdate,
     CircleRow,
@@ -58,7 +59,7 @@ RUN_STATUS_ZH = {
     "partial_success": "部分成功",
     "failed": "失败",
 }
-TRIGGER_ZH = {"manual": "手动触发", "scheduled": "定时提取"}
+TRIGGER_ZH = {"manual": "手动触发", "scheduled": "定时提取", "recurring": "循环计划"}
 
 
 def related_run_ids(db: Session, run_id: str) -> list[str]:
@@ -219,6 +220,12 @@ class ConfigService:
                     "updated_at": rule.updated_at,
                 }
 
+            weekly_nodes = [item for item in nodes if item.node_type == "weekly"]
+            recurring_nodes = [item for item in nodes if item.node_type == "recurring"]
+
+            def node_rule_ids(node: ScheduleNode) -> list[str]:
+                return node_rules.get(node.id, [node.legacy_rule_id])
+
             return {
                 "timezone": config.timezone_name,
                 "revision": config.revision,
@@ -230,10 +237,23 @@ class ConfigService:
                         "weekdays": item.weekdays,
                         "time": item.time_of_day,
                         "enabled": item.enabled,
-                        "rule_ids": node_rules.get(item.id, [item.legacy_rule_id]),
+                        "rule_ids": node_rule_ids(item),
                         "updated_at": item.updated_at,
                     }
-                    for item in nodes
+                    for item in weekly_nodes
+                ],
+                "recurring_nodes": [
+                    {
+                        "id": item.id,
+                        "weekdays": item.weekdays,
+                        "start_time": item.time_of_day,
+                        "end_time": item.end_time_of_day,
+                        "interval_minutes": item.interval_minutes,
+                        "enabled": item.enabled,
+                        "rule_ids": node_rule_ids(item),
+                        "updated_at": item.updated_at,
+                    }
+                    for item in recurring_nodes
                 ],
             }
 
@@ -260,13 +280,19 @@ class ConfigService:
                     )
                 names[key] = draft.id
             rule_ids = {item.id for item in value.rules}
-            node_ids = {item.id for item in value.nodes}
+            all_nodes = [*value.nodes, *value.recurring_nodes]
+            node_ids = {item.id for item in all_nodes}
+            if len(node_ids) != len(all_nodes):
+                raise DomainError(
+                    "SCHEDULE_NODE_ID_DUPLICATED",
+                    "每周计划与循环计划的节点 ID 需要保持全局唯一。",
+                )
             missing_refs = [
                 {
                     "node_id": item.id,
                     "rule_ids": [rule_id for rule_id in item.rule_ids if rule_id not in rule_ids],
                 }
-                for item in value.nodes
+                for item in all_nodes
                 if any(rule_id not in rule_ids for rule_id in item.rule_ids)
             ]
             if missing_refs:
@@ -281,6 +307,18 @@ class ConfigService:
                     continue
                 for weekday in node.weekdays:
                     conflicts.setdefault((weekday, node.time), []).append(node.id)
+            for node in value.recurring_nodes:
+                if not node.enabled:
+                    continue
+                trigger_times = schedule_node_trigger_times(
+                    "recurring",
+                    node.start_time,
+                    node.end_time,
+                    node.interval_minutes,
+                )
+                for weekday in node.weekdays:
+                    for trigger_time in trigger_times:
+                        conflicts.setdefault((weekday, trigger_time), []).append(node.id)
             duplicated = [
                 {"weekday": key[0], "time": key[1], "node_ids": ids}
                 for key, ids in conflicts.items()
@@ -289,7 +327,7 @@ class ConfigService:
             if duplicated:
                 raise DomainError(
                     "SCHEDULE_NODE_TIME_CONFLICT",
-                    "启用节点的星期和时间发生冲突。",
+                    "启用的每周计划或循环计划在同一星期和触发时刻发生冲突。",
                     details=duplicated,
                 )
             platforms = list(db.scalars(select(PlatformConfig)))
@@ -361,7 +399,7 @@ class ConfigService:
                 rule_circle_ids[draft.id] = circle_ids
             invalid_nodes = [
                 {"node_id": node.id, "rule_id": rule_id}
-                for node in value.nodes
+                for node in all_nodes
                 for rule_id in node.rule_ids
                 if node.enabled and not rule_circle_ids[rule_id]
             ]
@@ -435,12 +473,27 @@ class ConfigService:
                 if not node:
                     node = ScheduleNode(id=draft.id)
                     db.add(node)
+                node.node_type = "weekly"
                 node.weekdays = draft.weekdays
                 node.time_of_day = draft.time
+                node.end_time_of_day = None
+                node.interval_minutes = None
+                node.enabled = draft.enabled
+                node.legacy_rule_id = draft.rule_ids[0]
+            for draft in value.recurring_nodes:
+                node = existing_nodes.get(draft.id)
+                if not node:
+                    node = ScheduleNode(id=draft.id)
+                    db.add(node)
+                node.node_type = "recurring"
+                node.weekdays = draft.weekdays
+                node.time_of_day = draft.start_time
+                node.end_time_of_day = draft.end_time
+                node.interval_minutes = draft.interval_minutes
                 node.enabled = draft.enabled
                 node.legacy_rule_id = draft.rule_ids[0]
             db.flush()
-            for draft in value.nodes:
+            for draft in all_nodes:
                 db.execute(
                     delete(ScheduleNodeRule).where(
                         ScheduleNodeRule.schedule_node_id == draft.id
@@ -1311,9 +1364,10 @@ class RunService:
                 )
                 return None
             legacy_rule = rule_snapshots[0] if len(rule_snapshots) == 1 else None
+            trigger_type = "recurring" if node.node_type == "recurring" else "scheduled"
             run = ExtractionRun(
                 number=self._number(db),
-                trigger_type="scheduled",
+                trigger_type=trigger_type,
                 input_mode="circle_discovery",
                 status="queued",
                 idempotency_scope="scheduler",
@@ -1325,6 +1379,7 @@ class RunService:
                 config_snapshot={
                     "planned_at": planned_at.isoformat(),
                     "schedule_node_id": schedule_node_id,
+                    "schedule_node_type": node.node_type,
                     "schedule_revision": schedule_revision,
                     "rules": rule_snapshots,
                     "ai_analysis_enabled": any(
@@ -1404,7 +1459,10 @@ class RunService:
                     extraction_rule_version=legacy_rule["version"] if legacy_rule else None,
                     rule_snapshots=rule_snapshots,
                     status="created",
-                    message=f"定时提取批次已按 {len(rule_snapshots)} 条规则合并创建。",
+                    message=(
+                        f"{'循环计划' if trigger_type == 'recurring' else '定时提取'}批次已按 "
+                        f"{len(rule_snapshots)} 条规则合并创建。"
+                    ),
                     run_id=run.id,
                 )
             )

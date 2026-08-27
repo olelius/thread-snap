@@ -12,7 +12,7 @@ const runsRoute = createRoute({
     pageSize: oneOfNumber(search.pageSize, [20, 50, 100] as const),
     number: text(search.number),
     status: oneOf(search.status, ['queued', 'running', 'waiting_for_auth', 'success', 'partial_success', 'failed'] as const),
-    trigger: oneOf(search.trigger, ['manual', 'scheduled'] as const),
+    trigger: oneOf(search.trigger, ['manual', 'scheduled', 'recurring'] as const),
     listOrder: oneOf(search.listOrder, ['latest_reply', 'latest_publish'] as const),
     from: text(search.from),
     to: text(search.to),
@@ -40,7 +40,7 @@ const configRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/config',
   component: lazyRouteComponent(() => import('@/features/config/config-page'), 'ConfigPage'),
-  validateSearch: (search: Record<string, unknown>) => ({ tab: oneOf(search.tab, ['plan', 'rules', 'schedule', 'platforms', 'circles', 'history', 'templates', 'sentiment'] as const) ?? 'rules' }),
+  validateSearch: (search: Record<string, unknown>) => ({ tab: oneOf(search.tab, ['plan', 'rules', 'schedule', 'recurring', 'platforms', 'circles', 'history', 'templates', 'sentiment'] as const) ?? 'rules' }),
 })
 const reputationRoute = createRoute({
   getParentRoute: () => rootRoute,
