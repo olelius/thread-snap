@@ -148,3 +148,17 @@ sudo bash /opt/threadsnap/current/deploy/restore-backup.sh \
 ```
 
 程序回滚不会自动降级 Alembic 数据库；涉及不兼容迁移时使用与旧程序匹配的完整备份恢复。
+
+### 7.1 兼容应用最小升级
+
+既有服务器已经完成完整离线安装后，可以在以下条件全部成立时使用应用最小包，而不重新组装完整离线包：
+
+1. 当前 release、作为基线的完整离线包及其整体 SHA-256 均已核对；
+2. 从基线提交到目标提交的 `pyproject.toml`、前端 `package.json`/lock、`deploy/linux/` 和 Windows 制包脚本均无变化；
+3. 最小包来自干净目标提交，只包含 ThreadSnap 自身 wheel、Vite 生产文件、兼容元数据和逐文件 SHA-256，不含 wheelhouse、Chromium、RPM、模型、凭证或 `node_modules`；
+4. 目标机文件系统支持 reflink，能够从当前不可变 release 建立独立的写时复制新 release；
+5. 提取、圈子任务、配置验证、舆情、口碑及删除 Worker 均无排队或运行任务，SQLite 完整性和当前 Alembic 版本通过预检。
+
+该路径只允许对 reflink 新 release 执行 `pip --no-index --no-deps --force-reinstall` 以替换 ThreadSnap 自身 wheel，前端直接替换为包内生产文件；不得运行 DNF、解析 wheelhouse、复制浏览器或模型。最终切换按以下顺序完成：先停止 Nginx，再停止后端并生成带完整性、Alembic 和 SHA-256 的 SQLite 备份；设置旧 release 为 `previous`、原子切换 `current`；依次启动并等待后端 `8000`、Nginx `8088`，最后验证公网入口。任一阶段失败时同时恢复旧 release 和停机窗口数据库备份，不能只回滚程序软链接。
+
+最小包不是新的安装基线：服务器仍须保留最近一次已校验的完整离线包，用于新机安装、依赖变化、部署脚本变化和运行时修复。每次最小升级脚本是绑定明确基线提交、目标提交、数据库版本和包哈希的一次性受审产物；项目尚未提供可跳过这些门禁的通用“快速升级”命令。

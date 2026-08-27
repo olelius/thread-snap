@@ -247,6 +247,7 @@
 - 完整离线包内置全部 Python wheels、锁定 Patchright 对应的 Linux Chromium，以及 Python、Nginx、Weston 和浏览器共享库 RPM。RPM 目录带本地仓库元数据和顶层组件清单；目标机安装固定使用 `pip --no-index` 与 `dnf --disablerepo='*'`，只由包内仓库解析缺失依赖，不把全部递归 RPM 强制升级到制包日版本。
 - 程序 release 位于 `/opt/threadsnap/releases/`，配置位于 `/etc/threadsnap`，持久数据默认位于 `/var/lib/threadsnap`。安装前用 `lsblk`、`findmnt`、`df -hT` 与 `df -Pi` 核对挂载点；存在独立数据盘时把 `--data-dir` 指向其挂载点，不把 SQLite、模板、导出或加密 Profile 放入程序 release。
 - systemd 只启动一个 ThreadSnap 应用进程，并由独立 Weston 服务通过 `wayland-99` socket 提供 `1280 × 800` 无头显示。专用 `threadsnap-nginx.service` 使用 `/etc/threadsnap/nginx.conf` 发布 SPA、代理页面 API/SSE/认证 WebSocket并明确屏蔽 `/internal/v1`，不接管宿主机已有的 80/443 Nginx；Uvicorn 继续只监听 `127.0.0.1:8000`，不开放 CDP，Wayland socket 仅对 `threadsnap` 用户可用。
+- 既有服务器做兼容应用升级时，只有 `pyproject.toml`、前端 package/lock、`deploy/linux` 和制包脚本与当前已校验完整离线包均未变化，才允许使用应用最小包：包内只放新的 ThreadSnap wheel、前端生产构建、兼容元数据和逐文件 SHA-256，不复制 wheelhouse、浏览器、RPM、模型或 `node_modules`。目标机先校验基线 release、完整离线包和依赖清单，再以同文件系统 reflink 从当前不可变 release 建立新 release，只替换应用 wheel 与前端文件并使用 `pip --no-index --no-deps`，不得重新解析或安装依赖。切换前必须确认所有业务 Worker 空闲并在停机窗口备份 SQLite；Nginx 先于其 `Requires=` 后端停止，原子更新 `current`/`previous` 后分别等待后端与 Nginx 健康，失败时同时恢复旧 release 和数据库。
 - 制包、安装、验证、备份和回滚的唯一操作说明为 `docs/deployment/linux-v1.md`，具体脚本位于 `deploy/linux/`。完整离线包的发行版、架构、Python、浏览器和逐文件 SHA-256 必须写入 manifest 与校验清单。
 
 ## 保留的部署与性能验收门禁

@@ -16,6 +16,22 @@
 
 ---
 
+## 2026-08-27 — 服务器以应用最小包升级循环计划版本
+**总目标**：把当前 `main` 的循环计划、独立循环批次列表和跨类型同秒调度能力更新到目标服务器，同时复用既有离线依赖与运行环境，不重新组装或安装完整依赖载荷。
+**状态**：✅ 服务器已由 `0.1.0-8a7ede86679d` 增量升级到 `0.1.0-82d4712919f6`，数据库迁移、服务、内外网接口和回滚链均已验证。
+**干到哪里了**：
+- [x] 升级前只读确认四个服务均为 `active`、数据库完整性为 `ok`、Alembic 为 `b7d2f4a6c803`，提取、校验、舆情、口碑及删除链活动任务均为 0；当前完整离线包 SHA-256 仍为 `935b0b59ea088a5bfaf60bf0ed92d85713bcc60e7b331efdbb4b3709b829a643`。
+- [x] 本地确认 `8a7ede8..82d4712` 之间 `pyproject.toml`、前端 package/lock、`deploy/linux` 和制包脚本均未变化；生成仅含应用 wheel、37 个前端生产文件及兼容元数据的 544,570 字节最小包，SHA-256 为 `cb2a2aa85120b3a0d36ca26fc5f37dd0f90f297f836d2a39693efd6fba1eb44c`，不含 wheelhouse、浏览器、RPM、模型或 `node_modules`。
+- [x] 服务器复核最小包外层 SHA、42 项内部校验、目标迁移文件和旧完整包依赖清单；通过 XFS reflink 复用已安装 venv，只强制替换 ThreadSnap 自身 wheel 和前端静态文件，明确跳过依赖安装，旧 release 保留为 `previous`。
+- [x] 首次切换中新后端 8000 已健康，但 Nginx 即时探测与 `Requires=` 停止传播发生竞态，自动回滚恢复旧 release 与升级前数据库；确认回滚后四服务、8000/8088 和数据库 `b7d2f4a6c803` 均正常，再按“Nginx 先停、后端切换、分别等待健康”的顺序完成最终切换。
+- [x] 最终备份位于 `/var/lib/threadsnap/backups/minimal-release-upgrade/20260827-110014-finalize/`，SHA-256 为 `78e77b4f8eab376bfbf69a53590425f8766338a76c648a2c6212f9ec032a8476` 且完整性为 `ok`；升级后 Alembic 为 `c3f7a1d9e402`，新增三列齐全，既有 3 个节点均保持 `weekly`。
+- [x] 完整 `deploy/verify.sh` 通过应用、Wayland、Nginx、SPA、接口隔离、端口、Fernet、有头 Chromium 和离线本地模型；四服务均为 `active`，`pip check` 无破损依赖，公网 `/health` 和 SPA 返回 200、`/internal/v1` 返回 404。`/api/v1/extraction-plan` 已返回 `recurring_nodes`，手动/定时列表为 48 批、循环列表为 0 批；最终汇总 `final-verification.json` 的 SHA-256 为 `478cc37b20e68f1773da1e864c4a1252c654292f4e8dc7baf3a499135ae6bd83`。
+**下一步**：无；服务器后续按 `82d4712` 的计划与列表合同运行，完整离线依赖包继续保留为安装与回滚基线。
+**边界**：未重组 1.2 GiB 完整离线包，未下载或安装 Python/浏览器/RPM/模型依赖，未创建或补跑业务批次，未修改现有配置与历史数据；公网 Quick Tunnel 地址仍是临时观测值。
+**关联**：远端 release `/opt/threadsnap/releases/0.1.0-82d4712919f6`、远端最小包目录 `/var/tmp/threadsnap-minimal-upgrade-82d4712/`、本地运行证据 `artifacts/runtime/remote-minimal-upgrade-20260827-105151-corrected/`
+
+---
+
 ## 2026-08-27 — 将循环计划批次拆为独立导航与列表
 **总目标**：修正把循环计划放入“提取列表”触发方式筛选的界面误解，为循环计划批次提供独立侧边栏入口、列表路由和对应详情路由，同时保持与定时批次页面一致的能力。
 **状态**：✅ 两个列表已在导航、路由和服务端数据范围上完全分开，并继续复用同一套列表与详情实现。
