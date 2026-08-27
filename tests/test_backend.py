@@ -2840,6 +2840,41 @@ class AuthComponentTests(AppCase):
         )
         asyncio.run(self.container.auth._close(task))
 
+    def test_internal_validation_error_keeps_browser_ready_without_leaking_detail(self) -> None:
+        task = AuthTask(
+            id="auth-internal-error",
+            platform_code="dongchedi",
+            ticket="ticket",
+            expires_at=datetime.now(timezone.utc),
+            status="active",
+            page_status="ready",
+        )
+        task.profile_dir = self.container.auth.profiles.prepare("dongchedi", task.id)
+        task.context = FakeAuthContext(auth_state("new-session"))  # type: ignore[assignment]
+        task.playwright = FakePlaywright()  # type: ignore[assignment]
+        task.page = FakeAuthPage()  # type: ignore[assignment]
+        socket = FakeAuthSocket()
+
+        class BrokenCollector:
+            def __init__(self, *_args: object, **_kwargs: object):
+                pass
+
+            def validate_circle(self, _url: str) -> dict:
+                raise RuntimeError("sensitive-internal-detail")
+
+        with patch("threadsnap.auth.DongchediCollector", BrokenCollector):
+            asyncio.run(
+                self.container.auth._command(task, {"type": "finish"}, socket)  # type: ignore[arg-type]
+            )
+
+        self.assertEqual("active", task.status)
+        self.assertEqual("ready", task.page_status)
+        self.assertEqual("AUTH_VALIDATION_INTERNAL_ERROR", task.error_code)
+        self.assertEqual("validation_failed", socket.messages[-1]["type"])
+        self.assertNotIn("sensitive-internal-detail", str(socket.messages[-1]))
+        self.assertFalse(task.context.closed)  # type: ignore[union-attr]
+        asyncio.run(self.container.auth._close(task))
+
 
 class QueueAndRetryTests(AppCase):
     def setUp(self) -> None:

@@ -89,6 +89,8 @@ class YicheKnownFactsTests(unittest.TestCase):
             handler = None
 
             def on(self, _event: str, handler: object) -> None:
+                # Patchright 会在回调上缓存内部包装器；内置方法没有可写属性。
+                setattr(handler, "_pw_impl_instance_", object())
                 self.handler = handler
 
             def remove_listener(self, _event: str, _handler: object) -> None:
@@ -146,6 +148,16 @@ class YicheKnownFactsTests(unittest.TestCase):
 
         self.assertEqual("1001", post_id)
         self.assertEqual("https://baa.yiche.com/sample/thread-1001.html", url)
+
+    def test_navigation_uses_patchright_compatible_response_callback(self) -> None:
+        page = self._page_with_document(200, "<html><body>fixture content</body></html>")
+
+        YicheCollector(storage_state=None, concurrency=1)._navigate(
+            page,
+            "https://baa.yiche.com/sample/",
+        )
+
+        self.assertTrue(hasattr(page.handler, "_pw_impl_instance_"))
 
     def test_tencent_waf_document_is_control_not_empty_content(self) -> None:
         control = """
