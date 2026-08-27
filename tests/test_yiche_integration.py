@@ -491,4 +491,3 @@ class YichePublicFlowTests(AppCase):
             "/api/v1/runs?trigger_types=scheduled&trigger_types=recurring"
         ).json()["items"]
         self.assertTrue(all(item["status"] == "success" for item in states))
-

@@ -27,7 +27,7 @@
 - [x] Review补齐：评论API业务错误优先检查、请求contentId身份、可靠终止证明和业务码分类；圈子冻结 `forum_id + seo_name + forum_name`，现有external_id继续保存slug；列表冻结首个total；详情核对最终URL与圈子；易车本地时间按Asia/Shanghai解释；完整成功链标记visible并保存脱敏证明；主文档先识别WAF再分类HTTP，最初203只有在捕获到最终URL对应的后续主文档200时继续，否则验证码进入认证等待、普通文档保持HTTP错误。
 - [x] bootstrap回退未发布平台时同步把遗留 `queued`、`running` 和 `waiting_for_auth` 圈子任务以稳定 `PLATFORM_NOT_INTEGRATED` 收口并重新聚合批次，清空该平台活跃队列且不修改既有成功终态历史。
 - [x] 易车尚无页面证据能力，后端在手动与计划任务快照中按平台注册能力规范化为关闭并保留请求语义，前端在纯易车范围禁用并说明；手动切换平台同时清除已选圈子和两类URL输入，避免隐藏旧平台输入。
-- [x] 重放后本地门禁：三平台与汽车之家/易车业务组合专项 `64 / 64 OK`；完整后端 `195 / 195 OK`（114.025s）；`ruff check src tests`、`compileall -q src tests`、`pip check`、前端 `npm run check`、`npm run build`（2468 modules）均通过。
+- [x] 重放后本地门禁：三平台与汽车之家/易车业务组合专项 `64 / 64 OK`；完整后端 `195 / 195 OK`（114.025s）；`ruff check src tests`、`compileall -q src tests`、`pip check`、前端 `npm run check`、`npm run build`（2468 modules）及 `git diff main...HEAD --check` 均通过。
 **下一步**：在重放后新HEAD上做独立复核；随后以事前冻结的500个不同有效URL从头执行易车正式 `500 / 500`、真实页面配置/任务/XLSX闭环和环境证据；补齐当前未观察的0条、10+及多页评论覆盖或如实保留缺口。
 **边界**：未把动态请求头、追踪ID、真实业务清单、页面原文或Session写入Git；未实现口碑指标；未用 `hasMore`/`totalPage` 的不可靠值终止；未把本地fixture或单样本解析升级为正式500条通过。
 **关联**：`src/threadsnap/collectors/base.py`、`src/threadsnap/collectors/yiche.py`、`docs/chains/later-platform-delivery.md`、`docs/research/later-platform-onboarding-plan.md`

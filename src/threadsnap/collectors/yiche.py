@@ -756,4 +756,3 @@ class YicheCollector:
             "failures": failures,
             "stop_reason": "URL 清单处理完成。",
         }
-
