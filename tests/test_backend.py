@@ -2489,6 +2489,49 @@ class ApiAndConfigTests(AppCase):
         self.assertEqual(["latest_publish"], publish["items"][0]["list_orders"])
         self.assertEqual(["最新发布"], publish["items"][0]["list_order_names"])
 
+    def test_run_list_filters_exact_trigger_type_sets(self) -> None:
+        """两个独立列表可在服务端分页前精确限定各自批次类型。"""
+
+        with self.container.sessions.begin() as db:
+            db.add_all(
+                [
+                    ExtractionRun(
+                        number="20260827-100000-001",
+                        trigger_type="manual",
+                        input_mode="url_list",
+                        idempotency_key="run-list-trigger-manual",
+                        request_hash="m" * 64,
+                    ),
+                    ExtractionRun(
+                        number="20260827-100000-002",
+                        trigger_type="scheduled",
+                        input_mode="circle_discovery",
+                        idempotency_key="run-list-trigger-scheduled",
+                        request_hash="s" * 64,
+                    ),
+                    ExtractionRun(
+                        number="20260827-100000-003",
+                        trigger_type="recurring",
+                        input_mode="circle_discovery",
+                        idempotency_key="run-list-trigger-recurring",
+                        request_hash="r" * 64,
+                    ),
+                ]
+            )
+
+        extraction = self.client.get(
+            "/api/v1/runs?trigger_types=manual&trigger_types=scheduled"
+        ).json()
+        recurring = self.client.get("/api/v1/runs?trigger_types=recurring").json()
+
+        self.assertEqual(2, extraction["total"])
+        self.assertEqual(
+            {"manual", "scheduled"},
+            {item["trigger_type"] for item in extraction["items"]},
+        )
+        self.assertEqual(1, recurring["total"])
+        self.assertEqual(["recurring"], [item["trigger_type"] for item in recurring["items"]])
+
     def test_session_is_encrypted_and_never_returned(self) -> None:
         state = {
             "cookies": [

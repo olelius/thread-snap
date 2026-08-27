@@ -165,6 +165,7 @@
 | `docs/adr/0038-freeze-ai-and-screenshot-options-per-batch.md` | AI 分析与圈子页面截图按规则版本或手动批次冻结，原始页面捕获不注入改像素 CSS |
 | `docs/adr/0039-use-score-page-review-article-count.md` | 口碑第四指标读取评分页评价文章总数，清除并替代车型圈子帖子总量 |
 | `docs/adr/0040-add-recurring-window-schedule-nodes.md` | 循环计划按同日时间段和分钟间隔触发，并使用独立循环批次类型复用既有页面能力 |
+| `docs/adr/0041-separate-recurring-run-list-navigation.md` | 循环计划批次使用独立侧边栏和列表/详情路由，同时复用既有批次组件与业务能力 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 

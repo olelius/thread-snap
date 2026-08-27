@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, Outlet, useRouterState } from '@tanstack/react-router'
 import { motion, useReducedMotion } from 'motion/react'
-import { Cable, ChartNoAxesCombined, LayoutList, Settings2, Sparkles } from 'lucide-react'
+import { Cable, ChartNoAxesCombined, LayoutList, Repeat2, Settings2, Sparkles } from 'lucide-react'
 import { ThemeToggle } from './theme-toggle'
 import {
   Sidebar,
@@ -24,6 +24,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 
 const navigation = [
   { to: '/runs' as const, search: { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }, label: '提取列表', description: '批次与结果', icon: LayoutList },
+  { to: '/recurring-runs' as const, search: { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }, label: '循环计划列表', description: '周期批次', icon: Repeat2 },
   { to: '/reputation' as const, search: { tab: 'runs' as const, page: undefined }, label: '口碑巡检', description: '排名与证据', icon: ChartNoAxesCombined },
   { to: '/config' as const, search: { tab: 'rules' as const }, label: '配置管理', description: '计划与来源', icon: Settings2 },
 ]
@@ -92,7 +93,7 @@ export function AppShell() {
             <SidebarTrigger className='-ml-1 transition-transform duration-200 hover:scale-105' />
             <Separator orientation='vertical' className='h-5' />
             <div className='min-w-0 flex-1 truncate text-sm font-medium text-muted-foreground'>
-              {pathname.startsWith('/config') ? '配置管理' : pathname.startsWith('/reputation/runs/') ? '口碑巡检详情' : pathname.startsWith('/reputation') ? '口碑巡检' : pathname.includes('/runs/') ? '批次链接详情' : '提取列表'}
+              {pathname.startsWith('/config') ? '配置管理' : pathname.startsWith('/reputation/runs/') ? '口碑巡检详情' : pathname.startsWith('/reputation') ? '口碑巡检' : pathname.startsWith('/recurring-runs/') ? '循环批次详情' : pathname.startsWith('/recurring-runs') ? '循环计划列表' : pathname.startsWith('/runs/') ? '批次链接详情' : '提取列表'}
             </div>
             <div className='hidden items-center gap-2 text-xs text-muted-foreground sm:flex'>
               <span className='relative flex size-2'>
