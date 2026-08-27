@@ -60,6 +60,7 @@
 - 2026-08-14 第一版 React + Vite 前端与相关后端契约已完成：配置、每周计划与版本化规则、圈子、批次、认证、帖子结果、复制和 XLSX 导出形成单平台产品闭环；Windows 真实浏览器与自动化验证通过。前端只使用 `/api/v1`，`/internal/v1` 继续供后续系统集成；目标 CentOS 连续三轮仍按 ADR 0011 独立暂缓。
 - 2026-08-14 认证画面中继依据 ADR 0014 从输入空闲后整帧截图改为进程内 CDP Screencast：保持短期任务 WebSocket 和服务器 Profile/Session 边界，新增连续 hover、按下、释放、拖动、滚轮和组合键输入；不增加 VNC 或 WebRTC 服务，也不开放原始 CDP 端口。
 - 功能范围 owner 为 `docs/design/product-design.md`；技术边界 owner 为 `docs/design/technical-route.md`；PoC 细节 owner 为 `docs/research/collector-stack-poc-plan.md`。
+- 本链中的2000条采集框架证据和目标CentOS门禁只归懂车帝首平台工作线；汽车之家与易车各500条新增适配器验收改由 `docs/chains/later-platform-delivery.md` 和ADR 0043负责，不追溯改写本链历史结果。
 
 ## 决策链
 
