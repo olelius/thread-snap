@@ -7,6 +7,7 @@ import unittest
 
 from threadsnap.collectors import CollectorFailure, get_platform_spec
 from threadsnap.collectors.autohome import (
+    VIDEO_MEDIA_URL,
     AutohomeCollector,
     VideoMediaResolution,
     normalize_post_url,
@@ -23,6 +24,29 @@ class FakeResponse:
         self.status_code = status_code
 
 
+def video_media_payload(video_id: str, qualities: tuple[int, ...] = (100, 200, 300, 400)) -> dict:
+    """生成与固化 AHVP GPI 响应同形的最小媒体夹具。"""
+
+    return {
+        "returncode": 0,
+        "message": "",
+        "result": {
+            "media": {
+                "qualities": [
+                    {
+                        "copy": (
+                            f"https://media.example.test/video/{video_id}-{quality}.mp4"
+                            f"?key=SIGNATURE-{quality}&time=1787817312"
+                        ),
+                        "value": quality,
+                    }
+                    for quality in qualities
+                ]
+            }
+        },
+    }
+
+
 class AutohomeContractTests(unittest.TestCase):
     def test_registry_keeps_formal_gate_closed_but_exposes_collector(self) -> None:
         spec = get_platform_spec("autohome")
@@ -35,6 +59,7 @@ class AutohomeContractTests(unittest.TestCase):
 
         collector = AutohomeCollector(None, concurrency=99)
         self.assertEqual(1, collector.concurrency)
+        self.assertTrue(collector.supports_live_video_resolution)
 
     def test_source_order_and_post_identity_are_normalized(self) -> None:
         replied = parse_circle_url(
@@ -110,7 +135,16 @@ class AutohomeContractTests(unittest.TestCase):
         </body></html>
         """.encode()
         collector = AutohomeCollector(None)
-        collector._get = lambda url, **_: FakeResponse(document, url)  # type: ignore[method-assign]
+
+        def fake_get(url: str, **_: object) -> FakeResponse:
+            content = (
+                json.dumps(video_media_payload("VIDEO-1")).encode()
+                if url == VIDEO_MEDIA_URL
+                else document
+            )
+            return FakeResponse(content, url)
+
+        collector._get = fake_get  # type: ignore[method-assign]
         candidate = {
             "bbs_id": 8232,
             "bbs_type": "c",
@@ -130,10 +164,8 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertIn("正文第一段", record["content"])
         self.assertEqual(["https://img.example/a.jpg"], record["image_urls"])
         self.assertEqual("VIDEO-1", record["raw_status"]["video_id"])
-        self.assertEqual([], record["video_urls"])
-        self.assertEqual(
-            "response_not_observed", record["raw_status"]["video_url_resolution"]
-        )
+        self.assertEqual(4, len(record["video_urls"]))
+        self.assertEqual("resolved", record["raw_status"]["video_url_resolution"])
         self.assertEqual(10, len(record["comments"]))
         self.assertEqual("用户1", record["comments"][0]["author"])
         self.assertTrue(record["raw_status"]["comments_complete"])
@@ -190,7 +222,12 @@ class AutohomeContractTests(unittest.TestCase):
         window.__VIDEOINFO__ = {"videoid":"VIDEO-ONLY"};
         </script><h1 class="post-title">仅标题</h1></body></html>
         """.encode()
-        collector = AutohomeCollector(None)
+        class CollectorWithoutObservedMediaResponse(AutohomeCollector):
+            def _video_media_response(self, video_id: str) -> None:
+                _ = video_id
+                return None
+
+        collector = CollectorWithoutObservedMediaResponse(None)
         collector._get = lambda url, **_: FakeResponse(document, url)  # type: ignore[method-assign]
 
         with self.assertRaises(CollectorFailure) as caught:
@@ -201,7 +238,7 @@ class AutohomeContractTests(unittest.TestCase):
 
         self.assertEqual("POST_CONTENT_MISSING", caught.exception.code)
 
-    def test_verified_video_media_response_can_prove_content(self) -> None:
+    def test_real_video_response_contract_can_prove_video_only_content(self) -> None:
         document = """
         <html><body><script>
         window['__BBSINFO__'] = {"bbsId":8232,"bbs":"c"}
@@ -212,19 +249,19 @@ class AutohomeContractTests(unittest.TestCase):
         </body></html>
         """.encode()
 
-        class CollectorWithFrozenMediaResponse(AutohomeCollector):
-            def _video_media_response(self, video_id: str) -> VideoMediaResolution:
-                return VideoMediaResolution(
-                    video_id=video_id,
-                    video_urls=(
-                        "https://media.example.test/video.mp4?signature=temporary",
-                        "https://media.example.test/video.mp4?signature=temporary",
-                    ),
-                    response_kind="frozen-test-response",
-                )
+        calls: list[tuple[str, dict[str, object]]] = []
+        collector = AutohomeCollector(None)
 
-        collector = CollectorWithFrozenMediaResponse(None)
-        collector._get = lambda url, **_: FakeResponse(document, url)  # type: ignore[method-assign]
+        def fake_get(url: str, **params: object) -> FakeResponse:
+            calls.append((url, params))
+            content = (
+                json.dumps(video_media_payload("VIDEO-ONLY")).encode()
+                if url == VIDEO_MEDIA_URL
+                else document
+            )
+            return FakeResponse(content, url)
+
+        collector._get = fake_get  # type: ignore[method-assign]
 
         record = collector.fetch_post(
             "https://club.autohome.com.cn/bbs/thread/dee662/115934382-1.html",
@@ -240,14 +277,16 @@ class AutohomeContractTests(unittest.TestCase):
         assert record is not None
         self.assertIsNone(record["content"])
         self.assertEqual([], record["image_urls"])
-        self.assertEqual(
-            ["https://media.example.test/video.mp4?signature=temporary"],
-            record["video_urls"],
-        )
+        self.assertEqual(4, len(record["video_urls"]))
+        self.assertTrue(all("VIDEO-ONLY-" in url for url in record["video_urls"]))
         self.assertEqual("visible", record["visibility"])
         self.assertEqual("resolved", record["raw_status"]["video_url_resolution"])
         self.assertEqual(
-            "frozen-test-response", record["raw_status"]["video_media_response_kind"]
+            "ahvp-gpi-v1", record["raw_status"]["video_media_response_kind"]
+        )
+        self.assertEqual(
+            (VIDEO_MEDIA_URL, {"mid": "VIDEO-ONLY", "ft": "mp4", "strategy": 1}),
+            calls[1],
         )
 
     def test_video_media_response_rejects_mismatched_id_and_relative_url(self) -> None:
@@ -256,7 +295,9 @@ class AutohomeContractTests(unittest.TestCase):
                 "EXPECTED",
                 VideoMediaResolution(
                     video_id="OTHER",
-                    video_urls=("https://media.example.test/video.mp4",),
+                    video_urls=(
+                        "https://media.example.test/OTHER-300.mp4?key=SIGNATURE",
+                    ),
                     response_kind="frozen-test-response",
                 ),
             )
@@ -272,6 +313,73 @@ class AutohomeContractTests(unittest.TestCase):
 
         self.assertEqual("POST_VIDEO_ID_MISMATCH", mismatched.exception.code)
         self.assertEqual("PLATFORM_RESPONSE_INVALID", invalid_url.exception.code)
+
+    def test_video_media_control_failure_is_not_reclassified(self) -> None:
+        collector = AutohomeCollector(None)
+
+        def blocked(_url: str, **_: object) -> FakeResponse:
+            raise CollectorFailure("PLATFORM_CHALLENGE", "访问验证")
+
+        collector._get = blocked  # type: ignore[method-assign]
+        with self.assertRaises(CollectorFailure) as caught:
+            collector._video_media_response("VIDEO-1")
+
+        self.assertEqual("PLATFORM_CHALLENGE", caught.exception.code)
+
+    def test_public_video_resolver_preserves_all_qualities(self) -> None:
+        collector = AutohomeCollector(None)
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        def fake_get(url: str, **params: object) -> FakeResponse:
+            calls.append((url, params))
+            payload = video_media_payload("VIDEO-1", (100, 200, 300, 400, 400))
+            return FakeResponse(json.dumps(payload).encode(), url)
+
+        collector._get = fake_get  # type: ignore[method-assign]
+
+        urls = collector.resolve_video_urls(" VIDEO-1 ")
+
+        self.assertEqual(4, len(urls))
+        self.assertEqual(4, len(set(urls)))
+        self.assertEqual(
+            [(VIDEO_MEDIA_URL, {"mid": "VIDEO-1", "ft": "mp4", "strategy": 1})],
+            calls,
+        )
+        self.assertEqual([], collector.resolve_video_urls(""))
+
+    def test_video_media_rejects_nonzero_and_invalid_structure(self) -> None:
+        collector = AutohomeCollector(None)
+        invalid_payloads = (
+            (
+                {"returncode": 1001, "message": "failed", "result": {}},
+                "VIDEO_MEDIA_RESPONSE_ERROR",
+            ),
+            (
+                {"returncode": 0, "message": "", "result": {"media": {"qualities": {}}}},
+                "VIDEO_MEDIA_RESPONSE_INVALID",
+            ),
+        )
+        for payload, expected_code in invalid_payloads:
+            with self.subTest(expected_code=expected_code):
+                collector._get = lambda url, **_: FakeResponse(  # type: ignore[method-assign]
+                    json.dumps(payload).encode(), url
+                )
+                with self.assertRaises(CollectorFailure) as caught:
+                    collector._video_media_response("VIDEO-1")
+                self.assertEqual(expected_code, caught.exception.code)
+
+    def test_video_media_rejects_quality_without_copy(self) -> None:
+        collector = AutohomeCollector(None)
+        payload = video_media_payload("VIDEO-1")
+        payload["result"]["media"]["qualities"][2].pop("copy")
+        collector._get = lambda url, **_: FakeResponse(  # type: ignore[method-assign]
+            json.dumps(payload).encode(), url
+        )
+
+        with self.assertRaises(CollectorFailure) as caught:
+            collector._video_media_response("VIDEO-1")
+
+        self.assertEqual("VIDEO_MEDIA_URL_MISSING", caught.exception.code)
 
     def test_fewer_than_ten_comments_with_more_pages_is_incomplete(self) -> None:
         document = """

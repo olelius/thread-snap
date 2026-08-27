@@ -30,6 +30,7 @@ from .base import (
 ADAPTER_VERSION = "autohome-club-v1"
 BASE_URL = "https://club.autohome.com.cn"
 LIST_API_URL = "https://club-open-api.autohome.com.cn/api/pc/bbs/index/getClubTopicList"
+VIDEO_MEDIA_URL = "https://p-vp.autohome.com.cn/api/gpi"
 PAGE_SIZE = 50
 MAX_LIST_PAGES = 2_000
 CONTROL_FAILURE_CODES = frozenset(
@@ -219,7 +220,7 @@ class AutohomeCollector:
     display_name = "汽车之家"
     adapter_version = ADAPTER_VERSION
     supports_page_evidence = False
-    supports_live_video_resolution = False
+    supports_live_video_resolution = True
 
     def __init__(
         self,
@@ -274,22 +275,73 @@ class AutohomeCollector:
         raise CollectorFailure("PLATFORM_NETWORK_ERROR", f"访问汽车之家失败：{last_error}")
 
     def _video_media_response(self, video_id: str) -> VideoMediaResolution | None:
-        """返回已验证平台响应的归一化结果；当前固化证据未包含该响应。
+        """按固化 AHVP 合同取得全部 MP4 清晰度，并归一化实际 ``copy`` URL。"""
 
-        已保存的详情 HTML 只证明页面把 ``data-vid`` 交给外部 AHVP 播放器，
-        详情脚本本身没有播放器请求或最终媒体 URL。平台响应端点和字段通过真实
-        证据确认后，应在此处完成请求及平台字段解析，再返回强类型结果；在此之
-        前保持无网络请求，避免把视频 ID 或猜测出来的 URL 当作媒体。
-        """
-
-        _ = video_id
-        return None
+        response = self._get(VIDEO_MEDIA_URL, mid=video_id, ft="mp4", strategy=1)
+        if int(response.status_code) >= 400:
+            raise CollectorFailure(
+                "VIDEO_MEDIA_HTTP_ERROR",
+                f"汽车之家视频媒体接口返回 HTTP {response.status_code}。",
+            )
+        try:
+            payload = json.loads(response.content)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise CollectorFailure(
+                "VIDEO_MEDIA_RESPONSE_INVALID", "汽车之家视频媒体接口返回了无效 JSON。"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise CollectorFailure(
+                "VIDEO_MEDIA_RESPONSE_INVALID", "汽车之家视频媒体接口返回结构无效。"
+            )
+        self._detect_payload_control(str(payload.get("message") or ""))
+        returncode = payload.get("returncode")
+        if not isinstance(returncode, int) or isinstance(returncode, bool):
+            raise CollectorFailure(
+                "VIDEO_MEDIA_RESPONSE_INVALID", "汽车之家视频媒体接口缺少有效返回码。"
+            )
+        if returncode != 0:
+            raise CollectorFailure(
+                "VIDEO_MEDIA_RESPONSE_ERROR", "汽车之家视频媒体接口未返回成功状态。"
+            )
+        result = payload.get("result")
+        media = result.get("media") if isinstance(result, dict) else None
+        qualities = media.get("qualities") if isinstance(media, dict) else None
+        if not isinstance(qualities, list):
+            raise CollectorFailure(
+                "VIDEO_MEDIA_RESPONSE_INVALID",
+                "汽车之家视频媒体接口缺少清晰度数组。",
+            )
+        urls: list[str] = []
+        for quality in qualities:
+            if not isinstance(quality, dict):
+                raise CollectorFailure(
+                    "VIDEO_MEDIA_RESPONSE_INVALID",
+                    "汽车之家视频媒体接口包含无效清晰度项。",
+                )
+            copy_url = quality.get("copy")
+            if not isinstance(copy_url, str) or not copy_url.strip():
+                raise CollectorFailure(
+                    "VIDEO_MEDIA_URL_MISSING",
+                    "汽车之家视频媒体清晰度缺少实际播放地址。",
+                )
+            value = copy_url.strip()
+            if value not in urls:
+                urls.append(value)
+        if not urls:
+            raise CollectorFailure(
+                "VIDEO_MEDIA_URL_MISSING", "汽车之家视频媒体接口没有返回实际播放地址。"
+            )
+        return VideoMediaResolution(
+            video_id=video_id,
+            video_urls=tuple(urls),
+            response_kind="ahvp-gpi-v1",
+        )
 
     @staticmethod
     def _parse_video_media_response(
         expected_video_id: str, response: VideoMediaResolution | None
     ) -> tuple[list[str], str, str | None]:
-        """校验适配层媒体响应，只接受同一视频 ID 的绝对 HTTP(S) 播放地址。"""
+        """校验适配层媒体响应，只接受同一视频 ID 的签名 HTTPS MP4 地址。"""
 
         if response is None:
             return [], "response_not_observed", None
@@ -310,10 +362,13 @@ class AutohomeCollector:
             value = str(raw_url or "").strip()
             parsed = urlsplit(value)
             if (
-                parsed.scheme not in {"http", "https"}
+                parsed.scheme != "https"
                 or not parsed.hostname
                 or parsed.username is not None
                 or parsed.password is not None
+                or not parsed.path.lower().endswith(".mp4")
+                or f"/{expected_video_id}-" not in parsed.path
+                or not parsed.query
             ):
                 raise CollectorFailure(
                     "PLATFORM_RESPONSE_INVALID",
@@ -326,6 +381,20 @@ class AutohomeCollector:
             "resolved" if urls else "response_without_media",
             response.response_kind.strip(),
         )
+
+    def _resolve_video_media(self, video_id: str) -> tuple[list[str], str, str | None]:
+        """复用同一 GPI 响应与身份门禁，返回详情采集所需诊断。"""
+
+        return self._parse_video_media_response(video_id, self._video_media_response(video_id))
+
+    def resolve_video_urls(self, video_id: str) -> list[str]:
+        """按平台当前 GPI 合同刷新并返回全部 MP4 清晰度 URL。"""
+
+        normalized_id = str(video_id or "").strip()
+        if not normalized_id:
+            return []
+        urls, _, _ = self._resolve_video_media(normalized_id)
+        return urls
 
     @staticmethod
     def _detect_control(response: requests.Response) -> None:
@@ -583,7 +652,7 @@ class AutohomeCollector:
             raise CollectorFailure("POST_VIDEO_ID_MISMATCH", "汽车之家列表与详情视频 ID 不一致。")
         if video_id:
             video_urls, video_url_resolution, video_media_response_kind = (
-                self._parse_video_media_response(video_id, self._video_media_response(video_id))
+                self._resolve_video_media(video_id)
             )
         else:
             video_urls, video_url_resolution, video_media_response_kind = [], None, None
