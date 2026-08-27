@@ -16,6 +16,22 @@
 
 ---
 
+## 2026-08-27 — 修复易车认证完成校验的 Patchright 回调错误
+**总目标**：修复易车认证窗口在“完成并校验”阶段报 `_pw_impl_instance_` 并错误显示页面加载失败的问题，让已加载的官方页面能进入真实 Session 校验。
+**状态**：✅ 易车页面响应回调已改为普通 Python 函数；认证页加载、CDP 画面、完成校验和 Session 更新已在本地真实服务贯通，内部校验异常也不再误报页面加载失败或向前端泄露运行时细节。
+**干到哪里了**：
+- [x] 通过本地认证 WebSocket 复现易车页面可正常加载、CDP Screencast 可正常出帧，排除认证页、浏览器启动、WebSocket 和 CDP 画布故障。
+- [x] 将截图异常精确定位到 `YicheCollector._navigate()` 的 `page.on("response", responses.append)`；Patchright 1.61.2 会在事件回调上缓存 `_pw_impl_instance_`，内置方法对象不支持写入该属性。
+- [x] 回调改为可被 Patchright 缓存内部包装器的普通函数，并增加模拟 `_pw_impl_instance_` 写入的显式回归；旧的内置方法写法会在该测试中直接失败。
+- [x] 认证校验器未预期异常现返回 `AUTH_VALIDATION_INTERNAL_ERROR + validation_failed`，保留当前浏览器供重试，只把异常类型写入服务日志，不再把内部异常文字发送到页面。
+- [x] 易车与认证专项34/34、完整后端198/198（107.547s）通过；Ruff、compileall、pip check、`git diff --check`、前端 TypeScript 检查与生产构建（2468 modules）通过。
+- [x] 当前本地认证 WebSocket 真实贯通 `browser_starting → ready → frame → validating → completed`，官方根页 HTTP 200，完成后 Session 更新，未再出现 `_pw_impl_instance_` 或 `AUTH_BROWSER_FAILED`。
+**下一步**：按项目授权自动完成Git收尾，随后以合并后的 `main` 重启本地后端并复核前端代理、易车状态和认证画面。
+**边界**：不保存或输出用户认证凭证；真实登录是否通过仍取决于用户在官方页面完成认证，本修复只处理本地运行时对象错误。
+**关联**：`src/threadsnap/collectors/yiche.py`、`tests/test_collector_contract.py`、ADR 0007、ADR 0014
+
+---
+
 ## 2026-08-27 — 发布易车本地适配器并修正“未接入”状态
 **总目标**：让已经完成本地开发与公共业务闭环的易车适配器在配置页真实显示“已接入”，允许用户显式启用，同时保留正式生产验收的独立证据边界。
 **状态**：✅ 易车 `yiche-community-v1` 已从休眠注册改为 `available`、默认停用、并发上限1；旧数据库在新构建启动时自动升级接入状态，不自动启用、不扩张既有规则。

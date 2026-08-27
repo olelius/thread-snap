@@ -227,7 +227,13 @@ class YicheCollector:
         """加载官方页面并冻结本次页面实际产生的 API 响应。"""
 
         responses: list[Any] = []
-        handler = responses.append
+
+        def handle_response(response: Any) -> None:
+            """使用可附加属性的 Python 函数接收 Patchright 页面事件。"""
+
+            responses.append(response)
+
+        handler = handle_response
         page.on("response", handler)
         try:
             response = page.goto(

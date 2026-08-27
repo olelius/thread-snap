@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import os
 import secrets
 import shutil
@@ -38,6 +39,8 @@ from .ids import uuid7
 from .models import Circle, PlatformConfig
 from .session_store import SessionStore
 from .worker import WorkerService
+
+logger = logging.getLogger(__name__)
 
 
 class AuthPageLoadError(RuntimeError):
@@ -546,6 +549,24 @@ class BrowserAuthManager:
                 task.page_status = "ready"
                 task.error_code = "AUTH_VALIDATION_FAILED"
                 task.error_message = f"平台认证状态校验未通过：{exc}"
+                await websocket.send_json(
+                    {
+                        "type": "validation_failed",
+                        "code": task.error_code,
+                        "message": task.error_message,
+                    }
+                )
+                return
+            except Exception as exc:
+                # 校验器内部异常不应被误报为页面加载失败，也不向前端暴露运行时细节。
+                logger.error(
+                    "平台认证校验器内部错误：platform=%s type=%s",
+                    task.platform_code,
+                    type(exc).__name__,
+                )
+                task.page_status = "ready"
+                task.error_code = "AUTH_VALIDATION_INTERNAL_ERROR"
+                task.error_message = "平台认证状态校验出现内部错误，请重试或重新创建认证浏览器。"
                 await websocket.send_json(
                     {
                         "type": "validation_failed",
