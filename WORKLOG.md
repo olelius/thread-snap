@@ -27,7 +27,8 @@
 - [x] 显式设置独立工作树 `PYTHONPATH` 后，汽车之家及相关配置/Worker专项测试 `23 / 23 OK`；首次测试误读主工作区editable安装的旧代码，已定位并纠正测试入口。
 - [x] 完整后端 `196 / 196 OK`、PoC共享测试 `84 / 84 OK`；`ruff check src tests`及本次PoC测试、`compileall -q src tests poc/shared/tests`、`pip check`、`git diff --check`、前端 `npm run check` 与生产构建（2468 modules）均通过。PoC全目录Ruff另报告2个未修改文件的既有导入排序问题，不属于本次差异。
 - [x] 隔离数据库真实启动 `127.0.0.1:18000`：`/health=ok`，汽车之家首次GET为 `available + enabled=false + autohome-club-v1`；PUT启用返回200、`enabled=true`，并发输入8收敛为1。
-**下一步**：提交、合并并重启主工作区后端，复核实际 `8000/5173` 页面API显示“已接入”。
+- [x] 功能提交 `fb0d8fc` 经PR #207合并为 `main@e71cfa5`；本地主工作区后端已重启，`8000/health`与前端代理`5173/health`均为`ok`，两条平台API都返回汽车之家 `available + enabled=false + autohome-club-v1 + concurrency=1`，当前接入数为2/3。
+**下一步**：按正式环境验收计划完成汽车之家冻结500条与可持续访问验证；该工作不回退本地“已接入”状态。
 **边界**：`available` 表示本地适配器和公共业务闭环已发布，不声明真实500/500、正式环境可持续访问、页面证据、认证或口碑指标已经验收；平台仍由用户显式启用。
 **关联**：`src/threadsnap/collectors/registry.py`、`src/threadsnap/services.py`、`docs/adr/0044-separate-local-adapter-publication-from-formal-sample-acceptance.md`
 
