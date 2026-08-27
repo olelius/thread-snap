@@ -8,7 +8,7 @@
 - `/internal/v1`：后续客户现有后端使用的本机集成 API；
 - 全局定时协调器、平台 FIFO Worker、懂车帝采集器、加密 Session、XLSX 模板和导出。
 
-第一版只有懂车帝为 `available`。汽车之家和易车只返回 `not_integrated`，不创建提取任务。
+当前懂车帝与汽车之家为 `available`，汽车之家默认停用且内部并发上限为1；只有用户显式启用后才允许创建新任务。易车返回 `not_integrated`，不创建提取任务。
 
 ## 2. 本地安装
 

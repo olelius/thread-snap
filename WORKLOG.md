@@ -16,6 +16,23 @@
 
 ---
 
+## 2026-08-27 — 发布汽车之家本地接入状态
+**总目标**：纠正汽车之家本地开发已经完成但配置页仍显示“未接入”的状态错位，让已实现适配器通过正常平台注册、启用、任务与Worker路径运行，同时保留正式500条验收缺口。
+**状态**：✅ 汽车之家本地适配器已发布为 `available`，既有数据库可由bootstrap自动提升，配置页允许显式启用；正式500条环境验收仍独立保留。
+**干到哪里了**：
+- [x] 根因确认不是前端缓存：`autohome-club-v1` 在collector registry中被明确写为 `not_integrated`，且bootstrap只会降级未发布平台、不会把既有数据库状态提升为新发布状态。
+- [x] 汽车之家registry改为 `available`，继续默认停用、并发上限1、页面证据与认证能力关闭；bootstrap以registry同步适配器发布状态，提升时保留用户启用选择，撤回时仍关闭平台并收口活动任务。
+- [x] 本地组合测试改走正常平台Worker领取路径，不再直接调用私有平台头；新增既有数据库状态提升、默认停用、显式启用、并发收敛和统一手动任务测试。
+- [x] 产品设计、技术路线、后续平台链档、验证计划、部署说明与ADR 0044统一分离“本地适配器发布”和“正式500条环境验收”；易车状态未变，既有规则和来源不自动扩张。
+- [x] 显式设置独立工作树 `PYTHONPATH` 后，汽车之家及相关配置/Worker专项测试 `23 / 23 OK`；首次测试误读主工作区editable安装的旧代码，已定位并纠正测试入口。
+- [x] 完整后端 `196 / 196 OK`、PoC共享测试 `84 / 84 OK`；`ruff check src tests`及本次PoC测试、`compileall -q src tests poc/shared/tests`、`pip check`、`git diff --check`、前端 `npm run check` 与生产构建（2468 modules）均通过。PoC全目录Ruff另报告2个未修改文件的既有导入排序问题，不属于本次差异。
+- [x] 隔离数据库真实启动 `127.0.0.1:18000`：`/health=ok`，汽车之家首次GET为 `available + enabled=false + autohome-club-v1`；PUT启用返回200、`enabled=true`，并发输入8收敛为1。
+**下一步**：提交、合并并重启主工作区后端，复核实际 `8000/5173` 页面API显示“已接入”。
+**边界**：`available` 表示本地适配器和公共业务闭环已发布，不声明真实500/500、正式环境可持续访问、页面证据、认证或口碑指标已经验收；平台仍由用户显式启用。
+**关联**：`src/threadsnap/collectors/registry.py`、`src/threadsnap/services.py`、`docs/adr/0044-separate-local-adapter-publication-from-formal-sample-acceptance.md`
+
+---
+
 ## 2026-08-27 — 实现易车社区适配器与公共接入闭环
 **总目标**：在不复制批次、调度、存储、API、前端和导出能力的前提下，以真实易车页面证据接入第二个平台帖子采集。
 **状态**：✅ 易车适配器、休眠门禁与公共业务链已在 `main@cac1b91` 的汽车之家共享抽象上完成重放和本地门禁。真实500条冻结清单与正式运行门未执行，平台仍为 `not_integrated` 且不可启用。

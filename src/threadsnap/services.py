@@ -154,9 +154,10 @@ def bootstrap_database(db: Session) -> None:
             existing.max_quantity = spec.max_quantity
             existing.min_concurrency = spec.min_concurrency
             existing.max_concurrency = spec.max_concurrency
-            # 注册表声明未接入时绝不把数据库门禁提前切为可用。
+            # 注册表是适配器发布状态的唯一来源：发布时提升既有数据库状态，
+            # 撤回时关闭平台并清理其活动任务；平台启用开关仍由用户配置。
+            existing.adapter_status = spec.adapter_status
             if spec.adapter_status != "available":
-                existing.adapter_status = "not_integrated"
                 existing.enabled = False
     _close_dormant_platform_tasks(
         db,

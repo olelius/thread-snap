@@ -1,4 +1,4 @@
-"""汽车之家适配器字段合同、分页边界和平台注册门禁测试。"""
+"""汽车之家适配器字段合同、分页边界和平台注册状态测试。"""
 
 from __future__ import annotations
 
@@ -48,10 +48,11 @@ def video_media_payload(video_id: str, qualities: tuple[int, ...] = (100, 200, 3
 
 
 class AutohomeContractTests(unittest.TestCase):
-    def test_registry_keeps_formal_gate_closed_but_exposes_collector(self) -> None:
+    def test_registry_publishes_local_adapter_at_conservative_bounds(self) -> None:
         spec = get_platform_spec("autohome")
 
-        self.assertEqual("not_integrated", spec.adapter_status)
+        self.assertEqual("available", spec.adapter_status)
+        self.assertFalse(spec.default_enabled)
         self.assertIsNotNone(spec.collector_factory)
         self.assertFalse(spec.supports_page_evidence)
         self.assertTrue(spec.supports_live_video_resolution)

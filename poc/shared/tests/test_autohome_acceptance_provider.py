@@ -67,11 +67,12 @@ class SourceCollector:
 
 
 class AutohomeAcceptanceProviderTests(unittest.TestCase):
-    def test_registry_bridge_does_not_open_production_platform_gate(self) -> None:
+    def test_published_registry_keeps_formal_acceptance_contract_fixed(self) -> None:
         spec = get_platform_spec("autohome")
         provider = get_acceptance_provider("autohome")
 
-        self.assertEqual("not_integrated", spec.adapter_status)
+        self.assertEqual("available", spec.adapter_status)
+        self.assertFalse(spec.default_enabled)
         self.assertIsInstance(provider, AutohomeAcceptanceProvider)
         self.assertEqual(500, acceptance.FORMAL_COUNT)
         self.assertEqual(1, provider.max_concurrency)

@@ -88,7 +88,7 @@
 1. 技术实现任务要求的全部文件；
 2. `docs/chains/later-platform-delivery.md`；
 3. `docs/research/later-platform-onboarding-plan.md`；
-4. `docs/adr/0043-use-project-discovered-500-sample-gate-for-later-platforms.md`；
+4. `docs/adr/0043-use-project-discovered-500-sample-gate-for-later-platforms.md` 与 `docs/adr/0044-separate-local-adapter-publication-from-formal-sample-acceptance.md`；
 5. 涉及口碑映射时额外读取 `docs/chains/reputation-inspection.md`；
 6. Git外 `artifacts/poc/inputs/later-platforms/` 中当次真实来源与冻结样本。
 
