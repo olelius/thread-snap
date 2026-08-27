@@ -690,15 +690,6 @@ class ConfigService:
             if not platform:
                 errors.append({"row": index + 1, "field": "platform_code", "reason": "平台不存在"})
                 continue
-            if platform.adapter_status != "available":
-                errors.append(
-                    {
-                        "row": index + 1,
-                        "field": "platform_code",
-                        "reason": f"{platform.display_name}尚未通过正式可用门，当前不能配置来源",
-                    }
-                )
-                continue
             if row.section != "dynamic":
                 errors.append(
                     {

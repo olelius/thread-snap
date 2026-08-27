@@ -737,15 +737,6 @@ class DongchediCollector:
         ranked.sort(reverse=True)
         return [ranked[0][2]]
 
-    def resolve_record_video_urls(
-        self, raw_status: dict[str, Any], stored_urls: list[str] | None = None
-    ) -> list[str] | None:
-        """把懂车帝私有视频身份收敛在适配器内部。"""
-
-        del stored_urls
-        video_id = str(raw_status.get("video_id") or "").strip()
-        return self.resolve_video_urls(video_id) if video_id else None
-
     def _fetch_comments(self, post_id: str, reply_count: int) -> list[dict[str, Any]]:
         if reply_count <= 0:
             return []

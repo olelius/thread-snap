@@ -37,32 +37,32 @@ def api_event(
 
 class CollectorRegistryTests(unittest.TestCase):
     def test_dongchedi_definition_keeps_existing_runtime_bounds(self) -> None:
-        definition = get_platform_spec("dongchedi")
+        spec = get_platform_spec("dongchedi")
 
-        self.assertEqual("懂车帝", definition.display_name)
-        self.assertEqual((1, 2000), (definition.min_quantity, definition.max_quantity))
+        self.assertEqual("懂车帝", spec.display_name)
+        self.assertEqual((1, 2000), (spec.min_quantity, spec.max_quantity))
         self.assertEqual((1, 2, 8), (
-            definition.min_concurrency,
-            definition.default_concurrency,
-            definition.max_concurrency,
+            spec.min_concurrency,
+            spec.default_concurrency,
+            spec.max_concurrency,
         ))
-        self.assertTrue(definition.default_enabled)
-        self.assertEqual("available", definition.adapter_status)
-        self.assertTrue(definition.supports_page_evidence)
+        self.assertTrue(spec.default_enabled)
+        self.assertEqual("available", spec.adapter_status)
+        self.assertTrue(spec.supports_page_evidence)
 
-    def test_yiche_definition_is_unreleased_at_conservative_bounds(self) -> None:
-        definition = get_platform_spec("yiche")
+    def test_yiche_spec_is_dormant_at_conservative_bounds(self) -> None:
+        spec = get_platform_spec("yiche")
 
-        self.assertEqual("易车", definition.display_name)
-        self.assertEqual((1, 500), (definition.min_quantity, definition.max_quantity))
+        self.assertEqual("易车", spec.display_name)
+        self.assertEqual((1, 500), (spec.min_quantity, spec.max_quantity))
         self.assertEqual((1, 1, 1), (
-            definition.min_concurrency,
-            definition.default_concurrency,
-            definition.max_concurrency,
+            spec.min_concurrency,
+            spec.default_concurrency,
+            spec.max_concurrency,
         ))
-        self.assertFalse(definition.default_enabled)
-        self.assertEqual("not_integrated", definition.adapter_status)
-        self.assertFalse(definition.supports_page_evidence)
+        self.assertFalse(spec.default_enabled)
+        self.assertEqual("not_integrated", spec.adapter_status)
+        self.assertFalse(spec.supports_page_evidence)
 
 
 class YicheKnownFactsTests(unittest.TestCase):

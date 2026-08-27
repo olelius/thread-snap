@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { AuthDialog } from '@/features/auth/auth-dialog'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
-import { ApiError, api, errorMessage, formatDate, platformName, queryString } from '@/lib/api'
+import { ApiError, api, errorMessage, formatDate, queryString } from '@/lib/api'
 import type { Circle, ExtractionPlan, Platform, SentimentConfig, SessionStatus, Template, Vehicle } from '@/lib/types'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
@@ -293,13 +293,17 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
   const defaultQuantity = (platform: Platform) => Math.max(platform.quantity_range.min, Math.min(30, platform.quantity_range.max))
   const updateRules = (rules: ExtractionPlan['rules']) => setDraft({ ...draft, rules })
   const updateRule = (ruleId: string, transform: (rule: ExtractionPlan['rules'][number]) => ExtractionPlan['rules'][number]) => updateRules(draft.rules.map((item) => item.id === ruleId ? transform(item) : item))
+  const supportsRulePageEvidence = (circleIds: string[]) => circleIds.some((id) => {
+    const circle = allCircles.find((item) => item.id === id)
+    return allPlatforms.find((item) => item.code === circle?.platform_code)?.capabilities.page_evidence
+  })
   const toggleCircle = (ruleId: string, circle: Circle, checked: boolean) => updateRule(ruleId, (rule) => {
     const ids = checked ? [...new Set([...rule.circle_ids, circle.id])] : rule.circle_ids.filter((id) => id !== circle.id)
     const quantities = { ...rule.platform_quantities }
     const platform = allPlatforms.find((item) => item.code === circle.platform_code)
     if (checked && platform && quantities[platform.code] === undefined) quantities[platform.code] = defaultQuantity(platform)
     if (!ids.some((id) => allCircles.find((item) => item.id === id)?.platform_code === circle.platform_code)) delete quantities[circle.platform_code]
-    return { ...rule, circle_ids: ids, platform_quantities: quantities, screenshot_enabled: checked && platform && !platform.capabilities.page_evidence ? false : rule.screenshot_enabled }
+    return { ...rule, circle_ids: ids, platform_quantities: quantities, screenshot_enabled: supportsRulePageEvidence(ids) ? rule.screenshot_enabled : false }
   })
   const togglePlatform = (ruleId: string, platform: Platform, checked: boolean) => updateRule(ruleId, (rule) => {
     const platformIds = enabledCircles.filter((circle) => circle.platform_code === platform.code).map((circle) => circle.id)
@@ -307,7 +311,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
     const quantities = { ...rule.platform_quantities }
     if (checked && platformIds.length && quantities[platform.code] === undefined) quantities[platform.code] = defaultQuantity(platform)
     if (!ids.some((id) => allCircles.find((circle) => circle.id === id)?.platform_code === platform.code)) delete quantities[platform.code]
-    return { ...rule, circle_ids: ids, platform_quantities: quantities, screenshot_enabled: checked && !platform.capabilities.page_evidence ? false : rule.screenshot_enabled }
+    return { ...rule, circle_ids: ids, platform_quantities: quantities, screenshot_enabled: supportsRulePageEvidence(ids) ? rule.screenshot_enabled : false }
   })
   const toggleListOrder = (ruleId: string, platform: Platform, listOrder: Circle['list_order'], checked: boolean) => updateRule(ruleId, (rule) => {
     const sourceIds = enabledCircles.filter((circle) => circle.platform_code === platform.code && circle.list_order === listOrder).map((circle) => circle.id)
@@ -315,7 +319,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
     const quantities = { ...rule.platform_quantities }
     if (checked && sourceIds.length && quantities[platform.code] === undefined) quantities[platform.code] = defaultQuantity(platform)
     if (!ids.some((id) => allCircles.find((circle) => circle.id === id)?.platform_code === platform.code)) delete quantities[platform.code]
-    return { ...rule, circle_ids: ids, platform_quantities: quantities, screenshot_enabled: checked && !platform.capabilities.page_evidence ? false : rule.screenshot_enabled }
+    return { ...rule, circle_ids: ids, platform_quantities: quantities, screenshot_enabled: supportsRulePageEvidence(ids) ? rule.screenshot_enabled : false }
   })
 
   const baselineRules = new Map((query.data?.rules ?? []).map((rule) => [rule.id, rule]))
@@ -325,11 +329,12 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
   const savedNodes = [...(query.data?.nodes ?? []), ...(query.data?.recurring_nodes ?? [])]
   const selectedRule = draft.rules.find((rule) => rule.id === selectedRuleId)
   const baselineSelectedRule = selectedRule ? baselineRules.get(selectedRule.id) : undefined
-  const selectedRuleEvidenceUnavailable = Boolean(selectedRule?.circle_ids.some((id) => {
+  const selectedRuleEvidenceUnavailable = Boolean(selectedRule?.circle_ids.length) && !supportsRulePageEvidence(selectedRule?.circle_ids ?? [])
+  const selectedRuleEvidencePartial = Boolean(selectedRule?.circle_ids.some((id) => {
     const circle = allCircles.find((item) => item.id === id)
     const platform = allPlatforms.find((item) => item.code === circle?.platform_code)
     return platform && !platform.capabilities.page_evidence
-  }))
+  })) && !selectedRuleEvidenceUnavailable
   const ruleNameDirty = Boolean(selectedRule) && selectedRule?.name !== (baselineSelectedRule?.name ?? '')
   const search = ruleSearch.trim().toLocaleLowerCase('zh-CN')
   const filteredRules = draft.rules.filter((rule) => !search || `${rule.name} ${rule.id} ${rule.circle_ids.map((id) => { const circle = allCircles.find((item) => item.id === id); return circle ? sourceName(circle) : '' }).join(' ')}`.toLocaleLowerCase('zh-CN').includes(search))
@@ -381,7 +386,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
                   <Switch checked={selectedRule.ai_analysis_enabled} data-dirty={selectedRule.ai_analysis_enabled !== (baselineSelectedRule?.ai_analysis_enabled ?? true) || undefined} className={cn(selectedRule.ai_analysis_enabled !== (baselineSelectedRule?.ai_analysis_enabled ?? true) && dirtyControlClass)} onCheckedChange={(ai_analysis_enabled) => updateRule(selectedRule.id, (item) => ({ ...item, ai_analysis_enabled }))} />
                 </label>
                 <label className='flex cursor-pointer items-center justify-between gap-3 rounded-lg border bg-card/70 p-3'>
-                  <span><span className='block text-sm font-medium'>圈子页面截图</span><span className='mt-0.5 block text-xs text-muted-foreground'>{selectedRuleEvidenceUnavailable ? '所选平台尚未实现圈子页面证据' : '保留原始全页并生成负面框选成果'}</span></span>
+                  <span><span className='block text-sm font-medium'>圈子页面截图</span><span className='mt-0.5 block text-xs text-muted-foreground'>{selectedRuleEvidenceUnavailable ? '所选平台尚未实现圈子页面证据' : selectedRuleEvidencePartial ? '仅为支持该能力的平台来源保存页面证据' : '保留原始全页并生成负面框选成果'}</span></span>
                   <Switch checked={!selectedRuleEvidenceUnavailable && selectedRule.screenshot_enabled} disabled={selectedRuleEvidenceUnavailable} data-dirty={selectedRule.screenshot_enabled !== (baselineSelectedRule?.screenshot_enabled ?? true) || undefined} className={cn(selectedRule.screenshot_enabled !== (baselineSelectedRule?.screenshot_enabled ?? true) && dirtyControlClass)} onCheckedChange={(screenshot_enabled) => updateRule(selectedRule.id, (item) => ({ ...item, screenshot_enabled }))} />
                 </label>
               </div>
@@ -669,7 +674,7 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
         <Button variant='outline' disabled={dirty || unverifiedCount === 0 || bulkValidation.isPending} onClick={() => bulkValidation.mutate()} title={pendingAcceptanceCount ? `${pendingAcceptanceCount} 个待验收平台来源将在平台接入后验证` : undefined}>
           {bulkValidation.isPending ? <Loader2 className='size-4 animate-spin' /> : <RefreshCw className='size-4' />}验证全部待验证（{unverifiedCount}）
         </Button>
-        <Button variant='outline' disabled={!availablePlatforms.length} onClick={() => commitRows([...rows, { id: '', platform_code: availablePlatforms[0]?.code ?? '', external_id: '', url: '', vehicle_name: '未命名来源', auto_enabled: false, section: 'dynamic', list_order: 'latest_reply', validation_status: 'unverified' }])}><Plus className='size-4' />新增来源</Button>
+        <Button variant='outline' onClick={() => commitRows([...rows, { id: '', platform_code: 'dongchedi', external_id: '', url: '', vehicle_name: '未命名来源', auto_enabled: false, section: 'dynamic', list_order: 'latest_reply', validation_status: 'unverified' }])}><Plus className='size-4' />新增来源</Button>
         <Button variant='outline' disabled={!dirty || saving} onClick={discard}><RotateCcw className='size-4' />放弃修改</Button>
         <Button disabled={!dirty || saving} onClick={save}>{saving ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}保存当前标签{dirty ? ` (${changeCount})` : ''}</Button>
     </ConfigSectionToolbar>

@@ -194,7 +194,7 @@ class BrowserAuthManager:
         if not spec.supports_authentication or not spec.login_url:
             raise DomainError(
                 "PLATFORM_NOT_INTEGRATED", "该平台暂未接入认证流程。", status_code=409
-            ) from exc
+            )
         with self.worker.factory() as db:
             platform = db.get(PlatformConfig, platform_code)
             if not platform or platform.adapter_status != "available":

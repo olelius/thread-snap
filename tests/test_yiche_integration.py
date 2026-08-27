@@ -118,7 +118,7 @@ class FakeYicheCollector:
 
 
 class YicheReleaseGateTests(AppCase):
-    def test_unreleased_adapter_cannot_enter_config_run_or_auth(self) -> None:
+    def test_dormant_adapter_cannot_enter_enable_run_or_auth(self) -> None:
         platform = next(
             item for item in self.client.get("/api/v1/platforms").json() if item["code"] == "yiche"
         )
@@ -146,8 +146,12 @@ class YicheReleaseGateTests(AppCase):
                 "deleted_ids": [],
             },
         )
-        self.assertEqual(400, configured.status_code)
-        self.assertEqual("CIRCLE_BATCH_INVALID", configured.json()["code"])
+        self.assertEqual(200, configured.status_code, configured.text)
+        staged = configured.json()["items"][0]
+        self.assertFalse(staged["auto_enabled"])
+        validation = self.client.post(f"/api/v1/circles/{staged['id']}/validate")
+        self.assertEqual(409, validation.status_code)
+        self.assertEqual("PLATFORM_NOT_INTEGRATED", validation.json()["code"])
 
         auth = self.client.post("/api/v1/platforms/yiche/auth/tasks")
         self.assertEqual(409, auth.status_code)
@@ -160,13 +164,13 @@ class YicheReleaseGateTests(AppCase):
                 "circle_urls": ["https://baa.yiche.com/sample/"],
                 "quantity": 1,
                 "screenshot_enabled": False,
-                "idempotency_key": "unreleased-yiche",
+                "idempotency_key": "dormant-yiche",
             },
         )
         self.assertEqual(409, manual.status_code)
         self.assertEqual("PLATFORM_NOT_INTEGRATED", manual.json()["code"])
 
-    def test_bootstrap_downgrades_unreleased_adapter(self) -> None:
+    def test_bootstrap_downgrades_dormant_adapter(self) -> None:
         with self.container.sessions.begin() as db:
             platform = db.get(PlatformConfig, "yiche")
             assert platform is not None
