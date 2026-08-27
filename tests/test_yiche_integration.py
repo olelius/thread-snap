@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 
 from openpyxl import Workbook, load_workbook
 from sqlalchemy import select
 
+from threadsnap.collectors.registry import PLATFORM_ADAPTERS
 from threadsnap.collectors.yiche import _parse_time
 from threadsnap.models import (
     Circle,
@@ -117,12 +120,12 @@ class FakeYicheCollector:
         return None
 
 
-class YicheReleaseGateTests(AppCase):
-    def test_dormant_adapter_cannot_enter_enable_run_or_auth(self) -> None:
+class YicheReleaseStateTests(AppCase):
+    def test_released_adapter_is_available_but_default_disabled(self) -> None:
         platform = next(
             item for item in self.client.get("/api/v1/platforms").json() if item["code"] == "yiche"
         )
-        self.assertEqual("not_integrated", platform["adapter_status"])
+        self.assertEqual("available", platform["adapter_status"])
         self.assertFalse(platform["enabled"])
         self.assertFalse(platform["capabilities"]["page_evidence"])
 
@@ -130,61 +133,24 @@ class YicheReleaseGateTests(AppCase):
             "/api/v1/platforms/yiche",
             json={"enabled": True, "internal_concurrency": 1},
         )
-        self.assertEqual(409, enabled.status_code)
-        self.assertEqual("PLATFORM_NOT_INTEGRATED", enabled.json()["code"])
+        self.assertEqual(200, enabled.status_code, enabled.text)
+        self.assertTrue(enabled.json()["enabled"])
 
-        configured = self.client.put(
-            "/api/v1/circles/batch",
-            json={
-                "rows": [
-                    {
-                        "platform_code": "yiche",
-                        "url": "https://baa.yiche.com/sample/",
-                        "vehicle_name": "未发布样本",
-                    }
-                ],
-                "deleted_ids": [],
-            },
-        )
-        self.assertEqual(200, configured.status_code, configured.text)
-        staged = configured.json()["items"][0]
-        self.assertFalse(staged["auto_enabled"])
-        validation = self.client.post(f"/api/v1/circles/{staged['id']}/validate")
-        self.assertEqual(409, validation.status_code)
-        self.assertEqual("PLATFORM_NOT_INTEGRATED", validation.json()["code"])
-
-        auth = self.client.post("/api/v1/platforms/yiche/auth/tasks")
-        self.assertEqual(409, auth.status_code)
-        self.assertEqual("PLATFORM_NOT_INTEGRATED", auth.json()["code"])
-
-        manual = self.client.post(
-            "/api/v1/runs/manual",
-            json={
-                "platform_code": "yiche",
-                "circle_urls": ["https://baa.yiche.com/sample/"],
-                "quantity": 1,
-                "screenshot_enabled": False,
-                "idempotency_key": "dormant-yiche",
-            },
-        )
-        self.assertEqual(409, manual.status_code)
-        self.assertEqual("PLATFORM_NOT_INTEGRATED", manual.json()["code"])
-
-    def test_bootstrap_downgrades_dormant_adapter(self) -> None:
+    def test_bootstrap_upgrades_existing_database_to_released_adapter(self) -> None:
         with self.container.sessions.begin() as db:
             platform = db.get(PlatformConfig, "yiche")
             assert platform is not None
-            platform.adapter_status = "available"
-            platform.enabled = True
+            platform.adapter_status = "not_integrated"
+            platform.enabled = False
         with self.container.sessions.begin() as db:
             bootstrap_database(db)
         with self.container.sessions() as db:
             platform = db.get(PlatformConfig, "yiche")
             assert platform is not None
-            self.assertEqual("not_integrated", platform.adapter_status)
+            self.assertEqual("available", platform.adapter_status)
             self.assertFalse(platform.enabled)
 
-    def test_bootstrap_closes_legacy_queued_and_running_runs(self) -> None:
+    def test_bootstrap_withdrawal_closes_active_runs_and_preserves_history(self) -> None:
         with self.container.sessions.begin() as db:
             platform = db.get(PlatformConfig, "yiche")
             assert platform is not None
@@ -205,9 +171,9 @@ class YicheReleaseGateTests(AppCase):
             self.assertEqual(202, response.status_code, response.text)
             return str(response.json()["id"])
 
-        queued_run_id = create_run("legacy-yiche-queued")
-        running_run_id = create_run("legacy-yiche-running")
-        history_run_id = create_run("legacy-yiche-success-history")
+        queued_run_id = create_run("withdrawn-yiche-queued")
+        running_run_id = create_run("withdrawn-yiche-running")
+        history_run_id = create_run("withdrawn-yiche-success-history")
         completed_at = datetime.now(timezone.utc)
         with self.container.sessions.begin() as db:
             running_run = db.get(ExtractionRun, running_run_id)
@@ -231,8 +197,10 @@ class YicheReleaseGateTests(AppCase):
             history_task.completed_count = 1
             history_task.finished_at = completed_at
 
-        with self.container.sessions.begin() as db:
-            bootstrap_database(db)
+        dormant_spec = replace(PLATFORM_ADAPTERS["yiche"], adapter_status="not_integrated")
+        with patch.dict(PLATFORM_ADAPTERS, {"yiche": dormant_spec}):
+            with self.container.sessions.begin() as db:
+                bootstrap_database(db)
 
         with self.container.sessions() as db:
             platform = db.get(PlatformConfig, "yiche")
@@ -267,8 +235,12 @@ class YicheReleaseGateTests(AppCase):
             self.assertEqual(completed_at, history_run.finished_at)
             self.assertEqual(completed_at, history_task.finished_at)
 
-    def test_worker_fails_legacy_validation_job_after_release_gate_closes(self) -> None:
+    def test_worker_fails_validation_job_after_adapter_withdrawal(self) -> None:
         with self.container.sessions.begin() as db:
+            platform = db.get(PlatformConfig, "yiche")
+            assert platform is not None
+            platform.adapter_status = "not_integrated"
+            platform.enabled = False
             circle = Circle(
                 platform_code="yiche",
                 external_id="sample",
@@ -282,7 +254,9 @@ class YicheReleaseGateTests(AppCase):
             db.flush()
             job_id = job.id
 
-        self.assertTrue(self.container.worker.process_once())
+        dormant_spec = replace(PLATFORM_ADAPTERS["yiche"], adapter_status="not_integrated")
+        with patch.dict(PLATFORM_ADAPTERS, {"yiche": dormant_spec}):
+            self.assertTrue(self.container.worker.process_once())
         with self.container.sessions() as db:
             job = db.get(ValidationJob, job_id)
             assert job is not None
@@ -293,11 +267,6 @@ class YicheReleaseGateTests(AppCase):
 class YichePublicFlowTests(AppCase):
     def setUp(self) -> None:
         super().setUp()
-        # 仅用于证明发布门关闭后的公共链复用，不改变生产发布标志。
-        with self.container.sessions.begin() as db:
-            platform = db.get(PlatformConfig, "yiche")
-            assert platform is not None
-            platform.adapter_status = "available"
         enabled = self.client.put(
             "/api/v1/platforms/yiche",
             json={"enabled": True, "internal_concurrency": 8},

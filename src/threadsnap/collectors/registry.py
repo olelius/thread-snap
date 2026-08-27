@@ -118,8 +118,8 @@ PLATFORM_ADAPTERS: dict[str, PlatformAdapterSpec] = {
     "yiche": PlatformAdapterSpec(
         code="yiche",
         display_name="易车",
-        # 真实 500/500 正式验收前保持未接入；解析器可供冻结样本和测试直接复用。
-        adapter_status="not_integrated",
+        # 适配器与公共业务链已经交付，平台注册为可用；是否创建任务仍由 enabled 控制。
+        adapter_status="available",
         adapter_version=YICHE_VERSION,
         collector_factory=YicheCollector,
         parse_circle_url=parse_yiche_circle_url,
