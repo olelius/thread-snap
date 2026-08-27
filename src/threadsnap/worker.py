@@ -6,6 +6,7 @@ import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
+from inspect import signature
 from time import monotonic
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -15,7 +16,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from .browser_runtime import browser_launch_args
-from .collectors import AuthenticationRequired, CollectorFailure, DongchediCollector
+from .collectors import AuthenticationRequired, Collector, CollectorFailure, get_platform_spec
 from .errors import DomainError
 from .models import (
     Circle,
@@ -32,6 +33,14 @@ from .screenshots import ScreenshotService
 from .sentiment import SentimentService, deduplicate_media_urls
 from .services import aggregate_run, related_run_ids
 from .session_store import SessionStore
+
+
+def _supports_page_evidence(collector: Collector) -> bool:
+    """同时核对能力声明与调用签名，避免把截图回调传给旧适配器。"""
+
+    return bool(getattr(collector, "supports_page_evidence", False)) and (
+        "on_page_evidence" in signature(collector.collect_circle).parameters
+    )
 
 
 class WorkerService:
@@ -72,7 +81,14 @@ class WorkerService:
             platform_code = task.platform_code if task else None
             raw_status = post.raw_status if isinstance(post.raw_status, dict) else {}
             video_id = str(raw_status.get("video_id") or "").strip()
-        if platform_code != "dongchedi":
+        if not platform_code:
+            raise DomainError(
+                "MEDIA_RESOLVER_UNAVAILABLE",
+                "帖子快照缺少平台任务，不能刷新视频地址。",
+                status_code=409,
+            )
+        spec = get_platform_spec(platform_code)
+        if not spec.supports_live_video_resolution:
             raise DomainError(
                 "MEDIA_RESOLVER_UNAVAILABLE",
                 "当前平台尚未接入视频播放地址刷新。",
@@ -95,10 +111,19 @@ class WorkerService:
                         "帖子快照没有可用于刷新播放地址的视频 ID，请打开原帖查看。",
                         status_code=404,
                     )
-                collector = DongchediCollector(
-                    self.session_store.get_state(platform_code), concurrency=1
+                collector = spec.create_collector(
+                    self.session_store.get_state(platform_code),
+                    concurrency=1,
+                    browser_headless=self.session_store.settings.auth_browser_headless,
                 )
-                urls = deduplicate_media_urls(collector.resolve_video_urls(video_id))
+                resolver = getattr(collector, "resolve_video_urls", None)
+                if resolver is None:
+                    raise DomainError(
+                        "MEDIA_RESOLVER_UNAVAILABLE",
+                        "当前平台尚未接入视频播放地址刷新。",
+                        status_code=409,
+                    )
+                urls = deduplicate_media_urls(resolver(video_id))
             except DomainError:
                 raise
             except Exception as exc:
@@ -213,12 +238,11 @@ class WorkerService:
 
     def _collector(
         self, platform: PlatformConfig, snapshot_concurrency: int | None = None
-    ) -> DongchediCollector:
-        if platform.code != "dongchedi":
-            raise CollectorFailure("PLATFORM_NOT_INTEGRATED", f"{platform.display_name}暂未接入。")
+    ) -> Collector:
+        spec = get_platform_spec(platform.code)
         requested = snapshot_concurrency or platform.internal_concurrency
         concurrency = min(max(requested, platform.min_concurrency), platform.max_concurrency)
-        return DongchediCollector(
+        return spec.create_collector(
             self.session_store.get_state(platform.code),
             concurrency=concurrency,
             browser_headless=self.session_store.settings.auth_browser_headless,
@@ -246,10 +270,19 @@ class WorkerService:
                 job.finished_at = utc_now()
                 missing = True
             else:
-                job.status = "running"
-                job.started_at = utc_now()
-                circle_url = circle.url
-                platform_code = platform.code
+                if platform.adapter_status != "available":
+                    job.status = "failed"
+                    job.error_code = "PLATFORM_NOT_INTEGRATED"
+                    job.error_message = "该平台尚未通过接入验收。"
+                    job.finished_at = utc_now()
+                    circle.validation_status = "unverified"
+                    circle.validation_error = job.error_message
+                    missing = True
+                else:
+                    job.status = "running"
+                    job.started_at = utc_now()
+                    circle_url = circle.url
+                    platform_code = platform.code
         if missing:
             self._publish_validation(circle_id, job_id, "failed")
             return True
@@ -259,17 +292,28 @@ class WorkerService:
                 assert platform is not None
                 result = self._collector(platform).validate_circle(circle_url)
         except AuthenticationRequired as exc:
+            spec = get_platform_spec(platform_code)
             with self.factory.begin() as db:
                 job = db.get(ValidationJob, job.id)
                 circle = db.get(Circle, circle_id)
-                if job:
+                if job and spec.supports_authentication:
                     job.status = "waiting_for_auth"
                     job.error_code = "AUTH_REQUIRED"
                     job.error_message = exc.message
+                elif job:
+                    job.status = "failed"
+                    job.error_code = "AUTH_MODE_UNSUPPORTED"
+                    job.error_message = "该平台尚未建立已验证的认证流程。"
+                    job.finished_at = utc_now()
                 if circle:
                     circle.validation_status = "unverified"
-                    circle.validation_error = exc.message
-            self._publish_validation(circle_id, job_id, "waiting_for_auth")
+                    circle.validation_error = (
+                        exc.message
+                        if spec.supports_authentication
+                        else "该平台尚未建立已验证的认证流程。"
+                    )
+            status = "waiting_for_auth" if spec.supports_authentication else "failed"
+            self._publish_validation(circle_id, job_id, status)
             return True
         except (CollectorFailure, Exception) as exc:
             code = exc.code if isinstance(exc, CollectorFailure) else "VALIDATION_FAILED"
@@ -437,7 +481,7 @@ class WorkerService:
                 platform_code is None or platform_code in (row.platform_codes or []) for row in rows
             )
 
-    def _execute_task(self, collector: DongchediCollector, task_id: str) -> dict[str, Any]:
+    def _execute_task(self, collector: Collector, task_id: str) -> dict[str, Any]:
         with self.factory() as db:
             task = db.get(CircleTask, task_id)
             assert task is not None
@@ -464,6 +508,8 @@ class WorkerService:
             )
             needs_validation = transient
             platform_code = task.platform_code
+            spec = get_platform_spec(platform_code)
+            page_evidence_supported = _supports_page_evidence(collector)
             if circle_id:
                 circle = db.get(Circle, circle_id)
                 needs_validation = bool(circle and circle.validation_status != "verified")
@@ -471,7 +517,7 @@ class WorkerService:
             self.screenshot_service
             and screenshot_enabled
             and not known_urls
-            and type(collector) is DongchediCollector
+            and page_evidence_supported
         ):
             self.screenshot_service.register_task(task_id)
         pending_records: list[dict[str, Any]] = []
@@ -492,11 +538,15 @@ class WorkerService:
             nonlocal reported_failures
             if record is not None:
                 raw_status = record.get("raw_status") or {}
-                if not record.get("video_urls") and raw_status.get("video_id"):
+                resolver = getattr(collector, "resolve_video_urls", None)
+                if (
+                    spec.supports_live_video_resolution
+                    and resolver is not None
+                    and not record.get("video_urls")
+                    and raw_status.get("video_id")
+                ):
                     try:
-                        record["video_urls"] = collector.resolve_video_urls(
-                            str(raw_status["video_id"])
-                        )
+                        record["video_urls"] = resolver(str(raw_status["video_id"]))
                         raw_status["video_url_resolution"] = (
                             "resolved" if record["video_urls"] else "not_found"
                         )
@@ -537,7 +587,7 @@ class WorkerService:
                         }
                         if self.screenshot_service
                         and screenshot_enabled
-                        and type(collector) is DongchediCollector
+                        and page_evidence_supported
                         else {}
                     ),
                 )
@@ -559,6 +609,7 @@ class WorkerService:
                     platform = db.get(PlatformConfig, platform_code)
                     assert platform is not None
                     refreshed = self._collector(platform, collector.concurrency)
+                    refreshed_page_evidence_supported = _supports_page_evidence(refreshed)
                 try:
                     if needs_validation and validation is None:
                         validation = refreshed.validate_circle(circle_url)
@@ -578,7 +629,7 @@ class WorkerService:
                                 }
                                 if self.screenshot_service
                                 and screenshot_enabled
-                                and type(refreshed) is DongchediCollector
+                                and refreshed_page_evidence_supported
                                 else {}
                             ),
                         )
@@ -624,6 +675,9 @@ class WorkerService:
         """同一认证失效事件只允许一个线程刷新服务器 Session。"""
 
         with self.refresh_lock:
+            spec = get_platform_spec(platform_code)
+            if not spec.supports_authentication:
+                return False
             if self.refresh_generation.get(platform_code, 0) > observed_generation:
                 return True
             state = self.session_store.get_state(platform_code)
@@ -642,12 +696,12 @@ class WorkerService:
                     )
                     page = context.new_page()
                     page.goto(
-                        trigger_url or "https://www.dongchedi.com/community/24729",
+                        trigger_url or spec.login_url or spec.auth_probe_circle_url or "about:blank",
                         wait_until="domcontentloaded",
                         timeout=60_000,
                     )
                     page.wait_for_timeout(1000)
-                    if "/login-required" in page.url:
+                    if any(marker in page.url for marker in spec.auth_url_markers):
                         context.close()
                         browser.close()
                         return False

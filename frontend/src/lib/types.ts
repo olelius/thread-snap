@@ -7,6 +7,12 @@ export type Platform = {
   quantity_range: { min: number; max: number }
   concurrency_range: { min: number; max: number }
   adapter_version?: string
+  capabilities: {
+    source_configuration: boolean
+    authentication: boolean
+    page_evidence: boolean
+    live_video_resolution: boolean
+  }
   notes?: string[]
 }
 
@@ -81,6 +87,7 @@ export type Run = {
   queue_position?: number
   platform_count: number
   platform_codes?: string[]
+  waiting_platform_codes?: string[]
   circle_count: number
   circle_names?: string[]
   source_names?: string[]

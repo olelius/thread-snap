@@ -9,6 +9,7 @@ import json
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -22,6 +23,7 @@ from sqlalchemy import select
 
 from threadsnap.app import create_app, require_internal_loopback
 from threadsnap.auth import AuthPageLoadError, AuthTask
+from threadsnap.collectors.autohome import AutohomeCollector
 from threadsnap.collectors.dongchedi import (
     ADAPTER_VERSION,
     AuthenticationRequired,
@@ -44,6 +46,7 @@ from threadsnap.models import (
     ScheduleNodeRule,
     ScreenshotArtifactGroup,
     SentimentAnalysis,
+    ValidationJob,
     Vehicle,
 )
 from threadsnap.schemas import (
@@ -1492,6 +1495,89 @@ class ApiAndConfigTests(AppCase):
             platform = db.get(PlatformConfig, "dongchedi")
             assert platform is not None
         self.assertEqual(ADAPTER_VERSION, platform.adapter_version)
+
+    def test_autohome_registry_contract_keeps_gate_closed_until_temporary_test_enable(
+        self,
+    ) -> None:
+        """汽车之家已有真实输入合同，但正式 500/500 前仍保持未接入。"""
+
+        platforms = {item["code"]: item for item in self.client.get("/api/v1/platforms").json()}
+        autohome = platforms["autohome"]
+        self.assertEqual("not_integrated", autohome["adapter_status"])
+        self.assertFalse(autohome["enabled"])
+        self.assertTrue(autohome["capabilities"]["source_configuration"])
+        self.assertFalse(autohome["capabilities"]["authentication"])
+        self.assertFalse(autohome["capabilities"]["page_evidence"])
+        self.assertTrue(autohome["capabilities"]["live_video_resolution"])
+
+        source = self.client.post(
+            "/api/v1/circles",
+            json={
+                "platform_code": "autohome",
+                "url": "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post",
+                "vehicle_name": "iCAR V27",
+            },
+        )
+        self.assertEqual(201, source.status_code, source.text)
+        self.assertEqual(
+            409,
+            self.client.post(f"/api/v1/circles/{source.json()['id']}/validate").status_code,
+        )
+        bulk = self.client.post("/api/v1/circles/validate-unverified")
+        self.assertEqual(202, bulk.status_code)
+        self.assertEqual(0, bulk.json()["total_count"])
+
+        with self.container.sessions.begin() as db:
+            stale_job = ValidationJob(circle_id=source.json()["id"])
+            db.add(stale_job)
+            db.flush()
+            stale_job_id = stale_job.id
+        with patch.object(
+            self.container.worker,
+            "_collector",
+            side_effect=AssertionError("未接入平台不得构造采集器"),
+        ):
+            self.assertTrue(self.container.worker.process_once())
+        with self.container.sessions() as db:
+            stale_job = db.get(ValidationJob, stale_job_id)
+            assert stale_job is not None
+            self.assertEqual("failed", stale_job.status)
+            self.assertEqual("PLATFORM_NOT_INTEGRATED", stale_job.error_code)
+
+        blocked = self.client.post(
+            "/api/v1/runs/manual",
+            json={
+                "platform_code": "autohome",
+                "circle_urls": [
+                    "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post"
+                ],
+                "quantity": 3,
+                "screenshot_enabled": True,
+                "idempotency_key": "autohome-formal-gate-closed",
+            },
+        )
+        self.assertEqual(409, blocked.status_code)
+
+        with self.container.sessions.begin() as db:
+            platform = db.get(PlatformConfig, "autohome")
+            assert platform is not None
+            platform.adapter_status = "available"
+            platform.enabled = True
+        created = self.client.post(
+            "/api/v1/runs/manual",
+            json={
+                "platform_code": "autohome",
+                "circle_urls": [
+                    "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post"
+                ],
+                "quantity": 3,
+                "screenshot_enabled": True,
+                "idempotency_key": "autohome-temporary-test-enable",
+            },
+        )
+        self.assertEqual(202, created.status_code, created.text)
+        self.assertFalse(created.json()["screenshot_enabled"])
+        self.assertEqual(["autohome"], created.json()["platform_codes"])
 
     def test_sentiment_config_worker_filters_detail_and_manual_revision(self) -> None:
         """覆盖配置、单次分析、三态列表、详情依据和人工优先的组合路径。"""
@@ -3818,6 +3904,173 @@ class CollectorTests(unittest.TestCase):
             headers={"content-type": "application/json; charset=utf-8"},
         )
         DongchediCollector._detect_auth(response)
+
+
+class AutohomeLocalClosureTests(AppCase):
+    """只用本地 fixture 验证休眠适配器的共享业务闭环，不改变正式接入门。"""
+
+    def test_dormant_known_url_worker_api_and_xlsx_closure(self) -> None:
+        known_url = "https://club.autohome.com.cn/bbs/thread/dee662/115934382-1.html"
+        fixture = """
+        <html><head><meta charset="utf-8"><title>汽车之家 fixture</title></head><body>
+        <script>
+        window['__BBSINFO__'] = {"bbsId":8232,"bbs":"c","bbsName":"本地测试论坛"}
+        window['__TOPICINFO__'] = {
+          topicId: 115934382, topicTitle: '本地组合标题', topicMemberId: 42,
+          topicMemberName: '本地作者', topicDelete: 0,
+        };
+        </script>
+        <h1 class="post-title">本地组合标题</h1>
+        <div class="post-handle-publish"><strong>发表于</strong><strong>2026-08-27 09:30:00</strong></div>
+        <div class="post-container">本地组合正文<img data-src="//img.example/autohome.jpg" /></div>
+        <ul id="js-reply-list-container">
+          <li class="js-reply-floor-container" data-floor="1" data-reply-id="reply-1"
+              data-member-id="member-1" data-status="0">
+            <div class="reply-top"><strong>2026-08-27 09:35:00</strong></div>
+            <div class="reply-detail">本地一级评论</div>
+            <div class="reply-bottom-praise"><strong>7</strong></div>
+            <a href="/report?authorname=%E8%AF%84%E8%AE%BA%E8%80%85">举报</a>
+          </li>
+        </ul>
+        <span data-page-count="1">共1页</span>
+        <a class="athm-page__next disabled" data-page="2">下一页</a>
+        </body></html>
+        """.encode()
+
+        with self.container.sessions.begin() as db:
+            platform = db.get(PlatformConfig, "autohome")
+            assert platform is not None
+            self.assertEqual("not_integrated", platform.adapter_status)
+            self.assertFalse(platform.enabled)
+            circle = Circle(
+                platform_code="autohome",
+                external_id="8232",
+                name="汽车之家本地 fixture 来源",
+                url="https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post",
+                source_kind="configured",
+                validation_status="verified",
+                adapter_version="autohome-club-v1",
+            )
+            db.add(circle)
+            db.flush()
+            circle_id = circle.id
+            export_key = circle.export_key
+            run = ExtractionRun(
+                number="20260827-120000-001",
+                input_mode="url_list",
+                trigger_type="manual",
+                status="queued",
+                idempotency_scope="test",
+                idempotency_key="autohome-dormant-known-url-closure",
+                request_hash="a" * 64,
+                planned_count=1,
+                completed_count=0,
+                config_snapshot={"platform_code": "autohome", "quantity": 1},
+            )
+            db.add(run)
+            db.flush()
+            task = CircleTask(
+                run_id=run.id,
+                circle_id=circle.id,
+                platform_code="autohome",
+                external_id="known-url-list",
+                circle_name="导入帖子链接",
+                circle_url=circle.url,
+                list_order="latest_reply",
+                status="queued",
+                queue_sequence=1,
+                source_position=0,
+                target_count=1,
+                config_snapshot={
+                    "known_post_urls": [known_url],
+                    "internal_concurrency": 1,
+                    "ai_analysis_enabled": False,
+                    "screenshot_enabled": False,
+                },
+            )
+            db.add(task)
+            db.flush()
+            run_id = run.id
+            task_id = task.id
+
+        # 正常领取路径只扫描available平台；休眠汽车之家任务保持排队。
+        self.assertFalse(self.container.worker.process_once())
+        with self.container.sessions() as db:
+            queued = db.get(CircleTask, task_id)
+            assert queued is not None
+            self.assertEqual("queued", queued.status)
+
+        response = SimpleNamespace(content=fixture, url=known_url, status_code=200)
+        with patch.object(AutohomeCollector, "_get", autospec=True, return_value=response):
+            # 私有平台头仅用于本地fixture组合验证，不表示平台注册已开放。
+            self.assertTrue(self.container.worker._process_platform_head("autohome"))
+
+        run_response = self.client.get(f"/api/v1/runs/{run_id}")
+        self.assertEqual(200, run_response.status_code)
+        self.assertEqual("success", run_response.json()["status"])
+        self.assertEqual(1, run_response.json()["completed_count"])
+
+        posts_response = self.client.get(f"/api/v1/runs/{run_id}/posts")
+        self.assertEqual(200, posts_response.status_code)
+        post = posts_response.json()["items"][0]
+        self.assertEqual("115934382", post["platform_post_id"])
+        self.assertEqual(["https://img.example/autohome.jpg"], post["image_urls"])
+        self.assertEqual("unknown", post["visibility"])
+
+        detail_response = self.client.get(f"/api/v1/runs/{run_id}/posts/{post['id']}")
+        self.assertEqual(200, detail_response.status_code)
+        detail = detail_response.json()
+        self.assertEqual("本地组合正文", detail["content"])
+        self.assertEqual("本地一级评论", detail["comments"][0]["content"])
+        self.assertTrue(detail["raw_status"]["comments_complete"])
+
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.title = "汽车之家"
+        prefix = f"s.{export_key}"
+        for column, field in enumerate(
+            (
+                "post.platform_post_id",
+                "post.url",
+                "post.content",
+                "post.image_urls",
+                "post.visibility",
+                "comments.content_with_likes",
+                "post.raw_status",
+            ),
+            1,
+        ):
+            sheet.cell(row=1, column=column).value = f"{prefix}.{field}"
+        source = Path(self.temp.name) / "autohome-local-closure.xlsx"
+        workbook.save(source)
+        version = self.container.templates.upload("汽车之家本地闭环", source.name, source.read_bytes())
+
+        export_response = self.client.post(
+            f"/api/v1/runs/{run_id}/exports",
+            json={"template_version_id": version["version_id"]},
+        )
+        self.assertEqual(200, export_response.status_code, export_response.text)
+        download = self.client.get(
+            f"/api/v1/exports/{export_response.json()['id']}/download"
+        )
+        self.assertEqual(200, download.status_code)
+        output = load_workbook(BytesIO(download.content))["汽车之家"]
+        self.assertEqual("115934382", output["A1"].value)
+        self.assertEqual(known_url, output["B1"].value)
+        self.assertEqual("本地组合正文", output["C1"].value)
+        self.assertEqual("1. https://img.example/autohome.jpg", output["D1"].value)
+        self.assertEqual("unknown", output["E1"].value)
+        self.assertIn("评论：本地一级评论", output["F1"].value)
+        self.assertIn('"comments_complete":true', output["G1"].value)
+
+        with self.container.sessions() as db:
+            platform = db.get(PlatformConfig, "autohome")
+            stored_task = db.get(CircleTask, task_id)
+            assert platform is not None
+            assert stored_task is not None
+            self.assertEqual("not_integrated", platform.adapter_status)
+            self.assertFalse(platform.enabled)
+            self.assertEqual(circle_id, stored_task.circle_id)
 
 
 class TemplateTests(AppCase):

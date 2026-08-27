@@ -10,7 +10,6 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable
 from urllib.parse import urlencode, urljoin, urlsplit
@@ -22,6 +21,7 @@ from patchright.sync_api import sync_playwright
 from scrapling.fetchers import DynamicSession
 
 from ..browser_runtime import browser_launch_args
+from .base import AuthenticationRequired, CircleSource, CollectorFailure
 
 ADAPTER_VERSION = "dongchedi-dynamic-v4"
 BASE_URL = "https://www.dongchedi.com"
@@ -50,42 +50,6 @@ BLOCK_END_TAG_RE = re.compile(
     re.IGNORECASE,
 )
 BREAK_TAG_RE = re.compile(r"<br\s*/?>", re.IGNORECASE)
-
-
-class AuthenticationRequired(RuntimeError):
-    """平台明确要求登录或当前身份已经失效，并携带本次已完成结果。"""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        trigger_url: str | None = None,
-        records: list[dict[str, Any]] | None = None,
-        failures: list[dict[str, str]] | None = None,
-    ):
-        super().__init__(message)
-        self.message = message
-        self.trigger_url = trigger_url
-        self.records = records or []
-        self.failures = failures or []
-
-
-class CollectorFailure(RuntimeError):
-    """带稳定错误码的采集失败。"""
-
-    def __init__(self, code: str, message: str):
-        super().__init__(message)
-        self.code = code
-        self.message = message
-
-
-@dataclass(frozen=True)
-class CircleSource:
-    """从用户链接解析出的稳定圈子来源身份。"""
-
-    external_id: str
-    url: str
-    list_order: str
 
 
 def parse_circle_url(url: str) -> CircleSource:
@@ -212,6 +176,8 @@ class DongchediCollector:
     code = "dongchedi"
     display_name = "懂车帝"
     adapter_version = ADAPTER_VERSION
+    supports_page_evidence = True
+    supports_live_video_resolution = True
 
     def __init__(
         self,

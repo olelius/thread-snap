@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlencode
 
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import WebSocket, WebSocketDisconnect
@@ -26,7 +25,12 @@ from patchright.async_api import (
 from patchright.async_api import Error as PlaywrightError
 
 from .browser_runtime import browser_launch_args
-from .collectors import AuthenticationRequired, CollectorFailure, DongchediCollector
+from .collectors import (
+    AuthenticationRequired,
+    CollectorFailure,
+    DongchediCollector,
+    get_platform_spec,
+)
 from .config import Settings
 from .errors import DomainError
 from .ids import uuid7
@@ -166,11 +170,6 @@ class AuthTask:
 class BrowserAuthManager:
     """认证任务不接收或持久化账号密码，只中继用户对官方页面的输入。"""
 
-    LOGIN_REDIRECT_PATH = "/community/24729"
-    LOGIN_URL = "https://www.dongchedi.com/login-required?" + urlencode(
-        {"redirect": LOGIN_REDIRECT_PATH}
-    )
-
     def __init__(
         self,
         settings: Settings,
@@ -186,7 +185,11 @@ class BrowserAuthManager:
         self.tasks: dict[str, AuthTask] = {}
 
     async def create(self, platform_code: str, *, fresh: bool = False) -> dict[str, Any]:
-        if platform_code != "dongchedi":
+        try:
+            spec = get_platform_spec(platform_code)
+        except CollectorFailure as exc:
+            raise DomainError(exc.code, exc.message, status_code=404) from exc
+        if not spec.supports_authentication or not spec.login_url:
             raise DomainError(
                 "PLATFORM_NOT_INTEGRATED", "该平台暂未接入认证流程。", status_code=409
             )
@@ -270,7 +273,7 @@ class BrowserAuthManager:
         task.page = task.context.pages[0] if task.context.pages else await task.context.new_page()
         task.page_status = "loading"
         response = await task.page.goto(
-            self.LOGIN_URL,
+            get_platform_spec(task.platform_code).login_url,
             wait_until="domcontentloaded",
             timeout=60_000,
         )
@@ -497,9 +500,24 @@ class BrowserAuthManager:
             await websocket.send_json({"type": "validating", "message": "正在校验平台会话…"})
             state = await task.context.storage_state()
             try:
+                spec = get_platform_spec(task.platform_code)
+                if not spec.auth_probe_circle_url:
+                    raise CollectorFailure(
+                        "AUTH_VALIDATION_UNAVAILABLE", "该平台缺少认证会话校验入口。"
+                    )
+                # 保留懂车帝测试注入缝；平台资格、入口与其余适配器仍由 registry 决定。
+                collector = (
+                    DongchediCollector(state, concurrency=1)
+                    if task.platform_code == "dongchedi"
+                    else spec.create_collector(
+                        state,
+                        concurrency=1,
+                        browser_headless=self.settings.auth_browser_headless,
+                    )
+                )
                 await asyncio.to_thread(
-                    DongchediCollector(state, concurrency=1).validate_circle,
-                    "https://www.dongchedi.com/community/24729",
+                    collector.validate_circle,
+                    spec.auth_probe_circle_url,
                 )
             except (AuthenticationRequired, CollectorFailure) as exc:
                 task.page_status = "ready"

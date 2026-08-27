@@ -347,7 +347,7 @@ function RunDetail({ kind }: { kind: RunDetailKind }) {
       </Sheet>
       <ManualSentimentDialog open={manualCorrectionOpen} onOpenChange={setManualCorrectionOpen} runId={runId} post={detail.data} onSaved={async () => { await Promise.all([detail.refetch(), posts.refetch()]) }} />
       <Dialog open={manualCopy !== undefined} onOpenChange={(open) => !open && setManualCopy(undefined)}><DialogContent><DialogHeader><DialogTitle>手动复制</DialogTitle><DialogDescription>当前浏览器上下文未开放剪贴板写入，文本已全选。</DialogDescription></DialogHeader><Textarea readOnly rows={12} value={manualCopy ?? ''} onFocus={(event) => event.currentTarget.select()} autoFocus /></DialogContent></Dialog>
-      <AuthDialog open={authOpen} onOpenChange={setAuthOpen} runId={runId} freshOnOpen />
+      <AuthDialog open={authOpen} onOpenChange={setAuthOpen} platformCode={run.data?.waiting_platform_codes?.[0] ?? run.data?.platform_codes?.[0]} runId={runId} freshOnOpen />
     </div>
   )
 }
