@@ -1508,7 +1508,7 @@ class ApiAndConfigTests(AppCase):
         self.assertTrue(autohome["capabilities"]["source_configuration"])
         self.assertFalse(autohome["capabilities"]["authentication"])
         self.assertFalse(autohome["capabilities"]["page_evidence"])
-        self.assertFalse(autohome["capabilities"]["live_video_resolution"])
+        self.assertTrue(autohome["capabilities"]["live_video_resolution"])
 
         source = self.client.post(
             "/api/v1/circles",

@@ -95,9 +95,7 @@ def parse_circle_url(url: str) -> CircleSource:
         list_order = "latest_publish"
         canonical_sort = "topic"
     else:
-        raise CollectorFailure(
-            "CIRCLE_URL_INVALID", "汽车之家论坛链接包含未验证的列表顺序。"
-        )
+        raise CollectorFailure("CIRCLE_URL_INVALID", "汽车之家论坛链接包含未验证的列表顺序。")
     canonical = f"{BASE_URL}/bbs/forum-{bbs_type}-{bbs_id}-1.html?sort={canonical_sort}"
     return CircleSource(
         external_id=bbs_id,
@@ -405,7 +403,9 @@ class AutohomeCollector:
         text = content[:300_000].decode("utf-8", errors="ignore")
         try:
             document = html.fromstring(content)
-            visible = " ".join(document.xpath("//title/text() | //body//text()[not(ancestor::script)]"))
+            visible = " ".join(
+                document.xpath("//title/text() | //body//text()[not(ancestor::script)]")
+            )
         except (TypeError, ValueError):
             visible = text[:10_000]
         combined = f"{final_url}\n{visible}".lower()
@@ -420,7 +420,9 @@ class AutohomeCollector:
         if any(marker in combined for marker in CONTROL_MARKERS["challenge"]):
             raise CollectorFailure("PLATFORM_CHALLENGE", "汽车之家当前返回了访问验证页面。")
         if any(marker in combined for marker in CONTROL_MARKERS["login"]):
-            raise AuthenticationRequired("汽车之家当前要求重新完成平台认证。", trigger_url=final_url)
+            raise AuthenticationRequired(
+                "汽车之家当前要求重新完成平台认证。", trigger_url=final_url
+            )
         if not content:
             raise CollectorFailure("PLATFORM_RESPONSE_EMPTY", "汽车之家返回了异常空响应。")
 
@@ -597,7 +599,9 @@ class AutohomeCollector:
         try:
             document = html.fromstring(response.content)
         except (TypeError, ValueError) as exc:
-            raise CollectorFailure("PLATFORM_RESPONSE_INVALID", "汽车之家帖子 HTML 无法解析。") from exc
+            raise CollectorFailure(
+                "PLATFORM_RESPONSE_INVALID", "汽车之家帖子 HTML 无法解析。"
+            ) from exc
         source = response.content.decode("utf-8", errors="ignore")
         bbs_match = BBS_INFO_RE.search(source)
         topic_match = TOPIC_BLOCK_RE.search(source)
@@ -606,7 +610,9 @@ class AutohomeCollector:
         try:
             bbs_info = json.loads(bbs_match.group("value"))
         except json.JSONDecodeError as exc:
-            raise CollectorFailure("PLATFORM_RESPONSE_INVALID", "汽车之家论坛身份数据无效。") from exc
+            raise CollectorFailure(
+                "PLATFORM_RESPONSE_INVALID", "汽车之家论坛身份数据无效。"
+            ) from exc
         topic_block = topic_match.group("body")
         observed_id = _js_int(topic_block, "topicId")
         if observed_id != int(post_id):
@@ -651,8 +657,8 @@ class AutohomeCollector:
         if hinted_video_id and video_id != hinted_video_id:
             raise CollectorFailure("POST_VIDEO_ID_MISMATCH", "汽车之家列表与详情视频 ID 不一致。")
         if video_id:
-            video_urls, video_url_resolution, video_media_response_kind = (
-                self._resolve_video_media(video_id)
+            video_urls, video_url_resolution, video_media_response_kind = self._resolve_video_media(
+                video_id
             )
         else:
             video_urls, video_url_resolution, video_media_response_kind = [], None, None
@@ -663,7 +669,11 @@ class AutohomeCollector:
             f"//*[{_class_tokens('post-handle-publish')}]//strong/text()"
         )
         published_at = next(
-            (parsed for value in reversed(publish_values) if (parsed := _parse_platform_time(value))),
+            (
+                parsed
+                for value in reversed(publish_values)
+                if (parsed := _parse_platform_time(value))
+            ),
             None,
         )
         comments, reply_statuses, comments_complete, comment_page_end = self._comments(document)
@@ -680,7 +690,9 @@ class AutohomeCollector:
         else:
             visibility = "unknown"
         if not content_proven:
-            raise CollectorFailure("POST_CONTENT_MISSING", "汽车之家帖子没有返回真实正文或媒体证明。")
+            raise CollectorFailure(
+                "POST_CONTENT_MISSING", "汽车之家帖子没有返回真实正文或媒体证明。"
+            )
         if not comments_complete:
             raise CollectorFailure(
                 "POST_COMMENTS_INCOMPLETE",
@@ -775,12 +787,14 @@ class AutohomeCollector:
                     break
             time_values = row.xpath(f".//*[{_class_tokens('reply-top')}]//strong/text()")
             published_at = next(
-                (parsed for value in reversed(time_values) if (parsed := _parse_platform_time(value))),
+                (
+                    parsed
+                    for value in reversed(time_values)
+                    if (parsed := _parse_platform_time(value))
+                ),
                 None,
             )
-            like_values = row.xpath(
-                f".//*[{_class_tokens('reply-bottom-praise')}]//strong/text()"
-            )
+            like_values = row.xpath(f".//*[{_class_tokens('reply-bottom-praise')}]//strong/text()")
             comments.append(
                 {
                     "platform_comment_id": reply_id,
@@ -880,7 +894,9 @@ class AutohomeCollector:
 
             cursor = 0
             while cursor < len(candidates) and len(records) < target_count:
-                batch = candidates[cursor : cursor + min(self.concurrency, target_count - len(records))]
+                batch = candidates[
+                    cursor : cursor + min(self.concurrency, target_count - len(records))
+                ]
                 cursor += len(batch)
 
                 def fetch(value: dict[str, Any]) -> tuple[dict[str, Any], Any, Any]:
@@ -904,7 +920,9 @@ class AutohomeCollector:
                     if isinstance(error, CollectorFailure) or record is None:
                         failure = {
                             "url": candidate["url"],
-                            "code": error.code if isinstance(error, CollectorFailure) else "POST_NOT_FOUND",
+                            "code": error.code
+                            if isinstance(error, CollectorFailure)
+                            else "POST_NOT_FOUND",
                             "message": (
                                 error.message
                                 if isinstance(error, CollectorFailure)

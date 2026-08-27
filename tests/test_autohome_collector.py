@@ -54,7 +54,7 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertEqual("not_integrated", spec.adapter_status)
         self.assertIsNotNone(spec.collector_factory)
         self.assertFalse(spec.supports_page_evidence)
-        self.assertFalse(spec.supports_live_video_resolution)
+        self.assertTrue(spec.supports_live_video_resolution)
         self.assertEqual(1, spec.max_concurrency)
 
         collector = AutohomeCollector(None, concurrency=99)
@@ -62,9 +62,7 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertTrue(collector.supports_live_video_resolution)
 
     def test_source_order_and_post_identity_are_normalized(self) -> None:
-        replied = parse_circle_url(
-            "https://club.autohome.com.cn/bbs/forum-c-8232-9.html?sort=post"
-        )
+        replied = parse_circle_url("https://club.autohome.com.cn/bbs/forum-c-8232-9.html?sort=post")
         published = parse_circle_url(
             "https://club.autohome.com.cn/bbs/forum-c-8232-2.html?sort=topic"
         )
@@ -96,9 +94,9 @@ class AutohomeContractTests(unittest.TestCase):
             return FakeResponse(json.dumps(payload).encode(), url)
 
         collector._get = fake_get  # type: ignore[method-assign]
-        collector._list_page(parse_circle_url(
-            "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=topic"
-        ), 2)
+        collector._list_page(
+            parse_circle_url("https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=topic"), 2
+        )
 
         self.assertEqual(2, calls[0][1]["page_num"])
         self.assertEqual(50, calls[0][1]["page_size"])
@@ -222,6 +220,7 @@ class AutohomeContractTests(unittest.TestCase):
         window.__VIDEOINFO__ = {"videoid":"VIDEO-ONLY"};
         </script><h1 class="post-title">仅标题</h1></body></html>
         """.encode()
+
         class CollectorWithoutObservedMediaResponse(AutohomeCollector):
             def _video_media_response(self, video_id: str) -> None:
                 _ = video_id
@@ -281,9 +280,7 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertTrue(all("VIDEO-ONLY-" in url for url in record["video_urls"]))
         self.assertEqual("visible", record["visibility"])
         self.assertEqual("resolved", record["raw_status"]["video_url_resolution"])
-        self.assertEqual(
-            "ahvp-gpi-v1", record["raw_status"]["video_media_response_kind"]
-        )
+        self.assertEqual("ahvp-gpi-v1", record["raw_status"]["video_media_response_kind"])
         self.assertEqual(
             (VIDEO_MEDIA_URL, {"mid": "VIDEO-ONLY", "ft": "mp4", "strategy": 1}),
             calls[1],
@@ -295,9 +292,7 @@ class AutohomeContractTests(unittest.TestCase):
                 "EXPECTED",
                 VideoMediaResolution(
                     video_id="OTHER",
-                    video_urls=(
-                        "https://media.example.test/OTHER-300.mp4?key=SIGNATURE",
-                    ),
+                    video_urls=("https://media.example.test/OTHER-300.mp4?key=SIGNATURE",),
                     response_kind="frozen-test-response",
                 ),
             )

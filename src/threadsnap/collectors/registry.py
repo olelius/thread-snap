@@ -93,9 +93,7 @@ PLATFORM_ADAPTERS: dict[str, PlatformAdapterSpec] = {
         supports_authentication=True,
         supports_page_evidence=True,
         supports_live_video_resolution=True,
-        login_url=(
-            "https://www.dongchedi.com/login-required?redirect=%2Fcommunity%2F24729"
-        ),
+        login_url=("https://www.dongchedi.com/login-required?redirect=%2Fcommunity%2F24729"),
         auth_probe_circle_url="https://www.dongchedi.com/community/24729",
         auth_url_markers=("/login-required",),
     ),
@@ -111,7 +109,7 @@ PLATFORM_ADAPTERS: dict[str, PlatformAdapterSpec] = {
         max_concurrency=1,
         supports_authentication=False,
         supports_page_evidence=False,
-        supports_live_video_resolution=False,
+        supports_live_video_resolution=True,
     ),
     "yiche": PlatformAdapterSpec(
         code="yiche",
