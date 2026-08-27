@@ -40,6 +40,7 @@ from threadsnap.models import (
     PlatformSession,
     PostSnapshot,
     ScheduleEvent,
+    ScheduleNode,
     ScheduleNodeRule,
     ScreenshotArtifactGroup,
     SentimentAnalysis,
@@ -3201,8 +3202,8 @@ class QueueAndRetryTests(AppCase):
             tasks = list(db.scalars(select(CircleTask)))
             self.assertEqual([circle.id], [task.circle_id for task in tasks])
 
-    def test_recurring_schedule_conflicts_with_weekly_and_triggers_inclusive_end(self) -> None:
-        """两类计划按实际秒冲突；循环开始与恰好命中的结束都触发。"""
+    def test_cross_type_same_second_creates_independent_fifo_batches(self) -> None:
+        """每周与循环计划允许同秒触发，并以独立类型稳定进入 FIFO。"""
 
         circle = self.save_verified_circle(name="循环计划圈")
         with self.container.sessions.begin() as db:
@@ -3224,7 +3225,7 @@ class QueueAndRetryTests(AppCase):
             "enabled": True,
             "rule_ids": [rule["id"]],
         }
-        conflict = self.client.put(
+        saved = self.client.put(
             "/api/v1/extraction-plan",
             json={
                 "revision": 1,
@@ -3233,27 +3234,11 @@ class QueueAndRetryTests(AppCase):
                     {
                         "id": "weekly-node-0001",
                         "weekdays": [4],
-                        "time": "10:05:00",
+                        "time": "10:00:00",
                         "enabled": True,
                         "rule_ids": [rule["id"]],
                     }
                 ],
-                "recurring_nodes": [recurring],
-            },
-        )
-        self.assertEqual(400, conflict.status_code, conflict.text)
-        self.assertEqual("SCHEDULE_NODE_TIME_CONFLICT", conflict.json()["code"])
-        self.assertEqual(
-            ["recurring-node-0001", "weekly-node-0001"],
-            sorted(conflict.json()["details"][0]["node_ids"]),
-        )
-
-        saved = self.client.put(
-            "/api/v1/extraction-plan",
-            json={
-                "revision": 1,
-                "rules": [rule],
-                "nodes": [],
                 "recurring_nodes": [recurring],
             },
         )
@@ -3270,27 +3255,151 @@ class QueueAndRetryTests(AppCase):
             assert run is not None
             triggered.append(run["id"])
         self.assertEqual(3, len(set(triggered)))
-        self.assertTrue(
-            all(self.container.runs.get_run(run_id)["trigger_type"] == "recurring" for run_id in triggered)
-        )
-        self.assertTrue(
-            all(self.container.runs.get_run(run_id)["trigger_type_name"] == "循环计划" for run_id in triggered)
-        )
         self.assertIsNone(
             self.container.scheduler.tick(datetime(2026, 8, 14, 2, 11, tzinfo=timezone.utc))
         )
         with self.container.sessions() as db:
             events = list(
                 db.scalars(
-                    select(ScheduleEvent)
-                    .where(ScheduleEvent.schedule_node_id == recurring["id"])
-                    .order_by(ScheduleEvent.planned_at)
+                    select(ScheduleEvent).order_by(ScheduleEvent.planned_at, ScheduleEvent.id)
                 )
             )
             self.assertEqual(
-                ["02:00:00", "02:05:00", "02:10:00"],
+                ["02:00:00", "02:00:00", "02:05:00", "02:10:00"],
                 [item.planned_at.strftime("%H:%M:%S") for item in events],
             )
+            tasks = list(db.scalars(select(CircleTask).order_by(CircleTask.queue_sequence)))
+            runs = [db.get(ExtractionRun, task.run_id) for task in tasks]
+            self.assertEqual([1, 2, 3, 4], [task.queue_sequence for task in tasks])
+            self.assertEqual(
+                ["scheduled", "recurring", "recurring", "recurring"],
+                [run.trigger_type for run in runs if run],
+            )
+            self.assertEqual(4, len({task.run_id for task in tasks}))
+
+    def test_same_type_schedule_nodes_still_conflict(self) -> None:
+        """同类型节点保持实际触发秒唯一，跨类型放行不削弱内部排重。"""
+
+        circle = self.save_verified_circle(name="同类型冲突圈")
+        rule = {
+            "id": "rule-same-type-conflict",
+            "name": "同类型冲突规则",
+            "platform_quantities": {"dongchedi": 1},
+            "circle_ids": [circle.id],
+        }
+        weekly_conflict = self.client.put(
+            "/api/v1/extraction-plan",
+            json={
+                "revision": 1,
+                "rules": [rule],
+                "nodes": [
+                    {
+                        "id": f"weekly-conflict-{index}",
+                        "weekdays": [4],
+                        "time": "10:00:00",
+                        "enabled": True,
+                        "rule_ids": [rule["id"]],
+                    }
+                    for index in range(2)
+                ],
+                "recurring_nodes": [],
+            },
+        )
+        self.assertEqual(400, weekly_conflict.status_code, weekly_conflict.text)
+        self.assertEqual("SCHEDULE_NODE_TIME_CONFLICT", weekly_conflict.json()["code"])
+        self.assertEqual("weekly", weekly_conflict.json()["details"][0]["node_type"])
+
+        recurring_conflict = self.client.put(
+            "/api/v1/extraction-plan",
+            json={
+                "revision": 1,
+                "rules": [rule],
+                "nodes": [],
+                "recurring_nodes": [
+                    {
+                        "id": f"recurring-conflict-{index}",
+                        "weekdays": [4],
+                        "start_time": start,
+                        "end_time": "10:15:00",
+                        "interval_minutes": 5,
+                        "enabled": True,
+                        "rule_ids": [rule["id"]],
+                    }
+                    for index, start in enumerate(("10:00:00", "10:05:00"))
+                ],
+            },
+        )
+        self.assertEqual(400, recurring_conflict.status_code, recurring_conflict.text)
+        self.assertEqual("SCHEDULE_NODE_TIME_CONFLICT", recurring_conflict.json()["code"])
+        self.assertTrue(
+            all(
+                item["node_type"] == "recurring"
+                for item in recurring_conflict.json()["details"]
+            )
+        )
+
+    def test_scheduler_blocks_abnormal_same_type_persisted_conflict(self) -> None:
+        """运行期发现异常同类型冲突时记录阻止事件，不任意创建其中一个批次。"""
+
+        circle = self.save_verified_circle(name="运行期冲突圈")
+        with self.container.sessions.begin() as db:
+            stored = db.get(Circle, circle.id)
+            assert stored is not None
+            stored.auto_enabled = True
+        rule = {
+            "id": "rule-runtime-conflict",
+            "name": "运行期冲突规则",
+            "platform_quantities": {"dongchedi": 1},
+            "circle_ids": [circle.id],
+        }
+        saved = self.client.put(
+            "/api/v1/extraction-plan",
+            json={
+                "revision": 1,
+                "rules": [rule],
+                "nodes": [
+                    {
+                        "id": "weekly-runtime-conflict-1",
+                        "weekdays": [4],
+                        "time": "10:00:00",
+                        "enabled": True,
+                        "rule_ids": [rule["id"]],
+                    }
+                ],
+                "recurring_nodes": [],
+            },
+        )
+        self.assertEqual(200, saved.status_code, saved.text)
+        with self.container.sessions.begin() as db:
+            db.add(
+                ScheduleNode(
+                    id="weekly-runtime-conflict-2",
+                    node_type="weekly",
+                    weekdays=[4],
+                    time_of_day="10:00:00",
+                    enabled=True,
+                    legacy_rule_id=rule["id"],
+                )
+            )
+            db.add(
+                ScheduleNodeRule(
+                    schedule_node_id="weekly-runtime-conflict-2",
+                    rule_id=rule["id"],
+                    position=0,
+                )
+            )
+
+        outcome = self.container.scheduler.tick(
+            datetime(2026, 8, 14, 2, 0, tzinfo=timezone.utc)
+        )
+        self.assertIsNone(outcome)
+        with self.container.sessions() as db:
+            events = list(db.scalars(select(ScheduleEvent).order_by(ScheduleEvent.id)))
+            runs = list(db.scalars(select(ExtractionRun)))
+            self.assertEqual([], runs)
+            self.assertEqual(2, len(events))
+            self.assertEqual({"blocked"}, {event.status for event in events})
+            self.assertTrue(all("每周计划存在同秒启用节点" in event.message for event in events))
 
     def test_automatic_auth_refresh_retries_inside_same_run(self) -> None:
         circle = self.save_verified_circle()
