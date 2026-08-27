@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
@@ -20,10 +20,9 @@ class ExtractionRuleDraft(StrictModel):
     screenshot_enabled: bool = True
 
 
-class ScheduleNodeDraft(StrictModel):
+class ScheduleNodeBase(StrictModel):
     id: str = Field(min_length=8, max_length=36)
     weekdays: list[int] = Field(min_length=1)
-    time: str
     enabled: bool = True
     rule_ids: list[str] = Field(min_length=1)
 
@@ -41,9 +40,10 @@ class ScheduleNodeDraft(StrictModel):
             raise ValueError("规则 ID 长度必须在 8 到 36 个字符之间")
         return list(dict.fromkeys(values))
 
-    @field_validator("time")
     @classmethod
-    def validate_time(cls, value: str) -> str:
+    def normalized_time(cls, value: str) -> str:
+        """校验并规范化计划节点使用的时分秒。"""
+
         parts = value.split(":")
         if len(parts) != 3 or not all(part.isdigit() for part in parts):
             raise ValueError(f"时间 {value} 必须使用 HH:mm:ss 格式")
@@ -53,10 +53,37 @@ class ScheduleNodeDraft(StrictModel):
         return f"{hour:02d}:{minute:02d}:{second:02d}"
 
 
+class ScheduleNodeDraft(ScheduleNodeBase):
+    time: str
+
+    @field_validator("time")
+    @classmethod
+    def validate_time(cls, value: str) -> str:
+        return cls.normalized_time(value)
+
+
+class RecurringScheduleNodeDraft(ScheduleNodeBase):
+    start_time: str
+    end_time: str
+    interval_minutes: int = Field(ge=1, le=1440)
+
+    @field_validator("start_time", "end_time")
+    @classmethod
+    def validate_time(cls, value: str) -> str:
+        return cls.normalized_time(value)
+
+    @model_validator(mode="after")
+    def validate_window(self) -> "RecurringScheduleNodeDraft":
+        if self.start_time >= self.end_time:
+            raise ValueError("循环计划开始时间必须早于结束时间，且不支持跨午夜")
+        return self
+
+
 class ExtractionPlanUpdate(StrictModel):
     revision: int = Field(ge=1)
     rules: list[ExtractionRuleDraft] = Field(default_factory=list)
     nodes: list[ScheduleNodeDraft] = Field(default_factory=list)
+    recurring_nodes: list[RecurringScheduleNodeDraft] = Field(default_factory=list)
 
 
 class PlatformConfigUpdate(StrictModel):

@@ -1,4 +1,4 @@
-"""每周计划节点调度器。"""
+"""每周与循环计划节点的全局调度器。"""
 
 from __future__ import annotations
 
@@ -11,11 +11,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import ScheduleConfig, ScheduleEvent, ScheduleNode
+from .schedule_times import schedule_node_trigger_times
 from .services import RunService
 
 
 class SchedulerService:
-    """按星期与秒级时间触发节点，进程停机期间的节点不补跑。"""
+    """按实际星期与秒级触发点执行节点，进程停机期间不补跑。"""
 
     def __init__(
         self,
@@ -74,33 +75,40 @@ class SchedulerService:
                 )
             )
             for node in nodes:
-                hour, minute, second = (int(part) for part in node.time_of_day.split(":"))
-                for day_offset in (1, 0):
-                    day = (local_now - timedelta(days=day_offset)).date()
-                    if day.weekday() not in node.weekdays:
-                        continue
-                    planned_local = datetime(
-                        day.year,
-                        day.month,
-                        day.day,
-                        hour,
-                        minute,
-                        second,
-                        tzinfo=zone,
-                    )
-                    planned_at = planned_local.astimezone(timezone.utc)
-                    if not window_start < planned_at <= current:
-                        continue
-                    existing = db.scalar(
-                        select(ScheduleEvent).where(
-                            ScheduleEvent.planned_at == planned_at,
-                            ScheduleEvent.schedule_node_id == node.id,
+                trigger_times = schedule_node_trigger_times(
+                    node.node_type,
+                    node.time_of_day,
+                    node.end_time_of_day,
+                    node.interval_minutes,
+                )
+                for trigger_time in trigger_times:
+                    hour, minute, second = (int(part) for part in trigger_time.split(":"))
+                    for day_offset in (1, 0):
+                        day = (local_now - timedelta(days=day_offset)).date()
+                        if day.weekday() not in node.weekdays:
+                            continue
+                        planned_local = datetime(
+                            day.year,
+                            day.month,
+                            day.day,
+                            hour,
+                            minute,
+                            second,
+                            tzinfo=zone,
                         )
-                    )
-                    if not existing:
-                        due.append((planned_at, node.id, config.revision))
+                        planned_at = planned_local.astimezone(timezone.utc)
+                        if not window_start < planned_at <= current:
+                            continue
+                        existing = db.scalar(
+                            select(ScheduleEvent).where(
+                                ScheduleEvent.planned_at == planned_at,
+                                ScheduleEvent.schedule_node_id == node.id,
+                            )
+                        )
+                        if not existing:
+                            due.append((planned_at, node.id, config.revision))
         latest: dict | None = None
-        for planned_at, node_id, revision in due:
+        for planned_at, node_id, revision in sorted(due):
             latest = self.run_service.create_scheduled(planned_at, node_id, revision)
             if latest and self.event_publisher:
                 self.event_publisher(

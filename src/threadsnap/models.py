@@ -90,8 +90,11 @@ class ScheduleNode(Base):
     __table_args__ = (Index("ix_schedule_nodes_enabled_time", "enabled", "time_of_day"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
+    node_type: Mapped[str] = mapped_column(String(16), nullable=False, default="weekly")
     weekdays: Mapped[list[int]] = mapped_column(JSON, nullable=False, default=list)
     time_of_day: Mapped[str] = mapped_column(String(8), nullable=False)
+    end_time_of_day: Mapped[str | None] = mapped_column(String(8))
+    interval_minutes: Mapped[int | None] = mapped_column(Integer)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     legacy_rule_id: Mapped[str] = mapped_column(
         "rule_id",

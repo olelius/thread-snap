@@ -31,12 +31,24 @@ export type ScheduleNode = {
   updated_at: string
 }
 
+export type RecurringScheduleNode = {
+  id: string
+  weekdays: number[]
+  start_time: string
+  end_time: string
+  interval_minutes: number
+  enabled: boolean
+  rule_ids: string[]
+  updated_at: string
+}
+
 export type ExtractionPlan = {
   timezone: string
   revision: number
   rules: ExtractionRule[]
   archived_rules: ExtractionRule[]
   nodes: ScheduleNode[]
+  recurring_nodes: RecurringScheduleNode[]
 }
 
 export type Circle = {
@@ -61,7 +73,7 @@ export type Vehicle = { id: string; name: string; circles: Circle[] }
 export type Run = {
   id: string
   number: string
-  trigger_type: 'manual' | 'scheduled'
+  trigger_type: 'manual' | 'scheduled' | 'recurring'
   trigger_type_name: string
   input_mode: 'circle_discovery' | 'url_list'
   status: string
