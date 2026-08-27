@@ -301,12 +301,12 @@ class ConfigService:
                     "计划节点引用了当前计划中不存在的规则。",
                     details=missing_refs,
                 )
-            conflicts: dict[tuple[int, str], list[str]] = {}
+            conflicts: dict[tuple[str, int, str], list[str]] = {}
             for node in value.nodes:
                 if not node.enabled:
                     continue
                 for weekday in node.weekdays:
-                    conflicts.setdefault((weekday, node.time), []).append(node.id)
+                    conflicts.setdefault(("weekly", weekday, node.time), []).append(node.id)
             for node in value.recurring_nodes:
                 if not node.enabled:
                     continue
@@ -318,16 +318,23 @@ class ConfigService:
                 )
                 for weekday in node.weekdays:
                     for trigger_time in trigger_times:
-                        conflicts.setdefault((weekday, trigger_time), []).append(node.id)
+                        conflicts.setdefault(("recurring", weekday, trigger_time), []).append(
+                            node.id
+                        )
             duplicated = [
-                {"weekday": key[0], "time": key[1], "node_ids": ids}
+                {
+                    "node_type": key[0],
+                    "weekday": key[1],
+                    "time": key[2],
+                    "node_ids": ids,
+                }
                 for key, ids in conflicts.items()
                 if len(ids) > 1
             ]
             if duplicated:
                 raise DomainError(
                     "SCHEDULE_NODE_TIME_CONFLICT",
-                    "启用的每周计划或循环计划在同一星期和触发时刻发生冲突。",
+                    "启用的同类型计划节点在同一星期和触发时刻发生冲突。",
                     details=duplicated,
                 )
             platforms = list(db.scalars(select(PlatformConfig)))

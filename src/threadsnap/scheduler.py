@@ -60,7 +60,7 @@ class SchedulerService:
         if window_start > current:
             window_start = current - timedelta(seconds=max(self.poll_seconds, 1.0))
         self.last_tick_at = current
-        due: list[tuple[datetime, str, int]] = []
+        due: list[tuple[datetime, str, str, int, bool]] = []
         with self.factory() as db:
             config = db.get(ScheduleConfig, 1)
             if not config:
@@ -74,13 +74,24 @@ class SchedulerService:
                     .order_by(ScheduleNode.time_of_day, ScheduleNode.id)
                 )
             )
-            for node in nodes:
-                trigger_times = schedule_node_trigger_times(
+            node_trigger_times = {
+                node.id: schedule_node_trigger_times(
                     node.node_type,
                     node.time_of_day,
                     node.end_time_of_day,
                     node.interval_minutes,
                 )
+                for node in nodes
+            }
+            trigger_owners: dict[tuple[str, int, str], list[str]] = {}
+            for node in nodes:
+                for weekday in node.weekdays:
+                    for trigger_time in node_trigger_times[node.id]:
+                        trigger_owners.setdefault(
+                            (node.node_type, weekday, trigger_time), []
+                        ).append(node.id)
+            for node in nodes:
+                trigger_times = node_trigger_times[node.id]
                 for trigger_time in trigger_times:
                     hour, minute, second = (int(part) for part in trigger_time.split(":"))
                     for day_offset in (1, 0):
@@ -106,9 +117,33 @@ class SchedulerService:
                             )
                         )
                         if not existing:
-                            due.append((planned_at, node.id, config.revision))
+                            conflict = (
+                                len(trigger_owners[(node.node_type, day.weekday(), trigger_time)])
+                                > 1
+                            )
+                            due.append(
+                                (
+                                    planned_at,
+                                    node.node_type,
+                                    node.id,
+                                    config.revision,
+                                    conflict,
+                                )
+                            )
         latest: dict | None = None
-        for planned_at, node_id, revision in sorted(due):
+        type_order = {"weekly": 0, "recurring": 1}
+        ordered_due = sorted(
+            due,
+            key=lambda item: (
+                item[0],
+                type_order.get(item[1], 99),
+                item[2],
+            ),
+        )
+        for planned_at, node_type, node_id, revision, conflict in ordered_due:
+            if conflict:
+                self._record_same_type_conflict(planned_at, node_type, node_id, revision)
+                continue
             latest = self.run_service.create_scheduled(planned_at, node_id, revision)
             if latest and self.event_publisher:
                 self.event_publisher(
@@ -118,3 +153,32 @@ class SchedulerService:
                     status=latest["status"],
                 )
         return latest
+
+    def _record_same_type_conflict(
+        self,
+        planned_at: datetime,
+        node_type: str,
+        node_id: str,
+        revision: int,
+    ) -> None:
+        """为异常持久数据记录阻止事件，不任意选择同类型节点继续触发。"""
+
+        type_name = "循环计划" if node_type == "recurring" else "每周计划"
+        with self.factory.begin() as db:
+            existing = db.scalar(
+                select(ScheduleEvent).where(
+                    ScheduleEvent.planned_at == planned_at,
+                    ScheduleEvent.schedule_node_id == node_id,
+                )
+            )
+            if existing:
+                return
+            db.add(
+                ScheduleEvent(
+                    planned_at=planned_at,
+                    schedule_node_id=node_id,
+                    schedule_revision=revision,
+                    status="blocked",
+                    message=f"{type_name}存在同秒启用节点，整次节点触发已阻止。",
+                )
+            )
