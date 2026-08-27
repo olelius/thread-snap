@@ -6,9 +6,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
+from sqlalchemy import select
 
 from threadsnap.collectors.yiche import _parse_time
-from threadsnap.models import Circle, ExtractionRun, PlatformConfig, ValidationJob
+from threadsnap.models import (
+    Circle,
+    CircleTask,
+    ExtractionRun,
+    PlatformConfig,
+    ValidationJob,
+)
 from threadsnap.services import bootstrap_database
 
 try:
@@ -172,6 +179,89 @@ class YicheReleaseGateTests(AppCase):
             assert platform is not None
             self.assertEqual("not_integrated", platform.adapter_status)
             self.assertFalse(platform.enabled)
+
+    def test_bootstrap_closes_legacy_queued_and_running_runs(self) -> None:
+        with self.container.sessions.begin() as db:
+            platform = db.get(PlatformConfig, "yiche")
+            assert platform is not None
+            platform.adapter_status = "available"
+            platform.enabled = True
+
+        def create_run(key: str) -> str:
+            response = self.client.post(
+                "/api/v1/runs/manual",
+                json={
+                    "platform_code": "yiche",
+                    "circle_urls": ["https://baa.yiche.com/sample/"],
+                    "quantity": 1,
+                    "screenshot_enabled": False,
+                    "idempotency_key": key,
+                },
+            )
+            self.assertEqual(202, response.status_code, response.text)
+            return str(response.json()["id"])
+
+        queued_run_id = create_run("legacy-yiche-queued")
+        running_run_id = create_run("legacy-yiche-running")
+        history_run_id = create_run("legacy-yiche-success-history")
+        completed_at = datetime.now(timezone.utc)
+        with self.container.sessions.begin() as db:
+            running_run = db.get(ExtractionRun, running_run_id)
+            running_task = db.scalar(
+                select(CircleTask).where(CircleTask.run_id == running_run_id)
+            )
+            history_run = db.get(ExtractionRun, history_run_id)
+            history_task = db.scalar(
+                select(CircleTask).where(CircleTask.run_id == history_run_id)
+            )
+            assert running_run is not None and running_task is not None
+            assert history_run is not None and history_task is not None
+            running_run.status = "running"
+            running_run.started_at = completed_at
+            running_task.status = "running"
+            running_task.started_at = completed_at
+            history_run.status = "success"
+            history_run.completed_count = 1
+            history_run.finished_at = completed_at
+            history_task.status = "success"
+            history_task.completed_count = 1
+            history_task.finished_at = completed_at
+
+        with self.container.sessions.begin() as db:
+            bootstrap_database(db)
+
+        with self.container.sessions() as db:
+            platform = db.get(PlatformConfig, "yiche")
+            assert platform is not None
+            self.assertEqual("not_integrated", platform.adapter_status)
+            self.assertFalse(platform.enabled)
+            for run_id in (queued_run_id, running_run_id):
+                run = db.get(ExtractionRun, run_id)
+                task = db.scalar(select(CircleTask).where(CircleTask.run_id == run_id))
+                assert run is not None and task is not None
+                self.assertEqual("failed", task.status)
+                self.assertEqual("PLATFORM_NOT_INTEGRATED", task.error_code)
+                self.assertIsNotNone(task.finished_at)
+                self.assertEqual("failed", run.status)
+                self.assertIsNotNone(run.finished_at)
+            active_tasks = list(
+                db.scalars(
+                    select(CircleTask).where(
+                        CircleTask.platform_code == "yiche",
+                        CircleTask.status.in_(["queued", "running"]),
+                    )
+                )
+            )
+            self.assertEqual([], active_tasks)
+            history_run = db.get(ExtractionRun, history_run_id)
+            history_task = db.scalar(
+                select(CircleTask).where(CircleTask.run_id == history_run_id)
+            )
+            assert history_run is not None and history_task is not None
+            self.assertEqual("success", history_run.status)
+            self.assertEqual("success", history_task.status)
+            self.assertEqual(completed_at, history_run.finished_at)
+            self.assertEqual(completed_at, history_task.finished_at)
 
     def test_worker_fails_legacy_validation_job_after_release_gate_closes(self) -> None:
         with self.container.sessions.begin() as db:

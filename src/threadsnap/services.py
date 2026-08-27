@@ -89,6 +89,41 @@ def canonical_hash(value: Any) -> str:
     ).hexdigest()
 
 
+def _close_dormant_platform_tasks(db: Session, platform_codes: set[str]) -> None:
+    """把发布门关闭前遗留的活跃任务收口，避免永久滞留持久队列。"""
+
+    if not platform_codes:
+        return
+    message = "该平台尚未通过正式可用门，遗留提取任务已停止。"
+    run_ids: set[str] = set()
+    tasks = list(
+        db.scalars(
+            select(CircleTask).where(
+                CircleTask.platform_code.in_(platform_codes),
+                CircleTask.status.in_(["queued", "running", "waiting_for_auth"]),
+            )
+        )
+    )
+    if not tasks:
+        return
+    finished_at = utc_now()
+    for task in tasks:
+        task.status = "failed"
+        task.error_code = "PLATFORM_NOT_INTEGRATED"
+        task.error_message = message
+        task.stop_reason = message
+        task.finished_at = finished_at
+        run_ids.add(task.run_id)
+    db.flush()
+    for run_id in run_ids:
+        run = db.get(ExtractionRun, run_id)
+        if not run:
+            continue
+        aggregate_run(db, run)
+        if run.status == "failed":
+            run.error_message = message
+
+
 def bootstrap_database(db: Session) -> None:
     """写入第一版平台目录和计划配置默认值。"""
 
@@ -123,6 +158,10 @@ def bootstrap_database(db: Session) -> None:
             if spec.adapter_status != "available":
                 existing.adapter_status = "not_integrated"
                 existing.enabled = False
+    _close_dormant_platform_tasks(
+        db,
+        {spec.code for spec in platform_specs() if spec.adapter_status != "available"},
+    )
     if not db.get(ScheduleConfig, 1):
         db.add(ScheduleConfig(id=1, timezone_name="Asia/Shanghai", revision=1))
 

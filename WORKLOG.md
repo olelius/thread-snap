@@ -24,9 +24,10 @@
 - [x] 易车适配器按真实页面的两个列表顺序、50条列表响应、圈子与帖子联合身份、结构化正文、原图、直连MP4和最多10条一级评论映射；动态签名不逆向，使用 Patchright 页面引导并监听真实XHR。
 - [x] TencentCaptcha/WAF、平台业务码、429、空响应、错帖、私有区混淆和未验证评论翻页组合均失败关闭；挑战页不计有效结果，认证等待保留已完成检查点。
 - [x] services、worker、auth 和前端已改用平台定义；易车代码注册但发布门为false，bootstrap会把历史误开放状态降回 `not_integrated`，配置、任务、认证和Worker运行入口均遵守该门。发布后配置来源、手动提取、每周/循环计划、平台FIFO、详情、主评论与XLSX复用既有公共链。
-- [x] Review补齐：评论API业务错误优先检查、请求contentId身份、可靠终止证明和业务码分类；圈子冻结 `forum_id + seo_name + forum_name`，现有external_id继续保存slug；列表冻结首个total；详情核对最终URL与圈子；易车本地时间按Asia/Shanghai解释；完整成功链标记visible并保存脱敏证明；主文档先识别WAF再分类HTTP，使实测203验证码进入认证等待而203普通文档保持HTTP错误。
+- [x] Review补齐：评论API业务错误优先检查、请求contentId身份、可靠终止证明和业务码分类；圈子冻结 `forum_id + seo_name + forum_name`，现有external_id继续保存slug；列表冻结首个total；详情核对最终URL与圈子；易车本地时间按Asia/Shanghai解释；完整成功链标记visible并保存脱敏证明；主文档先识别WAF再分类HTTP，最初203只有在捕获到最终URL对应的后续主文档200时继续，否则验证码进入认证等待、普通文档保持HTTP错误。
+- [x] bootstrap回退未发布平台时同步把遗留 `queued`、`running` 和 `waiting_for_auth` 圈子任务以稳定 `PLATFORM_NOT_INTEGRATED` 收口并重新聚合批次，清空该平台活跃队列且不修改既有成功终态历史。
 - [x] 易车尚无页面证据能力，后端手动与计划明确拒绝截图，前端按平台能力禁用并说明；手动切换平台同时清除已选圈子和两类URL输入，避免隐藏旧平台输入。
-- [x] 本地门禁：`python -m unittest discover -s tests -v` 为 `172 / 172 OK`（131.639s）；`ruff check src tests`、`compileall -q src tests`、`pip check`、前端 `npm run check`、`npm run build`（2468 modules）均通过。
+- [x] 本地门禁：`python -m unittest discover -s tests -v` 为 `174 / 174 OK`（101.598s）；易车专项为 `32 / 32 OK`；`ruff check src tests`、`compileall -q src tests`、`pip check`、前端 `npm run check`、`npm run build`（2468 modules）均通过。
 **下一步**：独立复核本实现修复提交；随后以事前冻结的500个不同有效URL从头执行易车正式 `500 / 500`、真实页面配置/任务/XLSX闭环和环境证据；补齐当前未观察的0条、10+及多页评论覆盖或如实保留缺口。
 **边界**：未把动态请求头、追踪ID、真实业务清单、页面原文或Session写入Git；未实现口碑指标；未用 `hasMore`/`totalPage` 的不可靠值终止；未把本地fixture或单样本解析升级为正式500条通过。
 **关联**：`src/threadsnap/collectors/base.py`、`src/threadsnap/collectors/yiche.py`、`docs/chains/later-platform-delivery.md`、`docs/research/later-platform-onboarding-plan.md`

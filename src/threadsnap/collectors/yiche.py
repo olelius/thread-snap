@@ -241,6 +241,16 @@ class YicheCollector:
             # 腾讯 WAF 实测可能以 203 返回；控制文档身份必须先于通用 HTTP 分类。
             if is_waf_captcha(content):
                 require_content_page(content, url=url)
+            final_url = page.url
+            # goto 可能只返回挑战阶段的 203；仅以最终 URL 的后续主文档响应覆盖它。
+            for item in responses:
+                request = getattr(item, "request", None)
+                if (
+                    getattr(request, "resource_type", None) == "document"
+                    and urlsplit(str(getattr(item, "url", "")))._replace(fragment="")
+                    == urlsplit(final_url)._replace(fragment="")
+                ):
+                    status = item.status
             if status == 429:
                 raise CollectorFailure("RATE_LIMITED", "易车页面返回限流状态，请稍后重试。")
             if status in {401, 403}:
@@ -270,7 +280,7 @@ class YicheCollector:
                         ),
                     )
                 )
-            return content, events, page.url
+            return content, events, final_url
         finally:
             page.remove_listener("response", handler)
 
