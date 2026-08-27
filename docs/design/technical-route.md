@@ -393,6 +393,15 @@ Linux PoC 运行器必须把每个候选放入独立进程组；候选入口退�
 - 功能样本由项目从发现池按已观察事实分层生成，保存选样依据与 `not_observed` 覆盖缺口；平台没有提供的字段保持为空，状态证据不足时保存 `unknown`，不构造人工期望值冒充平台事实。
 - 访问模式先匿名、后按需认证。确需认证时使用该平台独立的服务器Profile与加密Session，复用官方登录、真实社区样本门禁、有界刷新、`waiting_for_auth`和平台FIFO隔离；项目负责建立和验证运行条件，账号密码、Cookie、令牌及完整Session不进入业务配置、Git、日志、前端或导出。
 - 汽车之家和易车的口碑车型映射工具只生成候选稳定车型ID、规范URL、展示名称与身份依据，再送入现有草稿和真实验证合同；车型名称不参与自动发布或自动改绑。
+
+### 易车已确认的适配路径
+
+- 易车社区来源以 `baa.yiche.com/<seoName>/` 为稳定入口；最新回复和最新发布分别对应页面 `order=0/1`，规范化后作为两个独立来源。现有 `Circle.external_id` 继续保存规范 slug `seoName`，不新增数据库字段；圈子验证结果持久化 `forum_id + seo_name + forum_name`，并要求 `forum/getid`、`forum/get` 和列表首帖三者一致。列表页面固定请求50条，首屏冻结 `data.total`，后续页总量突变立即停止本次快照；实测 `hasMore` 在首尾页均不可作为终止依据。
+- 列表和一级评论接口要求页面运行期生成的动态签名请求头，评论还要求页面生成的用户标识；Cookie重放和手工拼接请求头均不能形成可靠请求。因此适配器以 Patchright 加载官方页面并监听该页面实际产生的 XHR 响应，不复制或猜测签名算法。
+- 帖子身份必须同时匹配请求圈子 slug 与帖子ID、最终导航URL、主贴 DOM `data-id`、列表 `forumApp/id`（列表来源）和 `DiscussionForumPosting.mainEntityOfPage`；只匹配数字ID不足以通过。正文优先读取结构化 `DiscussionForumPosting.text` 并拒绝私有区混淆字符；图片读取结构化列表或正文图片的 `data-original`，视频读取已验证的详情页 MP4 `source`。无时区时间按 `Asia/Shanghai` 解释后再进入统一时间存储，不能按UTC误存。
+- 一级评论只读取页面实际产生的 `top_comment_list`，并在内存核对请求 `contentId` 与当前帖子身份；最多保存10条，只有空 `list`、`haveNextPage=false`、`ceil(total/pageSize)` 数量边界或已达到10条上限才能形成终止证明，不依赖已观察到不稳定的 `totalPage`。即使页面回复数为0也先检查业务响应；DOM评论没有API身份和终止证明时失败关闭。当前尚未验证“首批不足10条但仍有下一页”的交互翻页路径，遇到该组合时失败关闭。
+- 最终主文档HTTP 200、最终URL/DOM/结构化身份一致、正文或媒体有效且评论API身份与终止证明通过时，标准状态为 `visible`，并在 `raw_status` 保存脱敏的文档、身份、评论成功与终止证明；隐藏或删除证据不足仍保存 `unknown`。TencentCaptcha/WAF 控制文档可能以HTTP 200或203出现，必须先按文档内容进入认证等待；最初203经挑战后只有捕获到与最终URL一致的后续主文档200才继续业务验证，203普通文档没有这项最终成功证明时仍为HTTP错误。业务码 `11036` 固定分类为缺页面公共参数，评论业务码 `400` 固定分类为缺帖子业务身份，错误只保留业务码而不记录动态头。
+- collector registry 可在本地复用易车解析器与样本测试，但 `adapter_status=not_integrated`；平台启用、来源验证、任务、认证和Worker只允许数据库平台状态为 `available` 的适配器进入运行链；休眠适配器只允许暂存来源，不验证、不自动参与。bootstrap把注册表声明休眠的适配器回退为 `not_integrated` 时，同时将该平台遗留的 `queued`、`running` 或 `waiting_for_auth` 圈子任务以 `PLATFORM_NOT_INTEGRATED` 收口并重新聚合批次，既有成功等终态历史保持不变。正式 `500 / 500` 未关闭前易车保持 `not_integrated`、不可启用且并发上限为1。易车尚未实现圈子页面证据，平台能力明确返回不可用，手动与计划触发时均按平台能力规范化为关闭并保留请求语义，前端同步禁用并说明。
 - 两个平台的口碑评价篇数与差评率采集路线保持未确认。相关页面或接口必须另行证明字段语义、分页或聚合方式、原始计数、计算规则和同期证据；验证完成前不把平台适配器标记为五指标口碑可运行。
 
 汽车之家首轮实现已确认 `club.autohome.com.cn` 论坛页的“最后回复”与“最新发布”分别对应列表接口 `club_order_type=1/2`；`page_size=50`，初始总数只作为冻结页数提示，同时以空页、重复页和绝对安全页数作为终止边界，避免实时列表变化或缺失总数造成无界翻页。详情以列表 `biz_id`、详情URL稳定ID、`__TOPICINFO__.topicId` 和 `__BBSINFO__.bbsId` 交叉校验；正文、实际图片或经播放器接口解析并绑定同一视频ID的实际视频URL才构成当前内容证明，未解析的视频ID和标题不单独算有效媒体。播放器脚本已证明 `GET https://p-vp.autohome.com.cn/api/gpi` 使用 `mid`、`ft=mp4`、`strategy=1`，只接受成功响应 `result.media.qualities[*].copy` 中带签名查询、HTTPS、MP4且路径绑定输入视频ID的地址。评论只读取SSR一级楼层并最多保存前10条；已有十条由产品截断上限证明完成，不足十条时只接受详情 `data-page-count=1` 与禁用下一页所代表的一页终止证据，否则整条以 `POST_COMMENTS_INCOMPLETE` 失败。显式非零删除标志映射为 `hidden`，三项删除证据均为零且内容成立时才映射为 `visible`，其余保留 `unknown`。

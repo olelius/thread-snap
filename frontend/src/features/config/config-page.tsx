@@ -293,13 +293,17 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
   const defaultQuantity = (platform: Platform) => Math.max(platform.quantity_range.min, Math.min(30, platform.quantity_range.max))
   const updateRules = (rules: ExtractionPlan['rules']) => setDraft({ ...draft, rules })
   const updateRule = (ruleId: string, transform: (rule: ExtractionPlan['rules'][number]) => ExtractionPlan['rules'][number]) => updateRules(draft.rules.map((item) => item.id === ruleId ? transform(item) : item))
+  const supportsRulePageEvidence = (circleIds: string[]) => circleIds.some((id) => {
+    const circle = allCircles.find((item) => item.id === id)
+    return allPlatforms.find((item) => item.code === circle?.platform_code)?.capabilities.page_evidence
+  })
   const toggleCircle = (ruleId: string, circle: Circle, checked: boolean) => updateRule(ruleId, (rule) => {
     const ids = checked ? [...new Set([...rule.circle_ids, circle.id])] : rule.circle_ids.filter((id) => id !== circle.id)
     const quantities = { ...rule.platform_quantities }
     const platform = allPlatforms.find((item) => item.code === circle.platform_code)
     if (checked && platform && quantities[platform.code] === undefined) quantities[platform.code] = defaultQuantity(platform)
     if (!ids.some((id) => allCircles.find((item) => item.id === id)?.platform_code === circle.platform_code)) delete quantities[circle.platform_code]
-    return { ...rule, circle_ids: ids, platform_quantities: quantities }
+    return { ...rule, circle_ids: ids, platform_quantities: quantities, screenshot_enabled: supportsRulePageEvidence(ids) ? rule.screenshot_enabled : false }
   })
   const togglePlatform = (ruleId: string, platform: Platform, checked: boolean) => updateRule(ruleId, (rule) => {
     const platformIds = enabledCircles.filter((circle) => circle.platform_code === platform.code).map((circle) => circle.id)
@@ -307,7 +311,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
     const quantities = { ...rule.platform_quantities }
     if (checked && platformIds.length && quantities[platform.code] === undefined) quantities[platform.code] = defaultQuantity(platform)
     if (!ids.some((id) => allCircles.find((circle) => circle.id === id)?.platform_code === platform.code)) delete quantities[platform.code]
-    return { ...rule, circle_ids: ids, platform_quantities: quantities }
+    return { ...rule, circle_ids: ids, platform_quantities: quantities, screenshot_enabled: supportsRulePageEvidence(ids) ? rule.screenshot_enabled : false }
   })
   const toggleListOrder = (ruleId: string, platform: Platform, listOrder: Circle['list_order'], checked: boolean) => updateRule(ruleId, (rule) => {
     const sourceIds = enabledCircles.filter((circle) => circle.platform_code === platform.code && circle.list_order === listOrder).map((circle) => circle.id)
@@ -315,7 +319,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
     const quantities = { ...rule.platform_quantities }
     if (checked && sourceIds.length && quantities[platform.code] === undefined) quantities[platform.code] = defaultQuantity(platform)
     if (!ids.some((id) => allCircles.find((circle) => circle.id === id)?.platform_code === platform.code)) delete quantities[platform.code]
-    return { ...rule, circle_ids: ids, platform_quantities: quantities }
+    return { ...rule, circle_ids: ids, platform_quantities: quantities, screenshot_enabled: supportsRulePageEvidence(ids) ? rule.screenshot_enabled : false }
   })
 
   const baselineRules = new Map((query.data?.rules ?? []).map((rule) => [rule.id, rule]))
@@ -325,6 +329,12 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
   const savedNodes = [...(query.data?.nodes ?? []), ...(query.data?.recurring_nodes ?? [])]
   const selectedRule = draft.rules.find((rule) => rule.id === selectedRuleId)
   const baselineSelectedRule = selectedRule ? baselineRules.get(selectedRule.id) : undefined
+  const selectedRuleEvidenceUnavailable = Boolean(selectedRule?.circle_ids.length) && !supportsRulePageEvidence(selectedRule?.circle_ids ?? [])
+  const selectedRuleEvidencePartial = Boolean(selectedRule?.circle_ids.some((id) => {
+    const circle = allCircles.find((item) => item.id === id)
+    const platform = allPlatforms.find((item) => item.code === circle?.platform_code)
+    return platform && !platform.capabilities.page_evidence
+  })) && !selectedRuleEvidenceUnavailable
   const ruleNameDirty = Boolean(selectedRule) && selectedRule?.name !== (baselineSelectedRule?.name ?? '')
   const search = ruleSearch.trim().toLocaleLowerCase('zh-CN')
   const filteredRules = draft.rules.filter((rule) => !search || `${rule.name} ${rule.id} ${rule.circle_ids.map((id) => { const circle = allCircles.find((item) => item.id === id); return circle ? sourceName(circle) : '' }).join(' ')}`.toLocaleLowerCase('zh-CN').includes(search))
@@ -376,8 +386,8 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
                   <Switch checked={selectedRule.ai_analysis_enabled} data-dirty={selectedRule.ai_analysis_enabled !== (baselineSelectedRule?.ai_analysis_enabled ?? true) || undefined} className={cn(selectedRule.ai_analysis_enabled !== (baselineSelectedRule?.ai_analysis_enabled ?? true) && dirtyControlClass)} onCheckedChange={(ai_analysis_enabled) => updateRule(selectedRule.id, (item) => ({ ...item, ai_analysis_enabled }))} />
                 </label>
                 <label className='flex cursor-pointer items-center justify-between gap-3 rounded-lg border bg-card/70 p-3'>
-                  <span><span className='block text-sm font-medium'>圈子页面截图</span><span className='mt-0.5 block text-xs text-muted-foreground'>保留原始全页并生成负面框选成果</span></span>
-                  <Switch checked={selectedRule.screenshot_enabled} data-dirty={selectedRule.screenshot_enabled !== (baselineSelectedRule?.screenshot_enabled ?? true) || undefined} className={cn(selectedRule.screenshot_enabled !== (baselineSelectedRule?.screenshot_enabled ?? true) && dirtyControlClass)} onCheckedChange={(screenshot_enabled) => updateRule(selectedRule.id, (item) => ({ ...item, screenshot_enabled }))} />
+                  <span><span className='block text-sm font-medium'>圈子页面截图</span><span className='mt-0.5 block text-xs text-muted-foreground'>{selectedRuleEvidenceUnavailable ? '所选平台尚未实现圈子页面证据' : selectedRuleEvidencePartial ? '仅为支持该能力的平台来源保存页面证据' : '保留原始全页并生成负面框选成果'}</span></span>
+                  <Switch checked={!selectedRuleEvidenceUnavailable && selectedRule.screenshot_enabled} disabled={selectedRuleEvidenceUnavailable} data-dirty={selectedRule.screenshot_enabled !== (baselineSelectedRule?.screenshot_enabled ?? true) || undefined} className={cn(selectedRule.screenshot_enabled !== (baselineSelectedRule?.screenshot_enabled ?? true) && dirtyControlClass)} onCheckedChange={(screenshot_enabled) => updateRule(selectedRule.id, (item) => ({ ...item, screenshot_enabled }))} />
                 </label>
               </div>
               {allPlatforms.map((platform) => {
@@ -684,7 +694,7 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
           <TableCell><Select value={row.platform_code} onValueChange={(platform_code) => update(index, { platform_code, auto_enabled: false })}><SelectTrigger data-dirty={platformDirty || undefined} className={cn(platformDirty && dirtyFieldClass)}><SelectValue /></SelectTrigger><SelectContent>{sourcePlatforms.map((item) => <SelectItem key={item.code} value={item.code}>{item.display_name}{item.adapter_status !== 'available' ? '（待验收）' : ''}</SelectItem>)}</SelectContent></Select></TableCell>
           <TableCell><Input value={row.vehicle_name ?? ''} data-dirty={vehicleDirty || undefined} className={cn(vehicleDirty && dirtyFieldClass)} onChange={(event) => { const vehicle_name = event.target.value; update(index, { vehicle_name, vehicle_id: vehicle_name === baseline?.vehicle_name ? baseline?.vehicle_id : undefined }) }} placeholder='例如：风云A9最新发布' /></TableCell>
           <TableCell><Input value={row.url} data-dirty={urlDirty || undefined} className={cn(urlDirty && dirtyFieldClass)} onChange={(event) => update(index, { url: event.target.value })} placeholder='圈子 URL' /></TableCell>
-          <TableCell><Badge variant='outline' className='font-normal'>{listOrderName(row.list_order || (row.url.includes('/dongtai-release') ? 'latest_publish' : 'latest_reply'))}</Badge></TableCell>
+          <TableCell><Badge variant='outline' className='font-normal'>{listOrderName(row.list_order || 'latest_reply')}</Badge></TableCell>
           <TableCell>{row.name || (row.id ? '等待验证' : '保存后验证')}</TableCell>
           <TableCell><div className='space-y-1'><StatusBadge value={row.validation_status === 'verified' ? 'success' : row.validation_status === 'failed' ? 'failed' : 'unknown'} label={{ verified: '已验证', failed: '验证失败', unverified: '未验证' }[row.validation_status] ?? row.validation_status} />{row.id && !integrated && <div className='text-xs text-muted-foreground'>平台接入验收后可验证</div>}{row.id && integrated && !row.first_validated_at && row.validation_status !== 'verified' && <div className='text-xs text-muted-foreground'>首次通过后自动参与</div>}</div></TableCell>
           <TableCell><Switch checked={row.auto_enabled} disabled={!integrated || row.validation_status !== 'verified'} data-dirty={autoDirty || undefined} className={cn(autoDirty && dirtyControlClass)} onCheckedChange={(auto_enabled) => update(index, { auto_enabled })} /></TableCell>

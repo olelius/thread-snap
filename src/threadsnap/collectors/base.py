@@ -116,6 +116,8 @@ class Collector(Protocol):
     display_name: str
     adapter_version: str
     concurrency: int
+    supports_page_evidence: bool
+    supports_live_video_resolution: bool
 
     def validate_circle(self, circle_url: str) -> dict[str, Any]: ...
 

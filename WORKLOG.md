@@ -16,6 +16,24 @@
 
 ---
 
+## 2026-08-27 — 实现易车社区适配器与公共接入闭环
+**总目标**：在不复制批次、调度、存储、API、前端和导出能力的前提下，以真实易车页面证据接入第二个平台帖子采集。
+**状态**：✅ 易车适配器、休眠门禁与公共业务链已在 `main@cac1b91` 的汽车之家共享抽象上完成重放和本地门禁。真实500条冻结清单与正式运行门未执行，平台仍为 `not_integrated` 且不可启用。
+**干到哪里了**：
+- [x] 复用 `main` 已有 collector registry/Protocol、验收 Provider 和媒体能力合同，只为易车补充真实解析器、URL规范化、认证入口与保守能力声明；懂车帝和汽车之家既有行为保持原合同。
+- [x] 易车适配器按真实页面的两个列表顺序、50条列表响应、圈子与帖子联合身份、结构化正文、原图、直连MP4和最多10条一级评论映射；动态签名不逆向，使用 Patchright 页面引导并监听真实XHR。
+- [x] TencentCaptcha/WAF、平台业务码、429、空响应、错帖、私有区混淆和未验证评论翻页组合均失败关闭；挑战页不计有效结果，认证等待保留已完成检查点。
+- [x] services、worker、auth 和前端统一读取平台注册项；易车解析器已注册但 `adapter_status=not_integrated`，bootstrap会把历史误开放状态降回休眠，平台启用、运行、认证和Worker入口均遵守数据库门禁。休眠期允许暂存来源但不验证、不自动参与；发布后手动提取、每周/循环计划、平台FIFO、详情、主评论与XLSX复用既有公共链。
+- [x] Review补齐：评论API业务错误优先检查、请求contentId身份、可靠终止证明和业务码分类；圈子冻结 `forum_id + seo_name + forum_name`，现有external_id继续保存slug；列表冻结首个total；详情核对最终URL与圈子；易车本地时间按Asia/Shanghai解释；完整成功链标记visible并保存脱敏证明；主文档先识别WAF再分类HTTP，最初203只有在捕获到最终URL对应的后续主文档200时继续，否则验证码进入认证等待、普通文档保持HTTP错误。
+- [x] bootstrap回退未发布平台时同步把遗留 `queued`、`running` 和 `waiting_for_auth` 圈子任务以稳定 `PLATFORM_NOT_INTEGRATED` 收口并重新聚合批次，清空该平台活跃队列且不修改既有成功终态历史。
+- [x] 易车尚无页面证据能力，后端在手动与计划任务快照中按平台注册能力规范化为关闭并保留请求语义，前端在纯易车范围禁用并说明；手动切换平台同时清除已选圈子和两类URL输入，避免隐藏旧平台输入。
+- [x] 重放后本地门禁：三平台与汽车之家/易车业务组合专项 `64 / 64 OK`；完整后端 `195 / 195 OK`（114.025s）；`ruff check src tests`、`compileall -q src tests`、`pip check`、前端 `npm run check`、`npm run build`（2468 modules）及 `git diff main...HEAD --check` 均通过。
+**下一步**：在重放后新HEAD上做独立复核；随后以事前冻结的500个不同有效URL从头执行易车正式 `500 / 500`、真实页面配置/任务/XLSX闭环和环境证据；补齐当前未观察的0条、10+及多页评论覆盖或如实保留缺口。
+**边界**：未把动态请求头、追踪ID、真实业务清单、页面原文或Session写入Git；未实现口碑指标；未用 `hasMore`/`totalPage` 的不可靠值终止；未把本地fixture或单样本解析升级为正式500条通过。
+**关联**：`src/threadsnap/collectors/base.py`、`src/threadsnap/collectors/yiche.py`、`docs/chains/later-platform-delivery.md`、`docs/research/later-platform-onboarding-plan.md`
+
+---
+
 ## 2026-08-27 — 汽车之家本地接入开发与休眠门禁
 **总目标**：在独立工作树中完成汽车之家本地接入开发，确认真实论坛来源、两个列表顺序和字段合同，贯通统一采集与固定500验收入口，并只让正式500/500决定平台何时启用。
 **状态**：✅ 本地适配器、实际视频URL、评论终止门禁、固定500执行器、界面门禁和共享业务组合闭环已完成；真实500/500尚未执行，因此平台注册仍正确保持 `not_integrated`。

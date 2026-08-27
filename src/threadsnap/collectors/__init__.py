@@ -3,7 +3,13 @@
 from .autohome import AutohomeCollector
 from .base import AuthenticationRequired, Collector, CollectorFailure
 from .dongchedi import DongchediCollector
-from .registry import PlatformAdapterSpec, get_platform_spec, platform_specs
+from .registry import (
+    PlatformAdapterSpec,
+    get_acceptance_provider,
+    get_platform_spec,
+    platform_specs,
+)
+from .yiche import YicheCollector
 
 __all__ = [
     "AuthenticationRequired",
@@ -12,6 +18,8 @@ __all__ = [
     "CollectorFailure",
     "DongchediCollector",
     "PlatformAdapterSpec",
+    "YicheCollector",
+    "get_acceptance_provider",
     "get_platform_spec",
     "platform_specs",
 ]
