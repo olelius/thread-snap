@@ -138,3 +138,13 @@ def platform_specs() -> tuple[PlatformAdapterSpec, ...]:
     """按稳定平台代码顺序返回所有平台注册项。"""
 
     return tuple(PLATFORM_ADAPTERS[code] for code in sorted(PLATFORM_ADAPTERS))
+
+
+def get_acceptance_provider(code: str) -> Any | None:
+    """返回独立验收桥；不读取或改变平台注册的接入状态。"""
+
+    if code != "autohome":
+        return None
+    from .autohome_acceptance import create_autohome_acceptance_provider
+
+    return create_autohome_acceptance_provider()
