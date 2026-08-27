@@ -46,7 +46,6 @@ from threadsnap.models import (
     ScheduleNodeRule,
     ScreenshotArtifactGroup,
     SentimentAnalysis,
-    ValidationJob,
     Vehicle,
 )
 from threadsnap.schemas import (
@@ -1496,14 +1495,30 @@ class ApiAndConfigTests(AppCase):
             assert platform is not None
         self.assertEqual(ADAPTER_VERSION, platform.adapter_version)
 
-    def test_autohome_registry_contract_keeps_gate_closed_until_temporary_test_enable(
-        self,
-    ) -> None:
-        """汽车之家已有真实输入合同，但正式 500/500 前仍保持未接入。"""
+    def test_bootstrap_promotes_published_adapter_without_enabling_it(self) -> None:
+        """平台注册发布后提升既有数据库状态，但不替用户打开平台。"""
+
+        with self.container.sessions.begin() as db:
+            platform = db.get(PlatformConfig, "autohome")
+            assert platform is not None
+            platform.adapter_status = "not_integrated"
+            platform.enabled = False
+
+        with self.container.sessions.begin() as db:
+            bootstrap_database(db)
+
+        with self.container.sessions() as db:
+            platform = db.get(PlatformConfig, "autohome")
+            assert platform is not None
+            self.assertEqual("available", platform.adapter_status)
+            self.assertFalse(platform.enabled)
+
+    def test_autohome_registry_contract_is_available_and_can_create_runs(self) -> None:
+        """本地发布状态允许显式启用并进入统一手动任务链。"""
 
         platforms = {item["code"]: item for item in self.client.get("/api/v1/platforms").json()}
         autohome = platforms["autohome"]
-        self.assertEqual("not_integrated", autohome["adapter_status"])
+        self.assertEqual("available", autohome["adapter_status"])
         self.assertFalse(autohome["enabled"])
         self.assertTrue(autohome["capabilities"]["source_configuration"])
         self.assertFalse(autohome["capabilities"]["authentication"])
@@ -1519,50 +1534,13 @@ class ApiAndConfigTests(AppCase):
             },
         )
         self.assertEqual(201, source.status_code, source.text)
-        self.assertEqual(
-            409,
-            self.client.post(f"/api/v1/circles/{source.json()['id']}/validate").status_code,
+        enabled = self.client.put(
+            "/api/v1/platforms/autohome",
+            json={"enabled": True, "internal_concurrency": 9},
         )
-        bulk = self.client.post("/api/v1/circles/validate-unverified")
-        self.assertEqual(202, bulk.status_code)
-        self.assertEqual(0, bulk.json()["total_count"])
-
-        with self.container.sessions.begin() as db:
-            stale_job = ValidationJob(circle_id=source.json()["id"])
-            db.add(stale_job)
-            db.flush()
-            stale_job_id = stale_job.id
-        with patch.object(
-            self.container.worker,
-            "_collector",
-            side_effect=AssertionError("未接入平台不得构造采集器"),
-        ):
-            self.assertTrue(self.container.worker.process_once())
-        with self.container.sessions() as db:
-            stale_job = db.get(ValidationJob, stale_job_id)
-            assert stale_job is not None
-            self.assertEqual("failed", stale_job.status)
-            self.assertEqual("PLATFORM_NOT_INTEGRATED", stale_job.error_code)
-
-        blocked = self.client.post(
-            "/api/v1/runs/manual",
-            json={
-                "platform_code": "autohome",
-                "circle_urls": [
-                    "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post"
-                ],
-                "quantity": 3,
-                "screenshot_enabled": True,
-                "idempotency_key": "autohome-formal-gate-closed",
-            },
-        )
-        self.assertEqual(409, blocked.status_code)
-
-        with self.container.sessions.begin() as db:
-            platform = db.get(PlatformConfig, "autohome")
-            assert platform is not None
-            platform.adapter_status = "available"
-            platform.enabled = True
+        self.assertEqual(200, enabled.status_code, enabled.text)
+        self.assertTrue(enabled.json()["enabled"])
+        self.assertEqual(1, enabled.json()["internal_concurrency"])
         created = self.client.post(
             "/api/v1/runs/manual",
             json={
@@ -1572,7 +1550,7 @@ class ApiAndConfigTests(AppCase):
                 ],
                 "quantity": 3,
                 "screenshot_enabled": True,
-                "idempotency_key": "autohome-temporary-test-enable",
+                "idempotency_key": "autohome-published-adapter",
             },
         )
         self.assertEqual(202, created.status_code, created.text)
@@ -1847,12 +1825,13 @@ class ApiAndConfigTests(AppCase):
         self.assertEqual(8, response.json()["internal_concurrency"])
         self.assertEqual(1, len(response.json()["notes"]))
 
-        disabled = self.client.put(
+        autohome = self.client.put(
             "/api/v1/platforms/autohome",
             json={"enabled": True, "internal_concurrency": 1},
         )
-        self.assertEqual(409, disabled.status_code)
-        self.assertIn("暂未接入", disabled.json()["message"])
+        self.assertEqual(200, autohome.status_code)
+        self.assertTrue(autohome.json()["enabled"])
+        self.assertEqual(1, autohome.json()["internal_concurrency"])
 
         plan = self.client.put(
             "/api/v1/extraction-plan",
@@ -3907,9 +3886,9 @@ class CollectorTests(unittest.TestCase):
 
 
 class AutohomeLocalClosureTests(AppCase):
-    """只用本地 fixture 验证休眠适配器的共享业务闭环，不改变正式接入门。"""
+    """只用本地 fixture 验证已发布适配器的共享业务闭环。"""
 
-    def test_dormant_known_url_worker_api_and_xlsx_closure(self) -> None:
+    def test_published_known_url_worker_api_and_xlsx_closure(self) -> None:
         known_url = "https://club.autohome.com.cn/bbs/thread/dee662/115934382-1.html"
         fixture = """
         <html><head><meta charset="utf-8"><title>汽车之家 fixture</title></head><body>
@@ -3940,8 +3919,8 @@ class AutohomeLocalClosureTests(AppCase):
         with self.container.sessions.begin() as db:
             platform = db.get(PlatformConfig, "autohome")
             assert platform is not None
-            self.assertEqual("not_integrated", platform.adapter_status)
-            self.assertFalse(platform.enabled)
+            self.assertEqual("available", platform.adapter_status)
+            platform.enabled = True
             circle = Circle(
                 platform_code="autohome",
                 external_id="8232",
@@ -3993,17 +3972,9 @@ class AutohomeLocalClosureTests(AppCase):
             run_id = run.id
             task_id = task.id
 
-        # 正常领取路径只扫描available平台；休眠汽车之家任务保持排队。
-        self.assertFalse(self.container.worker.process_once())
-        with self.container.sessions() as db:
-            queued = db.get(CircleTask, task_id)
-            assert queued is not None
-            self.assertEqual("queued", queued.status)
-
         response = SimpleNamespace(content=fixture, url=known_url, status_code=200)
         with patch.object(AutohomeCollector, "_get", autospec=True, return_value=response):
-            # 私有平台头仅用于本地fixture组合验证，不表示平台注册已开放。
-            self.assertTrue(self.container.worker._process_platform_head("autohome"))
+            self.assertTrue(self.container.worker.process_once())
 
         run_response = self.client.get(f"/api/v1/runs/{run_id}")
         self.assertEqual(200, run_response.status_code)
@@ -4068,8 +4039,8 @@ class AutohomeLocalClosureTests(AppCase):
             stored_task = db.get(CircleTask, task_id)
             assert platform is not None
             assert stored_task is not None
-            self.assertEqual("not_integrated", platform.adapter_status)
-            self.assertFalse(platform.enabled)
+            self.assertEqual("available", platform.adapter_status)
+            self.assertTrue(platform.enabled)
             self.assertEqual(circle_id, stored_task.circle_id)
 
 

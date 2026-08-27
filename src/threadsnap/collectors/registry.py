@@ -104,8 +104,8 @@ PLATFORM_ADAPTERS: dict[str, PlatformAdapterSpec] = {
     "autohome": PlatformAdapterSpec(
         code="autohome",
         display_name="汽车之家",
-        # 真实 500/500 正式验收前保持未接入；直接采集器和测试库可验证实现。
-        adapter_status="not_integrated",
+        # 本地适配器与公共业务链已完成，平台注册为可用；正式 500/500 继续作为生产验收。
+        adapter_status="available",
         adapter_version=AUTOHOME_VERSION,
         collector_factory=AutohomeCollector,
         parse_circle_url=parse_autohome_circle_url,
