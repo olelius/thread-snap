@@ -30,6 +30,10 @@ ADAPTER_VERSION = "autohome-club-v1"
 BASE_URL = "https://club.autohome.com.cn"
 LIST_API_URL = "https://club-open-api.autohome.com.cn/api/pc/bbs/index/getClubTopicList"
 PAGE_SIZE = 50
+MAX_LIST_PAGES = 2_000
+CONTROL_FAILURE_CODES = frozenset(
+    {"PLATFORM_CAPTCHA_REQUIRED", "PLATFORM_CHALLENGE", "PLATFORM_RATE_LIMITED"}
+)
 FORUM_RE = re.compile(
     r"^https?://club\.autohome\.com\.cn/bbs/forum-(?P<type>[a-zA-Z])-(?P<id>\d+)-"
     r"(?P<page>\d+)\.html/?(?:\?(?P<query>[^#]*))?(?:#.*)?$"
@@ -216,7 +220,8 @@ class AutohomeCollector:
     ):
         self.storage_state = storage_state
         self.cookies = _cookies_from_state(storage_state)
-        self.concurrency = max(1, concurrency)
+        # 正式验收前的已确认安全上限为一；直接调用也不得绕过平台注册表。
+        self.concurrency = 1
         self.timeout_seconds = timeout_seconds
         self.browser_headless = browser_headless
         self.semaphore = threading.BoundedSemaphore(self.concurrency)
@@ -409,13 +414,26 @@ class AutohomeCollector:
         seen: set[str] = set()
         page_number = max(1, start_page)
         frozen_page_count: int | None = None
+        page_fingerprints: set[tuple[str, ...]] = set()
         source_index = 0
         while len(rows) < target_count:
+            if page_number > MAX_LIST_PAGES:
+                raise CollectorFailure(
+                    "PAGINATION_UNBOUNDED", "汽车之家列表未在安全页数内给出终止证明。"
+                )
             page = self._list_page(source, page_number)
             if frozen_page_count is None and page["items"] and page["total"] is not None:
                 frozen_page_count = math.ceil(max(page["total"], 0) / PAGE_SIZE)
             if not page["items"]:
                 return rows, "汽车之家列表没有返回更多帖子。"
+            fingerprint = tuple(
+                str(item.get("biz_id") or item.get("pc_url") or "")
+                for item in page["items"]
+                if isinstance(item, dict)
+            )
+            if fingerprint in page_fingerprints:
+                return rows, "汽车之家列表重复返回同一页面，已按安全边界停止。"
+            page_fingerprints.add(fingerprint)
             for raw in page["items"]:
                 candidate = self._candidate(source, raw, source_index)
                 source_index += 1
@@ -509,19 +527,19 @@ class AutohomeCollector:
             (parsed for value in reversed(publish_values) if (parsed := _parse_platform_time(value))),
             None,
         )
-        comments, reply_statuses = self._comments(document)
+        comments, reply_statuses, comments_complete, comment_page_end = self._comments(document)
         topic_delete = _js_int(topic_block, "topicDelete")
         list_is_delete = (candidate or {}).get("is_delete")
         list_delete_flag = (candidate or {}).get("club_delete_flag")
-        content_proven = bool(title or content or image_urls or video_id)
-        visibility = (
-            "visible"
-            if content_proven
-            and topic_delete == 0
-            and list_is_delete == 0
-            and list_delete_flag == 0
-            else "unknown"
-        )
+        # 标题和未解析的视频 ID 都不是正文或实际媒体证明。
+        content_proven = bool(content or image_urls)
+        delete_flags = (topic_delete, list_is_delete, list_delete_flag)
+        if any(value is not None and value != 0 for value in delete_flags):
+            visibility = "hidden"
+        elif content_proven and all(value == 0 for value in delete_flags):
+            visibility = "visible"
+        else:
+            visibility = "unknown"
         if not content_proven:
             raise CollectorFailure("POST_CONTENT_MISSING", "汽车之家帖子没有返回真实正文或媒体证明。")
         return {
@@ -550,6 +568,8 @@ class AutohomeCollector:
                 "video_url_resolution": "not_verified" if video_id else None,
                 "video_info": video_info or None,
                 "reply_raw_statuses": reply_statuses,
+                "comments_complete": comments_complete,
+                "comment_page_end": comment_page_end,
                 "source_raw": (candidate or {}).get("list_raw"),
             },
             "comments": comments,
@@ -572,14 +592,30 @@ class AutohomeCollector:
         return "\n".join(values) or None
 
     @classmethod
-    def _comments(cls, document: Any) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    def _comments(
+        cls, document: Any
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool, dict[str, Any]]:
         """只读取 SSR 一级楼层，明确排除楼中楼接口与嵌套评论。"""
 
-        rows = document.xpath(
+        all_rows = document.xpath(
             "//*[@id='js-reply-list-container']/li["
             + _class_tokens("js-reply-floor-container")
             + "]"
-        )[:10]
+        )
+        rows = all_rows[:10]
+        page_counts = {
+            value
+            for raw in document.xpath("//*[@data-page-count]/@data-page-count")
+            if (value := _integer(raw)) is not None and value > 0
+        }
+        page_count = next(iter(page_counts)) if len(page_counts) == 1 else None
+        next_page_disabled = bool(
+            document.xpath(
+                "//*[contains(concat(' ', normalize-space(@class), ' '), "
+                "' athm-page__next ') and contains(concat(' ', normalize-space(@class), ' '), "
+                "' disabled ')]"
+            )
+        )
         comments: list[dict[str, Any]] = []
         statuses: list[dict[str, Any]] = []
         for row in rows:
@@ -618,7 +654,19 @@ class AutohomeCollector:
                     "status": str(row.get("data-status") or "").strip() or None,
                 }
             )
-        return comments, statuses
+        # 十条已达到产品截断上限；不足十条时只接受详情SSR的一页终止证明。
+        comments_complete = len(rows) >= 10 or (page_count == 1 and next_page_disabled)
+        return (
+            comments,
+            statuses,
+            comments_complete,
+            {
+                "has_more": page_count > 1 if page_count is not None else None,
+                "cursor": 2 if page_count is not None and page_count > 1 else None,
+                "page_count": page_count,
+                "next_page_disabled": next_page_disabled,
+            },
+        )
 
     def collect_circle(
         self,
@@ -640,15 +688,29 @@ class AutohomeCollector:
         seen = set(skip_post_ids or set())
         page_number = 1
         frozen_page_count: int | None = None
+        page_fingerprints: set[tuple[str, ...]] = set()
         source_index = 0
         exhausted = False
         while len(records) < target_count:
+            if page_number > MAX_LIST_PAGES:
+                raise CollectorFailure(
+                    "PAGINATION_UNBOUNDED", "汽车之家列表未在安全页数内给出终止证明。"
+                )
             page = self._list_page(source, page_number)
             if frozen_page_count is None and page["items"] and page["total"] is not None:
                 frozen_page_count = math.ceil(max(page["total"], 0) / PAGE_SIZE)
             if not page["items"]:
                 exhausted = True
                 break
+            fingerprint = tuple(
+                str(item.get("biz_id") or item.get("pc_url") or "")
+                for item in page["items"]
+                if isinstance(item, dict)
+            )
+            if fingerprint in page_fingerprints:
+                exhausted = True
+                break
+            page_fingerprints.add(fingerprint)
             candidates: list[dict[str, Any]] = []
             for raw in page["items"]:
                 try:
@@ -693,6 +755,8 @@ class AutohomeCollector:
                             records=records,
                             failures=failures,
                         ) from error
+                    if isinstance(error, CollectorFailure) and error.code in CONTROL_FAILURE_CODES:
+                        raise error
                     if isinstance(error, CollectorFailure) or record is None:
                         failure = {
                             "url": candidate["url"],
@@ -759,6 +823,8 @@ class AutohomeCollector:
                     failures=failures,
                 ) from exc
             except CollectorFailure as exc:
+                if exc.code in CONTROL_FAILURE_CODES:
+                    raise
                 failure = {
                     "url": normalized,
                     "code": exc.code,

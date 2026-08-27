@@ -270,10 +270,19 @@ class WorkerService:
                 job.finished_at = utc_now()
                 missing = True
             else:
-                job.status = "running"
-                job.started_at = utc_now()
-                circle_url = circle.url
-                platform_code = platform.code
+                if platform.adapter_status != "available":
+                    job.status = "failed"
+                    job.error_code = "PLATFORM_NOT_INTEGRATED"
+                    job.error_message = "该平台尚未通过接入验收。"
+                    job.finished_at = utc_now()
+                    circle.validation_status = "unverified"
+                    circle.validation_error = job.error_message
+                    missing = True
+                else:
+                    job.status = "running"
+                    job.started_at = utc_now()
+                    circle_url = circle.url
+                    platform_code = platform.code
         if missing:
             self._publish_validation(circle_id, job_id, "failed")
             return True
@@ -283,17 +292,28 @@ class WorkerService:
                 assert platform is not None
                 result = self._collector(platform).validate_circle(circle_url)
         except AuthenticationRequired as exc:
+            spec = get_platform_spec(platform_code)
             with self.factory.begin() as db:
                 job = db.get(ValidationJob, job.id)
                 circle = db.get(Circle, circle_id)
-                if job:
+                if job and spec.supports_authentication:
                     job.status = "waiting_for_auth"
                     job.error_code = "AUTH_REQUIRED"
                     job.error_message = exc.message
+                elif job:
+                    job.status = "failed"
+                    job.error_code = "AUTH_MODE_UNSUPPORTED"
+                    job.error_message = "该平台尚未建立已验证的认证流程。"
+                    job.finished_at = utc_now()
                 if circle:
                     circle.validation_status = "unverified"
-                    circle.validation_error = exc.message
-            self._publish_validation(circle_id, job_id, "waiting_for_auth")
+                    circle.validation_error = (
+                        exc.message
+                        if spec.supports_authentication
+                        else "该平台尚未建立已验证的认证流程。"
+                    )
+            status = "waiting_for_auth" if spec.supports_authentication else "failed"
+            self._publish_validation(circle_id, job_id, status)
             return True
         except (CollectorFailure, Exception) as exc:
             code = exc.code if isinstance(exc, CollectorFailure) else "VALIDATION_FAILED"

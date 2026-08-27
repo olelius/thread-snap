@@ -912,9 +912,11 @@ class ConfigService:
             circles = list(
                 db.scalars(
                     select(Circle)
+                    .join(PlatformConfig, PlatformConfig.code == Circle.platform_code)
                     .where(
                         Circle.source_kind == "configured",
                         Circle.validation_status == "unverified",
+                        PlatformConfig.adapter_status == "available",
                     )
                     .order_by(Circle.created_at, Circle.id)
                 )

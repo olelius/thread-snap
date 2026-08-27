@@ -32,6 +32,9 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertFalse(spec.supports_live_video_resolution)
         self.assertEqual(1, spec.max_concurrency)
 
+        collector = AutohomeCollector(None, concurrency=99)
+        self.assertEqual(1, collector.concurrency)
+
     def test_source_order_and_post_identity_are_normalized(self) -> None:
         replied = parse_circle_url(
             "https://club.autohome.com.cn/bbs/forum-c-8232-9.html?sort=post"
@@ -129,6 +132,163 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertEqual([], record["video_urls"])
         self.assertEqual(10, len(record["comments"]))
         self.assertEqual("用户1", record["comments"][0]["author"])
+        self.assertTrue(record["raw_status"]["comments_complete"])
+        self.assertEqual(
+            {
+                "has_more": None,
+                "cursor": None,
+                "page_count": None,
+                "next_page_disabled": False,
+            },
+            record["raw_status"]["comment_page_end"],
+        )
+
+    def test_single_page_marker_proves_fewer_than_ten_comments_complete(self) -> None:
+        document = """
+        <html><body><script>
+        window['__BBSINFO__'] = {"bbsId":8232,"bbs":"c"}
+        window['__TOPICINFO__'] = {topicId: 115934382, topicDelete: 0};
+        </script>
+        <div class="post-container">正文</div>
+        <ul id="js-reply-list-container"></ul>
+        <span class="athm-page__count" data-page-count="1">共1页</span>
+        <a class="athm-page__next disabled" data-page="2">下一页</a>
+        </body></html>
+        """.encode()
+        collector = AutohomeCollector(None)
+        collector._get = lambda url, **_: FakeResponse(document, url)  # type: ignore[method-assign]
+
+        record = collector.fetch_post(
+            "https://club.autohome.com.cn/bbs/thread/dee662/115934382-1.html",
+            candidate={"bbs_id": 8232, "bbs_type": "c", "is_delete": 0, "club_delete_flag": 0},
+        )
+
+        assert record is not None
+        self.assertEqual([], record["comments"])
+        self.assertTrue(record["raw_status"]["comments_complete"])
+        self.assertEqual(
+            {
+                "has_more": False,
+                "cursor": None,
+                "page_count": 1,
+                "next_page_disabled": True,
+            },
+            record["raw_status"]["comment_page_end"],
+        )
+
+    def test_title_or_unresolved_video_id_is_not_content_proof(self) -> None:
+        document = """
+        <html><body><script>
+        window['__BBSINFO__'] = {"bbsId":8232,"bbs":"c"}
+        window['__TOPICINFO__'] = {
+          topicId: 115934382, topicTitle: '仅标题', topicDelete: 0,
+        };
+        window.__VIDEOINFO__ = {"videoid":"VIDEO-ONLY"};
+        </script><h1 class="post-title">仅标题</h1></body></html>
+        """.encode()
+        collector = AutohomeCollector(None)
+        collector._get = lambda url, **_: FakeResponse(document, url)  # type: ignore[method-assign]
+
+        with self.assertRaises(CollectorFailure) as caught:
+            collector.fetch_post(
+                "https://club.autohome.com.cn/bbs/thread/dee662/115934382-1.html",
+                candidate={"bbs_id": 8232, "bbs_type": "c", "video_id_hint": "VIDEO-ONLY"},
+            )
+
+        self.assertEqual("POST_CONTENT_MISSING", caught.exception.code)
+
+    def test_explicit_delete_flag_maps_to_hidden(self) -> None:
+        document = """
+        <html><body><script>
+        window['__BBSINFO__'] = {"bbsId":8232,"bbs":"c"}
+        window['__TOPICINFO__'] = {topicId: 115934382, topicDelete: 1};
+        </script><div class="post-container">仍可见的历史正文</div></body></html>
+        """.encode()
+        collector = AutohomeCollector(None)
+        collector._get = lambda url, **_: FakeResponse(document, url)  # type: ignore[method-assign]
+
+        record = collector.fetch_post(
+            "https://club.autohome.com.cn/bbs/thread/dee662/115934382-1.html",
+            candidate={"bbs_id": 8232, "bbs_type": "c", "is_delete": 0, "club_delete_flag": 0},
+        )
+
+        assert record is not None
+        self.assertEqual("hidden", record["visibility"])
+
+    def test_repeated_nonempty_page_stops_discovery(self) -> None:
+        collector = AutohomeCollector(None)
+        item = {
+            "club_bbs_id": 8232,
+            "club_bbs_type": "c",
+            "biz_id": 115934382,
+            "pc_url": "https://club.autohome.com.cn/bbs/thread/dee662/115934382-1.html",
+        }
+        calls = 0
+
+        def repeated_page(_source: object, _page: int) -> dict:
+            nonlocal calls
+            calls += 1
+            return {"items": [item], "total": None, "series_id": 8232}
+
+        collector._list_page = repeated_page  # type: ignore[method-assign]
+        rows, reason = collector.discover_posts(
+            "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post", 2
+        )
+
+        self.assertEqual(1, len(rows))
+        self.assertEqual(2, calls)
+        self.assertIn("重复", reason)
+
+    def test_control_response_halts_import_without_visiting_later_urls(self) -> None:
+        collector = AutohomeCollector(None)
+        visited: list[str] = []
+
+        def blocked(url: str, **_: object) -> None:
+            visited.append(url)
+            raise CollectorFailure("PLATFORM_CHALLENGE", "访问验证")
+
+        collector.fetch_post = blocked  # type: ignore[method-assign]
+        with self.assertRaises(CollectorFailure) as caught:
+            collector.collect_urls(
+                [
+                    "https://club.autohome.com.cn/bbs/thread/dee662/115934382-1.html",
+                    "https://club.autohome.com.cn/bbs/thread/dee663/115934383-1.html",
+                ]
+            )
+
+        self.assertEqual("PLATFORM_CHALLENGE", caught.exception.code)
+        self.assertEqual(1, len(visited))
+
+    def test_control_response_halts_circle_collection(self) -> None:
+        collector = AutohomeCollector(None)
+        items = [
+            {
+                "club_bbs_id": 8232,
+                "club_bbs_type": "c",
+                "biz_id": post_id,
+                "pc_url": f"https://club.autohome.com.cn/bbs/thread/hash{post_id}/{post_id}-1.html",
+            }
+            for post_id in (115934382, 115934383)
+        ]
+        collector._list_page = lambda _source, _page: {  # type: ignore[method-assign]
+            "items": items,
+            "total": 2,
+            "series_id": 8232,
+        }
+        visited: list[str] = []
+
+        def blocked(url: str, **_: object) -> None:
+            visited.append(url)
+            raise CollectorFailure("PLATFORM_CAPTCHA_REQUIRED", "验证码")
+
+        collector.fetch_post = blocked  # type: ignore[method-assign]
+        with self.assertRaises(CollectorFailure) as caught:
+            collector.collect_circle(
+                "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post", 2
+            )
+
+        self.assertEqual("PLATFORM_CAPTCHA_REQUIRED", caught.exception.code)
+        self.assertEqual(1, len(visited))
 
     def test_screenshot_callback_is_explicitly_rejected(self) -> None:
         collector = AutohomeCollector(None)

@@ -44,6 +44,7 @@ from threadsnap.models import (
     ScheduleNodeRule,
     ScreenshotArtifactGroup,
     SentimentAnalysis,
+    ValidationJob,
     Vehicle,
 )
 from threadsnap.schemas import (
@@ -1505,6 +1506,40 @@ class ApiAndConfigTests(AppCase):
         self.assertTrue(autohome["capabilities"]["source_configuration"])
         self.assertFalse(autohome["capabilities"]["page_evidence"])
         self.assertFalse(autohome["capabilities"]["live_video_resolution"])
+
+        source = self.client.post(
+            "/api/v1/circles",
+            json={
+                "platform_code": "autohome",
+                "url": "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post",
+                "vehicle_name": "iCAR V27",
+            },
+        )
+        self.assertEqual(201, source.status_code, source.text)
+        self.assertEqual(
+            409,
+            self.client.post(f"/api/v1/circles/{source.json()['id']}/validate").status_code,
+        )
+        bulk = self.client.post("/api/v1/circles/validate-unverified")
+        self.assertEqual(202, bulk.status_code)
+        self.assertEqual(0, bulk.json()["total_count"])
+
+        with self.container.sessions.begin() as db:
+            stale_job = ValidationJob(circle_id=source.json()["id"])
+            db.add(stale_job)
+            db.flush()
+            stale_job_id = stale_job.id
+        with patch.object(
+            self.container.worker,
+            "_collector",
+            side_effect=AssertionError("未接入平台不得构造采集器"),
+        ):
+            self.assertTrue(self.container.worker.process_once())
+        with self.container.sessions() as db:
+            stale_job = db.get(ValidationJob, stale_job_id)
+            assert stale_job is not None
+            self.assertEqual("failed", stale_job.status)
+            self.assertEqual("PLATFORM_NOT_INTEGRATED", stale_job.error_code)
 
         blocked = self.client.post(
             "/api/v1/runs/manual",
