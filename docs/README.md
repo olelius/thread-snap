@@ -23,6 +23,7 @@
 | 已证实的可复用根因、坑和杠杆 | `docs/memories/` |
 | 已冻结且确有保留价值的历史记录 | `docs/project-notes/` |
 | 采集框架 PoC 样本、阶段、指标和结果格式 | `docs/research/collector-stack-poc-plan.md` |
+| 汽车之家与易车接入样本、阶段、指标和结果格式 | `docs/research/later-platform-onboarding-plan.md` |
 | 舆情反馈 PoC 样本、模态覆盖、失败边界和结果格式 | `docs/research/sentiment-analysis-poc-plan.md` |
 | 舆情反馈 PoC 的真实 URL、模型用量和结构结果 | `docs/research/sentiment-analysis-poc-results.md` |
 | 圈子页面证据、成果合成、分片和资源门禁 PoC | `docs/research/circle-screenshot-poc-plan.md` |
@@ -79,6 +80,19 @@
 5. 甲方已填写并保存在本地 `artifacts/poc/inputs/` 的真实清单。
 
 `docs/research/collection-and-antibot-landscape.md`用于了解候选技术背景，不直接替代 PoC 计划和已接受决策。
+
+### 3.4.1 汽车之家或易车接入验证
+
+必须读取：
+
+1. 技术实现任务要求的全部文件；
+2. `docs/chains/later-platform-delivery.md`；
+3. `docs/research/later-platform-onboarding-plan.md`；
+4. `docs/adr/0043-use-project-discovered-500-sample-gate-for-later-platforms.md`；
+5. 涉及口碑映射时额外读取 `docs/chains/reputation-inspection.md`；
+6. Git外 `artifacts/poc/inputs/later-platforms/` 中当次真实来源与冻结样本。
+
+首平台的 `docs/templates/poc/` 和2000条外部输入合同不直接套用于后续两个平台；后续平台由项目从社区页面分别生成500条冻结样本与功能子集。
 
 ### 3.5 舆情反馈设计、PoC 或实现
 
@@ -167,6 +181,7 @@
 | `docs/adr/0040-add-recurring-window-schedule-nodes.md` | 循环计划按同日时间段和分钟间隔触发，并使用独立循环批次类型复用既有页面能力 |
 | `docs/adr/0041-separate-recurring-run-list-navigation.md` | 循环计划批次使用独立侧边栏和列表/详情路由，同时复用既有批次组件与业务能力 |
 | `docs/adr/0042-allow-cross-type-same-second-schedules.md` | 每周与循环计划允许同秒创建独立批次，同类型仍保持触发点唯一并由运行期兜底 |
+| `docs/adr/0043-use-project-discovered-500-sample-gate-for-later-platforms.md` | 汽车之家与易车各用项目从社区发现并冻结的500条样本完成新增适配器验收 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 
@@ -180,6 +195,8 @@ ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新�
 - `docs/templates/poc/threadsnap-poc-client-input-templates-v1.0.zip`
 
 当前采集框架 PoC 只必需 `throughput-urls.txt`；`functional-samples.csv` 是后续第一版功能回归的可选基准，不是运行结果。
+
+以上模板只适用于懂车帝首平台历史PoC。汽车之家与易车的500条验收清单和功能样本由项目按后续平台计划生成，不要求外部填写这些模板。
 
 ### 5.2 不进入 Git 的真实输入和产物
 
@@ -204,6 +221,7 @@ artifacts/poc/
 - 修改功能范围或验收条件时，同步更新产品设计和相关链档。
 - 修改技术决策时，同步更新技术路线、相关 ADR 和相关链档。
 - 修改采集框架 PoC 阶段、指标、输入或结果结构时，同步更新采集 PoC 计划、模板说明和 `docs/chains/first-platform-delivery.md`。
+- 修改汽车之家或易车接入阶段、500条样本、输入责任或结果结构时，同步更新后续平台接入计划、`docs/chains/later-platform-delivery.md` 和ADR 0043；涉及口碑映射或指标时同时核对 `docs/chains/reputation-inspection.md`。
 - 修改舆情反馈 PoC 阶段、输入、模态覆盖或结果结构时，同步更新舆情 PoC 计划和 `docs/chains/sentiment-analysis.md`。
 - 修改圈子页面证据、关联成果合成、分片或资源门禁时，同步更新截图 PoC 计划和 `docs/chains/circle-screenshot-artifacts.md`，并核对首个平台与舆情工作线。
 - 修改垂媒口碑巡检范围、阶段门、比较、证据或汇报规则时，同步更新 `docs/chains/reputation-inspection.md`。
