@@ -111,9 +111,14 @@ PLATFORM_ADAPTERS: dict[str, PlatformAdapterSpec] = {
         parse_circle_url=parse_autohome_circle_url,
         normalize_post_url=normalize_autohome_post_url,
         max_concurrency=1,
-        supports_authentication=False,
+        supports_authentication=True,
         supports_page_evidence=False,
         supports_live_video_resolution=True,
+        login_url=(
+            "https://account.autohome.com.cn/?backurl=https%3A%2F%2Fclub.autohome.com.cn%2F"
+        ),
+        auth_probe_circle_url="https://club.autohome.com.cn/bbs/forum-c-7853-1.html?sort=post",
+        auth_url_markers=("account.autohome.com.cn",),
     ),
     "yiche": PlatformAdapterSpec(
         code="yiche",

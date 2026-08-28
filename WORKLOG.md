@@ -16,6 +16,26 @@
 
 ---
 
+## 2026-08-28 — 汽车之家登录认证与可信帖子点赞数
+**总目标**：把汽车之家帖子点赞数从历史空值修正为登录后可验证的真实数值，并复用现有官方认证、加密Session和认证续跑链，避免把匿名占位零值保存为真实数据。
+**状态**：✅ `autohome-club-v3` 已完成实现、真实登录门禁、加密Session和点赞读取闭环；独立真实URL批次已把页面动态值 `19` 保存为帖子快照。
+**干到哪里了**：
+- [x] 根因确认：同一汽车之家帖子在匿名页面显示点赞 `0`，用户登录后显示 `19`；上一批次中的“—”来自v2明确写入 `like_count=null`，不是数据库把0显示成空值。
+- [x] 汽车之家registry已开启认证能力并配置官方登录入口与真实论坛探针；继续复用服务器Profile、加密Session、CDP认证Dialog、有界刷新、`waiting_for_auth`和平台FIFO，不新增账号密码配置。
+- [x] 首次真实登录暴露并定位校验误报：详情HTML的 `toolbar-praise strong` 是固定加载占位0，登录后由页面脚本调用 `/club/zan/list` 动态更新；旧实现读取了更新前HTML并用异步回复框节点误判登录状态。
+- [x] 详情采集现以 `clubUserShow + autouserid + sessionlogin` 的一致非游客Cookie组合证明Session，并按页面同款点赞列表接口读取主帖值；认证后空列表保存数字0，唯一主帖项保存非负整数，认证拒绝进入等待，接口结构、无效值或冲突以 `POST_LIKE_COUNT_INVALID` 失败关闭。
+- [x] ADR 0046、领域词汇、产品设计、技术路线、后续平台链档、正式500计划和文档索引已同步；历史批次保持不可变，汽车之家正式500改为认证Session模式从零执行。
+- [x] 汽车之家专项、认证能力API及Worker/API/XLSX本地闭环共27项定向测试通过；Ruff通过。真实匿名详情复核返回 `authentication_required`，未再把页面占位0作为结果。
+- [x] 用户通过ThreadSnap认证Dialog完成官方登录后，临时Profile证明三项平台登录Cookie身份一致；修正门禁从已配置论坛首帖验证通过，已登录同帖115843786的页面同款点赞接口返回19。Session与Profile均加密持久化，明文任务目录为0。
+- [x] 本地服务已重启为 `autohome-club-v3 + authentication=true + session=available`；独立URL批次 `20260828-152435-001`（运行ID `01a04741-9633-781c-baf7-0501b1d763d2`）完成1/1、失败0，数据库和详情API均保存帖子115843786点赞数19，SQLite完整性为ok。
+- [x] 完整后端206/206（107.575s）、PoC shared 84/84通过；本次Python范围Ruff、compileall、pip check、`git diff --check`、前端TypeScript检查和生产构建均通过，Vite转换2468个模块。Git外回执位于 `artifacts/runtime/autohome-auth-like/summary.json`；PoC全目录仍有两个未修改测试文件的既有导入排序告警。
+- [x] 功能提交 `af10701` 已推送至PR #214，PR范围仅包含本任务12个代码、测试及owner文档文件。
+**下一步**：等待PR检查通过后合并并清理功能分支，随后以合并后的main复核本地服务、Session状态和真实验收批次。
+**边界**：不输出、复制或提交账号密码与Session内容，不回写批次 `20260828-144055-001` 的历史空点赞数；正式500/500仍是独立生产验收门。
+**关联**：ADR 0046、`src/threadsnap/collectors/autohome.py`、`src/threadsnap/collectors/registry.py`、`tests/test_autohome_collector.py`
+
+---
+
 ## 2026-08-28 — 保留汽车之家跨论坛聚合帖并修正批次失败展示
 **总目标**：修复汽车之家圈子列表把平台明确聚合的跨论坛帖子误判为错帖的问题，使所选来源的实际前N条按顺序进入快照，并分别保留发现来源与帖子原始论坛身份。
 **状态**：✅ `autohome-club-v2` 已实现双身份校验和展示；合并后的本地服务已创建风云A9正式修复批次并完成30/30、失败0，原批次保持不可变。
