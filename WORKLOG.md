@@ -25,6 +25,7 @@
 - [x] “来源与圈子”按平台配置顺序派生折叠分组，组标题展示来源数、已验证数与本组未保存数；默认展开首个平台，支持展开/收起全部、组内新增以及修改平台后移入目标组，仍复用原跨平台批量保存事务。
 - [x] 真实 1680×900 页面无脚本错误，默认/全部展开/全部收起时可见数据行分别为 14/37/0；1024px 视口横向溢出保持在来源列表内部，页面主体未产生横向滚动。截图和脱敏录入回执位于 `artifacts/runtime/platform-source-import/`，回执 SHA-256 为 `1c37f69e10c11ac825d9b94ff3cb342f50bf5be5f1fd163aa393fca452fbbfde`。
 - [x] 完整后端 209/209（111.866秒）、Ruff、compileall、pip check、前端 TypeScript 检查与生产构建通过，Vite 转换 2468 个模块；SQLite `PRAGMA integrity_check=ok`，`git diff --check` 通过。
+- [x] 功能提交 `1fb68fb` 已精确暂存本任务 4 个代码与 owner 文档文件并推送至 PR #218；远端报告可合并且无待运行检查。
 **下一步**：代码和录入范围均已完成；待各平台 Session 可用时，由用户按需要执行“验证全部待验证”，首次验证通过后系统会自动开启对应来源的自动参与。
 **边界**：本次不创建验证或提取批次，不把未验证来源提前启用；“无”的易车单元格不创建占位来源，不改变既有懂车帝最新发布来源及已验证来源状态。
 **关联**：`frontend/src/features/config/config-page.tsx`、`docs/design/product-design.md`、`docs/design/technical-route.md`
