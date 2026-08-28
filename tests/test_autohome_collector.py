@@ -5,14 +5,41 @@ from __future__ import annotations
 import json
 import unittest
 
-from threadsnap.collectors import CollectorFailure, get_platform_spec
+from threadsnap.collectors import AuthenticationRequired, CollectorFailure, get_platform_spec
 from threadsnap.collectors.autohome import (
+    LIKE_COUNT_URL,
     VIDEO_MEDIA_URL,
     AutohomeCollector,
     VideoMediaResolution,
     normalize_post_url,
     parse_circle_url,
 )
+
+AUTH_STATE = {
+    "cookies": [
+        {
+            "name": "clubUserShow",
+            "value": "42|0|0|fixture-user|0|0|0||2026-08-28+15%3A00%3A00|0",
+            "domain": ".autohome.com.cn",
+            "path": "/",
+            "expires": -1,
+        },
+        {
+            "name": "autouserid",
+            "value": "42",
+            "domain": ".autohome.com.cn",
+            "path": "/",
+            "expires": -1,
+        },
+        {
+            "name": "sessionlogin",
+            "value": "1",
+            "domain": ".autohome.com.cn",
+            "path": "/",
+            "expires": -1,
+        },
+    ]
+}
 
 
 class FakeResponse:
@@ -22,6 +49,14 @@ class FakeResponse:
         self.content = content
         self.url = url
         self.status_code = status_code
+
+
+def collector_with_like(like_count: int = 7, **kwargs: object) -> AutohomeCollector:
+    """让非点赞专项夹具聚焦原有字段合同。"""
+
+    collector = AutohomeCollector(AUTH_STATE, **kwargs)
+    collector._topic_like_count = lambda *_: like_count  # type: ignore[method-assign]
+    return collector
 
 
 def video_media_payload(video_id: str, qualities: tuple[int, ...] = (100, 200, 300, 400)) -> dict:
@@ -54,11 +89,13 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertEqual("available", spec.adapter_status)
         self.assertFalse(spec.default_enabled)
         self.assertIsNotNone(spec.collector_factory)
+        self.assertTrue(spec.supports_authentication)
+        self.assertIn("account.autohome.com.cn", spec.login_url or "")
         self.assertFalse(spec.supports_page_evidence)
         self.assertTrue(spec.supports_live_video_resolution)
         self.assertEqual(1, spec.max_concurrency)
 
-        collector = AutohomeCollector(None, concurrency=99)
+        collector = collector_with_like(concurrency=99)
         self.assertEqual(1, collector.concurrency)
         self.assertTrue(collector.supports_live_video_resolution)
 
@@ -82,7 +119,7 @@ class AutohomeContractTests(unittest.TestCase):
         )
 
     def test_list_api_parameters_and_structure(self) -> None:
-        collector = AutohomeCollector(None)
+        collector = collector_with_like()
         calls: list[tuple[str, dict[str, object]]] = []
         payload = {
             "returncode": 0,
@@ -133,7 +170,7 @@ class AutohomeContractTests(unittest.TestCase):
         <ul id="js-reply-list-container">{replies}</ul>
         </body></html>
         """.encode()
-        collector = AutohomeCollector(None)
+        collector = collector_with_like()
 
         def fake_get(url: str, **_: object) -> FakeResponse:
             content = (
@@ -179,6 +216,80 @@ class AutohomeContractTests(unittest.TestCase):
         )
         self.assertFalse(record["raw_status"]["cross_forum_aggregate"])
         self.assertEqual(8232, record["raw_status"]["discovery_bbs_id"])
+        self.assertEqual(7, record["like_count"])
+        self.assertTrue(record["raw_status"]["authenticated_session"])
+        self.assertEqual("club_zan_list", record["raw_status"]["like_count_source"])
+
+    def test_anonymous_zero_like_is_authentication_required(self) -> None:
+        """匿名详情的零值是受保护占位值，不能保存为真实点赞数。"""
+
+        collector = AutohomeCollector(None)
+        collector._get = lambda *_args, **_kwargs: self.fail(  # type: ignore[method-assign]
+            "未证明登录时不应请求点赞接口"
+        )
+
+        with self.assertRaises(AuthenticationRequired) as caught:
+            collector._topic_like_count(
+                "115934382",
+                "https://club.autohome.com.cn/bbs/thread/dee662/115934382-1.html",
+            )
+
+        self.assertEqual(
+            "https://club.autohome.com.cn/bbs/thread/dee662/115934382-1.html",
+            caught.exception.trigger_url,
+        )
+
+    def test_authenticated_zero_like_is_preserved_as_zero(self) -> None:
+        """登录详情明确返回零时必须保存数字零，而不是空值。"""
+
+        collector = AutohomeCollector(AUTH_STATE)
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        def fake_get(url: str, **params: object) -> FakeResponse:
+            calls.append((url, params))
+            return FakeResponse(b"[]", url)
+
+        collector._get = fake_get  # type: ignore[method-assign]
+        value = collector._topic_like_count(
+            "115934382", "https://club.autohome.com.cn/bbs/thread/dee662/115934382-1.html"
+        )
+
+        self.assertEqual(0, value)
+        self.assertEqual(LIKE_COUNT_URL, calls[0][0])
+        self.assertEqual("115934382-0", calls[0][1]["input"])
+        self.assertEqual("42", calls[0][1]["memberId"])
+        self.assertIn("Referer", calls[0][1]["request_headers"])
+
+    def test_authenticated_like_api_requires_one_valid_value(self) -> None:
+        """点赞接口明确返回主帖项时只接受唯一非负整数。"""
+
+        collector = AutohomeCollector(AUTH_STATE)
+        collector._get = lambda url, **_: FakeResponse(  # type: ignore[method-assign]
+            b'[{"r":115934382,"z":"invalid"}]', url
+        )
+
+        with self.assertRaises(CollectorFailure) as caught:
+            collector._topic_like_count(
+                "115934382",
+                "https://club.autohome.com.cn/bbs/thread/dee662/115934382-1.html",
+            )
+
+        self.assertEqual("POST_LIKE_COUNT_INVALID", caught.exception.code)
+
+    def test_authenticated_like_api_returns_dynamic_nonzero_value(self) -> None:
+        """页面脚本接口返回的动态主帖点赞数覆盖HTML占位零值。"""
+
+        collector = AutohomeCollector(AUTH_STATE)
+        collector._get = lambda url, **_: FakeResponse(  # type: ignore[method-assign]
+            b'[{"r":115934382,"z":19}]', url
+        )
+
+        value = collector._topic_like_count(
+            "115934382",
+            "https://club.autohome.com.cn/bbs/thread/dee662/115934382-1.html",
+        )
+
+        self.assertEqual(19, value)
 
     def test_cross_forum_feed_item_preserves_discovery_and_canonical_identity(self) -> None:
         """列表明确聚合的跨论坛帖子仍是该来源的有效快照结果。"""
@@ -192,7 +303,7 @@ class AutohomeContractTests(unittest.TestCase):
         <span data-page-count="1"></span><a class="athm-page__next disabled"></a>
         </body></html>
         """.encode()
-        collector = AutohomeCollector(None)
+        collector = collector_with_like()
         source = parse_circle_url("https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post")
         candidate = collector._candidate(
             source,
@@ -230,7 +341,7 @@ class AutohomeContractTests(unittest.TestCase):
         <span data-page-count="1"></span><a class="athm-page__next disabled"></a>
         </body></html>
         """.encode()
-        collector = AutohomeCollector(None)
+        collector = collector_with_like()
         source = parse_circle_url("https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post")
         candidate = collector._candidate(
             source,
@@ -263,7 +374,7 @@ class AutohomeContractTests(unittest.TestCase):
         <span data-page-count="1"></span><a class="athm-page__next disabled"></a>
         </body></html>
         """.encode()
-        collector = AutohomeCollector(None)
+        collector = collector_with_like()
         collector._get = lambda url, **_: FakeResponse(document, url)  # type: ignore[method-assign]
 
         with self.assertRaises(CollectorFailure) as caught:
@@ -286,7 +397,7 @@ class AutohomeContractTests(unittest.TestCase):
         <a class="athm-page__next disabled" data-page="2">下一页</a>
         </body></html>
         """.encode()
-        collector = AutohomeCollector(None)
+        collector = collector_with_like()
         collector._get = lambda url, **_: FakeResponse(document, url)  # type: ignore[method-assign]
 
         record = collector.fetch_post(
@@ -323,7 +434,8 @@ class AutohomeContractTests(unittest.TestCase):
                 _ = video_id
                 return None
 
-        collector = CollectorWithoutObservedMediaResponse(None)
+        collector = CollectorWithoutObservedMediaResponse(AUTH_STATE)
+        collector._topic_like_count = lambda *_: 7  # type: ignore[method-assign]
         collector._get = lambda url, **_: FakeResponse(document, url)  # type: ignore[method-assign]
 
         with self.assertRaises(CollectorFailure) as caught:
@@ -346,7 +458,7 @@ class AutohomeContractTests(unittest.TestCase):
         """.encode()
 
         calls: list[tuple[str, dict[str, object]]] = []
-        collector = AutohomeCollector(None)
+        collector = collector_with_like()
 
         def fake_get(url: str, **params: object) -> FakeResponse:
             calls.append((url, params))
@@ -407,7 +519,7 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertEqual("PLATFORM_RESPONSE_INVALID", invalid_url.exception.code)
 
     def test_video_media_control_failure_is_not_reclassified(self) -> None:
-        collector = AutohomeCollector(None)
+        collector = collector_with_like()
 
         def blocked(_url: str, **_: object) -> FakeResponse:
             raise CollectorFailure("PLATFORM_CHALLENGE", "访问验证")
@@ -419,7 +531,7 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertEqual("PLATFORM_CHALLENGE", caught.exception.code)
 
     def test_public_video_resolver_preserves_all_qualities(self) -> None:
-        collector = AutohomeCollector(None)
+        collector = collector_with_like()
         calls: list[tuple[str, dict[str, object]]] = []
 
         def fake_get(url: str, **params: object) -> FakeResponse:
@@ -440,7 +552,7 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertEqual([], collector.resolve_video_urls(""))
 
     def test_video_media_rejects_nonzero_and_invalid_structure(self) -> None:
-        collector = AutohomeCollector(None)
+        collector = collector_with_like()
         invalid_payloads = (
             (
                 {"returncode": 1001, "message": "failed", "result": {}},
@@ -461,7 +573,7 @@ class AutohomeContractTests(unittest.TestCase):
                 self.assertEqual(expected_code, caught.exception.code)
 
     def test_video_media_rejects_quality_without_copy(self) -> None:
-        collector = AutohomeCollector(None)
+        collector = collector_with_like()
         payload = video_media_payload("VIDEO-1")
         payload["result"]["media"]["qualities"][2].pop("copy")
         collector._get = lambda url, **_: FakeResponse(  # type: ignore[method-assign]
@@ -489,7 +601,7 @@ class AutohomeContractTests(unittest.TestCase):
         <a class="athm-page__next" data-page="2">下一页</a>
         </body></html>
         """.encode()
-        collector = AutohomeCollector(None)
+        collector = collector_with_like()
         collector._get = lambda url, **_: FakeResponse(document, url)  # type: ignore[method-assign]
 
         with self.assertRaises(CollectorFailure) as caught:
@@ -514,7 +626,7 @@ class AutohomeContractTests(unittest.TestCase):
         <span data-page-count="1"></span><a class="athm-page__next disabled"></a>
         </body></html>
         """.encode()
-        collector = AutohomeCollector(None)
+        collector = collector_with_like()
         collector._get = lambda url, **_: FakeResponse(document, url)  # type: ignore[method-assign]
 
         record = collector.fetch_post(
@@ -526,7 +638,7 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertEqual("hidden", record["visibility"])
 
     def test_repeated_nonempty_page_stops_discovery(self) -> None:
-        collector = AutohomeCollector(None)
+        collector = collector_with_like()
         item = {
             "club_bbs_id": 8232,
             "club_bbs_type": "c",
@@ -550,7 +662,7 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertIn("重复", reason)
 
     def test_control_response_halts_import_without_visiting_later_urls(self) -> None:
-        collector = AutohomeCollector(None)
+        collector = collector_with_like()
         visited: list[str] = []
 
         def blocked(url: str, **_: object) -> None:
@@ -570,7 +682,7 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertEqual(1, len(visited))
 
     def test_control_response_halts_circle_collection(self) -> None:
-        collector = AutohomeCollector(None)
+        collector = collector_with_like()
         items = [
             {
                 "club_bbs_id": 8232,
@@ -601,7 +713,7 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertEqual(1, len(visited))
 
     def test_screenshot_callback_is_explicitly_rejected(self) -> None:
-        collector = AutohomeCollector(None)
+        collector = collector_with_like()
         with self.assertRaisesRegex(CollectorFailure, "截图") as caught:
             collector.collect_circle(
                 "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post",

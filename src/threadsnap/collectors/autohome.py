@@ -27,10 +27,11 @@ from .base import (
     ProgressCallback,
 )
 
-ADAPTER_VERSION = "autohome-club-v2"
+ADAPTER_VERSION = "autohome-club-v3"
 BASE_URL = "https://club.autohome.com.cn"
 LIST_API_URL = "https://club-open-api.autohome.com.cn/api/pc/bbs/index/getClubTopicList"
 VIDEO_MEDIA_URL = "https://p-vp.autohome.com.cn/api/gpi"
+LIKE_COUNT_URL = "https://club-open-api.autohome.com.cn/club/zan/list"
 PAGE_SIZE = 50
 MAX_LIST_PAGES = 2_000
 CONTROL_FAILURE_CODES = frozenset(
@@ -177,6 +178,33 @@ def _cookies_from_state(state: dict[str, Any] | None) -> Cookies:
     return jar
 
 
+def _authenticated_member_id(state: dict[str, Any] | None) -> str | None:
+    """从平台自有Cookie组合中证明登录身份，只返回校验后的会员ID。"""
+
+    values: dict[str, str] = {}
+    now = time.time()
+    for item in (state or {}).get("cookies", []):
+        if not isinstance(item, dict) or "autohome.com.cn" not in str(item.get("domain") or ""):
+            continue
+        expires = item.get("expires", -1)
+        if isinstance(expires, (int, float)) and expires > 0 and expires <= now:
+            continue
+        name = str(item.get("name") or "")
+        if name in {"autouserid", "clubUserShow", "sessionlogin"}:
+            values[name] = unquote_plus(str(item.get("value") or ""))
+    identity = values.get("clubUserShow", "").split("|")
+    if (
+        len(identity) < 4
+        or not identity[0].isdigit()
+        or int(identity[0]) <= 0
+        or identity[3].strip() in {"", "游客"}
+        or values.get("autouserid") != identity[0]
+        or not values.get("sessionlogin")
+    ):
+        return None
+    return identity[0]
+
+
 def _unique_urls(values: Iterable[object]) -> list[str]:
     """保序去重并补全协议相对媒体 URL。"""
 
@@ -238,7 +266,7 @@ def _js_string(block: str, key: str) -> str | None:
 
 
 class AutohomeCollector:
-    """匿名优先的汽车之家论坛采集器；当前安全并发在正式验收前固定为一。"""
+    """使用已验证Session的汽车之家论坛采集器；安全并发固定为一。"""
 
     code = "autohome"
     display_name = "汽车之家"
@@ -255,6 +283,7 @@ class AutohomeCollector:
     ):
         self.storage_state = storage_state
         self.cookies = _cookies_from_state(storage_state)
+        self.authenticated_member_id = _authenticated_member_id(storage_state)
         # 正式验收前的已确认安全上限为一；直接调用也不得绕过平台注册表。
         self.concurrency = 1
         self.timeout_seconds = timeout_seconds
@@ -272,7 +301,13 @@ class AutohomeCollector:
             self._thread_local.http = session
         return session
 
-    def _get(self, url: str, **params: object) -> requests.Response:
+    def _get(
+        self,
+        url: str,
+        *,
+        request_headers: dict[str, str] | None = None,
+        **params: object,
+    ) -> requests.Response:
         """执行有界 GET；平台控制分类由响应检查统一完成。"""
 
         last_error: Exception | None = None
@@ -282,6 +317,7 @@ class AutohomeCollector:
                     response = self._http_session().get(
                         url,
                         params=params or None,
+                        headers=request_headers,
                         timeout=self.timeout_seconds,
                         allow_redirects=True,
                     )
@@ -648,6 +684,7 @@ class AutohomeCollector:
         observed_id = _js_int(topic_block, "topicId")
         if observed_id != int(post_id):
             raise CollectorFailure("POST_ID_MISMATCH", "汽车之家详情帖子 ID 与输入链接不一致。")
+        like_count = self._topic_like_count(post_id, normalized_url)
         bbs_id = _integer(bbs_info.get("bbsId"))
         bbs_type = str(bbs_info.get("bbs") or "").lower()
         canonical_bbs_id_hint = (candidate or {}).get("canonical_bbs_id_hint")
@@ -749,7 +786,7 @@ class AutohomeCollector:
             "image_urls": image_urls,
             "video_urls": video_urls,
             "reply_count": (candidate or {}).get("reply_count"),
-            "like_count": None,
+            "like_count": like_count,
             "section": "dynamic",
             "visibility": visibility,
             "raw_status": {
@@ -763,6 +800,8 @@ class AutohomeCollector:
                 "list_is_delete": list_is_delete,
                 "list_club_delete_flag": list_delete_flag,
                 "topic_member_id": str(author_id) if author_id is not None else None,
+                "authenticated_session": True,
+                "like_count_source": "club_zan_list",
                 "video_id": video_id,
                 "video_url_resolution": video_url_resolution,
                 "video_media_response_kind": video_media_response_kind,
@@ -774,6 +813,68 @@ class AutohomeCollector:
             },
             "comments": comments,
         }
+
+    def _topic_like_count(self, post_id: str, post_url: str) -> int:
+        """按页面同款点赞列表接口读取主帖值，空列表代表已认证的真实零。"""
+
+        if not self.authenticated_member_id:
+            raise AuthenticationRequired(
+                "汽车之家登录后才能可靠读取帖子点赞数。",
+                trigger_url=post_url,
+            )
+        response = self._get(
+            LIKE_COUNT_URL,
+            request_headers={
+                "Referer": post_url,
+                "Origin": BASE_URL,
+            },
+            _appid="club",
+            input=f"{post_id}-0",
+            memberId=self.authenticated_member_id,
+        )
+        if int(response.status_code) in {401, 403, 430}:
+            raise AuthenticationRequired(
+                "汽车之家登录状态已失效，请重新完成平台认证。",
+                trigger_url=post_url,
+            )
+        if int(response.status_code) >= 400:
+            raise CollectorFailure(
+                "POST_LIKE_COUNT_HTTP_ERROR",
+                f"汽车之家点赞接口返回 HTTP {response.status_code}。",
+            )
+        try:
+            payload = json.loads(response.content)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise CollectorFailure(
+                "POST_LIKE_COUNT_INVALID", "汽车之家点赞接口返回了无效 JSON。"
+            ) from exc
+        if not isinstance(payload, list):
+            raise CollectorFailure("POST_LIKE_COUNT_INVALID", "汽车之家点赞接口返回结构无效。")
+        values: set[int] = set()
+        for row in payload:
+            if not isinstance(row, dict):
+                raise CollectorFailure(
+                    "POST_LIKE_COUNT_INVALID", "汽车之家点赞接口包含无效结果项。"
+                )
+            if _integer(row.get("r")) != int(post_id):
+                continue
+            value = _integer(row.get("z"))
+            if value is None or value < 0:
+                raise CollectorFailure(
+                    "POST_LIKE_COUNT_INVALID", "汽车之家帖子点赞数不是有效非负整数。"
+                )
+            values.add(value)
+        if len(values) > 1:
+            raise CollectorFailure(
+                "POST_LIKE_COUNT_INVALID", "汽车之家点赞接口返回了互相冲突的主帖数值。"
+            )
+        return next(iter(values), 0)
+
+    def validate_auth(self, probe_url: str) -> dict[str, Any]:
+        """用真实论坛来源和首帖同时证明Session及受保护点赞数可读。"""
+
+        result = self.validate_circle(probe_url)
+        return {**result, "authenticated": True, "like_count_access": "verified"}
 
     @staticmethod
     def _node_text(node: Any) -> str | None:

@@ -1521,9 +1521,13 @@ class ApiAndConfigTests(AppCase):
         self.assertEqual("available", autohome["adapter_status"])
         self.assertFalse(autohome["enabled"])
         self.assertTrue(autohome["capabilities"]["source_configuration"])
-        self.assertFalse(autohome["capabilities"]["authentication"])
+        self.assertTrue(autohome["capabilities"]["authentication"])
         self.assertFalse(autohome["capabilities"]["page_evidence"])
         self.assertTrue(autohome["capabilities"]["live_video_resolution"])
+        auth_task = self.client.post("/api/v1/platforms/autohome/auth/tasks")
+        self.assertEqual(202, auth_task.status_code, auth_task.text)
+        self.assertEqual("autohome", auth_task.json()["platform_code"])
+        self.assertFalse(auth_task.json()["fresh_profile"])
 
         source = self.client.post(
             "/api/v1/circles",
@@ -3934,6 +3938,8 @@ class AutohomeLocalClosureTests(AppCase):
           topicMemberName: '本地作者', topicDelete: 0,
         };
         </script>
+        <a class="comment-user-name" href="/user/fixture">fixture-user</a>
+        <span class="toolbar-praise"><strong>19</strong></span>
         <h1 class="post-title">本地组合标题</h1>
         <div class="post-handle-publish"><strong>发表于</strong><strong>2026-08-27 09:30:00</strong></div>
         <div class="post-container">本地组合正文<img data-src="//img.example/autohome.jpg" /></div>
@@ -3963,7 +3969,7 @@ class AutohomeLocalClosureTests(AppCase):
                 url="https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post",
                 source_kind="configured",
                 validation_status="verified",
-                adapter_version="autohome-club-v2",
+                adapter_version="autohome-club-v3",
             )
             db.add(circle)
             db.flush()
@@ -4008,7 +4014,10 @@ class AutohomeLocalClosureTests(AppCase):
             task_id = task.id
 
         response = SimpleNamespace(content=fixture, url=known_url, status_code=200)
-        with patch.object(AutohomeCollector, "_get", autospec=True, return_value=response):
+        with (
+            patch.object(AutohomeCollector, "_get", autospec=True, return_value=response),
+            patch.object(AutohomeCollector, "_topic_like_count", autospec=True, return_value=19),
+        ):
             self.assertTrue(self.container.worker.process_once())
 
         run_response = self.client.get(f"/api/v1/runs/{run_id}")
@@ -4021,6 +4030,7 @@ class AutohomeLocalClosureTests(AppCase):
         post = posts_response.json()["items"][0]
         self.assertEqual("115934382", post["platform_post_id"])
         self.assertEqual(["https://img.example/autohome.jpg"], post["image_urls"])
+        self.assertEqual(19, post["like_count"])
         self.assertEqual("unknown", post["visibility"])
 
         detail_response = self.client.get(f"/api/v1/runs/{run_id}/posts/{post['id']}")
