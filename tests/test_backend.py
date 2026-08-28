@@ -3963,7 +3963,7 @@ class AutohomeLocalClosureTests(AppCase):
                 url="https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post",
                 source_kind="configured",
                 validation_status="verified",
-                adapter_version="autohome-club-v1",
+                adapter_version="autohome-club-v2",
             )
             db.add(circle)
             db.flush()

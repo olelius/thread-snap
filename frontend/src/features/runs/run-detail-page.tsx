@@ -249,7 +249,7 @@ function RunDetail({ kind }: { kind: RunDetailKind }) {
         ['状态', <StatusBadge key='status' value={run.data.status} label={run.data.status_name} />],
         ['触发方式', `${run.data.trigger_type_name} · ${inputModeName}`],
         ['结果进度', `${run.data.completed_count} / ${run.data.planned_count}`],
-        ['失败项', String(run.data.failed_count)],
+        [run.data.status === 'success' && run.data.completed_count >= run.data.planned_count ? '跳过异常候选' : '失败项', String(run.data.failed_count)],
         ['创建时间', formatDate(run.data.created_at)],
       ].map(([label, value]) => <Card key={String(label)} className='border-border/70 bg-card/88 py-0'><CardContent className='p-3'><div className='text-xs text-muted-foreground'>{label}</div><div className='mt-1 text-sm font-semibold'>{value}</div></CardContent></Card>)}</div>}
       {run.data?.waiting_reason && <Alert><KeyRound className='size-4' /><AlertTitle>等待平台认证</AlertTitle><AlertDescription>{run.data.waiting_reason}</AlertDescription></Alert>}
@@ -268,6 +268,7 @@ function RunDetail({ kind }: { kind: RunDetailKind }) {
                 const isCurrentPost = post.id === search.post
                 const isLastViewedPost = !search.post && post.id === lastViewedPostId
                 const isHighlightedPost = isCurrentPost || isLastViewedPost
+                const forumIdentity = postForumIdentity(post)
                 return <TableRow key={post.id} id={`post-row-${post.id}`} aria-current={isCurrentPost ? 'true' : undefined} className={cn('transition-[background-color,box-shadow] duration-200', isHighlightedPost && 'post-row-active', isLastViewedPost && 'post-row-dismissed')}>
                   <TableCell className='w-16 text-center tabular-nums text-muted-foreground'>{((search.page ?? 1) - 1) * (search.pageSize ?? 50) + index + 1}</TableCell><TableCell className='relative max-w-80'>
                     {isHighlightedPost && <motion.span layoutId='post-row-selection-trail' aria-hidden className='post-row-selection-trail absolute inset-y-1 left-0 w-1 rounded-full' transition={selectionTransition} />}
@@ -296,7 +297,7 @@ function RunDetail({ kind }: { kind: RunDetailKind }) {
                       </AnimatePresence>
                       <span className='min-w-0 truncate'>{post.title || '无标题'}</span><ExternalLink className='ml-1.5 size-3 shrink-0' />
                     </motion.a>
-                  </TableCell><TableCell><div className='flex min-w-0 items-center gap-1.5'><span className='truncate'>{post.source_name || post.circle_name || '—'}</span>{post.list_order_name && <Badge variant='outline' className='h-5 shrink-0 px-1.5 text-[11px] font-normal'>{post.list_order_name}</Badge>}</div></TableCell><TableCell>{post.author || '—'}</TableCell><TableCell className='whitespace-nowrap'>{formatDate(post.published_at)}</TableCell><TableCell><StatusBadge value={post.visibility} label={{ visible: '可见', hidden: '不可见', unknown: '未知' }[post.visibility]} /></TableCell><TableCell><SentimentCell post={post} /></TableCell><TableCell className='text-right tabular-nums'>{post.reply_count ?? '—'}</TableCell><TableCell className='text-right tabular-nums'>{post.like_count ?? '—'}</TableCell><TableCell><div className='flex justify-end gap-1'><Button variant='ghost' size='sm' data-post-detail-trigger='true' onClick={(event) => openPost(post.id, event.currentTarget)}>查看</Button><Button variant='ghost' size='icon' onClick={() => copyText(post.url)} aria-label='复制帖子链接'><Copy className='size-4' /></Button></div></TableCell>
+                  </TableCell><TableCell><div className='flex min-w-0 items-center gap-1.5'><span className='truncate'>{post.source_name || post.circle_name || '—'}</span>{post.list_order_name && <Badge variant='outline' className='h-5 shrink-0 px-1.5 text-[11px] font-normal'>{post.list_order_name}</Badge>}{forumIdentity.crossForum && <Badge variant='secondary' className='h-5 shrink-0 px-1.5 text-[11px] font-normal'>跨论坛</Badge>}</div></TableCell><TableCell>{post.author || '—'}</TableCell><TableCell className='whitespace-nowrap'>{formatDate(post.published_at)}</TableCell><TableCell><StatusBadge value={post.visibility} label={{ visible: '可见', hidden: '不可见', unknown: '未知' }[post.visibility]} /></TableCell><TableCell><SentimentCell post={post} /></TableCell><TableCell className='text-right tabular-nums'>{post.reply_count ?? '—'}</TableCell><TableCell className='text-right tabular-nums'>{post.like_count ?? '—'}</TableCell><TableCell><div className='flex justify-end gap-1'><Button variant='ghost' size='sm' data-post-detail-trigger='true' onClick={(event) => openPost(post.id, event.currentTarget)}>查看</Button><Button variant='ghost' size='icon' onClick={() => copyText(post.url)} aria-label='复制帖子链接'><Copy className='size-4' /></Button></div></TableCell>
                 </TableRow>
               }) : <TableRow><TableCell colSpan={10} className='h-52 text-center text-muted-foreground'>当前筛选条件下没有帖子结果。</TableCell></TableRow>}
             </TableBody>
@@ -439,8 +440,9 @@ function EvidenceList({ values }: { values?: string[] }) {
 function PostDetailContent({ runId, post, onCorrect }: { runId: string; post: Post; onCorrect: () => void }) {
   const sentiment = post.sentiment
   const manualActionName = post.sentiment_result ? '人工修正' : '人工判定'
+  const forumIdentity = postForumIdentity(post)
   return <div className='space-y-6 p-6'>
-    <div className='grid gap-3 rounded-xl border bg-muted/20 p-4 sm:grid-cols-2'><Meta label='来源' value={[post.source_name || post.circle_name, post.list_order_name].filter(Boolean).join(' · ')} /><Meta label='作者' value={post.author} /><Meta label='发布时间' value={formatDate(post.published_at)} /><Meta label='平台帖子 ID' value={post.platform_post_id} /></div>
+    <div className='grid gap-3 rounded-xl border bg-muted/20 p-4 sm:grid-cols-2'><Meta label='发现来源' value={[post.source_name || post.circle_name, post.list_order_name].filter(Boolean).join(' · ')} />{forumIdentity.crossForum && <Meta label='原始归属' value={`跨论坛聚合 · 论坛 ID ${forumIdentity.canonicalBbsId ?? '未知'}`} />}<Meta label='作者' value={post.author} /><Meta label='发布时间' value={formatDate(post.published_at)} /><Meta label='平台帖子 ID' value={post.platform_post_id} /></div>
     <section className='space-y-3 rounded-xl border p-4'>
       <div className='flex flex-wrap items-start justify-between gap-3'><div><div className='flex items-center gap-2'><BrainCircuit className='size-4 text-primary' /><h3 className='text-sm font-semibold'>舆情反馈</h3></div><div className='mt-2 flex flex-wrap gap-1.5'>{post.sentiment_result ? <><StatusBadge value={post.sentiment_result === 'negative' ? 'failed' : post.sentiment_result === 'non_negative' ? 'success' : 'unknown'} label={sentimentNames[post.sentiment_result]} />{post.sentiment_source && <Badge variant='outline'>{sentimentSourceNames[post.sentiment_source]}</Badge>}</> : post.analysis_status ? <StatusBadge value={post.analysis_status === 'analysis_failed' ? 'failed' : post.analysis_status === 'analysis_running' ? 'running' : 'unknown'} label={analysisStatusNames[post.analysis_status]} /> : <Badge variant='outline'>未建立分析任务</Badge>}</div></div>{sentiment?.can_manual_correct && <Button variant='outline' size='sm' onClick={onCorrect}><PencilLine className='size-4' />{manualActionName}</Button>}</div>
       {sentiment?.summary && <div><div className='mb-1 text-xs font-medium text-muted-foreground'>中文总结</div><div className='whitespace-pre-wrap text-sm leading-7'>{sentiment.summary}</div></div>}
@@ -493,6 +495,15 @@ function ManualSentimentDialog({ open, onOpenChange, runId, post, onSaved }: { o
 }
 
 function Meta({ label, value }: { label: string; value?: string }) { return <div><div className='text-xs text-muted-foreground'>{label}</div><div className='mt-1 break-all text-sm'>{value || '—'}</div></div> }
+
+function postForumIdentity(post: Post) {
+  const raw = post.raw_status
+  const canonicalBbsId = raw?.bbs_id
+  return {
+    crossForum: raw?.cross_forum_aggregate === true,
+    canonicalBbsId: typeof canonicalBbsId === 'string' || typeof canonicalBbsId === 'number' ? String(canonicalBbsId) : undefined,
+  }
+}
 
 function TaskDialog({ open, onOpenChange, tasks }: { open: boolean; onOpenChange: (open: boolean) => void; tasks: RunTask[] }) {
   const groups = Array.from(tasks.reduce<Map<string, RunTask[]>>((result, task) => {
@@ -584,7 +595,8 @@ function TaskSummary({ icon: Icon, label, value, tone = 'normal' }: { icon: type
 function TaskRow({ task }: { task: RunTask }) {
   const progress = progressValue(task.completed_count, task.target_count)
   const detail = task.error_message || task.stop_reason
-  const hasIssue = task.failed_count > 0 || task.status === 'failed'
+  const failuresRecovered = task.status === 'success' && task.completed_count >= task.target_count
+  const hasIssue = task.status === 'failed' || (task.failed_count > 0 && !failuresRecovered)
 
   return (
     <div className='grid gap-3 px-4 py-3.5 transition-colors hover:bg-muted/20 sm:grid-cols-[minmax(0,1fr)_120px_160px] sm:items-center'>
@@ -606,7 +618,7 @@ function TaskRow({ task }: { task: RunTask }) {
           <span className='font-medium tabular-nums'>{task.completed_count} / {task.target_count}</span>
         </div>
         <Progress value={progress} className='h-1.5' />
-        {task.failed_count > 0 && <div className='text-right text-[11px] font-medium text-destructive'>{task.failed_count} 项失败</div>}
+        {task.failed_count > 0 && <div className={cn('text-right text-[11px] font-medium', failuresRecovered ? 'text-muted-foreground' : 'text-destructive')}>{failuresRecovered ? `跳过 ${task.failed_count} 个异常候选` : `${task.failed_count} 项失败`}</div>}
       </div>
     </div>
   )

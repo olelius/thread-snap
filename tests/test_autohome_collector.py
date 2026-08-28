@@ -177,6 +177,102 @@ class AutohomeContractTests(unittest.TestCase):
             },
             record["raw_status"]["comment_page_end"],
         )
+        self.assertFalse(record["raw_status"]["cross_forum_aggregate"])
+        self.assertEqual(8232, record["raw_status"]["discovery_bbs_id"])
+
+    def test_cross_forum_feed_item_preserves_discovery_and_canonical_identity(self) -> None:
+        """列表明确聚合的跨论坛帖子仍是该来源的有效快照结果。"""
+
+        document = """
+        <html><body><script>
+        window['__BBSINFO__'] = {"bbsId":8563,"bbs":"c"}
+        window['__TOPICINFO__'] = {topicId: 115775128, topicDelete: 0};
+        </script>
+        <div class="post-container">风云A9和MG07配置对比正文</div>
+        <span data-page-count="1"></span><a class="athm-page__next disabled"></a>
+        </body></html>
+        """.encode()
+        collector = AutohomeCollector(None)
+        source = parse_circle_url("https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post")
+        candidate = collector._candidate(
+            source,
+            {
+                "club_bbs_id": 8232,
+                "club_bbs_type": "c",
+                "biz_id": 115775128,
+                "pc_url": (
+                    "https://club.autohome.com.cn/bbs/thread/2d98dc568bd67abb/115775128-1.html"
+                ),
+                "app_url": ("autohome://club/topicdetail?pageid=115775128&bbsid=8563&bbstype=c"),
+            },
+            6,
+        )
+        collector._get = lambda url, **_: FakeResponse(document, url)  # type: ignore[method-assign]
+
+        record = collector.fetch_post(candidate["url"], candidate=candidate)
+
+        assert record is not None
+        self.assertEqual(8232, record["raw_status"]["discovery_bbs_id"])
+        self.assertEqual("c", record["raw_status"]["discovery_bbs_type"])
+        self.assertEqual(8563, record["raw_status"]["bbs_id"])
+        self.assertEqual("c", record["raw_status"]["bbs_type"])
+        self.assertTrue(record["raw_status"]["cross_forum_aggregate"])
+        self.assertEqual(6, candidate["order_index"])
+
+    def test_cross_forum_feed_item_still_rejects_canonical_identity_mismatch(self) -> None:
+        """列表已声明的原始论坛与详情再次冲突时仍按错帖失败关闭。"""
+
+        document = """
+        <html><body><script>
+        window['__BBSINFO__'] = {"bbsId":8666,"bbs":"c"}
+        window['__TOPICINFO__'] = {topicId: 115775128, topicDelete: 0};
+        </script><div class="post-container">正文</div>
+        <span data-page-count="1"></span><a class="athm-page__next disabled"></a>
+        </body></html>
+        """.encode()
+        collector = AutohomeCollector(None)
+        source = parse_circle_url("https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post")
+        candidate = collector._candidate(
+            source,
+            {
+                "club_bbs_id": 8232,
+                "club_bbs_type": "c",
+                "biz_id": 115775128,
+                "pc_url": (
+                    "https://club.autohome.com.cn/bbs/thread/2d98dc568bd67abb/115775128-1.html"
+                ),
+                "app_url": ("autohome://club/topicdetail?pageid=115775128&bbsid=8563&bbstype=c"),
+            },
+            6,
+        )
+        collector._get = lambda url, **_: FakeResponse(document, url)  # type: ignore[method-assign]
+
+        with self.assertRaises(CollectorFailure) as caught:
+            collector.fetch_post(candidate["url"], candidate=candidate)
+
+        self.assertEqual("WRONG_POST", caught.exception.code)
+
+    def test_cross_forum_detail_without_list_proof_is_rejected(self) -> None:
+        """列表没有声明聚合身份时，不把普通论坛错配误当成跨论坛聚合。"""
+
+        document = """
+        <html><body><script>
+        window['__BBSINFO__'] = {"bbsId":8563,"bbs":"c"}
+        window['__TOPICINFO__'] = {topicId: 115775128, topicDelete: 0};
+        </script><div class="post-container">正文</div>
+        <span data-page-count="1"></span><a class="athm-page__next disabled"></a>
+        </body></html>
+        """.encode()
+        collector = AutohomeCollector(None)
+        collector._get = lambda url, **_: FakeResponse(document, url)  # type: ignore[method-assign]
+
+        with self.assertRaises(CollectorFailure) as caught:
+            collector.fetch_post(
+                "https://club.autohome.com.cn/bbs/thread/2d98dc568bd67abb/115775128-1.html",
+                candidate={"bbs_id": 8232, "bbs_type": "c"},
+            )
+
+        self.assertEqual("WRONG_POST", caught.exception.code)
 
     def test_single_page_marker_proves_fewer_than_ten_comments_complete(self) -> None:
         document = """
