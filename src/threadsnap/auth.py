@@ -530,6 +530,22 @@ class BrowserAuthManager:
             task.page_status = "validating"
             await websocket.send_json({"type": "validating", "message": "正在校验平台会话…"})
             state = await task.context.storage_state()
+            try:
+                # 在关闭浏览器前检查导出结构；Cookie 空值是合法状态，不属于结构错误。
+                self.session_store.validate_state(state)
+            except DomainError:
+                logger.error("平台认证浏览器导出的会话结构无效：platform=%s", task.platform_code)
+                task.page_status = "ready"
+                task.error_code = "AUTH_SESSION_STATE_INVALID"
+                task.error_message = "平台登录状态结构异常，请使用全新登录环境重新认证。"
+                await websocket.send_json(
+                    {
+                        "type": "validation_failed",
+                        "code": task.error_code,
+                        "message": task.error_message,
+                    }
+                )
+                return
             probe_url = self._validation_probe_url(task.platform_code)
             try:
                 spec = get_platform_spec(task.platform_code)
@@ -576,18 +592,37 @@ class BrowserAuthManager:
                 )
                 return
 
-            previous_state = self.session_store.get_state(task.platform_code)
-            profile_dir = task.profile_dir
-            await self._close_browser(task)
-            self.session_store.import_state(task.platform_code, state)
             try:
-                self.profiles.promote(task.platform_code, profile_dir, task.id)
-            except Exception:
-                if previous_state:
-                    self.session_store.import_state(task.platform_code, previous_state)
-                else:
-                    self.session_store.clear(task.platform_code)
-                raise
+                previous_state = self.session_store.get_state(task.platform_code)
+                profile_dir = task.profile_dir
+                await self._close_browser(task)
+                self.session_store.import_state(task.platform_code, state)
+                try:
+                    self.profiles.promote(task.platform_code, profile_dir, task.id)
+                except Exception:
+                    if previous_state:
+                        self.session_store.import_state(task.platform_code, previous_state)
+                    else:
+                        self.session_store.clear(task.platform_code)
+                    raise
+            except Exception as exc:
+                logger.error(
+                    "平台认证会话持久化失败：platform=%s type=%s",
+                    task.platform_code,
+                    type(exc).__name__,
+                )
+                task.status = "failed"
+                task.page_status = "failed"
+                task.error_code = "AUTH_SESSION_SAVE_FAILED"
+                task.error_message = "平台登录校验已通过，但会话保存失败，请重新创建认证浏览器。"
+                await websocket.send_json(
+                    {
+                        "type": "session_save_failed",
+                        "code": task.error_code,
+                        "message": task.error_message,
+                    }
+                )
+                return
             task.profile_dir = None
             self.worker.resume_platform(task.platform_code)
             if self.event_publisher:
