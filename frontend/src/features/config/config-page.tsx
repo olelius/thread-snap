@@ -607,6 +607,8 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
   const [validationJobIds, setValidationJobIds] = useState<string[]>([])
+  const [openPlatformCodes, setOpenPlatformCodes] = useState<string[]>([])
+  const initializedPlatformGroups = useRef(false)
   const validationJobs = useQuery({
     queryKey: ['circle-validation-jobs', validationJobIds],
     queryFn: () => Promise.all(validationJobIds.map((id) => api<ValidationJob>(`/validation-jobs/${id}`))),
@@ -623,6 +625,12 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
     onError: (error) => toast.error('批量验证提交失败', { description: errorMessage(error) }),
   })
   useEffect(() => { if (query.data && !dirty) { setRows(vehicleRows(query.data)); setDeletedIds([]) } }, [query.data, dirty])
+  useEffect(() => {
+    if (!initializedPlatformGroups.current && sourcePlatforms.length) {
+      setOpenPlatformCodes([sourcePlatforms[0].code])
+      initializedPlatformGroups.current = true
+    }
+  }, [sourcePlatforms])
   if (!rows) return <Card><CardContent className='p-10 text-center text-sm text-muted-foreground'>正在加载来源与圈子…</CardContent></Card>
   const baselineRows = vehicleRows(query.data ?? [])
   const baselineById = new Map(baselineRows.map((row) => [row.id, row]))
@@ -639,6 +647,11 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
     const nextDeletedIds = row.id && !deletedIds.includes(row.id) ? [...deletedIds, row.id] : deletedIds
     commitRows(rows.filter((_, rowIndex) => rowIndex !== index), nextDeletedIds)
   }
+  const openPlatform = (platformCode: string) => setOpenPlatformCodes((values) => values.includes(platformCode) ? values : [...values, platformCode])
+  const add = (platformCode: string) => {
+    openPlatform(platformCode)
+    commitRows([...rows, { id: '', platform_code: platformCode, external_id: '', url: '', vehicle_name: '未命名来源', auto_enabled: false, section: 'dynamic', list_order: 'latest_reply', validation_status: 'unverified' }])
+  }
   const discard = () => {
     setRows(structuredClone(baselineRows))
     setDeletedIds([])
@@ -649,10 +662,16 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
   const availablePlatformCodes = new Set(sourcePlatforms.filter((platform) => platform.adapter_status === 'available').map((platform) => platform.code))
   const unverifiedCount = rows.filter((row) => row.id && row.validation_status === 'unverified' && availablePlatformCodes.has(row.platform_code)).length
   const pendingAcceptanceCount = rows.filter((row) => row.id && row.validation_status === 'unverified' && !availablePlatformCodes.has(row.platform_code)).length
-  const changedRows = rows.filter((row) => {
+  const rowDirtyState = (row: Circle) => {
     const baseline = baselineById.get(row.id)
-    return !baseline || row.vehicle_name !== baseline.vehicle_name || row.vehicle_id !== baseline.vehicle_id || row.url !== baseline.url || row.auto_enabled !== baseline.auto_enabled
-  }).length
+    const isNew = !baseline
+    const platformDirty = isNew || row.platform_code !== baseline.platform_code
+    const vehicleDirty = isNew || row.vehicle_name !== baseline.vehicle_name || row.vehicle_id !== baseline.vehicle_id
+    const urlDirty = isNew || row.url !== baseline.url
+    const autoDirty = Boolean(baseline) && row.auto_enabled !== baseline?.auto_enabled
+    return { baseline, isNew, platformDirty, vehicleDirty, urlDirty, autoDirty, rowDirty: isNew || platformDirty || vehicleDirty || urlDirty || autoDirty }
+  }
+  const changedRows = rows.filter((row) => rowDirtyState(row).rowDirty).length
   const changeCount = changedRows + deletedIds.length
   const jobs = validationJobs.data ?? []
   const completedJobs = jobs.filter(validationSettled).length
@@ -669,12 +688,17 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
       toast.error('验证提交失败', { description: errorMessage(error) })
     }
   }
+  const platformGroups = sourcePlatforms.map((platform) => ({
+    platform,
+    items: rows.map((row, index) => ({ row, index })).filter(({ row }) => row.platform_code === platform.code),
+  }))
+  const allGroupsOpen = platformGroups.length > 0 && platformGroups.every(({ platform }) => openPlatformCodes.includes(platform.code))
   return <div className='space-y-4 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:gap-4 xl:space-y-0'>
     <ConfigSectionToolbar icon={<CarFront className='size-4.5' />} title='来源与圈子' summary={`${rows.length} 个来源${dirty ? ` · ${changeCount} 项未保存` : ''}`} description='来源名称用于区分批次范围；同一圈子的最新回复和最新发布是两个独立来源。'>
         <Button variant='outline' disabled={dirty || unverifiedCount === 0 || bulkValidation.isPending} onClick={() => bulkValidation.mutate()} title={pendingAcceptanceCount ? `${pendingAcceptanceCount} 个待验收平台来源将在平台接入后验证` : undefined}>
           {bulkValidation.isPending ? <Loader2 className='size-4 animate-spin' /> : <RefreshCw className='size-4' />}验证全部待验证（{unverifiedCount}）
         </Button>
-        <Button variant='outline' onClick={() => commitRows([...rows, { id: '', platform_code: 'dongchedi', external_id: '', url: '', vehicle_name: '未命名来源', auto_enabled: false, section: 'dynamic', list_order: 'latest_reply', validation_status: 'unverified' }])}><Plus className='size-4' />新增来源</Button>
+        <Button variant='outline' disabled={!platformGroups.length} onClick={() => setOpenPlatformCodes(allGroupsOpen ? [] : platformGroups.map(({ platform }) => platform.code))}><ChevronsUpDown className='size-4' />{allGroupsOpen ? '收起全部' : '展开全部'}</Button>
         <Button variant='outline' disabled={!dirty || saving} onClick={discard}><RotateCcw className='size-4' />放弃修改</Button>
         <Button disabled={!dirty || saving} onClick={save}>{saving ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}保存当前标签{dirty ? ` (${changeCount})` : ''}</Button>
     </ConfigSectionToolbar>
@@ -686,21 +710,31 @@ function CirclePanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => voi
         <div>成功 {successfulJobs}，失败 {failedJobs}，等待认证 {authJobs}。首次验证成功会自动参与；重新验证不会改变现有开关。</div>
       </AlertDescription>
     </Alert>}
-    <div className='max-h-[min(65svh,680px)] overflow-auto rounded-xl border bg-card/90 xl:min-h-0 xl:max-h-none xl:flex-1' data-list-viewport='circles'>
-      <Table className='min-w-[1180px]'>
-        <TableHeader><TableRow><TableHead className='w-16 text-center'>序号</TableHead><TableHead>平台</TableHead><TableHead>来源名称</TableHead><TableHead>圈子 URL</TableHead><TableHead>列表顺序</TableHead><TableHead>平台圈子名称</TableHead><TableHead>验证状态</TableHead><TableHead>自动参与</TableHead><TableHead className='text-right'>操作</TableHead></TableRow></TableHeader>
-        <TableBody>{rows.map((row, index) => { const baseline = baselineById.get(row.id); const isNew = !baseline; const integrated = availablePlatformCodes.has(row.platform_code); const platformDirty = isNew || row.platform_code !== baseline.platform_code; const vehicleDirty = isNew || row.vehicle_name !== baseline.vehicle_name || row.vehicle_id !== baseline.vehicle_id; const urlDirty = isNew || row.url !== baseline.url; const autoDirty = Boolean(baseline) && row.auto_enabled !== baseline?.auto_enabled; const rowDirty = isNew || platformDirty || vehicleDirty || urlDirty || autoDirty; return <TableRow key={row.id || `new-${index}`} data-dirty={rowDirty || undefined} className={cn(rowDirty && 'bg-amber-500/[0.035]')}>
-          <TableCell className='w-16 text-center tabular-nums text-muted-foreground'><span className='inline-flex items-center gap-1.5'>{index + 1}{rowDirty && <span className='size-1.5 rounded-full bg-amber-500' aria-label={isNew ? '新增来源' : '本行有未保存修改'} />}</span></TableCell>
-          <TableCell><Select value={row.platform_code} onValueChange={(platform_code) => update(index, { platform_code, auto_enabled: false })}><SelectTrigger data-dirty={platformDirty || undefined} className={cn(platformDirty && dirtyFieldClass)}><SelectValue /></SelectTrigger><SelectContent>{sourcePlatforms.map((item) => <SelectItem key={item.code} value={item.code}>{item.display_name}{item.adapter_status !== 'available' ? '（待验收）' : ''}</SelectItem>)}</SelectContent></Select></TableCell>
-          <TableCell><Input value={row.vehicle_name ?? ''} data-dirty={vehicleDirty || undefined} className={cn(vehicleDirty && dirtyFieldClass)} onChange={(event) => { const vehicle_name = event.target.value; update(index, { vehicle_name, vehicle_id: vehicle_name === baseline?.vehicle_name ? baseline?.vehicle_id : undefined }) }} placeholder='例如：风云A9最新发布' /></TableCell>
-          <TableCell><Input value={row.url} data-dirty={urlDirty || undefined} className={cn(urlDirty && dirtyFieldClass)} onChange={(event) => update(index, { url: event.target.value })} placeholder='圈子 URL' /></TableCell>
-          <TableCell><Badge variant='outline' className='font-normal'>{listOrderName(row.list_order || 'latest_reply')}</Badge></TableCell>
-          <TableCell>{row.name || (row.id ? '等待验证' : '保存后验证')}</TableCell>
-          <TableCell><div className='space-y-1'><StatusBadge value={row.validation_status === 'verified' ? 'success' : row.validation_status === 'failed' ? 'failed' : 'unknown'} label={{ verified: '已验证', failed: '验证失败', unverified: '未验证' }[row.validation_status] ?? row.validation_status} />{row.id && !integrated && <div className='text-xs text-muted-foreground'>平台接入验收后可验证</div>}{row.id && integrated && !row.first_validated_at && row.validation_status !== 'verified' && <div className='text-xs text-muted-foreground'>首次通过后自动参与</div>}</div></TableCell>
-          <TableCell><Switch checked={row.auto_enabled} disabled={!integrated || row.validation_status !== 'verified'} data-dirty={autoDirty || undefined} className={cn(autoDirty && dirtyControlClass)} onCheckedChange={(auto_enabled) => update(index, { auto_enabled })} /></TableCell>
-          <TableCell><div className='flex justify-end gap-1'>{row.id && <Button variant='outline' size='sm' disabled={!integrated} title={!integrated ? '平台接入验收后可验证' : undefined} onClick={() => validate(row)}>{integrated ? row.first_validated_at ? '重新验证' : '验证' : '待接入'}</Button>}<Button variant='ghost' size='icon' onClick={() => remove(index)} aria-label='删除圈子'><Trash2 className='size-4' /></Button></div></TableCell>
-        </TableRow> })}</TableBody>
-      </Table>
+    <div className='max-h-[min(65svh,680px)] space-y-3 overflow-auto pr-1 xl:min-h-0 xl:max-h-none xl:flex-1' data-list-viewport='circles'>
+      {platformGroups.map(({ platform, items }) => { const open = openPlatformCodes.includes(platform.code); const groupDirtyCount = items.filter(({ row }) => rowDirtyState(row).rowDirty).length; const verifiedCount = items.filter(({ row }) => row.validation_status === 'verified').length; return <Collapsible key={platform.code} open={open} onOpenChange={(nextOpen) => setOpenPlatformCodes((values) => nextOpen ? [...new Set([...values, platform.code])] : values.filter((code) => code !== platform.code))} className='min-w-[1180px] overflow-hidden rounded-xl border bg-card/90 shadow-sm'>
+        <div className='flex items-center gap-2 px-3 py-2.5'>
+          <CollapsibleTrigger asChild><button type='button' className='flex min-w-0 flex-1 items-center gap-3 rounded-lg px-1 py-1 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring' aria-label={`${open ? '收起' : '展开'}${platform.display_name}来源`}><ChevronDown className={cn('size-4 shrink-0 text-muted-foreground transition-transform', open && 'rotate-180')} /><div className='min-w-0 flex-1'><div className='flex flex-wrap items-center gap-2'><span className='font-semibold'>{platform.display_name}</span><Badge variant='secondary' className='font-normal'>{items.length} 个来源</Badge><span className='text-xs text-muted-foreground'>已验证 {verifiedCount}</span>{groupDirtyCount > 0 && <Badge variant='outline' className='border-amber-500/60 text-amber-700 dark:text-amber-300'>{groupDirtyCount} 项未保存</Badge>}</div></div></button></CollapsibleTrigger>
+          <Button variant='outline' size='sm' onClick={() => add(platform.code)}><Plus className='size-4' />新增{platform.display_name}来源</Button>
+        </div>
+        <CollapsibleContent>
+          <div className='border-t'>
+            <Table className='min-w-[1180px]'>
+              <TableHeader><TableRow><TableHead className='w-16 text-center'>序号</TableHead><TableHead>平台</TableHead><TableHead>来源名称</TableHead><TableHead>圈子 URL</TableHead><TableHead>列表顺序</TableHead><TableHead>平台圈子名称</TableHead><TableHead>验证状态</TableHead><TableHead>自动参与</TableHead><TableHead className='text-right'>操作</TableHead></TableRow></TableHeader>
+              <TableBody>{items.length ? items.map(({ row, index }, groupIndex) => { const { baseline, isNew, platformDirty, vehicleDirty, urlDirty, autoDirty, rowDirty } = rowDirtyState(row); const integrated = availablePlatformCodes.has(row.platform_code); return <TableRow key={row.id || `new-${index}`} data-dirty={rowDirty || undefined} className={cn(rowDirty && 'bg-amber-500/[0.035]')}>
+                <TableCell className='w-16 text-center tabular-nums text-muted-foreground'><span className='inline-flex items-center gap-1.5'>{groupIndex + 1}{rowDirty && <span className='size-1.5 rounded-full bg-amber-500' aria-label={isNew ? '新增来源' : '本行有未保存修改'} />}</span></TableCell>
+                <TableCell><Select value={row.platform_code} onValueChange={(platform_code) => { openPlatform(platform_code); update(index, { platform_code, auto_enabled: false }) }}><SelectTrigger data-dirty={platformDirty || undefined} className={cn(platformDirty && dirtyFieldClass)}><SelectValue /></SelectTrigger><SelectContent>{sourcePlatforms.map((item) => <SelectItem key={item.code} value={item.code}>{item.display_name}{item.adapter_status !== 'available' ? '（待验收）' : ''}</SelectItem>)}</SelectContent></Select></TableCell>
+                <TableCell><Input value={row.vehicle_name ?? ''} data-dirty={vehicleDirty || undefined} className={cn(vehicleDirty && dirtyFieldClass)} onChange={(event) => { const vehicle_name = event.target.value; update(index, { vehicle_name, vehicle_id: vehicle_name === baseline?.vehicle_name ? baseline?.vehicle_id : undefined }) }} placeholder='例如：风云A9最新发布' /></TableCell>
+                <TableCell><Input value={row.url} data-dirty={urlDirty || undefined} className={cn(urlDirty && dirtyFieldClass)} onChange={(event) => update(index, { url: event.target.value })} placeholder='圈子 URL' /></TableCell>
+                <TableCell><Badge variant='outline' className='font-normal'>{listOrderName(row.list_order || 'latest_reply')}</Badge></TableCell>
+                <TableCell>{row.name || (row.id ? '等待验证' : '保存后验证')}</TableCell>
+                <TableCell><div className='space-y-1'><StatusBadge value={row.validation_status === 'verified' ? 'success' : row.validation_status === 'failed' ? 'failed' : 'unknown'} label={{ verified: '已验证', failed: '验证失败', unverified: '未验证' }[row.validation_status] ?? row.validation_status} />{row.id && !integrated && <div className='text-xs text-muted-foreground'>平台接入验收后可验证</div>}{row.id && integrated && !row.first_validated_at && row.validation_status !== 'verified' && <div className='text-xs text-muted-foreground'>首次通过后自动参与</div>}</div></TableCell>
+                <TableCell><Switch checked={row.auto_enabled} disabled={!integrated || row.validation_status !== 'verified'} data-dirty={autoDirty || undefined} className={cn(autoDirty && dirtyControlClass)} onCheckedChange={(auto_enabled) => update(index, { auto_enabled })} /></TableCell>
+                <TableCell><div className='flex justify-end gap-1'>{row.id && <Button variant='outline' size='sm' disabled={!integrated} title={!integrated ? '平台接入验收后可验证' : undefined} onClick={() => validate(row)}>{integrated ? row.first_validated_at ? '重新验证' : '验证' : '待接入'}</Button>}<Button variant='ghost' size='icon' onClick={() => remove(index)} aria-label='删除圈子'><Trash2 className='size-4' /></Button></div></TableCell>
+              </TableRow> }) : <TableRow><TableCell colSpan={9} className='h-24 text-center text-sm text-muted-foreground'>该平台暂无来源，点击右上角新增。</TableCell></TableRow>}</TableBody>
+            </Table>
+          </div>
+        </CollapsibleContent>
+      </Collapsible> })}
     </div>
   </div>
 }
