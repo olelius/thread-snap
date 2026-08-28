@@ -260,7 +260,7 @@ class YicheCollector:
             if status == 429:
                 raise CollectorFailure("RATE_LIMITED", "易车页面返回限流状态，请稍后重试。")
             if status in {401, 403}:
-                raise AuthenticationRequired("易车页面要求重新认证。", trigger_url=url)
+                raise AuthenticationRequired("易车访问会话需要更新。", trigger_url=url)
             if status is None:
                 raise CollectorFailure("HTTP_RESPONSE_MISSING", "易车页面没有返回主文档响应。")
             if status != 200:
@@ -410,7 +410,7 @@ class YicheCollector:
 
         with self._browser_page() as browser_page:
             self._navigate(browser_page, probe_url)
-        return {"platform": self.code, "authenticated": True}
+        return {"platform": self.code, "access_session_available": True}
 
     @staticmethod
     def _detail_payload(content: str, post_url: str) -> dict[str, Any]:

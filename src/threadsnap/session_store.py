@@ -104,7 +104,7 @@ class SessionStore:
         except (InvalidToken, json.JSONDecodeError) as exc:
             raise DomainError(
                 "SESSION_DECRYPT_FAILED",
-                "平台会话状态读取失败，请重新完成平台认证。",
+                "平台会话状态读取失败，请重新更新平台会话。",
                 status_code=500,
             ) from exc
         return result if isinstance(result, dict) else None

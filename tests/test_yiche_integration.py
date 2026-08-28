@@ -121,6 +121,33 @@ class FakeYicheCollector:
 
 
 class YicheReleaseStateTests(AppCase):
+    def test_background_worker_uses_hidden_yiche_browser_independently_from_auth(self) -> None:
+        captured: dict[str, object] = {}
+
+        def collector_factory(
+            storage_state: dict | None,
+            *,
+            concurrency: int,
+            browser_headless: bool,
+        ) -> FakeYicheCollector:
+            captured.update(
+                storage_state=storage_state,
+                concurrency=concurrency,
+                browser_headless=browser_headless,
+            )
+            return FakeYicheCollector()
+
+        spec = replace(PLATFORM_ADAPTERS["yiche"], collector_factory=collector_factory)
+        with self.container.sessions() as db:
+            platform = db.get(PlatformConfig, "yiche")
+            assert platform is not None
+            with patch.dict(PLATFORM_ADAPTERS, {"yiche": spec}):
+                self.container.worker._collector(platform)
+
+        self.assertFalse(self.container.settings.auth_browser_headless)
+        self.assertTrue(spec.background_browser_headless)
+        self.assertTrue(captured["browser_headless"])
+
     def test_released_adapter_is_available_but_default_disabled(self) -> None:
         platform = next(
             item for item in self.client.get("/api/v1/platforms").json() if item["code"] == "yiche"
@@ -128,6 +155,7 @@ class YicheReleaseStateTests(AppCase):
         self.assertEqual("available", platform["adapter_status"])
         self.assertFalse(platform["enabled"])
         self.assertFalse(platform["capabilities"]["page_evidence"])
+        self.assertEqual("access_session", platform["capabilities"]["authentication_mode"])
 
         enabled = self.client.put(
             "/api/v1/platforms/yiche",
