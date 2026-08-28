@@ -26,7 +26,8 @@
 - [x] 真实瑞虎8来源验证任务 `01a047aa-a82e-7cba-a788-69a536ab6a93` 成功；进程采样89次确认 Chromium 主进程含 `--headless`，回执位于 `artifacts/runtime/yiche-hidden-validation/runtime-validation.json`。
 - [x] 1680×900真实页面确认三平台会话卡片语义和易车交互Dialog，无脚本错误；截图位于 `artifacts/runtime/yiche-hidden-validation/session-modes.png` 与 `access-session-dialog.png`，SHA-256分别为 `49e514a9f62317ca38f7e5047e1d50ec50eb0b7a0f03f1d7bba655772ade6b28`、`fcec77c48eb49e56c10ecb5f8538f408302346c2eb4c475bb5954eb39ce8d68d`。
 - [x] 完整后端210/210（111.602秒）、Ruff、compileall、pip check、前端TypeScript检查和生产构建通过，Vite转换2468个模块；`git diff --check`通过。
-**下一步**：完成精确提交、PR合并和合并后本地服务复核。
+- [x] 功能提交 `f6564a1` 已经PR #220合并为 `main@bbcb5dd`，功能分支已清理；合并后本地服务健康，能力API返回易车 `authentication_mode=access_session`，真实瑞虎8重新验证任务 `01a047b9-d142-76ce-af9f-5acb2858cf2a` 成功，当前页面再次确认三平台模式和3个可用会话且无脚本错误。Git外回执位于 `artifacts/runtime/yiche-hidden-validation/post-merge-validation.json`。
+**下一步**：无业务、代码、文档或本地服务恢复缺口；易车正式500/500仍按既有独立生产验收计划执行。
 **边界**：不移除易车对 Chromium 页面运行时动态签名和真实XHR的依赖；后台只改为无界面运行。访问会话可用不等于账号已登录，不新增账号字段，也不输出Cookie、令牌或Profile内容。
 **关联**：`CONTEXT.md`、`src/threadsnap/collectors/registry.py`、`src/threadsnap/worker.py`、`frontend/src/features/config/config-page.tsx`、`docs/design/product-design.md`
 
