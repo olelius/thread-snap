@@ -18,7 +18,7 @@
 
 ## 2026-08-28 — 修复口碑浏览器通用错误不重试且丢失诊断
 **总目标**：修复口碑巡检中 Patchright 通用 `Error` 被直接落为内部错误、既不保留故障阶段也不执行既有一次有界重试的问题，并通过正式补跑链恢复当日瑞虎9缺失结果。
-**状态**：🛠️ 代码、回归和本地真实页面复核已完成；待Git收尾、重启本地后端并创建关联补跑。
+**状态**：✅ Patchright通用错误已进入阶段诊断与既有一次有界重试；本地正式关联补跑已恢复瑞虎9，原批次保持不可变且关联结果达到27/27。
 **干到哪里了**：
 - [x] 从本地批次 `RP-S-20260828-9797` 确认瑞虎9为 `REPUTATION_VALIDATION_INTERNAL_ERROR`、`attempt_count=1`、证据目录未创建；错误发生在证据写入前，且底层文本被 `_validation_error()` 收敛为类型名 `Error`。
 - [x] 懂车帝口碑适配器现为页面上下文、页面创建、导航、标题等待、布局冻结、DOM测量和证据截图维护明确阶段；Patchright 通用错误写入不含Session的服务端阶段诊断，并转换为 `REPUTATION_BROWSER_RUNTIME_ERROR + retryable=true`，复用现有最多一次重试。
@@ -26,7 +26,10 @@
 - [x] 新增回归证明底层错误文本只进入服务日志、业务错误不泄漏细节且标记为可重试；既有进度回归继续证明暂时错误第二次尝试终态前不进入完成分子。
 - [x] 口碑专项21/21、完整后端199/199（120.926s）通过；Ruff、compileall、pip check、`git diff --check`、前端TypeScript检查与生产构建（2468 modules）通过。
 - [x] 修改后使用当前本地加密Session真实复核瑞虎9：5.469秒取得3.85分、同级第3、口碑量831、评价篇数831、差评率24%，指标区域PNG SHA-256为 `944c564e2ce911f22ac1156fa510cdd47b66440e18a657eaaeadd16a152e3e48`；回执位于Git外 `artifacts/runtime/reputation-browser-error-retry/`。
-**下一步**：完成Git提交、推送、PR合并和分支清理；以合并后的`main`重启本地服务，再通过原批次“补跑失败项”创建关联批次并核验瑞虎9结果、证据及原批次不可变性。
+- [x] 本地后端重启到修复提交后，正式“补跑失败项”创建 `RP-R-20260828-055455-02F4`；13:55:01完成1/1结果和1/1证据，瑞虎9为3.85分、同级第3、口碑量831、评价篇数831、差评率24%，证据文件存在且实际哈希与数据库同为 `944c564e2ce911f22ac1156fa510cdd47b66440e18a657eaaeadd16a152e3e48`。
+- [x] 原批次 `RP-S-20260828-9797` 仍为原始 `partial_success + 26/27 + 失败1`，原失败行仍保存 `REPUTATION_VALIDATION_INTERNAL_ERROR`；关联视图现为 `resolved=27`、`unresolved=0`、`linked_status=success`、证据27/27，SQLite `PRAGMA integrity_check=ok`。
+- [x] 功能提交 `9f9e7a7` 已精确暂存5个目标文件并推送到PR #211；远端报告可合并，敏感模式扫描0命中。
+**下一步**：无业务或本地恢复缺口；按项目自动收尾授权合并PR #211并清理分支，随后以合并后的`main`复核本地健康和关联结果。
 **边界**：不覆盖或重算原批次，不扩大重试次数，不把全部异常都标为暂时错误，不记录Session、Cookie或令牌；本次不改变口碑指标与证据合同。
 **关联**：`src/threadsnap/reputation_dongchedi.py`、`tests/test_reputation.py`、`docs/memories/patchright-error-classification.md`
 
