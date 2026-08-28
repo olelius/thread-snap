@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import hashlib
 import json
@@ -14,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
+from patchright.async_api import Error as PlaywrightError
 from PIL import Image
 from sqlalchemy import func, select
 
@@ -167,6 +169,40 @@ class ReputationInspectionTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 202, response.text)
         return response.json()
+
+    def test_browser_runtime_error_is_logged_and_marked_retryable(self) -> None:
+        """Patchright通用异常必须保留服务端阶段诊断并标记为可重试。"""
+
+        class BrokenBrowser:
+            @staticmethod
+            async def new_context(**_kwargs):
+                raise PlaywrightError("page context closed during navigation")
+
+        adapter = DongchediReputationAdapter(None)
+        target = ReputationMappingTarget(
+            vehicle_id="vehicle-browser-error",
+            platform_vehicle_id="6227",
+            platform_url="https://www.dongchedi.com/auto/series/score/6227-x-x-x-x-x",
+            platform_display_name="瑞虎9",
+            mapping_hash="fixture",
+        )
+
+        with self.assertLogs("threadsnap.reputation_dongchedi", level="WARNING") as logs:
+            with self.assertRaises(ReputationAdapterError) as raised:
+                asyncio.run(
+                    adapter._visit(  # noqa: SLF001 - 显式验证浏览器异常分类边界。
+                        BrokenBrowser(),  # type: ignore[arg-type]
+                        target,
+                        self.root / "browser-error",
+                    )
+                )
+
+        self.assertEqual("REPUTATION_BROWSER_RUNTIME_ERROR", raised.exception.code)
+        self.assertTrue(raised.exception.retryable)
+        self.assertNotIn("page context closed", raised.exception.message)
+        joined = "\n".join(logs.output)
+        self.assertIn("stage=创建页面上下文", joined)
+        self.assertIn("page context closed during navigation", joined)
 
     def initialize_scope(self, filename: str = "scope.csv") -> dict:
         """写入固定 27 车型初始化清单并返回当前范围。"""
