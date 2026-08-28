@@ -2625,6 +2625,52 @@ class ApiAndConfigTests(AppCase):
             encrypted = db.get(PlatformSession, "dongchedi").encrypted_state
             self.assertNotIn(b"secret-value", encrypted)
 
+    def test_session_accepts_cookie_with_empty_value(self) -> None:
+        """浏览器合法导出的空值Cookie仍可进入加密Session。"""
+
+        state = {
+            "cookies": [
+                {
+                    "name": "empty-marker",
+                    "value": "",
+                    "domain": ".dongchedi.com",
+                    "path": "/",
+                }
+            ]
+        }
+
+        imported = self.client.post(
+            "/internal/v1/platforms/dongchedi/session/import",
+            json={"storage_state": state},
+        )
+
+        self.assertEqual(200, imported.status_code)
+        self.assertEqual(
+            "",
+            self.container.session_store.get_state("dongchedi")["cookies"][0]["value"],
+        )
+
+    def test_session_rejects_cookie_without_value_field(self) -> None:
+        """Cookie必须显式包含字符串value，避免把结构缺失放入正式Session。"""
+
+        response = self.client.post(
+            "/internal/v1/platforms/dongchedi/session/import",
+            json={
+                "storage_state": {
+                    "cookies": [
+                        {
+                            "name": "broken",
+                            "domain": ".dongchedi.com",
+                            "path": "/",
+                        }
+                    ]
+                }
+            },
+        )
+
+        self.assertEqual(400, response.status_code)
+        self.assertEqual("SESSION_INVALID", response.json()["code"])
+
 
 class AuthComponentTests(AppCase):
     def test_zero_byte_auth_page_is_reported_as_failed(self) -> None:
@@ -2761,7 +2807,16 @@ class AuthComponentTests(AppCase):
         task.profile_dir = self.container.auth.profiles.prepare("dongchedi", task.id)
         (task.profile_dir / "Default").mkdir(parents=True)
         (task.profile_dir / "Default" / "marker.txt").write_text("new-profile", encoding="utf-8")
-        task.context = FakeAuthContext(auth_state("new-session"))  # type: ignore[assignment]
+        state = auth_state("new-session")
+        state["cookies"].append(
+            {
+                "name": "empty-marker",
+                "value": "",
+                "domain": ".dongchedi.com",
+                "path": "/",
+            }
+        )
+        task.context = FakeAuthContext(state)  # type: ignore[assignment]
         task.playwright = FakePlaywright()  # type: ignore[assignment]
         task.page = FakeAuthPage()  # type: ignore[assignment]
         socket = FakeAuthSocket()
@@ -2792,6 +2847,10 @@ class AuthComponentTests(AppCase):
         self.assertEqual(
             "new-session",
             self.container.session_store.get_state("dongchedi")["cookies"][0]["value"],
+        )
+        self.assertEqual(
+            "",
+            self.container.session_store.get_state("dongchedi")["cookies"][1]["value"],
         )
         encrypted = self.container.auth.profiles.current("dongchedi")
         self.assertTrue(encrypted.is_file())
@@ -2878,6 +2937,48 @@ class AuthComponentTests(AppCase):
         self.assertNotIn("sensitive-internal-detail", str(socket.messages[-1]))
         self.assertFalse(task.context.closed)  # type: ignore[union-attr]
         asyncio.run(self.container.auth._close(task))
+
+    def test_session_persistence_error_is_not_reported_as_page_load_failure(self) -> None:
+        """门禁后的持久化异常使用独立错误码，避免误导为页面加载失败。"""
+
+        task = AuthTask(
+            id="auth-save-failed",
+            platform_code="dongchedi",
+            ticket="ticket",
+            expires_at=datetime.now(timezone.utc),
+            status="active",
+            page_status="ready",
+        )
+        task.profile_dir = self.container.auth.profiles.prepare("dongchedi", task.id)
+        task.context = FakeAuthContext(auth_state("new-session"))  # type: ignore[assignment]
+        task.playwright = FakePlaywright()  # type: ignore[assignment]
+        task.page = FakeAuthPage()  # type: ignore[assignment]
+        socket = FakeAuthSocket()
+
+        class ValidCollector:
+            def __init__(self, *_args: object, **_kwargs: object):
+                pass
+
+            def validate_circle(self, _url: str) -> dict:
+                return {"external_id": "24729"}
+
+        with (
+            patch("threadsnap.auth.DongchediCollector", ValidCollector),
+            patch.object(
+                self.container.session_store,
+                "import_state",
+                side_effect=OSError("sensitive-storage-detail"),
+            ),
+        ):
+            asyncio.run(
+                self.container.auth._command(task, {"type": "finish"}, socket)  # type: ignore[arg-type]
+            )
+
+        self.assertEqual("failed", task.status)
+        self.assertEqual("failed", task.page_status)
+        self.assertEqual("AUTH_SESSION_SAVE_FAILED", task.error_code)
+        self.assertEqual("session_save_failed", socket.messages[-1]["type"])
+        self.assertNotIn("sensitive-storage-detail", str(socket.messages[-1]))
 
 
 class QueueAndRetryTests(AppCase):

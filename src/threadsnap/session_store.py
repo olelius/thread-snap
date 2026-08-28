@@ -48,16 +48,27 @@ class SessionStore:
                 details=[{"field": "cookies", "reason": "必须是非空数组"}],
             )
         for index, item in enumerate(cookies):
-            if not isinstance(item, dict) or not all(
-                item.get(key) for key in ("name", "value", "domain", "path")
-            ):
+            structural_fields = ("name", "domain", "path")
+            valid_structure = isinstance(item, dict) and all(
+                isinstance(item.get(key), str) and bool(item[key]) for key in structural_fields
+            )
+            # RFC Cookie 允许空值；浏览器 storage_state 会如实导出 value=""。
+            valid_value = (
+                isinstance(item, dict)
+                and "value" in item
+                and isinstance(item["value"], str)
+            )
+            if not valid_structure or not valid_value:
                 raise DomainError(
                     "SESSION_INVALID",
                     "平台会话文件包含无效 Cookie。",
                     details=[
                         {
                             "field": f"cookies[{index}]",
-                            "reason": "缺少 name、value、domain 或 path",
+                            "reason": (
+                                "name、domain、path必须是非空字符串；"
+                                "value必须存在且为字符串，允许空字符串"
+                            ),
                         }
                     ],
                 )

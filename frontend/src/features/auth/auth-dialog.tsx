@@ -24,13 +24,20 @@ type FrameMessage = {
 
 type PageStatus = 'idle' | 'starting' | 'loading' | 'ready' | 'validating' | 'failed' | 'completed'
 
+type PageError = {
+  title: string
+  code?: string
+  message: string
+  httpStatus?: number
+}
+
 const pageStatusNames: Record<PageStatus, string> = {
   idle: '等待启动',
   starting: '启动浏览器',
   loading: '加载平台页面',
   ready: '页面可操作',
   validating: '校验会话',
-  failed: '页面加载失败',
+  failed: '认证处理失败',
   completed: '认证完成',
 }
 
@@ -61,7 +68,7 @@ export function AuthDialog({
   const [pageUrl, setPageUrl] = useState('')
   const [connection, setConnection] = useState<'connecting' | 'online' | 'offline'>('offline')
   const [pageStatus, setPageStatus] = useState<PageStatus>('idle')
-  const [pageError, setPageError] = useState<{ code?: string; message: string; httpStatus?: number }>()
+  const [pageError, setPageError] = useState<PageError>()
   const [validationFailed, setValidationFailed] = useState(false)
   const [remaining, setRemaining] = useState(0)
   const [browserSize, setBrowserSize] = useState({ width: 1280, height: 800 })
@@ -119,9 +126,17 @@ export function AuthDialog({
         setPageStatus('ready')
         setValidationFailed(true)
         toast.error('认证状态校验未通过', { description: message.message })
+      } else if (message.type === 'session_save_failed') {
+        setPageStatus('failed')
+        setPageError({
+          title: '平台会话保存失败',
+          code: message.code,
+          message: message.message ?? '平台登录校验已通过，但会话保存失败。',
+        })
+        setFrame(undefined)
       } else if (message.type === 'page_failed' || message.type === 'error') {
         setPageStatus('failed')
-        setPageError({ code: message.code, message: message.message ?? '平台认证页面加载失败。', httpStatus: message.http_status })
+        setPageError({ title: '平台页面加载失败', code: message.code, message: message.message ?? '平台认证页面加载失败。', httpStatus: message.http_status })
         setFrame(undefined)
       }
     }
@@ -131,7 +146,7 @@ export function AuthDialog({
     createTask(fresh).then(connect).catch((error) => {
       setConnection('offline')
       setPageStatus('failed')
-      setPageError({ message: errorMessage(error) })
+      setPageError({ title: '认证窗口启动失败', message: errorMessage(error) })
       toast.error('认证窗口启动失败', { description: errorMessage(error) })
     })
   }, [connect, createTask, freshOnOpen])
@@ -251,7 +266,7 @@ export function AuthDialog({
           {pageError ? (
             <Alert variant='destructive' className='max-w-xl border-red-400/40 bg-background/95 shadow-2xl'>
               <AlertCircle className='size-4' />
-              <AlertTitle>平台页面加载失败</AlertTitle>
+              <AlertTitle>{pageError.title}</AlertTitle>
               <AlertDescription className='space-y-2'>
                 <p>{pageError.message}</p>
                 <p className='font-mono text-xs'>错误码：{pageError.code ?? 'AUTH_BROWSER_FAILED'}{pageError.httpStatus ? ` · HTTP ${pageError.httpStatus}` : ''}</p>

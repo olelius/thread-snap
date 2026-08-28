@@ -16,6 +16,25 @@
 
 ---
 
+## 2026-08-28 — 修复认证空值Cookie误判与错误阶段展示
+**总目标**：修复浏览器已登录且门禁通过后，合法空值Cookie被Session结构校验拒绝，并被界面误报为页面加载失败的问题。
+**状态**：✅ 空值Cookie合同、认证阶段错误分类和前端提示均已修复；真实汽车之家认证、加密Session恢复及新URL批次已完成闭环。
+**干到哪里了**：
+- [x] 现场任务 `01a0474e-8d8f-701e-a971-4401d818093b` 证明认证页面HTTP 200且错误发生在完成校验后的Session写入；`中继已断开`是任务进入失败终态后的结果，不是起因。
+- [x] `SessionStore`现要求Cookie的`name/domain/path`为非空字符串、`value`键存在且为字符串，并接受浏览器合法导出的空字符串值；真正缺字段或类型错误仍以`SESSION_INVALID`拒绝。
+- [x] 浏览器关闭前新增Session结构预检；持久化异常使用`AUTH_SESSION_SAVE_FAILED`及“平台会话保存失败”，前端失败状态改为“认证处理失败”，不再归类为页面加载失败。
+- [x] 新增空值Cookie导入、缺失value拒绝、认证完成后空值持久化及持久化异常分类测试；7项定向回归通过，Python Ruff和前端TypeScript检查通过。
+- [x] 产品设计、技术路线和项目记忆已同步。
+- [x] 完整后端209/209（111.474秒）、Ruff、compileall、pip check、前端TypeScript检查和生产构建通过，Vite转换2468个模块，`git diff --check`通过。
+- [x] 修复分支服务重启后复用现有加密Profile，真实认证任务 `01a04757-7455-73ee-94cb-8fc5b0ed0030` 完成；汽车之家Session恢复为`available`，加密状态含29项结构有效Cookie且未发现无效结构。
+- [x] 新URL批次 `20260828-154857-001`（运行ID `01a04757-e5bd-76e1-b20b-f0485df40dd7`）完成1/1、失败0，帖子115843786再次保存点赞数19，SQLite完整性为ok；Git外脱敏回执位于 `artifacts/runtime/auth-empty-cookie-fix/summary.json`。
+- [x] 功能提交 `5ab73f0` 已推送至PR #216，PR范围仅包含本任务9个代码、测试与owner文档文件。
+**下一步**：合并PR并清理功能分支，再以合并后的main复核服务、Session与真实批次。
+**边界**：不记录或输出Cookie值、账号信息、认证票据和Profile内容；原失败认证任务只作为不可复用的运行时证据。
+**关联**：`src/threadsnap/session_store.py`、`src/threadsnap/auth.py`、`frontend/src/features/auth/auth-dialog.tsx`、`docs/memories/browser-cookie-empty-value.md`
+
+---
+
 ## 2026-08-28 — 汽车之家登录认证与可信帖子点赞数
 **总目标**：把汽车之家帖子点赞数从历史空值修正为登录后可验证的真实数值，并复用现有官方认证、加密Session和认证续跑链，避免把匿名占位零值保存为真实数据。
 **状态**：✅ `autohome-club-v3` 已完成实现、真实登录门禁、加密Session和点赞读取闭环；独立真实URL批次已把页面动态值 `19` 保存为帖子快照。
