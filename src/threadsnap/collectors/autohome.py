@@ -27,7 +27,7 @@ from .base import (
     ProgressCallback,
 )
 
-ADAPTER_VERSION = "autohome-club-v1"
+ADAPTER_VERSION = "autohome-club-v2"
 BASE_URL = "https://club.autohome.com.cn"
 LIST_API_URL = "https://club-open-api.autohome.com.cn/api/pc/bbs/index/getClubTopicList"
 VIDEO_MEDIA_URL = "https://p-vp.autohome.com.cn/api/gpi"
@@ -124,6 +124,32 @@ def normalize_post_url(url: str) -> tuple[str, str]:
     post_id = match.group("id")
     canonical = f"{BASE_URL}/bbs/thread/{match.group('hash')}/{post_id}-1.html"
     return post_id, canonical
+
+
+def _app_topic_identity(value: object) -> tuple[int, int, str] | None:
+    """读取列表 APP 跳转中声明的帖子与原始论坛身份。"""
+
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    parsed = urlsplit(raw)
+    if (
+        parsed.scheme.lower() != "autohome"
+        or parsed.netloc.lower() != "club"
+        or parsed.path.rstrip("/").lower() != "/topicdetail"
+    ):
+        raise CollectorFailure(
+            "PLATFORM_RESPONSE_INVALID", "汽车之家列表包含无法识别的 APP 帖子链接。"
+        )
+    query = parse_qs(parsed.query)
+    post_id = _integer((query.get("pageid") or [None])[0])
+    bbs_id = _integer((query.get("bbsid") or [None])[0])
+    bbs_type = str((query.get("bbstype") or [""])[0]).strip().lower()
+    if not post_id or post_id <= 0 or not bbs_id or bbs_id <= 0 or not bbs_type:
+        raise CollectorFailure(
+            "PLATFORM_RESPONSE_INVALID", "汽车之家列表 APP 链接缺少稳定帖子或论坛身份。"
+        )
+    return post_id, bbs_id, bbs_type
 
 
 def _cookies_from_state(state: dict[str, Any] | None) -> Cookies:
@@ -478,7 +504,7 @@ class AutohomeCollector:
 
     @staticmethod
     def _candidate(source: CircleSource, item: object, source_index: int) -> dict[str, Any]:
-        """把列表项收敛为稳定帖子候选，不信任跨来源或错帖数据。"""
+        """收敛列表候选，并区分发现来源与帖子原始论坛身份。"""
 
         if not isinstance(item, dict):
             raise CollectorFailure("PLATFORM_RESPONSE_INVALID", "汽车之家列表包含无效帖子项。")
@@ -492,12 +518,17 @@ class AutohomeCollector:
         normalized_id, url = normalize_post_url(str(item.get("pc_url") or ""))
         if normalized_id != str(post_id):
             raise CollectorFailure("POST_ID_MISMATCH", "汽车之家列表帖子 ID 与链接不一致。")
+        app_identity = _app_topic_identity(item.get("app_url"))
+        if app_identity and app_identity[0] != post_id:
+            raise CollectorFailure("POST_ID_MISMATCH", "汽车之家列表 APP 链接帖子 ID 不一致。")
         return {
             "post_id": str(post_id),
             "url": url,
             "order_index": source_index,
             "bbs_id": bbs_id,
             "bbs_type": bbs_type,
+            "canonical_bbs_id_hint": app_identity[1] if app_identity else None,
+            "canonical_bbs_type_hint": app_identity[2] if app_identity else None,
             "title_hint": str(item.get("title") or "").strip() or None,
             "author_id_hint": str(item.get("author_id") or "").strip() or None,
             "author_hint": str(item.get("author_name") or "").strip() or None,
@@ -619,10 +650,20 @@ class AutohomeCollector:
             raise CollectorFailure("POST_ID_MISMATCH", "汽车之家详情帖子 ID 与输入链接不一致。")
         bbs_id = _integer(bbs_info.get("bbsId"))
         bbs_type = str(bbs_info.get("bbs") or "").lower()
-        if candidate and (
-            bbs_id != candidate.get("bbs_id") or bbs_type != candidate.get("bbs_type")
-        ):
-            raise CollectorFailure("WRONG_POST", "汽车之家详情论坛身份与发现来源不符。")
+        canonical_bbs_id_hint = (candidate or {}).get("canonical_bbs_id_hint")
+        canonical_bbs_type_hint = (candidate or {}).get("canonical_bbs_type_hint")
+        discovery_bbs_id = (candidate or {}).get("bbs_id")
+        discovery_bbs_type = (candidate or {}).get("bbs_type")
+        if candidate and canonical_bbs_id_hint is not None:
+            if bbs_id != canonical_bbs_id_hint or bbs_type != canonical_bbs_type_hint:
+                raise CollectorFailure("WRONG_POST", "汽车之家详情论坛身份与列表原始归属不符。")
+        elif candidate and (bbs_id != discovery_bbs_id or bbs_type != discovery_bbs_type):
+            raise CollectorFailure("WRONG_POST", "汽车之家详情论坛身份缺少列表聚合证明。")
+        cross_forum_aggregate = bool(
+            candidate
+            and canonical_bbs_id_hint is not None
+            and (bbs_id != discovery_bbs_id or bbs_type != discovery_bbs_type)
+        )
 
         title_nodes = document.xpath(f"//*[{_class_tokens('post-title')}]")
         title = self._node_text(title_nodes[0]) if title_nodes else None
@@ -715,6 +756,9 @@ class AutohomeCollector:
                 "response_class": "post",
                 "bbs_type": bbs_type,
                 "bbs_id": bbs_id,
+                "discovery_bbs_type": discovery_bbs_type,
+                "discovery_bbs_id": discovery_bbs_id,
+                "cross_forum_aggregate": cross_forum_aggregate,
                 "topic_delete": topic_delete,
                 "list_is_delete": list_is_delete,
                 "list_club_delete_flag": list_delete_flag,

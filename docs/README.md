@@ -88,7 +88,7 @@
 1. 技术实现任务要求的全部文件；
 2. `docs/chains/later-platform-delivery.md`；
 3. `docs/research/later-platform-onboarding-plan.md`；
-4. `docs/adr/0043-use-project-discovered-500-sample-gate-for-later-platforms.md` 与 `docs/adr/0044-separate-local-adapter-publication-from-formal-sample-acceptance.md`；
+4. `docs/adr/0043-use-project-discovered-500-sample-gate-for-later-platforms.md`、`docs/adr/0044-separate-local-adapter-publication-from-formal-sample-acceptance.md` 与 `docs/adr/0045-preserve-cross-forum-feed-items.md`；
 5. 涉及口碑映射时额外读取 `docs/chains/reputation-inspection.md`；
 6. Git外 `artifacts/poc/inputs/later-platforms/` 中当次真实来源与冻结样本。
 
@@ -183,6 +183,7 @@
 | `docs/adr/0042-allow-cross-type-same-second-schedules.md` | 每周与循环计划允许同秒创建独立批次，同类型仍保持触发点唯一并由运行期兜底 |
 | `docs/adr/0043-use-project-discovered-500-sample-gate-for-later-platforms.md` | 汽车之家与易车各用项目从社区发现并冻结的500条样本完成新增适配器验收 |
 | `docs/adr/0044-separate-local-adapter-publication-from-formal-sample-acceptance.md` | 分离本地适配器发布与正式样本验收，已交付平台注册为可用且默认停用 |
+| `docs/adr/0045-preserve-cross-forum-feed-items.md` | 汽车之家圈子列表中的跨论坛聚合帖保留为来源快照结果，并分别保存发现来源与原始归属 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 
@@ -222,7 +223,7 @@ artifacts/poc/
 - 修改功能范围或验收条件时，同步更新产品设计和相关链档。
 - 修改技术决策时，同步更新技术路线、相关 ADR 和相关链档。
 - 修改采集框架 PoC 阶段、指标、输入或结果结构时，同步更新采集 PoC 计划、模板说明和 `docs/chains/first-platform-delivery.md`。
-- 修改汽车之家或易车接入阶段、可用状态、500条样本、输入责任或结果结构时，同步更新后续平台接入计划、`docs/chains/later-platform-delivery.md`、ADR 0043 和 ADR 0044；涉及口碑映射或指标时同时核对 `docs/chains/reputation-inspection.md`。
+- 修改汽车之家或易车接入阶段、可用状态、500条样本、输入责任或结果结构时，同步更新后续平台接入计划、`docs/chains/later-platform-delivery.md`、ADR 0043、ADR 0044 和 ADR 0045；涉及口碑映射或指标时同时核对 `docs/chains/reputation-inspection.md`。
 - 修改舆情反馈 PoC 阶段、输入、模态覆盖或结果结构时，同步更新舆情 PoC 计划和 `docs/chains/sentiment-analysis.md`。
 - 修改圈子页面证据、关联成果合成、分片或资源门禁时，同步更新截图 PoC 计划和 `docs/chains/circle-screenshot-artifacts.md`，并核对首个平台与舆情工作线。
 - 修改垂媒口碑巡检范围、阶段门、比较、证据或汇报规则时，同步更新 `docs/chains/reputation-inspection.md`。
