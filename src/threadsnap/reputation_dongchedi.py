@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import re
 import threading
 import time
@@ -17,10 +18,13 @@ from urllib.parse import urlsplit
 from curl_cffi import requests
 from curl_cffi.requests import Cookies
 from lxml import html
-from patchright.async_api import Browser, Page, async_playwright
+from patchright.async_api import Browser, BrowserContext, Page, async_playwright
+from patchright.async_api import Error as PlaywrightError
 from PIL import Image
 
 from .browser_runtime import browser_launch_args
+
+logger = logging.getLogger(__name__)
 
 ADAPTER_VERSION = "dongchedi-reputation-v8-presale-not-available"
 VALIDATION_CONTRACT_VERSION = "dongchedi-reputation-mapping-v1"
@@ -523,6 +527,30 @@ class DongchediReputationAdapter:
         )
         await page.evaluate("() => window.scrollTo({top:0,left:0,behavior:'instant'})")
 
+    @staticmethod
+    def _browser_runtime_error(
+        target: ReputationMappingTarget,
+        stage: str,
+        error: PlaywrightError,
+    ) -> ReputationAdapterError:
+        """记录浏览器底层诊断，并转换为可执行一次有界重试的稳定业务错误。"""
+
+        logger.warning(
+            "口碑真实页面浏览器错误：vehicle_id=%s platform_vehicle_id=%s stage=%s "
+            "type=%s detail=%s",
+            target.vehicle_id,
+            target.platform_vehicle_id,
+            stage,
+            type(error).__name__,
+            str(error),
+            exc_info=(type(error), error, error.__traceback__),
+        )
+        return ReputationAdapterError(
+            "REPUTATION_BROWSER_RUNTIME_ERROR",
+            f"浏览器页面在{stage}阶段暂时失败。",
+            retryable=True,
+        )
+
     async def _visit(
         self,
         browser: Browser,
@@ -532,15 +560,19 @@ class DongchediReputationAdapter:
         force_capture: bool = False,
     ) -> ReputationPageResult:
         started = time.monotonic()
-        context = await browser.new_context(
-            storage_state=self.storage_state,
-            viewport=VIEWPORT,
-            device_scale_factor=1,
-            locale="zh-CN",
-        )
-        page = await context.new_page()
-        page.set_default_timeout(self.timeout_seconds * 1000)
+        context: BrowserContext | None = None
+        stage = "创建页面上下文"
         try:
+            context = await browser.new_context(
+                storage_state=self.storage_state,
+                viewport=VIEWPORT,
+                device_scale_factor=1,
+                locale="zh-CN",
+            )
+            stage = "创建页面"
+            page = await context.new_page()
+            page.set_default_timeout(self.timeout_seconds * 1000)
+            stage = "页面导航"
             response = await page.goto(
                 target.platform_url,
                 wait_until="domcontentloaded",
@@ -554,12 +586,15 @@ class DongchediReputationAdapter:
                     f"平台页面返回HTTP {response.status}。",
                     retryable=True,
                 )
+            stage = "等待车型标题"
             await page.locator("h1:visible").first.wait_for(state="visible", timeout=15_000)
             if "/login-required" in page.url:
                 raise ReputationAdapterError("AUTH_REQUIRED", "懂车帝共享Session需要更新。")
             await page.wait_for_timeout(1800)
+            stage = "冻结页面布局"
             await self._freeze_layout(page)
             measurements: list[dict[str, Any]] = []
+            stage = "测量页面指标"
             for _ in range(3):
                 measurements.append(await self._measure(page))
                 await page.wait_for_timeout(350)
@@ -647,6 +682,7 @@ class DongchediReputationAdapter:
                         "指标区域超出页面边界。",
                     )
                 metric_path = target_dir / "region.png"
+                stage = "截取指标证据"
                 await page.screenshot(
                     path=str(metric_path),
                     clip=metric_rect,
@@ -686,8 +722,23 @@ class DongchediReputationAdapter:
                 negative_rate_negative_count=negative_rate_negative_count,
                 reputation_not_available=reputation_not_available,
             )
+        except PlaywrightError as error:
+            raise self._browser_runtime_error(target, stage, error) from error
         finally:
-            await context.close()
+            if context is not None:
+                try:
+                    await context.close()
+                except PlaywrightError as error:
+                    # 结果或原始异常已经确定时，关闭上下文失败只记运维诊断，不能覆盖业务结果。
+                    logger.warning(
+                        "口碑页面上下文关闭失败：vehicle_id=%s platform_vehicle_id=%s "
+                        "type=%s detail=%s",
+                        target.vehicle_id,
+                        target.platform_vehicle_id,
+                        type(error).__name__,
+                        str(error),
+                        exc_info=(type(error), error, error.__traceback__),
+                    )
 
     @staticmethod
     def _node_text(node: Any) -> str:
