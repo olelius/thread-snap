@@ -30,7 +30,8 @@
 - [x] 本地服务已重启为 `autohome-club-v3 + authentication=true + session=available`；独立URL批次 `20260828-152435-001`（运行ID `01a04741-9633-781c-baf7-0501b1d763d2`）完成1/1、失败0，数据库和详情API均保存帖子115843786点赞数19，SQLite完整性为ok。
 - [x] 完整后端206/206（107.575s）、PoC shared 84/84通过；本次Python范围Ruff、compileall、pip check、`git diff --check`、前端TypeScript检查和生产构建均通过，Vite转换2468个模块。Git外回执位于 `artifacts/runtime/autohome-auth-like/summary.json`；PoC全目录仍有两个未修改测试文件的既有导入排序告警。
 - [x] 功能提交 `af10701` 已推送至PR #214，PR范围仅包含本任务12个代码、测试及owner文档文件。
-**下一步**：等待PR检查通过后合并并清理功能分支，随后以合并后的main复核本地服务、Session状态和真实验收批次。
+- [x] PR #214已合并为 `main@66ccc1b`，功能分支已清理；合并后本地服务健康，适配器v3、认证能力、Session可用状态及批次 `20260828-152435-001` 的帖子115843786点赞数19均再次通过API复核，本地与远端main一致。
+**下一步**：无业务、代码、文档或本地恢复缺口；后续独立执行汽车之家认证模式正式500/500生产验收。
 **边界**：不输出、复制或提交账号密码与Session内容，不回写批次 `20260828-144055-001` 的历史空点赞数；正式500/500仍是独立生产验收门。
 **关联**：ADR 0046、`src/threadsnap/collectors/autohome.py`、`src/threadsnap/collectors/registry.py`、`tests/test_autohome_collector.py`
 
