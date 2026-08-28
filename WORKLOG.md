@@ -28,7 +28,8 @@
 - [x] 完整后端209/209（111.474秒）、Ruff、compileall、pip check、前端TypeScript检查和生产构建通过，Vite转换2468个模块，`git diff --check`通过。
 - [x] 修复分支服务重启后复用现有加密Profile，真实认证任务 `01a04757-7455-73ee-94cb-8fc5b0ed0030` 完成；汽车之家Session恢复为`available`，加密状态含29项结构有效Cookie且未发现无效结构。
 - [x] 新URL批次 `20260828-154857-001`（运行ID `01a04757-e5bd-76e1-b20b-f0485df40dd7`）完成1/1、失败0，帖子115843786再次保存点赞数19，SQLite完整性为ok；Git外脱敏回执位于 `artifacts/runtime/auth-empty-cookie-fix/summary.json`。
-**下一步**：按项目自动收尾授权提交、推送、合并并清理功能分支，再以合并后的main复核服务、Session与真实批次。
+- [x] 功能提交 `5ab73f0` 已推送至PR #216，PR范围仅包含本任务9个代码、测试与owner文档文件。
+**下一步**：合并PR并清理功能分支，再以合并后的main复核服务、Session与真实批次。
 **边界**：不记录或输出Cookie值、账号信息、认证票据和Profile内容；原失败认证任务只作为不可复用的运行时证据。
 **关联**：`src/threadsnap/session_store.py`、`src/threadsnap/auth.py`、`frontend/src/features/auth/auth-dialog.tsx`、`docs/memories/browser-cookie-empty-value.md`
 
