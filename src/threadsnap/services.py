@@ -48,7 +48,7 @@ TERMINAL_STATUSES = frozenset({"success", "partial_success", "failed"})
 RUN_STATUS_ZH = {
     "queued": "排队中",
     "running": "提取中",
-    "waiting_for_auth": "等待平台认证",
+    "waiting_for_auth": "等待平台会话",
     "success": "成功",
     "partial_success": "部分成功",
     "failed": "失败",
@@ -198,6 +198,7 @@ class ConfigService:
             "capabilities": {
                 "source_configuration": spec.parse_circle_url is not None,
                 "authentication": spec.supports_authentication,
+                "authentication_mode": spec.authentication_mode,
                 "page_evidence": spec.supports_page_evidence,
                 "live_video_resolution": spec.supports_live_video_resolution,
             },
@@ -1819,7 +1820,7 @@ class RunService:
             if run.status != "waiting_for_auth":
                 raise DomainError(
                     "RUN_NOT_WAITING_FOR_AUTH",
-                    "该批次当前不处于等待平台认证状态。",
+                    "该批次当前不处于等待平台会话状态。",
                     status_code=409,
                 )
             for task in db.scalars(
@@ -1829,7 +1830,7 @@ class RunService:
             ):
                 task.status = "partial_success" if task.completed_count else "failed"
                 task.error_code = "AUTH_WAIT_ENDED"
-                task.error_message = "用户结束了本次等待平台认证的提取。"
+                task.error_message = "用户结束了本次等待平台会话的提取。"
                 task.finished_at = utc_now()
             aggregate_run(db, run)
             db.flush()
@@ -2438,7 +2439,7 @@ def aggregate_run(db: Session, run: ExtractionRun) -> None:
         run.status = "waiting_for_auth"
         run.waiting_reason = next(
             (item.error_message for item in tasks if item.status == "waiting_for_auth"),
-            "等待平台认证。",
+            "等待平台会话。",
         )
         return
     if statuses & {"running", "queued"}:

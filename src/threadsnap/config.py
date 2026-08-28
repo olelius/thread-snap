@@ -41,7 +41,7 @@ class Settings(BaseSettings):
 
     @property
     def auth_profile_dir(self) -> Path:
-        """平台认证浏览器的隔离 Profile 根目录。"""
+        """平台交互会话浏览器的隔离 Profile 根目录。"""
 
         return self.data_dir / "auth-profiles"
 

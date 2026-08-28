@@ -58,8 +58,10 @@ class PlatformAdapterSpec:
     min_concurrency: int = 1
     max_concurrency: int = 1
     supports_authentication: bool = False
+    authentication_mode: str = "none"
     supports_page_evidence: bool = False
     supports_live_video_resolution: bool = False
+    background_browser_headless: bool = False
     login_url: str | None = None
     auth_probe_circle_url: str | None = None
     auth_url_markers: tuple[str, ...] = ()
@@ -81,6 +83,20 @@ class PlatformAdapterSpec:
             browser_headless=browser_headless,
         )
 
+    def create_background_collector(
+        self,
+        storage_state: dict[str, Any] | None,
+        *,
+        concurrency: int,
+    ) -> Collector:
+        """按平台已验证的后台浏览器模式创建采集器，不复用人工认证显示配置。"""
+
+        return self.create_collector(
+            storage_state,
+            concurrency=concurrency,
+            browser_headless=self.background_browser_headless,
+        )
+
 
 PLATFORM_ADAPTERS: dict[str, PlatformAdapterSpec] = {
     "dongchedi": PlatformAdapterSpec(
@@ -95,6 +111,7 @@ PLATFORM_ADAPTERS: dict[str, PlatformAdapterSpec] = {
         default_concurrency=2,
         max_concurrency=8,
         supports_authentication=True,
+        authentication_mode="account_login",
         supports_page_evidence=True,
         supports_live_video_resolution=True,
         login_url=("https://www.dongchedi.com/login-required?redirect=%2Fcommunity%2F24729"),
@@ -112,6 +129,7 @@ PLATFORM_ADAPTERS: dict[str, PlatformAdapterSpec] = {
         normalize_post_url=normalize_autohome_post_url,
         max_concurrency=1,
         supports_authentication=True,
+        authentication_mode="account_login",
         supports_page_evidence=False,
         supports_live_video_resolution=True,
         login_url=(
@@ -132,8 +150,12 @@ PLATFORM_ADAPTERS: dict[str, PlatformAdapterSpec] = {
         max_quantity=500,
         max_concurrency=1,
         supports_authentication=True,
+        # 当前只证明访问会话可用，尚未建立账号登录身份门禁。
+        authentication_mode="access_session",
         supports_page_evidence=False,
         supports_live_video_resolution=False,
+        # 易车后台验证与采集仍需页面动态签名，但无头 Chromium 已由真实来源验证通过。
+        background_browser_headless=True,
         login_url="https://baa.yiche.com/",
         auth_probe_circle_url="https://baa.yiche.com/",
     ),

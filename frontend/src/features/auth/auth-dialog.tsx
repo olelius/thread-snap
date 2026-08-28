@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, Expand, Loader2, LogIn, LogOut, RefreshCw, ShieldCheck, Wifi, WifiOff } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, errorMessage } from '@/lib/api'
-import type { AuthTask } from '@/lib/types'
+import type { AuthTask, Platform } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { StatusBadge } from '@/components/status-badge'
@@ -45,7 +45,8 @@ export function AuthDialog({
   open,
   onOpenChange,
   platformCode = 'dongchedi',
-  platformName = '懂车帝',
+  platformName,
+  authenticationMode,
   runId,
   freshOnOpen = false,
 }: {
@@ -53,10 +54,17 @@ export function AuthDialog({
   onOpenChange: (open: boolean) => void
   platformCode?: string
   platformName?: string
+  authenticationMode?: Platform['capabilities']['authentication_mode']
   runId?: string
   freshOnOpen?: boolean
 }) {
   const queryClient = useQueryClient()
+  const platforms = useQuery({ queryKey: ['platforms'], queryFn: () => api<Platform[]>('/platforms'), enabled: open && authenticationMode === undefined })
+  const platform = platforms.data?.find((item) => item.code === platformCode)
+  const resolvedPlatformName = platformName || platform?.display_name || platformCode
+  const accessSession = (authenticationMode ?? platform?.capabilities.authentication_mode) === 'access_session'
+  const modeReady = authenticationMode !== undefined || Boolean(platform) || platforms.isError
+  const statusNames = accessSession ? { ...pageStatusNames, validating: '校验访问会话', failed: '会话处理失败', completed: '会话已更新' } : pageStatusNames
   const socketRef = useRef<WebSocket | null>(null)
   const imageRef = useRef<HTMLImageElement | null>(null)
   const onOpenChangeRef = useRef(onOpenChange)
@@ -120,39 +128,39 @@ export function AuthDialog({
       } else if (message.type === 'completed') {
         setPageStatus('completed')
         await queryClient.invalidateQueries()
-        toast.success('平台认证成功', { description: message.message })
+        toast.success(accessSession ? '访问会话已更新' : '平台登录认证成功', { description: message.message })
         onOpenChangeRef.current(false)
       } else if (message.type === 'validation_failed') {
         setPageStatus('ready')
         setValidationFailed(true)
-        toast.error('认证状态校验未通过', { description: message.message })
+        toast.error(accessSession ? '访问会话校验未通过' : '登录状态校验未通过', { description: message.message })
       } else if (message.type === 'session_save_failed') {
         setPageStatus('failed')
         setPageError({
           title: '平台会话保存失败',
           code: message.code,
-          message: message.message ?? '平台登录校验已通过，但会话保存失败。',
+          message: message.message ?? `${accessSession ? '平台访问' : '平台登录'}校验已通过，但会话保存失败。`,
         })
         setFrame(undefined)
       } else if (message.type === 'page_failed' || message.type === 'error') {
         setPageStatus('failed')
-        setPageError({ title: '平台页面加载失败', code: message.code, message: message.message ?? '平台认证页面加载失败。', httpStatus: message.http_status })
+        setPageError({ title: '平台页面加载失败', code: message.code, message: message.message ?? '平台会话页面加载失败。', httpStatus: message.http_status })
         setFrame(undefined)
       }
     }
-  }, [queryClient])
+  }, [accessSession, queryClient])
 
   const start = useCallback((fresh = freshOnOpen) => {
     createTask(fresh).then(connect).catch((error) => {
       setConnection('offline')
       setPageStatus('failed')
-      setPageError({ title: '认证窗口启动失败', message: errorMessage(error) })
-      toast.error('认证窗口启动失败', { description: errorMessage(error) })
+      setPageError({ title: '会话窗口启动失败', message: errorMessage(error) })
+      toast.error('会话窗口启动失败', { description: errorMessage(error) })
     })
   }, [connect, createTask, freshOnOpen])
 
   useEffect(() => {
-    if (!open) return
+    if (!open || !modeReady) return
     start()
     return () => {
       const socket = socketRef.current
@@ -174,7 +182,7 @@ export function AuthDialog({
       setPageError(undefined)
       setValidationFailed(false)
     }
-  }, [open, start])
+  }, [modeReady, open, start])
 
   useEffect(() => {
     if (!task) return
@@ -237,9 +245,9 @@ export function AuthDialog({
         <DialogHeader className='border-b bg-background/90 px-5 py-4 backdrop-blur'>
           <div className='flex flex-wrap items-center gap-3 pr-10'>
             <div className='grid size-10 place-items-center rounded-xl bg-primary/10 text-primary'><ShieldCheck className='size-5' /></div>
-            <div className='min-w-0 flex-1'><DialogTitle>{platformName}平台认证</DialogTitle><DialogDescription className='mt-1 truncate'>{pageUrl || '正在连接服务器浏览器…'}</DialogDescription></div>
-            <StatusBadge value={pageStatus} label={pageStatusNames[pageStatus]} />
-            {task?.fresh_profile && <span className='rounded-full border border-primary/25 bg-primary/5 px-2 py-1 text-xs text-primary'>全新登录环境</span>}
+            <div className='min-w-0 flex-1'><DialogTitle>{resolvedPlatformName}{accessSession ? '访问会话初始化' : '平台登录认证'}</DialogTitle><DialogDescription className='mt-1 truncate'>{pageUrl || '正在连接服务器浏览器…'}</DialogDescription></div>
+            <StatusBadge value={pageStatus} label={statusNames[pageStatus]} />
+            {task?.fresh_profile && <span className='rounded-full border border-primary/25 bg-primary/5 px-2 py-1 text-xs text-primary'>{accessSession ? '全新访问环境' : '全新登录环境'}</span>}
             <div className='flex items-center gap-1.5 text-xs text-muted-foreground'>{connection === 'online' ? <Wifi className='size-4 text-emerald-500' /> : <WifiOff className='size-4 text-red-500' />}中继{connection === 'online' ? '已连接' : connection === 'connecting' ? '连接中' : '已断开'}</div>
             <div className='font-mono text-xs text-muted-foreground'>剩余 {String(Math.floor(remaining / 60)).padStart(2, '0')}:{String(remaining % 60).padStart(2, '0')}</div>
           </div>
@@ -302,14 +310,14 @@ export function AuthDialog({
               send({ type: 'scroll', ...pointerCoordinates(event), dx: event.deltaX, dy: event.deltaY, buttons: 0, modifiers: modifiers(event) })
             }}
             onContextMenu={(event) => event.preventDefault()}
-          /> : <div className='flex flex-col items-center gap-3 text-slate-300'><Loader2 className='size-8 animate-spin text-cyan-400' /><span className='text-sm'>{pageStatusNames[pageStatus]}</span></div>}
+          /> : <div className='flex flex-col items-center gap-3 text-slate-300'><Loader2 className='size-8 animate-spin text-cyan-400' /><span className='text-sm'>{statusNames[pageStatus]}</span></div>}
           <div className='pointer-events-none absolute right-4 bottom-4 flex items-center gap-2 rounded-full bg-black/55 px-3 py-1.5 text-[11px] text-slate-300 backdrop-blur'><Expand className='size-3.5' />1280 × 800 交互画布</div>
         </div>
         <div className='flex flex-wrap items-center justify-between gap-3 border-t bg-background px-5 py-3'>
-          <div className={`text-xs ${validationFailed ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-muted-foreground'}`}>{validationFailed ? '当前旧登录状态未通过采集校验，可使用全新登录环境重新登录。' : task?.fresh_profile && freshOnOpen ? '检测到批次中途认证失效，已启动全新登录环境，请重新完成平台登录。' : '画面支持悬停、点击、拖动、滚动和键盘输入；剪贴板文本会发送到当前页面焦点。'}</div>
+          <div className={`text-xs ${validationFailed ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-muted-foreground'}`}>{validationFailed ? accessSession ? '当前访问会话未通过采集校验，可使用全新访问环境重新初始化。' : '当前旧登录状态未通过采集校验，可使用全新登录环境重新登录。' : task?.fresh_profile && freshOnOpen ? accessSession ? '检测到批次中的访问会话失效，已启动全新访问环境，请重新初始化。' : '检测到批次中途认证失效，已启动全新登录环境，请重新完成平台登录。' : accessSession ? '此流程只初始化平台访问状态，不检查或证明账号登录。' : '画面支持悬停、点击、拖动、滚动和键盘输入；剪贴板文本会发送到当前页面焦点。'}</div>
           <div className='flex items-center gap-2'>
-            {!task?.fresh_profile && <Button variant={validationFailed ? 'default' : 'outline'} disabled={pageStatus === 'starting' || pageStatus === 'loading' || pageStatus === 'validating'} onClick={() => start(true)}><LogIn className='size-4' />使用全新登录环境</Button>}
-            <Button variant='outline' onClick={() => pageStatus === 'failed' || !task?.ticket ? start() : connect(task)}><RefreshCw className='size-4' />{pageStatus === 'failed' ? '重新创建认证浏览器' : '重新连接'}</Button>
+            {!task?.fresh_profile && <Button variant={validationFailed ? 'default' : 'outline'} disabled={pageStatus === 'starting' || pageStatus === 'loading' || pageStatus === 'validating'} onClick={() => start(true)}><LogIn className='size-4' />使用全新{accessSession ? '访问' : '登录'}环境</Button>}
+            <Button variant='outline' onClick={() => pageStatus === 'failed' || !task?.ticket ? start() : connect(task)}><RefreshCw className='size-4' />{pageStatus === 'failed' ? '重新创建会话浏览器' : '重新连接'}</Button>
             <Button variant='outline' onClick={() => onOpenChange(false)}>关闭窗口</Button>
             {runId && <AlertDialog><AlertDialogTrigger asChild><Button variant='destructive' disabled={endRun.isPending}><LogOut className='size-4' />结束本次提取</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>结束本次提取？</AlertDialogTitle><AlertDialogDescription>已有结果将保留，批次按实际结果结束并释放平台队列。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => endRun.mutate()}>确认结束</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
             <Button disabled={pageStatus !== 'ready'} onClick={() => send({ type: 'finish' })}><ShieldCheck className='size-4' />完成并校验</Button>

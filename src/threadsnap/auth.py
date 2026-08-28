@@ -254,7 +254,7 @@ class BrowserAuthManager:
         task = self.tasks.get(task_id)
         if not task:
             raise DomainError(
-                "AUTH_TASK_NOT_FOUND", "平台认证任务不存在或已经过期。", status_code=404
+                "AUTH_TASK_NOT_FOUND", "平台会话任务不存在或已经过期。", status_code=404
             )
         return self.task_dict(task)
 
@@ -325,7 +325,7 @@ class BrowserAuthManager:
         if status is not None and status >= 400:
             raise AuthPageLoadError(
                 "AUTH_PAGE_HTTP_ERROR",
-                f"平台认证页面返回 HTTP {status}。",
+                f"平台会话页面返回 HTTP {status}。",
                 http_status=status,
             )
         if headers.get("content-length", "").strip() == "0":
@@ -346,7 +346,7 @@ class BrowserAuthManager:
             await page.wait_for_timeout(500)
         raise AuthPageLoadError(
             "AUTH_PAGE_EMPTY_DOM",
-            "平台认证页面没有形成可操作内容，请重新创建认证浏览器。",
+            "平台会话页面没有形成可操作内容，请重新创建会话浏览器。",
             http_status=status,
         )
 
@@ -457,7 +457,7 @@ class BrowserAuthManager:
                 task.status = "failed"
                 task.page_status = "failed"
                 task.error_code = "AUTH_BROWSER_FAILED"
-                task.error_message = f"平台认证浏览器运行失败：{exc}"
+                task.error_message = f"平台会话浏览器运行失败：{exc}"
                 try:
                     await websocket.send_json(
                         {
@@ -527,6 +527,10 @@ class BrowserAuthManager:
         elif kind == "finish":
             if not task.context or not task.profile_dir:
                 return
+            spec = get_platform_spec(task.platform_code)
+            access_session = spec.authentication_mode == "access_session"
+            session_label = "访问会话" if access_session else "登录状态"
+            environment_label = "访问环境" if access_session else "登录环境"
             task.page_status = "validating"
             await websocket.send_json({"type": "validating", "message": "正在校验平台会话…"})
             state = await task.context.storage_state()
@@ -537,7 +541,9 @@ class BrowserAuthManager:
                 logger.error("平台认证浏览器导出的会话结构无效：platform=%s", task.platform_code)
                 task.page_status = "ready"
                 task.error_code = "AUTH_SESSION_STATE_INVALID"
-                task.error_message = "平台登录状态结构异常，请使用全新登录环境重新认证。"
+                task.error_message = (
+                    f"平台{session_label}结构异常，请使用全新{environment_label}重新处理。"
+                )
                 await websocket.send_json(
                     {
                         "type": "validation_failed",
@@ -548,7 +554,6 @@ class BrowserAuthManager:
                 return
             probe_url = self._validation_probe_url(task.platform_code)
             try:
-                spec = get_platform_spec(task.platform_code)
                 # 保留懂车帝测试注入缝；平台资格、入口与其余适配器仍由 registry 决定。
                 collector = (
                     DongchediCollector(state, concurrency=1)
@@ -564,7 +569,7 @@ class BrowserAuthManager:
             except (AuthenticationRequired, CollectorFailure) as exc:
                 task.page_status = "ready"
                 task.error_code = "AUTH_VALIDATION_FAILED"
-                task.error_message = f"平台认证状态校验未通过：{exc}"
+                task.error_message = f"平台{session_label}校验未通过：{exc}"
                 await websocket.send_json(
                     {
                         "type": "validation_failed",
@@ -582,7 +587,9 @@ class BrowserAuthManager:
                 )
                 task.page_status = "ready"
                 task.error_code = "AUTH_VALIDATION_INTERNAL_ERROR"
-                task.error_message = "平台认证状态校验出现内部错误，请重试或重新创建认证浏览器。"
+                task.error_message = (
+                    f"平台{session_label}校验出现内部错误，请重试或重新创建会话浏览器。"
+                )
                 await websocket.send_json(
                     {
                         "type": "validation_failed",
@@ -614,7 +621,9 @@ class BrowserAuthManager:
                 task.status = "failed"
                 task.page_status = "failed"
                 task.error_code = "AUTH_SESSION_SAVE_FAILED"
-                task.error_message = "平台登录校验已通过，但会话保存失败，请重新创建认证浏览器。"
+                task.error_message = (
+                    f"平台{session_label}校验已通过，但会话保存失败，请重新创建会话浏览器。"
+                )
                 await websocket.send_json(
                     {
                         "type": "session_save_failed",

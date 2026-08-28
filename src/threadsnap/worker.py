@@ -111,10 +111,9 @@ class WorkerService:
                         "帖子快照没有可用于刷新播放地址的视频 ID，请打开原帖查看。",
                         status_code=404,
                     )
-                collector = spec.create_collector(
+                collector = spec.create_background_collector(
                     self.session_store.get_state(platform_code),
                     concurrency=1,
-                    browser_headless=self.session_store.settings.auth_browser_headless,
                 )
                 resolver = getattr(collector, "resolve_video_urls", None)
                 if resolver is None:
@@ -242,10 +241,9 @@ class WorkerService:
         spec = get_platform_spec(platform.code)
         requested = snapshot_concurrency or platform.internal_concurrency
         concurrency = min(max(requested, platform.min_concurrency), platform.max_concurrency)
-        return spec.create_collector(
+        return spec.create_background_collector(
             self.session_store.get_state(platform.code),
             concurrency=concurrency,
-            browser_headless=self.session_store.settings.auth_browser_headless,
         )
 
     def _process_validation_job(self) -> bool:

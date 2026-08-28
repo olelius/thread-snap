@@ -16,6 +16,22 @@
 
 ---
 
+## 2026-08-28 — 分离易车访问会话与后台无头验证
+**总目标**：修复易车普通来源验证弹出系统浏览器，并纠正把易车 `available` 访问会话误写成账号登录认证的产品与界面语义。
+**状态**：✅ 后台验证显示模式与交互会话模式已解耦，易车访问会话已独立建模并通过真实无头验证、页面交互和全量回归。
+**干到哪里了**：
+- [x] 根因确认：Worker 创建易车采集器时错误复用了人工交互会话的 `auth_browser_headless=false`，所以普通来源验证启动可见 Chromium；易车 `validate_auth()` 只检查目标页可访问性，从未证明账号身份，Session `available` 也只表示访问门禁最近通过。
+- [x] 平台注册表新增后台浏览器模式和 `authentication_mode`；易车后台验证/提取固定无头，只有用户主动初始化或更新访问会话时保留 CDP 有头交互，汽车之家与懂车帝继续标记为 `account_login`。
+- [x] 平台配置页把易车显示为“访问会话、初始化/更新”，明确“不代表账号已经登录”；账号平台仍显示“登录 Session、登录/更新”，批次与验证状态统一显示“等待平台会话/处理会话”。
+- [x] 真实瑞虎8来源验证任务 `01a047aa-a82e-7cba-a788-69a536ab6a93` 成功；进程采样89次确认 Chromium 主进程含 `--headless`，回执位于 `artifacts/runtime/yiche-hidden-validation/runtime-validation.json`。
+- [x] 1680×900真实页面确认三平台会话卡片语义和易车交互Dialog，无脚本错误；截图位于 `artifacts/runtime/yiche-hidden-validation/session-modes.png` 与 `access-session-dialog.png`，SHA-256分别为 `49e514a9f62317ca38f7e5047e1d50ec50eb0b7a0f03f1d7bba655772ade6b28`、`fcec77c48eb49e56c10ecb5f8538f408302346c2eb4c475bb5954eb39ce8d68d`。
+- [x] 完整后端210/210（111.602秒）、Ruff、compileall、pip check、前端TypeScript检查和生产构建通过，Vite转换2468个模块；`git diff --check`通过。
+**下一步**：完成精确提交、PR合并和合并后本地服务复核。
+**边界**：不移除易车对 Chromium 页面运行时动态签名和真实XHR的依赖；后台只改为无界面运行。访问会话可用不等于账号已登录，不新增账号字段，也不输出Cookie、令牌或Profile内容。
+**关联**：`CONTEXT.md`、`src/threadsnap/collectors/registry.py`、`src/threadsnap/worker.py`、`frontend/src/features/config/config-page.tsx`、`docs/design/product-design.md`
+
+---
+
 ## 2026-08-28 — 补录三平台圈子来源并按平台折叠展示
 **总目标**：把用户截图中的汽车之家、懂车帝和易车圈子来源录入当前本地配置，并把持续增长的来源长表改为按平台展开和收起。
 **状态**：✅ 21 条缺失来源已原子补录，现有来源增至 37 条；来源与圈子页已按三平台折叠分组并通过真实页面交互验证。

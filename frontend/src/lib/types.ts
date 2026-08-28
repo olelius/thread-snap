@@ -10,6 +10,7 @@ export type Platform = {
   capabilities: {
     source_configuration: boolean
     authentication: boolean
+    authentication_mode: 'none' | 'account_login' | 'access_session'
     page_evidence: boolean
     live_video_resolution: boolean
   }

@@ -1522,6 +1522,9 @@ class ApiAndConfigTests(AppCase):
         self.assertFalse(autohome["enabled"])
         self.assertTrue(autohome["capabilities"]["source_configuration"])
         self.assertTrue(autohome["capabilities"]["authentication"])
+        self.assertEqual(
+            "account_login", autohome["capabilities"]["authentication_mode"]
+        )
         self.assertFalse(autohome["capabilities"]["page_evidence"])
         self.assertTrue(autohome["capabilities"]["live_video_resolution"])
         auth_task = self.client.post("/api/v1/platforms/autohome/auth/tasks")
