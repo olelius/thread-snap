@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlsplit
 
 from cryptography.fernet import Fernet, InvalidToken
 from fastapi import WebSocket, WebSocketDisconnect
@@ -39,6 +40,8 @@ from .session_store import SessionStore
 from .worker import WorkerService
 
 logger = logging.getLogger(__name__)
+
+INTERACTIVE_RECOVERY_CODES = {"PLATFORM_CAPTCHA_REQUIRED", "PLATFORM_CHALLENGE"}
 
 
 class AuthPageLoadError(RuntimeError):
@@ -164,6 +167,9 @@ class AuthTask:
     http_status: int | None = None
     fresh_profile: bool = False
     start_url: str | None = None
+    run_id: str | None = None
+    recovery_error_code: str | None = None
+    interactive_control_seen: bool = False
     playwright: Playwright | None = None
     context: BrowserContext | None = None
     page: Page | None = None
@@ -204,6 +210,7 @@ class BrowserAuthManager:
                 "PLATFORM_NOT_INTEGRATED", "该平台暂未接入认证流程。", status_code=409
             )
         start_url = spec.login_url
+        recovery_error_code: str | None = None
         with self.worker.factory() as db:
             platform = db.get(PlatformConfig, platform_code)
             if not platform or platform.adapter_status != "available":
@@ -228,9 +235,20 @@ class BrowserAuthManager:
                         "该批次当前没有此平台的待处理会话任务。",
                         status_code=409,
                     )
-                start_url = str(
+                recovery_error_code = waiting.error_code
+                trigger_url = str(
                     (waiting.checkpoint or {}).get("trigger_url") or waiting.circle_url
                 )
+                # 验证码和访问验证必须继承当前已登录 Profile；全新环境会丢失登录态，
+                # 把原本的验证恢复错误地变成 AUTH_REQUIRED。
+                if recovery_error_code in INTERACTIVE_RECOVERY_CODES:
+                    start_url = trigger_url
+                    fresh = False
+                elif recovery_error_code == "AUTH_REQUIRED":
+                    # 真正的登录失效才进入官方登录页；公开帖子页本身不能完成登录恢复。
+                    start_url = spec.login_url
+                else:
+                    start_url = trigger_url
         await self.cleanup_expired()
         active = next(
             (
@@ -242,7 +260,12 @@ class BrowserAuthManager:
             ),
             None,
         )
-        if active and (fresh or active.start_url != start_url):
+        if active and (
+            fresh
+            or active.start_url != start_url
+            or active.run_id != run_id
+            or active.recovery_error_code != recovery_error_code
+        ):
             active.status = "cancelled"
             active.page_status = "cancelled"
             await self._close(active)
@@ -254,6 +277,8 @@ class BrowserAuthManager:
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
             fresh_profile=fresh,
             start_url=start_url,
+            run_id=run_id,
+            recovery_error_code=recovery_error_code,
         )
         self.tasks[task.id] = task
         return self.task_dict(task)
@@ -287,6 +312,7 @@ class BrowserAuthManager:
             "error_message": task.error_message,
             "http_status": task.http_status,
             "fresh_profile": task.fresh_profile,
+            "recovery_error_code": task.recovery_error_code,
             "ticket": task.ticket if task.status in {"created", "active"} else None,
             "websocket_path": f"/api/v1/auth/tasks/{task.id}/stream",
         }
@@ -381,6 +407,7 @@ class BrowserAuthManager:
                         "page_status": task.page_status,
                     }
                 )
+                self._observe_interactive_control(task, page.url)
                 cdp = await task.context.new_cdp_session(page)
                 frame_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=1)
 
@@ -427,6 +454,10 @@ class BrowserAuthManager:
                         receive_task = asyncio.create_task(websocket.receive_json())
                     if frame_task in done and task.status == "active":
                         frame = frame_task.result()
+                        if self._observe_interactive_control(task, page.url):
+                            await self._command(task, {"type": "finish"}, websocket, cdp)
+                            if task.status != "active":
+                                break
                         await websocket.send_json(
                             {
                                 "type": "frame",
@@ -491,6 +522,33 @@ class BrowserAuthManager:
                         await active_cdp.detach()
                     except Exception:
                         pass
+
+    @staticmethod
+    def _observe_interactive_control(task: AuthTask, current_url: str) -> bool:
+        """记录验证页出现，并在其回到原站页面后请求自动保存与续跑。"""
+
+        if task.recovery_error_code not in INTERACTIVE_RECOVERY_CODES:
+            return False
+        parsed = urlsplit(current_url)
+        host = (parsed.hostname or "").lower()
+        normalized = current_url.lower()
+        control_visible = (
+            host == "safety.autohome.com.cn"
+            or "userverify" in normalized
+            or "captcha" in normalized
+            or "challenge" in normalized
+        )
+        if control_visible:
+            task.interactive_control_seen = True
+            return False
+        if not task.interactive_control_seen:
+            return False
+        expected_host = (urlsplit(task.start_url or "").hostname or "").lower()
+        if not host or not expected_host:
+            return False
+        return host == expected_host or host.endswith(f".{expected_host}") or expected_host.endswith(
+            f".{host}"
+        )
 
     async def _command(
         self,

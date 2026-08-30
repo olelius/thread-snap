@@ -16,6 +16,21 @@
 
 ---
 
+## 2026-08-30 — 汽车之家验证码完成后自动续跑
+**总目标**：纠正验证码/访问验证被错误当成重新登录的恢复路径，并在人工验证完成后自动保存更新状态、恢复原任务。
+**状态**：✅ 代码、状态路由、自动续跑、错误分类、owner 文档、完整验证和本地服务加载均已完成。
+**干到哪里了**：
+- [x] 数据库确认批次 `20260830-185206-001` 的上游来源原为 `PLATFORM_CHALLENGE` / `PLATFORM_CAPTCHA_REQUIRED`，旧恢复入口却统一传入 `fresh=true`；全新 Profile 丢失登录态后，当前补提批次4项转成 `AUTH_REQUIRED`，另3项会话刷新后的限频被外层错误包装为 `TASK_INTERNAL_ERROR`。
+- [x] 批次恢复按错误类型分流：验证码或访问验证强制继承现有加密 Profile并打开检查点触发URL；真实 `AUTH_REQUIRED` 才使用全新 Profile打开官方登录页。前端明确展示当前为验证码恢复，并隐藏无效的“使用全新登录环境”操作。
+- [x] 认证中继记录实际验证页；验证页返回原站后自动导出并加密保存 Session/Profile、关闭窗口、调用既有 `resume_platform` 将等待任务恢复为队列状态。未观察到可确认跳转时仍保留“保存 Session”作为人工兜底。
+- [x] 会话刷新后的验证码、访问验证、限频等 `CollectorFailure` 复用同一分类器，不再泄漏为 `TASK_INTERNAL_ERROR`。
+- [x] 完整后端218/218、Ruff、compileall、pip check、前端TypeScript和2468模块生产构建、`git diff --check`全部通过；本地后端已加载新代码并返回`/health=ok`，当前真实等待批次路由探针返回`AUTH_REQUIRED + fresh_profile=true`，证明登录与验证码路径已分离。脱敏回执位于`artifacts/runtime/autohome-challenge-resume-20260830/summary.json`。
+**下一步**：完成Git自动收尾；当前历史补提批次已在旧逻辑下把正式Profile覆盖为匿名状态，需要一次重新登录取得服务器Session，之后新发生的验证码恢复将复用登录Profile并在验证完成后自动续跑。
+**边界**：系统只观察人工验证页是否返回原站，不自动求解验证码；既有批次错误码、快照和已保存匿名Profile不做历史改写。
+**关联**：`src/threadsnap/auth.py`、`src/threadsnap/worker.py`、`frontend/src/features/auth/auth-dialog.tsx`、`docs/design/product-design.md`
+
+---
+
 ## 2026-08-30 — 汽车之家平台控制改为原任务人工恢复
 **总目标**：确认汽车之家新手动批次在 4 并发和 1 并发仍于候选冻结前失败的真实原因；把验证码和访问验证从终态失败改为可恢复暂停，并让人工会话入口直接打开原始触发 URL。
 **状态**：✅ 根因诊断、恢复状态机、精确触发 URL、owner 文档、完整验证、本地服务加载、合并和分支清理均已完成。

@@ -72,6 +72,7 @@ export function AuthDialog({
   const pendingPointerRef = useRef<Record<string, unknown> | undefined>(undefined)
   const lastPointerRef = useRef({ x: 0, y: 0 })
   const [task, setTask] = useState<AuthTask | null>(null)
+  const interactiveRecovery = ['PLATFORM_CHALLENGE', 'PLATFORM_CAPTCHA_REQUIRED'].includes(task?.recovery_error_code ?? '')
   const [frame, setFrame] = useState<string>()
   const [pageUrl, setPageUrl] = useState('')
   const [connection, setConnection] = useState<'connecting' | 'online' | 'offline'>('offline')
@@ -318,9 +319,9 @@ export function AuthDialog({
           <div className='pointer-events-none absolute right-4 bottom-4 flex items-center gap-2 rounded-full bg-black/55 px-3 py-1.5 text-[11px] text-slate-300 backdrop-blur'><Expand className='size-3.5' />1280 × 800 交互画布</div>
         </div>
         <div className='flex flex-wrap items-center justify-between gap-3 border-t bg-background px-5 py-3'>
-          <div className={`text-xs ${validationFailed ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-muted-foreground'}`}>{validationFailed ? '当前浏览器没有形成结构有效的 Session，请继续操作或使用全新环境。' : task?.fresh_profile && freshOnOpen ? accessSession ? '检测到批次中的访问会话失效，已启动全新访问环境，请重新初始化。' : '检测到批次中途认证失效，已启动全新登录环境，请重新完成平台登录。' : accessSession ? '此流程只初始化并保存平台访问状态，不检查或证明账号登录。' : '保存服务器浏览器 Session；页面登录状态、圈子和帖子访问由实际采集任务判断。'}</div>
+          <div className={`text-xs ${validationFailed ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-muted-foreground'}`}>{validationFailed ? '当前浏览器没有形成结构有效的 Session，请继续操作或使用全新环境。' : interactiveRecovery ? '正在复用当前登录环境处理原 URL 的验证码或访问验证；验证页返回原站后将自动保存 Session 并继续原任务。' : task?.fresh_profile && freshOnOpen ? accessSession ? '检测到批次中的访问会话失效，已启动全新访问环境，请重新初始化。' : '检测到批次中途认证失效，已启动全新登录环境，请重新完成平台登录。' : accessSession ? '此流程只初始化并保存平台访问状态，不检查或证明账号登录。' : '保存服务器浏览器 Session；页面登录状态、圈子和帖子访问由实际采集任务判断。'}</div>
           <div className='flex items-center gap-2'>
-            {!task?.fresh_profile && <Button variant={validationFailed ? 'default' : 'outline'} disabled={pageStatus === 'starting' || pageStatus === 'loading' || pageStatus === 'validating'} onClick={() => start(true)}><LogIn className='size-4' />使用全新{accessSession ? '访问' : '登录'}环境</Button>}
+            {!task?.fresh_profile && !interactiveRecovery && <Button variant={validationFailed ? 'default' : 'outline'} disabled={pageStatus === 'starting' || pageStatus === 'loading' || pageStatus === 'validating'} onClick={() => start(true)}><LogIn className='size-4' />使用全新{accessSession ? '访问' : '登录'}环境</Button>}
             <Button variant='outline' onClick={() => pageStatus === 'failed' || !task?.ticket ? start() : connect(task)}><RefreshCw className='size-4' />{pageStatus === 'failed' ? '重新创建会话浏览器' : '重新连接'}</Button>
             <Button variant='outline' onClick={() => onOpenChange(false)}>关闭窗口</Button>
             {runId && <AlertDialog><AlertDialogTrigger asChild><Button variant='destructive' disabled={endRun.isPending}><LogOut className='size-4' />结束本次提取</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>结束本次提取？</AlertDialogTitle><AlertDialogDescription>已有结果将保留，批次按实际结果结束并释放平台队列。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => endRun.mutate()}>确认结束</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
