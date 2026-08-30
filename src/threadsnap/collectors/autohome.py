@@ -27,7 +27,7 @@ from .base import (
     ProgressCallback,
 )
 
-ADAPTER_VERSION = "autohome-club-v5"
+ADAPTER_VERSION = "autohome-club-v6"
 BASE_URL = "https://club.autohome.com.cn"
 LIST_API_URL = "https://club-open-api.autohome.com.cn/api/pc/bbs/index/getClubTopicList"
 VIDEO_MEDIA_URL = "https://p-vp.autohome.com.cn/api/gpi"
@@ -1011,6 +1011,7 @@ class AutohomeCollector:
         source_index = 0
         selected_count = 0
         exhausted = False
+        frozen_candidates: list[dict[str, Any]] = []
         while selected_count < target_count:
             if page_number > MAX_LIST_PAGES:
                 raise CollectorFailure(
@@ -1031,7 +1032,6 @@ class AutohomeCollector:
                 exhausted = True
                 break
             page_fingerprints.add(fingerprint)
-            candidates: list[dict[str, Any]] = []
             for raw in page["items"]:
                 if selected_count >= target_count:
                     break
@@ -1056,58 +1056,79 @@ class AutohomeCollector:
                     continue
                 seen.add(candidate["post_id"])
                 selected_count += 1
-                candidates.append(candidate)
-
-            cursor = 0
-            while cursor < len(candidates):
-                batch = candidates[cursor : cursor + self.concurrency]
-                cursor += len(batch)
-
-                def fetch(value: dict[str, Any]) -> tuple[dict[str, Any], Any, Any]:
-                    try:
-                        return value, self.fetch_post(value["url"], candidate=value), None
-                    except (AuthenticationRequired, CollectorFailure) as exc:
-                        return value, None, exc
-
-                with ThreadPoolExecutor(max_workers=max(1, len(batch))) as pool:
-                    outcomes = list(pool.map(fetch, batch))
-                for candidate, record, error in outcomes:
-                    if isinstance(error, AuthenticationRequired):
-                        raise AuthenticationRequired(
-                            error.message,
-                            trigger_url=candidate["url"],
-                            records=records,
-                            failures=failures,
-                        ) from error
-                    if isinstance(error, CollectorFailure) and error.code in CONTROL_FAILURE_CODES:
-                        raise error
-                    if isinstance(error, CollectorFailure) or record is None:
-                        failure = {
-                            "url": candidate["url"],
-                            "code": error.code
-                            if isinstance(error, CollectorFailure)
-                            else "POST_NOT_FOUND",
-                            "message": (
-                                error.message
-                                if isinstance(error, CollectorFailure)
-                                else "帖子详情当前不可用。"
-                            ),
-                            "source_index": candidate["order_index"],
-                        }
-                        failures.append(failure)
-                        if on_progress:
-                            on_progress(None, failure)
-                        continue
-                    record["order_index"] = candidate["order_index"]
-                    records.append(record)
-                    if on_progress:
-                        on_progress(record, None)
+                frozen_candidates.append(candidate)
             if frozen_page_count is not None and page_number >= frozen_page_count:
                 exhausted = True
                 break
             page_number += 1
             if selected_count >= target_count:
                 break
+
+        cursor = 0
+        while cursor < len(frozen_candidates):
+            batch_start = cursor
+            batch = frozen_candidates[cursor : cursor + self.concurrency]
+            cursor += len(batch)
+
+            def fetch(value: dict[str, Any]) -> tuple[dict[str, Any], Any, Any]:
+                try:
+                    return value, self.fetch_post(value["url"], candidate=value), None
+                except (AuthenticationRequired, CollectorFailure) as exc:
+                    return value, None, exc
+
+            with ThreadPoolExecutor(max_workers=max(1, len(batch))) as pool:
+                outcomes = list(pool.map(fetch, batch))
+            for offset, (candidate, record, error) in enumerate(outcomes):
+                if isinstance(error, AuthenticationRequired):
+                    raise AuthenticationRequired(
+                        error.message,
+                        trigger_url=candidate["url"],
+                        records=records,
+                        failures=failures,
+                    ) from error
+                if (
+                    isinstance(error, CollectorFailure)
+                    and error.code == "PLATFORM_RATE_LIMITED"
+                ):
+                    # 限流后的冷却续跑必须使用本轮已经冻结的剩余URL，不能重新读取
+                    # 实时列表并把后续帖子补进原任务。
+                    for pending in frozen_candidates[batch_start + offset :]:
+                        failures.append(
+                            {
+                                "url": pending["url"],
+                                "code": error.code,
+                                "message": error.message,
+                                "source_index": pending["order_index"],
+                            }
+                        )
+                    return {
+                        "records": records,
+                        "failures": failures,
+                        "stop_reason": "平台请求频率受限，固定候选将在冷却后原位续跑。",
+                    }
+                if isinstance(error, CollectorFailure) and error.code in CONTROL_FAILURE_CODES:
+                    raise error
+                if isinstance(error, CollectorFailure) or record is None:
+                    failure = {
+                        "url": candidate["url"],
+                        "code": error.code
+                        if isinstance(error, CollectorFailure)
+                        else "POST_NOT_FOUND",
+                        "message": (
+                            error.message
+                            if isinstance(error, CollectorFailure)
+                            else "帖子详情当前不可用。"
+                        ),
+                        "source_index": candidate["order_index"],
+                    }
+                    failures.append(failure)
+                    if on_progress:
+                        on_progress(None, failure)
+                    continue
+                record["order_index"] = candidate["order_index"]
+                records.append(record)
+                if on_progress:
+                    on_progress(record, None)
         if selected_count >= target_count and failures:
             stop_reason = "固定候选中存在未完成帖子，未使用后续帖子替换。"
         elif selected_count >= target_count:
@@ -1153,6 +1174,23 @@ class AutohomeCollector:
                     failures=failures,
                 ) from exc
             except CollectorFailure as exc:
+                if exc.code == "PLATFORM_RATE_LIMITED":
+                    for pending_index, pending_url in enumerate(
+                        urls[source_index:], start=source_index
+                    ):
+                        failures.append(
+                            {
+                                "url": pending_url,
+                                "code": exc.code,
+                                "message": exc.message,
+                                "source_index": pending_index,
+                            }
+                        )
+                    return {
+                        "records": records,
+                        "failures": failures,
+                        "stop_reason": "平台请求频率受限，固定URL将在冷却后原位续跑。",
+                    }
                 if exc.code in CONTROL_FAILURE_CODES:
                     raise
                 failure = {
