@@ -26,7 +26,8 @@
 - [x] 74项定向合同测试通过；真实复跑历史候选 `115873433`（列表6/详情6）和 `115124729`（列表3/详情2）均生成 `visible` 正常记录，回执位于 `artifacts/runtime/nonblocking-comments-20260830/real-autohome-results.json`。
 - [x] 完整后端208/208、任务范围Ruff、compileall、pip check、前端TypeScript检查与生产构建通过，Vite转换2468个模块；`git diff --check`通过。全仓Ruff另检出的6个旧PoC导入排序问题均位于本任务未修改文件，不影响生产代码与正式测试检查结果。
 - [x] 本地后端重启后 `/health` 返回 `ok`，平台接口确认汽车之家 `autohome-club-v4` 已启用、易车 `yiche-community-v3` 已接入且保持用户原有停用状态；懂车帝继续为 `dongchedi-dynamic-v5`。
-**下一步**：无代码、文档、验证或本地服务缺口；按项目授权完成提交、PR合并和分支清理。
+- [x] 功能提交 `5a64481` 已经PR #224合并为 `main@ea80e04`，功能分支与远程分支均已清理。
+**下一步**：无代码、文档、验证、本地服务或Git收尾缺口。
 **边界**：历史批次及既有失败计数保持不可变；登录失效、验证码、限流、帖子身份冲突和正文或媒体缺失继续按既有控制与失败合同处理。
 **关联**：`docs/adr/0048-treat-primary-comments-as-nonblocking-post-enrichment.md`、`src/threadsnap/collectors/autohome.py`、`src/threadsnap/collectors/yiche.py`
 
