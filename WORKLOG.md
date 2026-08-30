@@ -25,7 +25,7 @@
 - [x] 认证中继记录实际验证页；验证页返回原站后自动导出并加密保存 Session/Profile、关闭窗口、调用既有 `resume_platform` 将等待任务恢复为队列状态。未观察到可确认跳转时仍保留“保存 Session”作为人工兜底。
 - [x] 会话刷新后的验证码、访问验证、限频等 `CollectorFailure` 复用同一分类器，不再泄漏为 `TASK_INTERNAL_ERROR`。
 - [x] 完整后端218/218、Ruff、compileall、pip check、前端TypeScript和2468模块生产构建、`git diff --check`全部通过；本地后端已加载新代码并返回`/health=ok`，当前真实等待批次路由探针返回`AUTH_REQUIRED + fresh_profile=true`，证明登录与验证码路径已分离。脱敏回执位于`artifacts/runtime/autohome-challenge-resume-20260830/summary.json`。
-- [x] 修复已提交并推送，PR #237 已具备无冲突合并条件；合并后功能分支按项目自动收尾规则删除。
+- [x] 修复已由 PR #237 合并为 `main@a20acde`，远程和本地功能分支均已删除；合并后的本地服务继续返回 `/health=ok`。
 **下一步**：当前历史补提批次已在旧逻辑下把正式Profile覆盖为匿名状态，需要一次重新登录取得服务器Session；之后新发生的验证码恢复将复用登录Profile并在验证完成后自动续跑。
 **边界**：系统只观察人工验证页是否返回原站，不自动求解验证码；既有批次错误码、快照和已保存匿名Profile不做历史改写。
 **关联**：`src/threadsnap/auth.py`、`src/threadsnap/worker.py`、`frontend/src/features/auth/auth-dialog.tsx`、`docs/design/product-design.md`
