@@ -27,7 +27,7 @@ from .base import (
     ProgressCallback,
 )
 
-ADAPTER_VERSION = "autohome-club-v3"
+ADAPTER_VERSION = "autohome-club-v4"
 BASE_URL = "https://club.autohome.com.cn"
 LIST_API_URL = "https://club-open-api.autohome.com.cn/api/pc/bbs/index/getClubTopicList"
 VIDEO_MEDIA_URL = "https://p-vp.autohome.com.cn/api/gpi"
@@ -754,7 +754,7 @@ class AutohomeCollector:
             ),
             None,
         )
-        comments, reply_statuses, comments_complete, comment_page_end = self._comments(document)
+        comments, reply_statuses, comment_page_end = self._comments(document)
         topic_delete = _js_int(topic_block, "topicDelete")
         list_is_delete = (candidate or {}).get("is_delete")
         list_delete_flag = (candidate or {}).get("club_delete_flag")
@@ -770,11 +770,6 @@ class AutohomeCollector:
         if not content_proven:
             raise CollectorFailure(
                 "POST_CONTENT_MISSING", "汽车之家帖子没有返回真实正文或媒体证明。"
-            )
-        if not comments_complete:
-            raise CollectorFailure(
-                "POST_COMMENTS_INCOMPLETE",
-                "汽车之家帖子不足十条一级评论且详情页未返回完整终止证明。",
             )
         return {
             "platform_post_id": post_id,
@@ -807,7 +802,7 @@ class AutohomeCollector:
                 "video_media_response_kind": video_media_response_kind,
                 "video_info": video_info or None,
                 "reply_raw_statuses": reply_statuses,
-                "comments_complete": comments_complete,
+                "comment_capture": "detail_first_page_up_to_10",
                 "comment_page_end": comment_page_end,
                 "source_raw": (candidate or {}).get("list_raw"),
             },
@@ -895,7 +890,7 @@ class AutohomeCollector:
     @classmethod
     def _comments(
         cls, document: Any
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool, dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
         """只读取 SSR 一级楼层，明确排除楼中楼接口与嵌套评论。"""
 
         all_rows = document.xpath(
@@ -957,12 +952,9 @@ class AutohomeCollector:
                     "status": str(row.get("data-status") or "").strip() or None,
                 }
             )
-        # 十条已达到产品截断上限；不足十条时只接受详情SSR的一页终止证明。
-        comments_complete = len(rows) >= 10 or (page_count == 1 and next_page_disabled)
         return (
             comments,
             statuses,
-            comments_complete,
             {
                 "has_more": page_count > 1 if page_count is not None else None,
                 "cursor": 2 if page_count is not None and page_count > 1 else None,

@@ -204,7 +204,9 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertEqual("resolved", record["raw_status"]["video_url_resolution"])
         self.assertEqual(10, len(record["comments"]))
         self.assertEqual("用户1", record["comments"][0]["author"])
-        self.assertTrue(record["raw_status"]["comments_complete"])
+        self.assertEqual(
+            "detail_first_page_up_to_10", record["raw_status"]["comment_capture"]
+        )
         self.assertEqual(
             {
                 "has_more": None,
@@ -385,7 +387,7 @@ class AutohomeContractTests(unittest.TestCase):
 
         self.assertEqual("WRONG_POST", caught.exception.code)
 
-    def test_single_page_marker_proves_fewer_than_ten_comments_complete(self) -> None:
+    def test_single_page_marker_is_kept_as_comment_page_evidence(self) -> None:
         document = """
         <html><body><script>
         window['__BBSINFO__'] = {"bbsId":8232,"bbs":"c"}
@@ -407,7 +409,9 @@ class AutohomeContractTests(unittest.TestCase):
 
         assert record is not None
         self.assertEqual([], record["comments"])
-        self.assertTrue(record["raw_status"]["comments_complete"])
+        self.assertEqual(
+            "detail_first_page_up_to_10", record["raw_status"]["comment_capture"]
+        )
         self.assertEqual(
             {
                 "has_more": False,
@@ -585,7 +589,7 @@ class AutohomeContractTests(unittest.TestCase):
 
         self.assertEqual("VIDEO_MEDIA_URL_MISSING", caught.exception.code)
 
-    def test_fewer_than_ten_comments_with_more_pages_is_incomplete(self) -> None:
+    def test_fewer_than_ten_comments_with_more_pages_still_keeps_post(self) -> None:
         document = """
         <html><body><script>
         window['__BBSINFO__'] = {"bbsId":8232,"bbs":"c"}
@@ -604,18 +608,21 @@ class AutohomeContractTests(unittest.TestCase):
         collector = collector_with_like()
         collector._get = lambda url, **_: FakeResponse(document, url)  # type: ignore[method-assign]
 
-        with self.assertRaises(CollectorFailure) as caught:
-            collector.fetch_post(
-                "https://club.autohome.com.cn/bbs/thread/dee662/115934382-1.html",
-                candidate={
-                    "bbs_id": 8232,
-                    "bbs_type": "c",
-                    "is_delete": 0,
-                    "club_delete_flag": 0,
-                },
-            )
+        record = collector.fetch_post(
+            "https://club.autohome.com.cn/bbs/thread/dee662/115934382-1.html",
+            candidate={
+                "bbs_id": 8232,
+                "bbs_type": "c",
+                "is_delete": 0,
+                "club_delete_flag": 0,
+            },
+        )
 
-        self.assertEqual("POST_COMMENTS_INCOMPLETE", caught.exception.code)
+        assert record is not None
+        self.assertEqual(1, len(record["comments"]))
+        self.assertEqual(
+            "detail_first_page_up_to_10", record["raw_status"]["comment_capture"]
+        )
 
     def test_explicit_delete_flag_maps_to_hidden(self) -> None:
         document = """

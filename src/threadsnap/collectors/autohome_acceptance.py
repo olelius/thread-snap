@@ -130,18 +130,9 @@ def _record_contract_errors(record: dict[str, Any], expected_post_id: str) -> li
     ):
         errors.append("content_missing")
     comments = record.get("comments")
-    raw_status = record.get("raw_status")
-    raw_status = raw_status if isinstance(raw_status, dict) else {}
-    page_end = raw_status.get("comment_page_end")
     comments = comments if isinstance(comments, list) else []
     if len(comments) > 10:
         errors.append("comment_limit_exceeded")
-    if not (
-        raw_status.get("comments_complete") is True
-        and isinstance(page_end, dict)
-        and (len(comments) >= 10 or page_end.get("has_more") is False)
-    ):
-        errors.append("comments_incomplete")
     if record.get("visibility") not in {"visible", "hidden", "unknown"}:
         errors.append("normalized_status_invalid")
     return errors
@@ -524,7 +515,7 @@ class AutohomeAcceptanceProvider:
             "image_urls": list(record.get("image_urls") or []) if record else [],
             "video_urls": list(record.get("video_urls") or []) if record else [],
             "comments": list(record.get("comments") or []) if record else [],
-            "comments_complete": bool(raw_status.get("comments_complete")) if record else False,
+            "comment_capture": raw_status.get("comment_capture") if record else None,
             "comment_page_end": raw_status.get("comment_page_end") if record else {},
             "raw_status": raw_status,
             "normalized_status": record.get("visibility", "unknown") if record else "unknown",

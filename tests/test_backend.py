@@ -4069,7 +4069,7 @@ class AutohomeLocalClosureTests(AppCase):
                 url="https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post",
                 source_kind="configured",
                 validation_status="verified",
-                adapter_version="autohome-club-v3",
+                adapter_version="autohome-club-v4",
             )
             db.add(circle)
             db.flush()
@@ -4138,7 +4138,9 @@ class AutohomeLocalClosureTests(AppCase):
         detail = detail_response.json()
         self.assertEqual("本地组合正文", detail["content"])
         self.assertEqual("本地一级评论", detail["comments"][0]["content"])
-        self.assertTrue(detail["raw_status"]["comments_complete"])
+        self.assertEqual(
+            "detail_first_page_up_to_10", detail["raw_status"]["comment_capture"]
+        )
 
         workbook = Workbook()
         sheet = workbook.active
@@ -4177,7 +4179,9 @@ class AutohomeLocalClosureTests(AppCase):
         self.assertEqual("1. https://img.example/autohome.jpg", output["D1"].value)
         self.assertEqual("unknown", output["E1"].value)
         self.assertIn("评论：本地一级评论", output["F1"].value)
-        self.assertIn('"comments_complete":true', output["G1"].value)
+        self.assertIn(
+            '"comment_capture":"detail_first_page_up_to_10"', output["G1"].value
+        )
 
         with self.container.sessions() as db:
             platform = db.get(PlatformConfig, "autohome")

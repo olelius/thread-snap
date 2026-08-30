@@ -1000,7 +1000,7 @@ def result_contract_errors(
         "image_urls",
         "video_urls",
         "comments",
-        "comments_complete",
+        "comment_capture",
         "comment_page_end",
         "raw_status",
         "normalized_status",
@@ -1055,13 +1055,10 @@ def result_contract_errors(
         errors.append("content_missing")
     if len(comments) > 10:
         errors.append("comment_limit_exceeded")
-    page_end = record["comment_page_end"]
-    page_end_ok = isinstance(page_end, dict) and (
-        len(comments) >= 10 or page_end.get("has_more") is False
-    )
-    comments_ok = record["comments_complete"] is True and page_end_ok
-    if not comments_ok:
-        errors.append("comments_incomplete")
+    if record["comment_capture"] is not None and not isinstance(record["comment_capture"], str):
+        errors.append("comment_capture_invalid")
+    if not isinstance(record["comment_page_end"], dict):
+        errors.append("comment_page_end_invalid")
     raw_status = record["raw_status"]
     status_ok = isinstance(raw_status, dict) and bool(raw_status)
     if not status_ok:

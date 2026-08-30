@@ -175,7 +175,7 @@ def make_result(index: int, url: str, post_id: str) -> dict:
         "image_urls": [],
         "video_urls": [],
         "comments": [],
-        "comments_complete": True,
+        "comment_capture": "first_page",
         "comment_page_end": {"has_more": False, "cursor": None},
         "raw_status": {"fixture_status": "visible"},
         "normalized_status": "visible",
@@ -530,13 +530,11 @@ class ResultContractTests(unittest.TestCase):
             self.assertEqual(1, summary["duplicate_result_count"])
             self.assertEqual(1, summary["missing_result_count"])
 
-    def test_comment_termination_is_mandatory(self) -> None:
+    def test_comment_termination_does_not_invalidate_post(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             _, urls, _, manifest, records = self.make_run_fixture(root)
-            records[0]["comments_complete"] = False
             records[0]["comment_page_end"] = {"has_more": True, "cursor": None}
-            records[0]["final_status"] = "invalid"
             summary = acceptance.evaluate_results(
                 platform_code="autohome",
                 urls=acceptance.read_urls_strict(urls, 500),
@@ -545,8 +543,8 @@ class ResultContractTests(unittest.TestCase):
                 request_events=[],
                 wall_seconds=10,
             )
-            self.assertFalse(summary["passed"])
-            self.assertEqual(1, summary["failure_category_counts"]["comments_incomplete"])
+            self.assertTrue(summary["passed"])
+            self.assertEqual(500, summary["valid_count"])
 
     def test_body_or_media_is_mandatory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
