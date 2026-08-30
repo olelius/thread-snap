@@ -227,6 +227,8 @@ function RunDetail({ kind }: { kind: RunDetailKind }) {
   const canRetry = run.data?.status === 'failed' || run.data?.status === 'partial_success'
   const canDelete = ['success', 'partial_success', 'failed'].includes(run.data?.status ?? '')
   const inputModeName = run.data?.input_mode === 'url_list' ? 'URL 清单' : '圈子发现'
+  const reachedTarget = run.data?.status === 'success' && run.data.completed_count >= run.data.planned_count
+  const visibleFailedCount = reachedTarget ? 0 : (run.data?.failed_count ?? 0)
   const selectionTransition = reduceMotion ? { duration: 0 } : { type: 'spring' as const, stiffness: 430, damping: 34, mass: 0.55 }
   const viewLabelTransition = reduceMotion ? { duration: 0 } : { duration: 0.18, ease: [0.2, 0, 0, 1] as const }
 
@@ -249,7 +251,7 @@ function RunDetail({ kind }: { kind: RunDetailKind }) {
         ['状态', <StatusBadge key='status' value={run.data.status} label={run.data.status_name} />],
         ['触发方式', `${run.data.trigger_type_name} · ${inputModeName}`],
         ['结果进度', `${run.data.completed_count} / ${run.data.planned_count}`],
-        [run.data.status === 'success' && run.data.completed_count >= run.data.planned_count ? '跳过异常候选' : '失败项', String(run.data.failed_count)],
+        ['失败项', String(visibleFailedCount)],
         ['创建时间', formatDate(run.data.created_at)],
       ].map(([label, value]) => <Card key={String(label)} className='border-border/70 bg-card/88 py-0'><CardContent className='p-3'><div className='text-xs text-muted-foreground'>{label}</div><div className='mt-1 text-sm font-semibold'>{value}</div></CardContent></Card>)}</div>}
       {run.data?.waiting_reason && <Alert><KeyRound className='size-4' /><AlertTitle>等待平台会话</AlertTitle><AlertDescription>{run.data.waiting_reason}</AlertDescription></Alert>}
@@ -515,7 +517,10 @@ function TaskDialog({ open, onOpenChange, tasks }: { open: boolean; onOpenChange
   const targetCount = tasks.reduce((total, task) => total + task.target_count, 0)
   const completedCount = tasks.reduce((total, task) => total + task.completed_count, 0)
   const successfulCount = tasks.filter((task) => ['success', 'completed'].includes(task.status)).length
-  const issueCount = tasks.filter((task) => task.failed_count > 0 || task.status === 'failed').length
+  const issueCount = tasks.filter((task) => {
+    const reachedTarget = task.status === 'success' && task.completed_count >= task.target_count
+    return task.status === 'failed' || (task.failed_count > 0 && !reachedTarget)
+  }).length
   const overallProgress = progressValue(completedCount, targetCount)
 
   return (
@@ -536,7 +541,7 @@ function TaskDialog({ open, onOpenChange, tasks }: { open: boolean; onOpenChange
             <TaskSummary icon={Layers3} label='任务总数' value={`${tasks.length} 个`} />
             <TaskSummary icon={CircleCheckBig} label='已成功' value={`${successfulCount} 个`} />
             <TaskSummary icon={Gauge} label='结果进度' value={`${completedCount} / ${targetCount}`} />
-            <TaskSummary icon={CircleAlert} label='存在异常' value={`${issueCount} 个`} tone={issueCount ? 'danger' : 'normal'} />
+            <TaskSummary icon={CircleAlert} label='失败来源' value={`${issueCount} 个`} tone={issueCount ? 'danger' : 'normal'} />
           </div>
 
           <div className='mt-3 flex items-center gap-3'>
@@ -618,7 +623,7 @@ function TaskRow({ task }: { task: RunTask }) {
           <span className='font-medium tabular-nums'>{task.completed_count} / {task.target_count}</span>
         </div>
         <Progress value={progress} className='h-1.5' />
-        {task.failed_count > 0 && <div className={cn('text-right text-[11px] font-medium', failuresRecovered ? 'text-muted-foreground' : 'text-destructive')}>{failuresRecovered ? `跳过 ${task.failed_count} 个异常候选` : `${task.failed_count} 项失败`}</div>}
+        {task.failed_count > 0 && !failuresRecovered && <div className='text-right text-[11px] font-medium text-destructive'>{task.failed_count} 项失败</div>}
       </div>
     </div>
   )
