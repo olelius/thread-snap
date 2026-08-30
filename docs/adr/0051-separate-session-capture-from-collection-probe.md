@@ -1,0 +1,16 @@
+---
+status: accepted
+amends: 0007-official-login-and-encrypted-platform-session.md, 0046-require-autohome-session-for-like-count.md
+---
+
+# Session 获取与采集访问门禁分离
+
+平台人工认证入口只负责操作服务器官方页面、导出并加密保存 Session。用户点击保存后只检查 storage state 是否为可持久化结构，不判断当前页面是否已登录；保存动作不实例化采集器，也不访问圈子、首帖、评论、点赞、用户消息或其他业务端点。这样“Session 已取得”不会因页面外观或某个实时帖子触发访问验证而被误报为登录失败。
+
+采集端点是否可用继续由真实任务在自己的原 URL 上判断。保存后的 Session 若缺少平台所需账号身份、已失效或被目标端点拒绝，任务按既有 `waiting_for_auth` 恢复；访问验证、限流、网络错误和内容错误保持各自分类。汽车之家受保护点赞数仍须在实际帖子采集中由一致账号Cookie和点赞接口证明，匿名占位零值仍不进入快照。
+
+## Consequences
+
+- 配置页只显示“Session 已保存”和最近保存时间，不把它表述为采集验证通过。
+- 等待任务在 Session 保存后恢复原 URL；恢复请求才执行采集访问门禁，不创建替代批次。
+- 旧正式 Session 在新 storage state 结构检查或持久化失败时保持不变；真实采集控制也不通过隐藏错误或跳过字段改写为成功。

@@ -183,11 +183,16 @@ class FakeAuthLocator:
 
 
 class FakeAuthPage:
-    url = "https://www.dongchedi.com/login-required"
-
-    def __init__(self, *, html: str = "<html><body>登录</body></html>", controls: int = 1):
+    def __init__(
+        self,
+        *,
+        html: str = "<html><body>登录</body></html>",
+        controls: int = 1,
+        url: str = "https://www.dongchedi.com/community/24729",
+    ):
         self.html = html
         self.controls = controls
+        self.url = url
 
     def is_closed(self) -> bool:
         return False
@@ -2800,7 +2805,7 @@ class AuthComponentTests(AppCase):
         self.assertIsNone(task.page)
         self.assertIsNone(task.playwright)
 
-    def test_successful_validation_promotes_profile_and_resumes_platform(self) -> None:
+    def test_successful_session_capture_promotes_profile_and_resumes_platform(self) -> None:
         task = AuthTask(
             id="auth-success",
             platform_code="dongchedi",
@@ -2827,20 +2832,10 @@ class AuthComponentTests(AppCase):
         socket = FakeAuthSocket()
         resumed: list[str] = []
 
-        class ValidCollector:
-            def __init__(self, *_args: object, **_kwargs: object):
-                pass
-
-            def validate_circle(self, _url: str) -> dict:
-                return {"external_id": "24729"}
-
-        with (
-            patch("threadsnap.auth.DongchediCollector", ValidCollector),
-            patch.object(
-                self.container.worker,
-                "resume_platform",
-                side_effect=lambda platform: resumed.append(platform),
-            ),
+        with patch.object(
+            self.container.worker,
+            "resume_platform",
+            side_effect=lambda platform: resumed.append(platform),
         ):
             asyncio.run(
                 self.container.auth._command(task, {"type": "finish"}, socket)  # type: ignore[arg-type]
@@ -2862,7 +2857,7 @@ class AuthComponentTests(AppCase):
         self.assertNotIn(b"new-profile", encrypted.read_bytes())
         self.assertEqual("completed", socket.messages[-1]["type"])
 
-    def test_failed_validation_keeps_previous_session_and_profile(self) -> None:
+    def test_invalid_export_keeps_previous_session_and_profile(self) -> None:
         self.container.session_store.import_state("dongchedi", auth_state("old-session"))
         profiles = self.container.auth.profiles
         old_profile = profiles.prepare("dongchedi", "old-profile")
@@ -2881,25 +2876,20 @@ class AuthComponentTests(AppCase):
         )
         task.profile_dir = profiles.prepare("dongchedi", task.id)
         (task.profile_dir / "Default" / "marker.txt").write_text("new", encoding="utf-8")
-        task.context = FakeAuthContext(auth_state("new-session"))  # type: ignore[assignment]
+        task.context = FakeAuthContext({"cookies": [], "origins": []})  # type: ignore[assignment]
         task.playwright = FakePlaywright()  # type: ignore[assignment]
-        task.page = FakeAuthPage()  # type: ignore[assignment]
+        task.page = FakeAuthPage(
+            url="https://www.dongchedi.com/login-required?redirect=%2Fcommunity%2F24729"
+        )  # type: ignore[assignment]
         socket = FakeAuthSocket()
 
-        class InvalidCollector:
-            def __init__(self, *_args: object, **_kwargs: object):
-                pass
-
-            def validate_circle(self, _url: str) -> dict:
-                raise AuthenticationRequired("仍需登录")
-
-        with patch("threadsnap.auth.DongchediCollector", InvalidCollector):
-            asyncio.run(
-                self.container.auth._command(task, {"type": "finish"}, socket)  # type: ignore[arg-type]
-            )
+        asyncio.run(
+            self.container.auth._command(task, {"type": "finish"}, socket)  # type: ignore[arg-type]
+        )
 
         self.assertEqual("active", task.status)
         self.assertEqual("ready", task.page_status)
+        self.assertEqual("AUTH_SESSION_STATE_INVALID", task.error_code)
         self.assertEqual("validation_failed", socket.messages[-1]["type"])
         self.assertEqual(previous_encrypted, current.read_bytes())
         self.assertEqual(
@@ -2908,43 +2898,37 @@ class AuthComponentTests(AppCase):
         )
         asyncio.run(self.container.auth._close(task))
 
-    def test_internal_validation_error_keeps_browser_ready_without_leaking_detail(self) -> None:
+    def test_session_capture_does_not_call_collection_validator(self) -> None:
         task = AuthTask(
-            id="auth-internal-error",
-            platform_code="dongchedi",
+            id="auth-no-collection-probe",
+            platform_code="autohome",
             ticket="ticket",
             expires_at=datetime.now(timezone.utc),
             status="active",
             page_status="ready",
         )
-        task.profile_dir = self.container.auth.profiles.prepare("dongchedi", task.id)
+        task.profile_dir = self.container.auth.profiles.prepare("autohome", task.id)
         task.context = FakeAuthContext(auth_state("new-session"))  # type: ignore[assignment]
         task.playwright = FakePlaywright()  # type: ignore[assignment]
-        task.page = FakeAuthPage()  # type: ignore[assignment]
+        task.page = FakeAuthPage(url="https://account.autohome.com.cn/")  # type: ignore[assignment]
         socket = FakeAuthSocket()
 
-        class BrokenCollector:
-            def __init__(self, *_args: object, **_kwargs: object):
-                pass
-
-            def validate_circle(self, _url: str) -> dict:
-                raise RuntimeError("sensitive-internal-detail")
-
-        with patch("threadsnap.auth.DongchediCollector", BrokenCollector):
+        with patch.object(
+            AutohomeCollector,
+            "validate_auth",
+            side_effect=AssertionError("保存 Session 时不应访问采集端点"),
+        ):
             asyncio.run(
                 self.container.auth._command(task, {"type": "finish"}, socket)  # type: ignore[arg-type]
             )
 
-        self.assertEqual("active", task.status)
-        self.assertEqual("ready", task.page_status)
-        self.assertEqual("AUTH_VALIDATION_INTERNAL_ERROR", task.error_code)
-        self.assertEqual("validation_failed", socket.messages[-1]["type"])
-        self.assertNotIn("sensitive-internal-detail", str(socket.messages[-1]))
-        self.assertFalse(task.context.closed)  # type: ignore[union-attr]
-        asyncio.run(self.container.auth._close(task))
+        self.assertEqual("completed", task.status)
+        self.assertEqual("completed", task.page_status)
+        self.assertEqual("completed", socket.messages[-1]["type"])
+        self.assertIsNotNone(self.container.session_store.get_state("autohome"))
 
     def test_session_persistence_error_is_not_reported_as_page_load_failure(self) -> None:
-        """门禁后的持久化异常使用独立错误码，避免误导为页面加载失败。"""
+        """Session导出后的持久化异常使用独立错误码，避免误导为页面加载失败。"""
 
         task = AuthTask(
             id="auth-save-failed",
@@ -2960,20 +2944,10 @@ class AuthComponentTests(AppCase):
         task.page = FakeAuthPage()  # type: ignore[assignment]
         socket = FakeAuthSocket()
 
-        class ValidCollector:
-            def __init__(self, *_args: object, **_kwargs: object):
-                pass
-
-            def validate_circle(self, _url: str) -> dict:
-                return {"external_id": "24729"}
-
-        with (
-            patch("threadsnap.auth.DongchediCollector", ValidCollector),
-            patch.object(
-                self.container.session_store,
-                "import_state",
-                side_effect=OSError("sensitive-storage-detail"),
-            ),
+        with patch.object(
+            self.container.session_store,
+            "import_state",
+            side_effect=OSError("sensitive-storage-detail"),
         ):
             asyncio.run(
                 self.container.auth._command(task, {"type": "finish"}, socket)  # type: ignore[arg-type]

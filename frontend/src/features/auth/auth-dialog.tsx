@@ -36,9 +36,9 @@ const pageStatusNames: Record<PageStatus, string> = {
   starting: '启动浏览器',
   loading: '加载平台页面',
   ready: '页面可操作',
-  validating: '校验会话',
+  validating: '保存 Session',
   failed: '认证处理失败',
-  completed: '认证完成',
+  completed: 'Session 已保存',
 }
 
 export function AuthDialog({
@@ -128,18 +128,18 @@ export function AuthDialog({
       } else if (message.type === 'completed') {
         setPageStatus('completed')
         await queryClient.invalidateQueries()
-        toast.success(accessSession ? '访问会话已更新' : '平台登录认证成功', { description: message.message })
+        toast.success(accessSession ? '访问会话已更新' : '登录 Session 已保存', { description: message.message })
         onOpenChangeRef.current(false)
       } else if (message.type === 'validation_failed') {
         setPageStatus('ready')
         setValidationFailed(true)
-        toast.error(accessSession ? '访问会话校验未通过' : '登录状态校验未通过', { description: message.message })
+        toast.error(accessSession ? '访问会话保存条件未满足' : 'Session 保存条件未满足', { description: message.message })
       } else if (message.type === 'session_save_failed') {
         setPageStatus('failed')
         setPageError({
           title: '平台会话保存失败',
           code: message.code,
-          message: message.message ?? `${accessSession ? '平台访问' : '平台登录'}校验已通过，但会话保存失败。`,
+          message: message.message ?? `${accessSession ? '访问会话' : '登录 Session'}已导出，但保存失败。`,
         })
         setFrame(undefined)
       } else if (message.type === 'page_failed' || message.type === 'error') {
@@ -314,13 +314,13 @@ export function AuthDialog({
           <div className='pointer-events-none absolute right-4 bottom-4 flex items-center gap-2 rounded-full bg-black/55 px-3 py-1.5 text-[11px] text-slate-300 backdrop-blur'><Expand className='size-3.5' />1280 × 800 交互画布</div>
         </div>
         <div className='flex flex-wrap items-center justify-between gap-3 border-t bg-background px-5 py-3'>
-          <div className={`text-xs ${validationFailed ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-muted-foreground'}`}>{validationFailed ? accessSession ? '当前访问会话未通过采集校验，可使用全新访问环境重新初始化。' : '当前旧登录状态未通过采集校验，可使用全新登录环境重新登录。' : task?.fresh_profile && freshOnOpen ? accessSession ? '检测到批次中的访问会话失效，已启动全新访问环境，请重新初始化。' : '检测到批次中途认证失效，已启动全新登录环境，请重新完成平台登录。' : accessSession ? '此流程只初始化平台访问状态，不检查或证明账号登录。' : '画面支持悬停、点击、拖动、滚动和键盘输入；剪贴板文本会发送到当前页面焦点。'}</div>
+          <div className={`text-xs ${validationFailed ? 'font-medium text-amber-700 dark:text-amber-300' : 'text-muted-foreground'}`}>{validationFailed ? '当前浏览器没有形成结构有效的 Session，请继续操作或使用全新环境。' : task?.fresh_profile && freshOnOpen ? accessSession ? '检测到批次中的访问会话失效，已启动全新访问环境，请重新初始化。' : '检测到批次中途认证失效，已启动全新登录环境，请重新完成平台登录。' : accessSession ? '此流程只初始化并保存平台访问状态，不检查或证明账号登录。' : '保存服务器浏览器 Session；页面登录状态、圈子和帖子访问由实际采集任务判断。'}</div>
           <div className='flex items-center gap-2'>
             {!task?.fresh_profile && <Button variant={validationFailed ? 'default' : 'outline'} disabled={pageStatus === 'starting' || pageStatus === 'loading' || pageStatus === 'validating'} onClick={() => start(true)}><LogIn className='size-4' />使用全新{accessSession ? '访问' : '登录'}环境</Button>}
             <Button variant='outline' onClick={() => pageStatus === 'failed' || !task?.ticket ? start() : connect(task)}><RefreshCw className='size-4' />{pageStatus === 'failed' ? '重新创建会话浏览器' : '重新连接'}</Button>
             <Button variant='outline' onClick={() => onOpenChange(false)}>关闭窗口</Button>
             {runId && <AlertDialog><AlertDialogTrigger asChild><Button variant='destructive' disabled={endRun.isPending}><LogOut className='size-4' />结束本次提取</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>结束本次提取？</AlertDialogTitle><AlertDialogDescription>已有结果将保留，批次按实际结果结束并释放平台队列。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => endRun.mutate()}>确认结束</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
-            <Button disabled={pageStatus !== 'ready'} onClick={() => send({ type: 'finish' })}><ShieldCheck className='size-4' />完成并校验</Button>
+            <Button disabled={pageStatus !== 'ready'} onClick={() => send({ type: 'finish' })}><ShieldCheck className='size-4' />{accessSession ? '完成并保存' : '保存 Session'}</Button>
           </div>
         </div>
       </DialogContent>

@@ -189,6 +189,7 @@
 | `docs/adr/0048-treat-primary-comments-as-nonblocking-post-enrichment.md` | 汽车之家与易车把一级评论作为非阻塞帖子附属快照，不再作为整帖有效性门禁 |
 | `docs/adr/0049-unify-configurable-platform-internal-concurrency.md` | 三个已接入平台统一使用1～8的可配置内部总并发，默认值仍分别保留 |
 | `docs/adr/0050-freeze-circle-candidates-without-replacement.md` | 圈子任务冻结来源前 N 个候选，网络错误只重试原 URL，不使用后续帖子补位 |
+| `docs/adr/0051-separate-session-capture-from-collection-probe.md` | 平台人工认证只获取并保存 Session，真实圈子与帖子访问由采集任务在原 URL 判断 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 
