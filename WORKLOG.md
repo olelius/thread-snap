@@ -25,6 +25,7 @@
 - [x] 默认值保持既有语义：懂车帝默认2，汽车之家和易车默认1；当前本地用户配置已按本次操作保存为三平台各2，其中汽车之家与懂车帝启用、易车保持停用。配置保存后再次完整重启后端，接口和SQLite仍返回2及范围1～8。
 - [x] 146项定向测试和完整后端208/208通过；Ruff、compileall、pip check、前端TypeScript检查与生产构建通过，Vite转换2468个模块；`git diff --check`与SQLite `PRAGMA integrity_check=ok`通过。
 - [x] 本地后端已重启并返回 `/health=ok`；脱敏验收回执位于 `artifacts/runtime/platform-concurrency-unification/summary.json`。
+- [x] 功能修复已经PR #226合并为 `main@b1bba19`，功能分支和远程分支均已清理；合并后本地服务继续返回三平台当前值2、范围1～8。
 **下一步**：无代码、配置或本地服务缺口；页面刷新后会从后端读取三个平台注册范围1～8和当前值2。
 **边界**：历史批次继续保留创建时并发快照；汽车之家与易车正式500条生产验收尚未关闭，本次证明配置和有界执行链一致，不把任意部署环境下的8并发描述为已完成容量验收。
 **关联**：`docs/adr/0049-unify-configurable-platform-internal-concurrency.md`、`src/threadsnap/collectors/registry.py`、`src/threadsnap/collectors/autohome.py`
