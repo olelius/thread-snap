@@ -3156,6 +3156,91 @@ class QueueAndRetryTests(AppCase):
         )))
         self.assertEqual(["circle", "circle"], calls)
 
+    def test_interactive_platform_control_waits_and_auth_opens_trigger_url(self) -> None:
+        """验证码或访问验证应暂停原任务，并把人工入口定位到原始触发 URL。"""
+
+        circle_url = "https://club.autohome.com.cn/bbs/forum-c-7853-1.html?sort=post"
+        trigger_url = (
+            "https://club.autohome.com.cn/bbs/thread/example/123456789-1.html"
+        )
+        with self.container.sessions.begin() as db:
+            platform = db.get(PlatformConfig, "autohome")
+            assert platform is not None
+            platform.enabled = True
+            vehicle = Vehicle(name="风云A9")
+            db.add(vehicle)
+            db.flush()
+            circle = Circle(
+                platform_code="autohome",
+                external_id="7853",
+                name="风云A9论坛",
+                url=circle_url,
+                vehicle_id=vehicle.id,
+                source_kind="configured",
+                validation_status="verified",
+            )
+            db.add(circle)
+            db.flush()
+            circle_id = circle.id
+
+        run = self.container.runs.create_manual(
+            ManualRunCreate(platform_code="autohome", circle_ids=[circle_id], quantity=30),
+            scope="api",
+            header_key="autohome-interactive-control-0001",
+        )
+
+        class ChallengeCollector(FakeCollector):
+            def collect_circle(
+                self,
+                _url: str,
+                _target: int,
+                skip_post_ids: set[str] | None = None,
+                on_progress=None,
+            ) -> dict:
+                raise CollectorFailure(
+                    "PLATFORM_CHALLENGE",
+                    "平台要求完成访问验证。",
+                    trigger_url=trigger_url,
+                )
+
+        self.container.worker._collector = lambda *_args: ChallengeCollector()  # type: ignore[method-assign]
+
+        self.assertTrue(self.container.worker.process_once())
+        waiting_run = self.container.runs.get_run(run["id"])
+        self.assertEqual("waiting_for_auth", waiting_run["status"])
+        self.assertEqual(["autohome"], waiting_run["waiting_platform_codes"])
+        with self.container.sessions() as db:
+            task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            assert task is not None
+            self.assertEqual("waiting_for_auth", task.status)
+            self.assertEqual("PLATFORM_CHALLENGE", task.error_code)
+            self.assertEqual(trigger_url, task.checkpoint["trigger_url"])
+
+        response = self.client.post(
+            f"/api/v1/platforms/autohome/auth/tasks?fresh=true&run_id={run['id']}"
+        )
+        self.assertEqual(202, response.status_code, response.text)
+        auth_task = self.container.auth.tasks[response.json()["id"]]
+        self.assertTrue(auth_task.fresh_profile)
+        self.assertEqual(trigger_url, auth_task.start_url)
+
+    def test_run_auth_task_rejects_non_waiting_platform(self) -> None:
+        """批次恢复入口不得借任意 run_id 打开与等待任务无关的页面。"""
+
+        circle = self.save_verified_circle()
+        run = self.container.runs.create_manual(
+            ManualRunCreate(platform_code="dongchedi", circle_ids=[circle.id], quantity=1),
+            scope="api",
+            header_key="run-auth-not-waiting-0001",
+        )
+
+        response = self.client.post(
+            f"/api/v1/platforms/dongchedi/auth/tasks?run_id={run['id']}"
+        )
+
+        self.assertEqual(409, response.status_code)
+        self.assertEqual("RUN_AUTH_TASK_NOT_FOUND", response.json()["code"])
+
     def test_auth_resume_publishes_queued_progress_event(self) -> None:
         """认证恢复提交为排队状态后应立即通知列表，不只依赖 Session 事件。"""
 

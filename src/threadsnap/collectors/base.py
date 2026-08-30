@@ -28,10 +28,11 @@ class AuthenticationRequired(RuntimeError):
 class CollectorFailure(RuntimeError):
     """带稳定英文错误码和中文说明的采集失败。"""
 
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, *, trigger_url: str | None = None):
         super().__init__(message)
         self.code = code
         self.message = message
+        self.trigger_url = trigger_url
 
 
 @dataclass(frozen=True)
