@@ -77,6 +77,17 @@ class Container:
         with self.sessions.begin() as db:
             bootstrap_database(db)
         self.session_store = SessionStore(settings, self.sessions)
+        yiche_state = self.session_store.get_state("yiche")
+        if yiche_state and not any(
+            isinstance(item, dict)
+            and item.get("name") == "username"
+            and isinstance(item.get("value"), str)
+            and bool(item["value"])
+            for item in yiche_state.get("cookies", [])
+        ):
+            self.session_store.mark_invalid(
+                "yiche", "历史访问会话不包含易车账号身份，请重新完成登录认证。"
+            )
         if (
             settings.dongchedi_storage_state
             and settings.dongchedi_storage_state.is_file()

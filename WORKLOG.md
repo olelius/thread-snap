@@ -16,6 +16,23 @@
 
 ---
 
+## 2026-08-30 — 三平台账号认证与直连 HTTP 采集统一
+**总目标**：把易车从仅证明页面可访问的会话改为与懂车帝、汽车之家一致的账号登录 Session，并移除三平台普通来源验证和帖子提取中的浏览器依赖及失败回退。
+**状态**：✅ 代码、状态迁移、真实直连样本和回归验证已完成；当前历史易车访问会话已明确标记失效，等待用户在配置页完成一次新的易车账号登录。
+**干到哪里了**：
+- [x] 前提复核：汽车之家 `autohome-club-v3` 原本已经全程直连 HTTP；懂车帝15个现有来源首页均以登录Session直连取得完整30/30，浏览器回退触发0次；证据位于 Git 外 `artifacts/poc/results/collector-http-unification-20260830/`。
+- [x] 易车升级为 `yiche-community-v2`：冻结公开 PC `v311` 签名合同，列表/圈子身份直接请求官方业务接口；详情严格解析一次 HTTP 203 Cookie 挑战；一级评论直接请求同款接口。未知协议、第二次异常、验证码、限流和身份冲突均失败关闭，不启动 Chromium 补量。
+- [x] 易车注册改为 `account_login`，官方登录页、加密Profile/Session、真实账号门禁、`waiting_for_auth`、有界刷新、原批次续跑和平台FIFO全部复用共享认证状态机；账号门禁同时要求非空 `username` Cookie 与官方用户消息接口非空 `userId`。启动时不含账号身份的历史易车会话保留加密状态但标记 `invalid`，前端显示“登录 Session / 登录更新”。
+- [x] 懂车帝移除 `DynamicSession` 列表回退并升级 `dongchedi-dynamic-v5`；SSR行数不足直接返回 `CIRCLE_HTTP_ROWS_INCOMPLETE`。平台注册统一公开 `background_transport=direct_http`；浏览器只属于认证状态机的人工登录/有界Session刷新和用户明确开启且平台支持的页面证据。
+- [x] 真实零浏览器样本：易车瑞虎8直连返回50条列表、详情内容/媒体和评论成功，当前匿名历史会话被账号门禁正确拒绝；懂车帝风云A9和汽车之家A9来源验证均成功。三组验证前后 Chromium 进程均为0。
+- [x] 1680×900真实配置页确认易车显示“登录 Session / 已失效 / 登录更新”，不再出现“访问会话”，页面脚本错误0；Git外回执与截图位于 `artifacts/runtime/platform-http-auth-unification/`。
+- [x] 完整后端208/208（113.652秒）、Ruff、compileall、pip check、前端TypeScript检查与生产构建通过，Vite转换2468个模块；`git diff --check`通过。
+**下一步**：在“平台配置”对易车执行“登录/更新”，扫码或账号登录后点击“完成并校验”；通过账号身份门禁后，再按既有计划运行易车正式500/500生产验收。
+**边界**：本任务移除的是普通采集浏览器，不删除共享人工认证浏览器，也不删除懂车帝显式页面证据浏览器；易车当前不支持圈子页面证据。正式500条不与历史访问会话样本拼接。
+**关联**：`docs/adr/0047-use-account-login-and-direct-http-for-yiche.md`、`src/threadsnap/collectors/yiche.py`、`src/threadsnap/collectors/dongchedi.py`、`src/threadsnap/collectors/registry.py`
+
+---
+
 ## 2026-08-28 — 分离易车访问会话与后台无头验证
 **总目标**：修复易车普通来源验证弹出系统浏览器，并纠正把易车 `available` 访问会话误写成账号登录认证的产品与界面语义。
 **状态**：✅ 后台验证显示模式与交互会话模式已解耦，易车访问会话已独立建模并通过真实无头验证、页面交互和全量回归。

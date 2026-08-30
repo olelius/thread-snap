@@ -18,12 +18,11 @@ from curl_cffi import requests
 from curl_cffi.requests import Cookies
 from lxml import html
 from patchright.sync_api import sync_playwright
-from scrapling.fetchers import DynamicSession
 
 from ..browser_runtime import browser_launch_args
 from .base import AuthenticationRequired, CircleSource, CollectorFailure
 
-ADAPTER_VERSION = "dongchedi-dynamic-v4"
+ADAPTER_VERSION = "dongchedi-dynamic-v5"
 BASE_URL = "https://www.dongchedi.com"
 DETAIL_ROOT = f"{BASE_URL}/motor/pc/ugc/detail"
 VIDEO_TOKEN_URL = f"{BASE_URL}/motor/pc/common/token"
@@ -231,35 +230,6 @@ class DongchediCollector:
         is_html = "html" in content_type or body.lstrip().startswith((b"<!doctype html", b"<html"))
         if "/login-required" in path or is_html and b"login-required" in body:
             raise AuthenticationRequired("懂车帝当前要求重新完成平台认证。")
-
-    def _browser_page_rows(self, url: str) -> list[dict[str, Any]]:
-        state: dict[str, Any] = {}
-        cookie_items = [
-            item for item in (self.storage_state or {}).get("cookies", []) if isinstance(item, dict)
-        ]
-
-        def action(page: Any) -> None:
-            page.wait_for_timeout(1500)
-            state["url"] = page.url
-            state["rows"] = page.locator("section.community-card").evaluate_all(
-                "els => els.map((e,i) => ({index:i,text:(e.innerText||''),hrefs:Array.from(e.querySelectorAll('a')).map(a=>a.href)}))"
-            )
-
-        with self.semaphore:
-            with DynamicSession(
-                headless=True,
-                real_chrome=True,
-                google_search=False,
-                max_pages=1,
-                timeout=self.timeout_seconds * 1000,
-                retries=1,
-                cookies=cookie_items or None,
-                disable_resources=True,
-            ) as browser:
-                browser.fetch(url, page_action=action, wait=500, network_idle=False)
-        if "/login-required" in str(state.get("url", "")):
-            raise AuthenticationRequired("懂车帝当前要求重新完成平台认证。")
-        return self._normalize_card_rows(state.get("rows", []))
 
     @staticmethod
     def _stabilize_capture_layout(page: Any, cards: Any, page_number: int) -> None:
@@ -470,7 +440,10 @@ class DongchediCollector:
         if effective_expected is None and total_count is not None:
             effective_expected = min(30, max(0, total_count - (page - 1) * 30))
         if effective_expected is not None and len(rows) < effective_expected:
-            rows = self._browser_page_rows(url)
+            raise CollectorFailure(
+                "CIRCLE_HTTP_ROWS_INCOMPLETE",
+                f"懂车帝圈子第 {page} 页直连结果仅 {len(rows)} 条，预期 {effective_expected} 条。",
+            )
         return {
             "url": url,
             "title": title,

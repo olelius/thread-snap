@@ -24,6 +24,7 @@ from sqlalchemy import select
 from threadsnap.app import create_app, require_internal_loopback
 from threadsnap.auth import AuthPageLoadError, AuthTask
 from threadsnap.collectors.autohome import AutohomeCollector
+from threadsnap.collectors.base import CollectorFailure
 from threadsnap.collectors.dongchedi import (
     ADAPTER_VERSION,
     AuthenticationRequired,
@@ -3997,7 +3998,7 @@ class CollectorTests(unittest.TestCase):
             requested_sources,
         )
 
-    def test_first_page_underfill_triggers_browser_fallback(self) -> None:
+    def test_first_page_underfill_fails_without_browser_fallback(self) -> None:
         collector = DongchediCollector(None)
         cards = "".join(
             f'<section class="community-card"><a href="/ugc/article/{index}">{index}</a></section>'
@@ -4010,14 +4011,9 @@ class CollectorTests(unittest.TestCase):
             status_code=200,
             headers={"content-type": "text/html; charset=utf-8"},
         )  # type: ignore[method-assign]
-        browser_rows = [
-            {"post_id": str(x), "url": f"u{x}", "sort_label": None, "order_index": x}
-            for x in range(30)
-        ]
-        collector._browser_page_rows = lambda _url: browser_rows  # type: ignore[method-assign]
-        page = collector._fetch_circle_page("https://www.dongchedi.com/community/24729", 1, None)
-        self.assertEqual(30, len(page["rows"]))
-        self.assertEqual(60, page["total_count"])
+        with self.assertRaises(CollectorFailure) as caught:
+            collector._fetch_circle_page("https://www.dongchedi.com/community/24729", 1, None)
+        self.assertEqual("CIRCLE_HTTP_ROWS_INCOMPLETE", caught.exception.code)
 
     def test_json_post_text_containing_login_word_is_not_auth_page(self) -> None:
         response = SimpleNamespace(
