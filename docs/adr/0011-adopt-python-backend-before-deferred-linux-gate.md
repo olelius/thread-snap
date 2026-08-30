@@ -1,6 +1,7 @@
 ---
 status: accepted
 supersedes: 0003-package-poc-for-linux-before-formal-development.md
+amended_by: 0051-separate-session-capture-from-collection-probe.md
 ---
 
 # 在暂缓 Linux 三轮门禁期间采用 Python 后端技术栈
@@ -13,7 +14,7 @@ supersedes: 0003-package-poc-for-linux-before-formal-development.md
 - 第一版单进程部署使用 SQLite、一个全局调度线程和一个持久平台 FIFO Worker；业务表与迁移契约不依赖 SQLite 私有 JSON 类型，后续确有多进程或多实例需要时再评审 PostgreSQL 和外部队列。
 - `/api/v1` 与 `/internal/v1` 位于同一后端并共用应用层；集成接口增加回环地址限制，不引入第二个业务后端。
 - 懂车帝列表采用直接 HTTP 优先，SSR 条目不足时才使用服务器浏览器补全；详情和最多十条一级评论使用结构化 HTTP JSON 接口。
-- 服务端 Session 加密持久化，认证异常先对既有 Session 有界刷新一次；仍需人工操作时进入 `waiting_for_auth`，认证状态通过真实圈子样本校验后再恢复对应平台队列。
+- 服务端 Session 加密持久化，认证异常先对既有 Session 有界刷新一次；仍需人工操作时进入 `waiting_for_auth`。人工操作只保存结构有效的 Session，随后恢复原任务并在原 URL 执行真实采集访问门禁。
 - 目标 CentOS 的连续三轮 2000 条门禁暂缓，不再阻塞本次后端编码和 Windows 验证；它仍是最终 Linux 部署、依赖兼容、进程管理和性能验收门禁，当前结果不得表述为已通过该门禁。
 
 ## Evidence used for the provisional selection

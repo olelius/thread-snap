@@ -24,19 +24,16 @@ from patchright.async_api import (
     async_playwright,
 )
 from patchright.async_api import Error as PlaywrightError
-from sqlalchemy import select
 
 from .browser_runtime import browser_launch_args
 from .collectors import (
-    AuthenticationRequired,
     CollectorFailure,
-    DongchediCollector,
     get_platform_spec,
 )
 from .config import Settings
 from .errors import DomainError
 from .ids import uuid7
-from .models import Circle, PlatformConfig
+from .models import PlatformConfig
 from .session_store import SessionStore
 from .worker import WorkerService
 
@@ -231,24 +228,6 @@ class BrowserAuthManager:
         )
         self.tasks[task.id] = task
         return self.task_dict(task)
-
-    def _validation_probe_url(self, platform_code: str) -> str:
-        """优先用已保存真实圈子做认证门禁，无来源时才退回平台根入口。"""
-
-        spec = get_platform_spec(platform_code)
-        fallback = spec.auth_probe_circle_url or spec.login_url
-        if not fallback:
-            raise CollectorFailure(
-                "AUTH_VALIDATION_UNAVAILABLE", "该平台缺少认证会话校验入口。"
-            )
-        with self.worker.factory() as db:
-            circle_url = db.scalar(
-                select(Circle.url)
-                .where(Circle.platform_code == platform_code)
-                .order_by(Circle.first_validated_at.is_(None), Circle.updated_at.desc())
-                .limit(1)
-            )
-        return str(circle_url or fallback)
 
     def get(self, task_id: str) -> dict[str, Any]:
         task = self.tasks.get(task_id)
@@ -529,10 +508,10 @@ class BrowserAuthManager:
                 return
             spec = get_platform_spec(task.platform_code)
             access_session = spec.authentication_mode == "access_session"
-            session_label = "访问会话" if access_session else "登录状态"
+            session_label = "访问会话" if access_session else "登录 Session"
             environment_label = "访问环境" if access_session else "登录环境"
             task.page_status = "validating"
-            await websocket.send_json({"type": "validating", "message": "正在校验平台会话…"})
+            await websocket.send_json({"type": "validating", "message": "正在保存平台 Session…"})
             state = await task.context.storage_state()
             try:
                 # 在关闭浏览器前检查导出结构；Cookie 空值是合法状态，不属于结构错误。
@@ -552,52 +531,10 @@ class BrowserAuthManager:
                     }
                 )
                 return
-            probe_url = self._validation_probe_url(task.platform_code)
-            try:
-                # 保留懂车帝测试注入缝；平台资格、入口与其余适配器仍由 registry 决定。
-                collector = (
-                    DongchediCollector(state, concurrency=1)
-                    if task.platform_code == "dongchedi"
-                    else spec.create_collector(
-                        state,
-                        concurrency=1,
-                        browser_headless=self.settings.auth_browser_headless,
-                    )
-                )
-                validator = getattr(collector, "validate_auth", collector.validate_circle)
-                await asyncio.to_thread(validator, probe_url)
-            except (AuthenticationRequired, CollectorFailure) as exc:
-                task.page_status = "ready"
-                task.error_code = "AUTH_VALIDATION_FAILED"
-                task.error_message = f"平台{session_label}校验未通过：{exc}"
-                await websocket.send_json(
-                    {
-                        "type": "validation_failed",
-                        "code": task.error_code,
-                        "message": task.error_message,
-                    }
-                )
-                return
-            except Exception as exc:
-                # 校验器内部异常不应被误报为页面加载失败，也不向前端暴露运行时细节。
-                logger.error(
-                    "平台认证校验器内部错误：platform=%s type=%s",
-                    task.platform_code,
-                    type(exc).__name__,
-                )
-                task.page_status = "ready"
-                task.error_code = "AUTH_VALIDATION_INTERNAL_ERROR"
-                task.error_message = (
-                    f"平台{session_label}校验出现内部错误，请重试或重新创建会话浏览器。"
-                )
-                await websocket.send_json(
-                    {
-                        "type": "validation_failed",
-                        "code": task.error_code,
-                        "message": task.error_message,
-                    }
-                )
-                return
+
+            # 人工认证入口只负责导出并保存服务器浏览器 Session，不把当前页面 URL、
+            # 圈子、帖子、点赞或其他采集端点的判断混入“保存 Session”操作。真实
+            # 采集门禁由 Worker 在原 URL 上执行并按平台错误类型恢复。
 
             try:
                 previous_state = self.session_store.get_state(task.platform_code)
@@ -622,7 +559,7 @@ class BrowserAuthManager:
                 task.page_status = "failed"
                 task.error_code = "AUTH_SESSION_SAVE_FAILED"
                 task.error_message = (
-                    f"平台{session_label}校验已通过，但会话保存失败，请重新创建会话浏览器。"
+                    f"平台{session_label}已导出，但保存失败，请重新创建会话浏览器。"
                 )
                 await websocket.send_json(
                     {
@@ -641,7 +578,10 @@ class BrowserAuthManager:
             task.error_code = None
             task.error_message = None
             await websocket.send_json(
-                {"type": "completed", "message": "平台会话已更新，等待任务将自动续跑。"}
+                {
+                    "type": "completed",
+                    "message": "平台 Session 已保存；等待任务将按原 URL 恢复并执行实际采集检查。",
+                }
             )
         elif kind == "close":
             await websocket.close(code=1000)

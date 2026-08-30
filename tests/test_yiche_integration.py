@@ -332,10 +332,6 @@ class YichePublicFlowTests(AppCase):
 
     def test_manual_detail_and_xlsx_close_over_yiche_without_new_storage_schema(self) -> None:
         circles = self.save_yiche_sources()
-        self.assertIn(
-            self.container.auth._validation_probe_url("yiche"),
-            {circle.url for circle in circles},
-        )
         auth_task = self.client.post("/api/v1/platforms/yiche/auth/tasks")
         self.assertEqual(202, auth_task.status_code, auth_task.text)
         self.assertEqual("yiche", auth_task.json()["platform_code"])
