@@ -186,6 +186,8 @@
 | `docs/adr/0045-preserve-cross-forum-feed-items.md` | 汽车之家圈子列表中的跨论坛聚合帖保留为来源快照结果，并分别保存发现来源与原始归属 |
 | `docs/adr/0046-require-autohome-session-for-like-count.md` | 汽车之家帖子点赞数必须由登录会话证明，匿名占位零值不进入新快照 |
 | `docs/adr/0047-use-account-login-and-direct-http-for-yiche.md` | 易车使用账号登录门禁和直连 HTTP 采集，三平台普通采集均不使用浏览器回退 |
+| `docs/adr/0048-treat-primary-comments-as-nonblocking-post-enrichment.md` | 汽车之家与易车把一级评论作为非阻塞帖子附属快照，不再作为整帖有效性门禁 |
+| `docs/adr/0049-unify-configurable-platform-internal-concurrency.md` | 三个已接入平台统一使用1～8的可配置内部总并发，默认值仍分别保留 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 

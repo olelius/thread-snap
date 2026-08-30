@@ -53,13 +53,13 @@ class CollectorRegistryTests(unittest.TestCase):
         self.assertTrue(spec.supports_page_evidence)
         self.assertEqual("direct_http", spec.background_transport)
 
-    def test_yiche_spec_is_available_at_conservative_bounds(self) -> None:
+    def test_yiche_spec_uses_shared_concurrency_bounds(self) -> None:
         spec = get_platform_spec("yiche")
 
         self.assertEqual("易车", spec.display_name)
         self.assertEqual((1, 500), (spec.min_quantity, spec.max_quantity))
         self.assertEqual(
-            (1, 1, 1),
+            (1, 1, 8),
             (
                 spec.min_concurrency,
                 spec.default_concurrency,
