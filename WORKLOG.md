@@ -18,7 +18,7 @@
 
 ## 2026-08-30 — Session 保存与采集访问门禁分离
 **总目标**：人工认证窗口只取得并保存服务器浏览器 Session，不再用当前页面、圈子首帖、评论、点赞或用户身份接口判断“登录是否成功”；真实访问条件继续由原任务在原 URL 判断。
-**状态**：✅ 代码、界面语义、领域合同、完整验证和本地真实 Session 保存路径均已完成，正在执行自动 Git 收尾。
+**状态**：✅ 代码、界面语义、领域合同、完整验证、本地真实 Session 保存路径、合并和分支清理均已完成。
 **干到哪里了**：
 - [x] 根因确认：旧 `finish` 流程在导出 storage state 后仍创建平台采集器，以已配置圈子首帖执行 `validate_auth/validate_circle`；汽车之家详情被实时安全验证页拦截时，系统因此把“Session 已取得”误报为“登录状态校验未通过”。
 - [x] 三平台共享认证完成操作现只检查 storage state 可持久化结构并加密保存 Session；不判断当前页面 URL，不创建采集器，不预访圈子、帖子、评论、点赞或用户端点。结构错误和持久化错误仍保留独立错误码，旧正式 Session 在新状态保存失败时保持不变。
@@ -27,7 +27,8 @@
 - [x] 新增“不调用汽车之家采集验证器仍完成保存”、结构无效保留旧 Session、持久化失败分层等回归；全仓215/215通过，Ruff、compileall、pip check、前端TypeScript与生产构建（2468模块）以及 `git diff --check` 通过。
 - [x] 本地后端加载新代码后，以既有加密 Profile 真实创建汽车之家认证任务并立即保存：消息序列为 `browser_starting → ready → validating → completed`，任务与页面均为 `completed`，Session 保存时间已更新，后端 `/health=ok`；脱敏回执位于 `artifacts/runtime/session-capture-boundary-20260830/summary.json`。
 - [x] ADR 0051、领域词汇、产品设计、技术路线、部署验收步骤、后续平台链档及旧 ADR 修订关系已同步。
-**下一步**：完成提交、PR、合并和分支清理；之后用户在官方页面操作完成后直接点击“保存 Session”，实际任务自行判断原 URL。
+- [x] 功能修复已由 PR #234 合并为 `main@7c4ffd9`，功能分支与远程分支均已清理；合并后的本地后端继续返回 `/health=ok`。
+**下一步**：无代码、文档、验证、本地服务或 Git 缺口；用户在官方页面操作完成后直接点击“保存 Session”，实际任务自行判断原 URL。
 **边界**：storage state 至少包含结构有效的 Cookie 才构成可保存 Session；这一检查只证明数据可持久化，不证明账号登录或任一业务端点可访问。历史批次、原 URL 和冻结候选保持不变。
 **关联**：`docs/adr/0051-separate-session-capture-from-collection-probe.md`、`src/threadsnap/auth.py`、`frontend/src/features/auth/auth-dialog.tsx`
 
