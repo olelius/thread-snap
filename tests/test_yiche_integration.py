@@ -49,10 +49,7 @@ def yiche_record(post_id: str) -> dict:
             "document_http_status": 200,
             "document_classification": "content",
             "detail_identity_verified": True,
-            "comment_api_status": "success",
-            "comment_api_business_status": "1",
-            "comment_identity_verified": True,
-            "comment_termination": "have_next_false",
+            "comment_capture": "have_next_false",
         },
         "comments": [
             {

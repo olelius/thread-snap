@@ -190,7 +190,7 @@ class YicheKnownFactsTests(unittest.TestCase):
             )
         self.assertEqual("POST_CONTENT_OBFUSCATED", obfuscated.exception.code)
 
-    def test_comment_mapping_requires_identity_and_terminal_proof(self) -> None:
+    def test_comment_mapping_keeps_post_data_when_comment_identity_does_not_match(self) -> None:
         collector = YicheCollector(None)
         path = "/web_api/information_api/api/v1/comment/top_comment_list"
         payload = {
@@ -207,9 +207,10 @@ class YicheKnownFactsTests(unittest.TestCase):
             "", [api_event(path, payload, content_id="1001")], 1, "1001"
         )
         self.assertEqual((1, "have_next_false"), (len(result.comments), result.termination))
-        with self.assertRaises(CollectorFailure) as wrong:
-            collector._parse_comments("", [api_event(path, payload, content_id="1002")], 1, "1001")
-        self.assertEqual("COMMENTS_IDENTITY_MISMATCH", wrong.exception.code)
+        wrong = collector._parse_comments(
+            "", [api_event(path, payload, content_id="1002")], 1, "1001"
+        )
+        self.assertEqual(([], "first_page", False), (wrong.comments, wrong.termination, wrong.verified))
 
     def test_circle_validation_freezes_three_part_identity_over_http(self) -> None:
         collector = YicheCollector(self._logged_state())
@@ -250,7 +251,7 @@ class YicheKnownFactsTests(unittest.TestCase):
         )
         self.assertEqual((10, "cap_10"), (len(result.comments), result.termination))
 
-    def test_comment_continuation_and_count_conflict_fail_closed(self) -> None:
+    def test_comment_continuation_and_count_conflict_keep_first_page(self) -> None:
         payload = {
             "status": "1",
             "data": {
@@ -261,19 +262,17 @@ class YicheKnownFactsTests(unittest.TestCase):
                 "list": [{"id": "c1"}],
             },
         }
-        with self.assertRaises(CollectorFailure) as conflict:
-            YicheCollector(None)._parse_comments(
-                "", [api_event("/comment/top_comment_list", payload, content_id="1001")], 1, "1001"
-            )
-        self.assertEqual("COMMENTS_TERMINATION_CONFLICT", conflict.exception.code)
+        conflict = YicheCollector(None)._parse_comments(
+            "", [api_event("/comment/top_comment_list", payload, content_id="1001")], 1, "1001"
+        )
+        self.assertEqual((1, "first_page"), (len(conflict.comments), conflict.termination))
         payload["data"]["total"] = 21
-        with self.assertRaises(CollectorFailure) as continued:
-            YicheCollector(None)._parse_comments(
-                "", [api_event("/comment/top_comment_list", payload, content_id="1001")], 21, "1001"
-            )
-        self.assertEqual("COMMENTS_PAGINATION_UNVERIFIED", continued.exception.code)
+        continued = YicheCollector(None)._parse_comments(
+            "", [api_event("/comment/top_comment_list", payload, content_id="1001")], 21, "1001"
+        )
+        self.assertEqual((1, "first_page"), (len(continued.comments), continued.termination))
 
-    def test_comment_empty_and_missing_responses_are_distinct(self) -> None:
+    def test_comment_empty_and_missing_responses_both_keep_post_result(self) -> None:
         collector = YicheCollector(None)
         empty = collector._parse_comments(
             "",
@@ -288,9 +287,8 @@ class YicheKnownFactsTests(unittest.TestCase):
             "1001",
         )
         self.assertEqual("empty_list", empty.termination)
-        with self.assertRaises(CollectorFailure) as missing:
-            collector._parse_comments("", [], 0, "1001")
-        self.assertEqual("COMMENTS_RESPONSE_MISSING", missing.exception.code)
+        missing = collector._parse_comments("", [], 0, "1001")
+        self.assertEqual(([], "first_page", False), (missing.comments, missing.termination, missing.verified))
 
     def test_account_identity_without_user_id_stays_unverified(self) -> None:
         collector = YicheCollector(self._logged_state())

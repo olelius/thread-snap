@@ -23,7 +23,7 @@ from lxml import html
 from .base import AuthenticationRequired, CircleSource, CollectorFailure
 
 BASE_URL = "https://baa.yiche.com"
-ADAPTER_VERSION = "yiche-community-v2"
+ADAPTER_VERSION = "yiche-community-v3"
 CIRCLE_RE = re.compile(
     r"^/(?P<id>[A-Za-z0-9_-]+)/?"
     r"(?:index-0-(?P<order>[01])-(?P<page>\d+)\.html)?/?$"
@@ -56,10 +56,11 @@ class ApiEvent:
 
 @dataclass(frozen=True)
 class CommentResult:
-    """已验证身份和终止边界的一级评论结果。"""
+    """帖子可用时保留的一级评论结果，不把评论响应作为整帖有效性门禁。"""
 
     comments: list[dict[str, Any]]
     termination: str
+    verified: bool = True
 
 
 def _request_content_id(url: str, post_data: str | None = None) -> str | None:
@@ -597,17 +598,20 @@ class YicheCollector:
     ) -> CommentResult:
         """解析页面首批一级评论；当前页面每批20条，系统最多保留10条。"""
 
-        payload = self._api_payload(
-            events,
-            "/comment/top_comment_list",
-            required=False,
-            expected_content_id=expected_content_id,
-        )
+        try:
+            payload = self._api_payload(
+                events,
+                "/comment/top_comment_list",
+                required=False,
+                expected_content_id=expected_content_id,
+            )
+        except CollectorFailure:
+            return CommentResult([], "first_page", verified=False)
         comments: list[dict[str, Any]] = []
         if payload:
             data = payload.get("data")
             if not isinstance(data, dict) or not isinstance(data.get("list"), list):
-                raise CollectorFailure("COMMENTS_RESPONSE_INVALID", "易车一级评论响应结构无效。")
+                return CommentResult([], "first_page", verified=False)
             for item in data["list"][:10]:
                 if not isinstance(item, dict):
                     continue
@@ -644,30 +648,14 @@ class YicheCollector:
                 and total >= 0
                 and current_page >= max(1, ceil(total / page_size))
             )
-            if have_next is True and count_proves_terminal:
-                raise CollectorFailure(
-                    "COMMENTS_TERMINATION_CONFLICT",
-                    "易车一级评论的下一页标记与数量边界冲突。",
-                )
             if have_next is False or (have_next is None and count_proves_terminal):
                 return CommentResult(
                     comments,
                     "have_next_false" if have_next is False else "count_boundary",
                 )
-            if have_next is True:
-                raise CollectorFailure(
-                    "COMMENTS_PAGINATION_UNVERIFIED",
-                    "易车当前评论页不足10条但仍声明后续页，未验证的翻页结果不计入有效帖子。",
-                )
-            raise CollectorFailure(
-                "COMMENTS_TERMINATION_UNPROVEN",
-                "易车一级评论响应没有可验证的分页终止证明。",
-            )
+            return CommentResult(comments, "first_page")
         del content, reply_count
-        raise CollectorFailure(
-            "COMMENTS_RESPONSE_MISSING",
-            "易车详情未捕获到带帖子身份和终止证明的一级评论业务响应。",
-        )
+        return CommentResult([], "first_page", verified=False)
 
     def _fetch_post(
         self, post_url: str, *, list_row: dict[str, Any] | None = None
@@ -722,10 +710,7 @@ class YicheCollector:
             "document_classification": "content",
             "detail_identity_verified": True,
             "list_identity_verified": bool(row_id),
-            "comment_api_business_status": "1",
-            "comment_api_status": "success",
-            "comment_identity_verified": True,
-            "comment_termination": comment_result.termination,
+            "comment_capture": comment_result.termination,
             "transport": "direct_http",
             "api_protocol": YICHE_API_PROTOCOL,
         }
