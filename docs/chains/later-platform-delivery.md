@@ -6,7 +6,7 @@
 - 技术合同 owner：`docs/design/technical-route.md` 的“后续平台接入验证合同”。
 - 验收计划 owner：`docs/research/later-platform-onboarding-plan.md`。
 - 架构决策：`docs/adr/0043-use-project-discovered-500-sample-gate-for-later-platforms.md`、`docs/adr/0044-separate-local-adapter-publication-from-formal-sample-acceptance.md`、`docs/adr/0045-preserve-cross-forum-feed-items.md`、`docs/adr/0046-require-autohome-session-for-like-count.md`、`docs/adr/0047-use-account-login-and-direct-http-for-yiche.md`、`docs/adr/0048-treat-primary-comments-as-nonblocking-post-enrichment.md`、`docs/adr/0049-unify-configurable-platform-internal-concurrency.md`。
-- 当前阶段：汽车之家与易车均已完成本地适配器和公共业务闭环并发布为 `available`、默认停用；两平台与懂车帝统一允许配置 1～8 的平台内部总并发，保存值由新批次冻结并由跨来源、来源内详情和即时重试共同共享。汽车之家 `autohome-club-v4` 已使用官方账号登录、加密Session和直连HTTP读取可信点赞；易车 `yiche-community-v3` 已改用相同账号登录状态机，以账号Cookie和官方用户身份接口作为门禁，并以 `pc-v311` 直连HTTP取得列表、详情及评论。两平台均按ADR 0048把主评论作为非阻塞附属快照，帖子身份和正文或媒体有效时正常入库，不因评论数量或终止标记向后补量。三平台后台帖子采集都不回退Chromium；人工登录和明确页面证据仍各自使用受控浏览器。两平台都尚未冻结或运行正式500条，正式生产验收仍未关闭，易车页面证据继续作为明确缺口。
+- 当前阶段：汽车之家与易车均已完成本地适配器和公共业务闭环并发布为 `available`、默认停用；两平台与懂车帝统一允许配置 1～8 的平台内部总并发，保存值由新批次冻结并由跨来源、来源内详情和即时重试共同共享。汽车之家 `autohome-club-v5` 已使用官方账号登录、加密Session和直连HTTP读取可信点赞；易车 `yiche-community-v4` 已改用相同账号登录状态机，以账号Cookie和官方用户身份接口作为门禁，并以 `pc-v311` 直连HTTP取得列表、详情及评论。两平台均按ADR 0048把主评论作为非阻塞附属快照，并按ADR 0050冻结前 N 个候选、不以列表后续帖子补位；瞬时网络错误由共享Worker持久重试原URL。三平台后台帖子采集都不回退Chromium；人工登录和明确页面证据仍各自使用受控浏览器。两平台都尚未冻结或运行正式500条，正式生产验收仍未关闭，易车页面证据继续作为明确缺口。
 - 与首平台关系：本链只负责懂车帝之后的两个适配器；`docs/chains/first-platform-delivery.md` 中既有2000条证据和目标CentOS门禁保持原状。
 
 ## 已确认边界

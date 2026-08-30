@@ -5,6 +5,8 @@ from __future__ import annotations
 import unittest
 from datetime import timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from threadsnap.collectors import AuthenticationRequired, get_platform_spec
 from threadsnap.collectors.yiche import (
@@ -242,6 +244,54 @@ class YicheKnownFactsTests(unittest.TestCase):
         )
         self.assertEqual(["1002", "1003"], [x["platform_post_id"] for x in result["records"]])
         self.assertEqual([1, 2], visited)
+
+    def test_failed_fixed_candidate_is_not_replaced_by_later_row(self) -> None:
+        """固定候选访问失败后不得用列表中的下一条帖子补位。"""
+
+        collector = YicheCollector(self._logged_state())
+        collector._account_verified = True
+        collector._list_page = lambda *_args: {
+            "list": [{"id": 1001}, {"id": 1002}, {"id": 1003}],
+            "total": 3,
+        }
+        visited: list[str] = []
+
+        def fetch(url: str, **_kwargs: object) -> dict:
+            post_id, normalized_url = normalize_post_url(url)
+            visited.append(post_id)
+            if post_id == "1001":
+                raise CollectorFailure("POST_CONTENT_EMPTY", "固定候选正文为空")
+            return {"platform_post_id": post_id, "url": normalized_url}
+
+        collector._fetch_post = fetch
+        result = collector.collect_circle("https://baa.yiche.com/sample/", 2)
+
+        self.assertEqual(["1001", "1002"], visited)
+        self.assertEqual(["1002"], [row["platform_post_id"] for row in result["records"]])
+        self.assertEqual(
+            ["1001"], [normalize_post_url(row["url"])[0] for row in result["failures"]]
+        )
+        self.assertIn("未使用后续帖子替换", result["stop_reason"])
+
+    def test_exhausted_server_errors_become_persistent_network_retry(self) -> None:
+        """连续5xx必须归一为共享Worker可识别的访问错误。"""
+
+        collector = YicheCollector(self._logged_state())
+        calls = 0
+
+        class ServerErrorSession:
+            def get(self, *_args: object, **_kwargs: object) -> SimpleNamespace:
+                nonlocal calls
+                calls += 1
+                return SimpleNamespace(status_code=503)
+
+        collector._http_session = lambda: ServerErrorSession()  # type: ignore[method-assign]
+        with patch("threadsnap.collectors.yiche.time.sleep"):
+            with self.assertRaises(CollectorFailure) as caught:
+                collector._get("https://baa.yiche.com/sample/thread-1001.html")
+
+        self.assertEqual("PLATFORM_NETWORK_ERROR", caught.exception.code)
+        self.assertEqual(3, calls)
 
     def test_comment_mapping_is_capped_at_ten(self) -> None:
         rows = [{"id": f"c{i}", "contentData": {"contentText": f"评论{i}"}} for i in range(12)]

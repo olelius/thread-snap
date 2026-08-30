@@ -27,7 +27,7 @@ from .base import (
     ProgressCallback,
 )
 
-ADAPTER_VERSION = "autohome-club-v4"
+ADAPTER_VERSION = "autohome-club-v5"
 BASE_URL = "https://club.autohome.com.cn"
 LIST_API_URL = "https://club-open-api.autohome.com.cn/api/pc/bbs/index/getClubTopicList"
 VIDEO_MEDIA_URL = "https://p-vp.autohome.com.cn/api/gpi"
@@ -321,9 +321,12 @@ class AutohomeCollector:
                         timeout=self.timeout_seconds,
                         allow_redirects=True,
                     )
-                if response.status_code >= 500 and attempt < 2:
-                    time.sleep(0.5 * (attempt + 1))
-                    continue
+                if response.status_code >= 500:
+                    last_error = RuntimeError(f"HTTP {response.status_code}")
+                    if attempt < 2:
+                        time.sleep(0.5 * (attempt + 1))
+                        continue
+                    break
                 self._detect_control(response)
                 return response
             except (AuthenticationRequired, CollectorFailure):
@@ -971,7 +974,7 @@ class AutohomeCollector:
         on_progress: ProgressCallback | None = None,
         on_page_evidence: PageEvidenceCallback | None = None,
     ) -> dict[str, Any]:
-        """按有效详情数量继续翻页；页面截图能力当前明确关闭。"""
+        """处理来源前N个固定候选；详情失败时不向后补位。"""
 
         if on_page_evidence is not None:
             raise CollectorFailure(
@@ -985,8 +988,9 @@ class AutohomeCollector:
         frozen_page_count: int | None = None
         page_fingerprints: set[tuple[str, ...]] = set()
         source_index = 0
+        selected_count = 0
         exhausted = False
-        while len(records) < target_count:
+        while selected_count < target_count:
             if page_number > MAX_LIST_PAGES:
                 raise CollectorFailure(
                     "PAGINATION_UNBOUNDED", "汽车之家列表未在安全页数内给出终止证明。"
@@ -1008,32 +1012,34 @@ class AutohomeCollector:
             page_fingerprints.add(fingerprint)
             candidates: list[dict[str, Any]] = []
             for raw in page["items"]:
+                if selected_count >= target_count:
+                    break
+                index = source_index
+                source_index += 1
                 try:
-                    candidate = self._candidate(source, raw, source_index)
+                    candidate = self._candidate(source, raw, index)
                 except CollectorFailure as exc:
                     raw_url = raw.get("pc_url") if isinstance(raw, dict) else source.url
                     failure = {
                         "url": str(raw_url or source.url),
                         "code": exc.code,
                         "message": exc.message,
-                        "source_index": source_index,
+                        "source_index": index,
                     }
                     failures.append(failure)
                     if on_progress:
                         on_progress(None, failure)
-                    source_index += 1
+                    selected_count += 1
                     continue
-                source_index += 1
                 if candidate["post_id"] in seen:
                     continue
                 seen.add(candidate["post_id"])
+                selected_count += 1
                 candidates.append(candidate)
 
             cursor = 0
-            while cursor < len(candidates) and len(records) < target_count:
-                batch = candidates[
-                    cursor : cursor + min(self.concurrency, target_count - len(records))
-                ]
+            while cursor < len(candidates):
+                batch = candidates[cursor : cursor + self.concurrency]
                 cursor += len(batch)
 
                 def fetch(value: dict[str, Any]) -> tuple[dict[str, Any], Any, Any]:
@@ -1079,12 +1085,16 @@ class AutohomeCollector:
                 exhausted = True
                 break
             page_number += 1
-        if len(records) >= target_count:
-            stop_reason = "已经取得配置数量的有效帖子。"
+            if selected_count >= target_count:
+                break
+        if selected_count >= target_count and failures:
+            stop_reason = "固定候选中存在未完成帖子，未使用后续帖子替换。"
+        elif selected_count >= target_count:
+            stop_reason = "已经处理配置数量的固定候选帖子。"
         elif exhausted:
-            stop_reason = "汽车之家论坛没有更多可用内容，按实际有效数量结束。"
+            stop_reason = "汽车之家论坛没有更多候选内容，按实际冻结清单结束。"
         else:
-            stop_reason = "候选帖子存在错误，未能取得配置数量的有效结果。"
+            stop_reason = "固定候选处理未完成。"
         return {"records": records, "failures": failures, "stop_reason": stop_reason}
 
     def collect_urls(

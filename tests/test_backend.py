@@ -3059,24 +3059,19 @@ class QueueAndRetryTests(AppCase):
         self.assertEqual([1, 2, 3], [event["summary"]["completed_count"] for event in events[1:4]])
         self.assertEqual("success", events[-1]["summary"]["status"])
 
-    def test_replaced_candidate_failure_does_not_become_business_failure(self) -> None:
-        """已被后续候选补足的请求错误只保留诊断，不污染任务与批次失败数。"""
+    def test_network_failure_retries_same_candidate_until_success(self) -> None:
+        """网络错误应持久重试固定URL，不进入终态，也不重新发现后续帖子。"""
 
-        observed_failed_counts: list[int] = []
         circle = self.save_verified_circle()
         run = self.container.runs.create_manual(
             ManualRunCreate(platform_code="dongchedi", circle_ids=[circle.id], quantity=2),
             scope="api",
-            header_key="replaced-candidate-failure-0001",
+            header_key="fixed-candidate-retry-0001",
         )
-        container = self.container
-        failure = {
-            "url": "https://www.dongchedi.com/ugc/article/3999",
-            "code": "PLATFORM_NETWORK_ERROR",
-            "message": "候选请求超时。",
-        }
+        failed_url = "https://www.dongchedi.com/ugc/article/4002"
+        calls: list[tuple[str, ...]] = []
 
-        class RecoveredCollector(FakeCollector):
+        class FixedCandidateCollector(FakeCollector):
             def collect_circle(
                 self,
                 _url: str,
@@ -3084,77 +3079,108 @@ class QueueAndRetryTests(AppCase):
                 skip_post_ids: set[str] | None = None,
                 on_progress=None,
             ) -> dict:
-                records = [sample_record("4001"), sample_record("4002")]
-                assert on_progress is not None
-                on_progress(None, failure)
-                observed_failed_counts.append(
-                    container.runs.get_run(run["id"])["failed_count"]
-                )
-                for record in records:
-                    on_progress(record, None)
-                return {
-                    "records": records,
-                    "failures": [failure],
-                    "stop_reason": "已经取得配置数量的有效帖子。",
+                record = sample_record("4001")
+                failure = {
+                    "url": failed_url,
+                    "code": "PLATFORM_NETWORK_ERROR",
+                    "message": "候选请求超时。",
+                    "source_index": 1,
                 }
-
-        self.container.worker._collector = lambda *_args: RecoveredCollector()  # type: ignore[method-assign]
-
-        self.assertTrue(self.container.worker.process_once())
-
-        stored_run = self.container.runs.get_run(run["id"])
-        self.assertEqual("success", stored_run["status"])
-        self.assertEqual(2, stored_run["completed_count"])
-        self.assertEqual(0, stored_run["failed_count"])
-        self.assertEqual([0], observed_failed_counts)
-        with self.container.sessions() as db:
-            task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
-            assert task is not None
-            self.assertEqual("success", task.status)
-            self.assertEqual(0, task.failed_count)
-            self.assertEqual([failure], task.checkpoint["failed_urls"])
-
-    def test_unresolved_candidate_failure_remains_a_business_failure(self) -> None:
-        """目标未完成时继续保留最终失败数和部分成功状态。"""
-
-        circle = self.save_verified_circle()
-        run = self.container.runs.create_manual(
-            ManualRunCreate(platform_code="dongchedi", circle_ids=[circle.id], quantity=2),
-            scope="api",
-            header_key="unresolved-candidate-failure-0001",
-        )
-        failure = {
-            "url": "https://www.dongchedi.com/ugc/article/4999",
-            "code": "PLATFORM_NETWORK_ERROR",
-            "message": "候选请求超时。",
-        }
-
-        class PartialCollector(FakeCollector):
-            def collect_circle(
-                self,
-                _url: str,
-                _target: int,
-                skip_post_ids: set[str] | None = None,
-                on_progress=None,
-            ) -> dict:
-                record = sample_record("5001")
+                calls.append(("circle",))
                 if on_progress:
                     on_progress(record, None)
                     on_progress(None, failure)
                 return {
                     "records": [record],
                     "failures": [failure],
-                    "stop_reason": "候选请求失败后未达到目标。",
+                    "stop_reason": "固定候选访问暂时失败。",
                 }
 
-        self.container.worker._collector = lambda *_args: PartialCollector()  # type: ignore[method-assign]
+            def collect_urls(self, urls: list[str], on_progress=None) -> dict:
+                calls.append(tuple(urls))
+                records = [sample_record("4002")]
+                if on_progress:
+                    on_progress(records[0], None)
+                return {
+                    "records": records,
+                    "failures": [],
+                    "stop_reason": "固定候选重试成功。",
+                }
+
+        collector = FixedCandidateCollector()
+        self.container.worker._collector = lambda *_args: collector  # type: ignore[method-assign]
 
         self.assertTrue(self.container.worker.process_once())
+        waiting = self.container.runs.get_run(run["id"])
+        self.assertEqual("queued", waiting["status"])
+        self.assertEqual((1, 0), (waiting["completed_count"], waiting["failed_count"]))
+        with self.container.sessions.begin() as db:
+            task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            assert task is not None
+            checkpoint = dict(task.checkpoint or {})
+            checkpoint["retry_not_before"] = datetime.now(timezone.utc).isoformat()
+            task.checkpoint = checkpoint
 
-        stored_run = self.container.runs.get_run(run["id"])
-        self.assertEqual("partial_success", stored_run["status"])
-        self.assertEqual(1, stored_run["completed_count"])
-        self.assertEqual(1, stored_run["failed_count"])
+        self.assertTrue(self.container.worker.process_once())
+        completed = self.container.runs.get_run(run["id"])
+        self.assertEqual("success", completed["status"])
+        self.assertEqual((2, 0), (completed["completed_count"], completed["failed_count"]))
+        self.assertEqual([("circle",), (failed_url,)], calls)
+
+    def test_source_network_failure_retries_same_source_until_success(self) -> None:
+        """候选冻结前的网络错误也应重试原来源，不能直接结束任务。"""
+
+        circle = self.save_verified_circle()
+        run = self.container.runs.create_manual(
+            ManualRunCreate(platform_code="dongchedi", circle_ids=[circle.id], quantity=1),
+            scope="api",
+            header_key="fixed-source-retry-0001",
+        )
+        calls: list[str] = []
+
+        class SourceRetryCollector(FakeCollector):
+            def collect_circle(
+                self,
+                _url: str,
+                _target: int,
+                skip_post_ids: set[str] | None = None,
+                on_progress=None,
+            ) -> dict:
+                calls.append("circle")
+                if len(calls) == 1:
+                    raise CollectorFailure("PLATFORM_NETWORK_ERROR", "来源请求超时。")
+                record = sample_record("4101")
+                if on_progress:
+                    on_progress(record, None)
+                return {
+                    "records": [record],
+                    "failures": [],
+                    "stop_reason": "固定候选访问成功。",
+                }
+
+            def collect_urls(self, urls: list[str], on_progress=None) -> dict:
+                raise AssertionError(f"来源重试不应进入 URL 清单路径：{urls}")
+
+        collector = SourceRetryCollector()
+        self.container.worker._collector = lambda *_args: collector  # type: ignore[method-assign]
+
+        self.assertTrue(self.container.worker.process_once())
+        waiting = self.container.runs.get_run(run["id"])
+        self.assertEqual(("queued", 0), (waiting["status"], waiting["failed_count"]))
+        with self.container.sessions.begin() as db:
+            task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            assert task is not None
+            checkpoint = dict(task.checkpoint or {})
+            self.assertEqual([], checkpoint["retry_urls"])
+            checkpoint["retry_not_before"] = datetime.now(timezone.utc).isoformat()
+            task.checkpoint = checkpoint
+
+        self.assertTrue(self.container.worker.process_once())
+        completed = self.container.runs.get_run(run["id"])
+        self.assertEqual(("success", 1, 0), tuple(completed[key] for key in (
+            "status", "completed_count", "failed_count"
+        )))
+        self.assertEqual(["circle", "circle"], calls)
 
     def test_auth_resume_publishes_queued_progress_event(self) -> None:
         """认证恢复提交为排队状态后应立即通知列表，不只依赖 Session 事件。"""
@@ -3792,6 +3818,26 @@ class QueueAndRetryTests(AppCase):
 
 
 class CollectorTests(unittest.TestCase):
+    def test_exhausted_server_errors_become_persistent_network_retry(self) -> None:
+        """连续5xx必须归一为Worker可持久重试的访问错误。"""
+
+        collector = DongchediCollector(None)
+        calls = 0
+
+        class ServerErrorSession:
+            def get(self, *_args: object, **_kwargs: object) -> SimpleNamespace:
+                nonlocal calls
+                calls += 1
+                return SimpleNamespace(status_code=503)
+
+        collector._http_session = lambda: ServerErrorSession()  # type: ignore[method-assign]
+        with patch("threadsnap.collectors.dongchedi.time.sleep"):
+            with self.assertRaises(CollectorFailure) as caught:
+                collector._get("https://www.dongchedi.com/ugc/article/1001")
+
+        self.assertEqual("PLATFORM_NETWORK_ERROR", caught.exception.code)
+        self.assertEqual(3, calls)
+
     def test_circle_url_parses_two_independent_list_orders(self) -> None:
         latest_reply = parse_circle_url("https://www.dongchedi.com/community/24729/2?x=1")
         latest_publish = parse_circle_url(
@@ -4005,7 +4051,7 @@ class CollectorTests(unittest.TestCase):
         self.assertEqual("第一句话。", record["title"])
         self.assertEqual("第一句话。\n第二段内容。", record["content"])
 
-    def test_collection_continues_to_later_pages_until_valid_target(self) -> None:
+    def test_collection_does_not_replace_failed_fixed_candidates(self) -> None:
         collector = DongchediCollector(None)
         requested_sources: list[str] = []
         pages = {
@@ -4030,12 +4076,13 @@ class CollectorTests(unittest.TestCase):
             None if url in {"u1", "u2", "u3"} else sample_record(url[1:])
         )  # type: ignore[method-assign]
         result = collector.collect_circle("https://www.dongchedi.com/community/24729", 3)
-        self.assertEqual(["4", "5", "6"], [item["platform_post_id"] for item in result["records"]])
+        self.assertEqual([], result["records"])
         self.assertEqual(3, len(result["failures"]))
         self.assertEqual(
-            ["https://www.dongchedi.com/community/24729"] * 2,
+            ["https://www.dongchedi.com/community/24729"],
             requested_sources,
         )
+        self.assertIn("未使用后续帖子替换", result["stop_reason"])
 
     def test_collection_resume_skips_completed_page_and_continues(self) -> None:
         collector = DongchediCollector(None)
@@ -4068,7 +4115,7 @@ class CollectorTests(unittest.TestCase):
 
         self.assertEqual([1, 2], requested_pages)
         self.assertEqual(["4", "5", "6"], [item["platform_post_id"] for item in result["records"]])
-        self.assertEqual("已经取得配置数量的有效帖子。", result["stop_reason"])
+        self.assertEqual("已经处理配置数量的固定候选帖子。", result["stop_reason"])
 
     def test_collection_keeps_latest_publish_source_url(self) -> None:
         collector = DongchediCollector(None)

@@ -23,7 +23,7 @@ from lxml import html
 from .base import AuthenticationRequired, CircleSource, CollectorFailure
 
 BASE_URL = "https://baa.yiche.com"
-ADAPTER_VERSION = "yiche-community-v3"
+ADAPTER_VERSION = "yiche-community-v4"
 CIRCLE_RE = re.compile(
     r"^/(?P<id>[A-Za-z0-9_-]+)/?"
     r"(?:index-0-(?P<order>[01])-(?P<page>\d+)\.html)?/?$"
@@ -281,9 +281,12 @@ class YicheCollector:
                     response = self._http_session().get(
                         url, timeout=self.timeout_seconds, allow_redirects=True, **kwargs
                     )
-                if response.status_code >= 500 and attempt < 2:
-                    time.sleep(0.5 * (attempt + 1))
-                    continue
+                if response.status_code >= 500:
+                    last_error = RuntimeError(f"HTTP {response.status_code}")
+                    if attempt < 2:
+                        time.sleep(0.5 * (attempt + 1))
+                        continue
+                    break
                 return response
             except Exception as exc:
                 last_error = exc
@@ -745,8 +748,9 @@ class YicheCollector:
         page_number = 1
         frozen_total: int | None = None
         source_index = 0
+        selected_count = 0
         stop_reason = "易车列表已经没有更多帖子。"
-        while len(records) < target_count:
+        while selected_count < target_count:
             page = self._list_page(source, page_number)
             rows = page.get("list") or []
             if not rows:
@@ -763,6 +767,8 @@ class YicheCollector:
                 )
             new_candidates = 0
             for row in rows:
+                if selected_count >= target_count:
+                    break
                 if not isinstance(row, dict):
                     continue
                 post_id = str(row.get("id") or "").strip()
@@ -774,6 +780,7 @@ class YicheCollector:
                 source_index += 1
                 if post_id in seen:
                     continue
+                selected_count += 1
                 url = f"{BASE_URL}/{source.external_id}/thread-{post_id}.html"
                 try:
                     record = self._fetch_post(url, list_row=row)
@@ -796,10 +803,7 @@ class YicheCollector:
                     failures.append(failure)
                     if on_progress:
                         on_progress(None, failure)
-                if len(records) >= target_count:
-                    stop_reason = "已经取得配置数量的有效帖子。"
-                    break
-            if len(records) >= target_count:
+            if selected_count >= target_count:
                 break
             if page_number * 50 >= frozen_total:
                 break
@@ -807,6 +811,10 @@ class YicheCollector:
                 stop_reason = "易车列表分页没有返回新的帖子身份。"
                 break
             page_number += 1
+        if selected_count >= target_count and failures:
+            stop_reason = "固定候选中存在未完成帖子，未使用后续帖子替换。"
+        elif selected_count >= target_count:
+            stop_reason = "已经处理配置数量的固定候选帖子。"
         return {"records": records, "failures": failures, "stop_reason": stop_reason}
 
     def collect_urls(

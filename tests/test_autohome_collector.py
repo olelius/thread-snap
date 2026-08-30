@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest.mock import patch
 
 from threadsnap.collectors import AuthenticationRequired, CollectorFailure, get_platform_spec
 from threadsnap.collectors.autohome import (
@@ -83,6 +84,28 @@ def video_media_payload(video_id: str, qualities: tuple[int, ...] = (100, 200, 3
 
 
 class AutohomeContractTests(unittest.TestCase):
+    def test_exhausted_server_errors_become_persistent_network_retry(self) -> None:
+        """连续5xx必须归一为共享Worker可识别的访问错误。"""
+
+        collector = collector_with_like()
+        calls = 0
+
+        class ServerErrorSession:
+            def get(self, url: str, **_kwargs: object) -> FakeResponse:
+                nonlocal calls
+                calls += 1
+                return FakeResponse(b"", url, status_code=503)
+
+        collector._http_session = lambda: ServerErrorSession()  # type: ignore[method-assign]
+        with patch("threadsnap.collectors.autohome.time.sleep"):
+            with self.assertRaises(CollectorFailure) as caught:
+                collector._get(
+                    "https://club.autohome.com.cn/bbs/thread/hash/115934382-1.html"
+                )
+
+        self.assertEqual("PLATFORM_NETWORK_ERROR", caught.exception.code)
+        self.assertEqual(3, calls)
+
     def test_registry_and_collector_publish_shared_concurrency_bounds(self) -> None:
         spec = get_platform_spec("autohome")
 
@@ -718,6 +741,48 @@ class AutohomeContractTests(unittest.TestCase):
 
         self.assertEqual("PLATFORM_CAPTCHA_REQUIRED", caught.exception.code)
         self.assertEqual(1, len(visited))
+
+    def test_failed_fixed_candidate_is_not_replaced_by_later_row(self) -> None:
+        """圈子前 N 个候选一旦冻结，详情失败也不得向后补位。"""
+
+        collector = collector_with_like()
+        items = [
+            {
+                "club_bbs_id": 8232,
+                "club_bbs_type": "c",
+                "biz_id": post_id,
+                "pc_url": f"https://club.autohome.com.cn/bbs/thread/hash{post_id}/{post_id}-1.html",
+            }
+            for post_id in (115934382, 115934383, 115934384)
+        ]
+        collector._list_page = lambda _source, _page: {  # type: ignore[method-assign]
+            "items": items,
+            "total": 3,
+            "series_id": 8232,
+        }
+        visited: list[str] = []
+
+        def fetch(url: str, **_: object) -> dict:
+            post_id, normalized_url = normalize_post_url(url)
+            visited.append(post_id)
+            if post_id == "115934382":
+                raise CollectorFailure("POST_CONTENT_EMPTY", "固定候选正文为空")
+            return {"platform_post_id": post_id, "url": normalized_url}
+
+        collector.fetch_post = fetch  # type: ignore[method-assign]
+        result = collector.collect_circle(
+            "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post", 2
+        )
+
+        self.assertEqual(["115934382", "115934383"], visited)
+        self.assertEqual(
+            ["115934383"], [row["platform_post_id"] for row in result["records"]]
+        )
+        self.assertEqual(
+            ["115934382"],
+            [normalize_post_url(row["url"])[0] for row in result["failures"]],
+        )
+        self.assertIn("未使用后续帖子替换", result["stop_reason"])
 
     def test_screenshot_callback_is_explicitly_rejected(self) -> None:
         collector = collector_with_like()
