@@ -630,6 +630,47 @@ class WorkerService:
                 **payload,
             }
 
+        def collector_failure_result(exc: CollectorFailure) -> dict[str, Any]:
+            """统一分类首次请求和会话刷新后的平台控制错误。"""
+
+            if exc.code in INTERACTIVE_RECOVERY_CODES:
+                return {
+                    "kind": "auth",
+                    "code": exc.code,
+                    "message": exc.message,
+                    "trigger_url": exc.trigger_url or circle_url,
+                    "records": [],
+                    "failures": prior_terminal_failures,
+                    "validation": validation,
+                    "retry_urls": retry_urls,
+                    "retry_source_indexes": source_indexes,
+                    "terminal_failures": prior_terminal_failures,
+                }
+            if exc.code in RETRYABLE_ACCESS_FAILURE_CODES:
+                failure = {
+                    "url": circle_url,
+                    "code": exc.code,
+                    "message": exc.message,
+                    "source_index": 0,
+                }
+                return {
+                    "kind": "retry",
+                    "records": [],
+                    "failures": prior_terminal_failures + [failure],
+                    "retry_failures": [failure],
+                    "terminal_failures": prior_terminal_failures,
+                    "retry_scope": "source",
+                    "validation": validation,
+                }
+            return {
+                "kind": "failed",
+                "code": exc.code,
+                "message": exc.message,
+                "records": [],
+                "failures": [],
+                "validation": validation,
+            }
+
         try:
             if needs_validation:
                 validation = collector.validate_circle(circle_url)
@@ -709,6 +750,8 @@ class WorkerService:
                     return finalize_payload(payload)
                 except AuthenticationRequired as repeated:
                     exc = repeated
+                except CollectorFailure as repeated_control:
+                    return collector_failure_result(repeated_control)
             return {
                 "kind": "auth",
                 "code": "AUTH_REQUIRED",
@@ -722,43 +765,7 @@ class WorkerService:
                 "terminal_failures": prior_terminal_failures,
             }
         except CollectorFailure as exc:
-            if exc.code in INTERACTIVE_RECOVERY_CODES:
-                return {
-                    "kind": "auth",
-                    "code": exc.code,
-                    "message": exc.message,
-                    "trigger_url": exc.trigger_url or circle_url,
-                    "records": [],
-                    "failures": prior_terminal_failures,
-                    "validation": validation,
-                    "retry_urls": retry_urls,
-                    "retry_source_indexes": source_indexes,
-                    "terminal_failures": prior_terminal_failures,
-                }
-            if exc.code in RETRYABLE_ACCESS_FAILURE_CODES:
-                failure = {
-                    "url": circle_url,
-                    "code": exc.code,
-                    "message": exc.message,
-                    "source_index": 0,
-                }
-                return {
-                    "kind": "retry",
-                    "records": [],
-                    "failures": prior_terminal_failures + [failure],
-                    "retry_failures": [failure],
-                    "terminal_failures": prior_terminal_failures,
-                    "retry_scope": "source",
-                    "validation": validation,
-                }
-            return {
-                "kind": "failed",
-                "code": exc.code,
-                "message": exc.message,
-                "records": [],
-                "failures": [],
-                "validation": validation,
-            }
+            return collector_failure_result(exc)
         finally:
             flush_progress()
 

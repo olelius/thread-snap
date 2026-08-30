@@ -31,6 +31,7 @@ from threadsnap.collectors.dongchedi import (
     DongchediCollector,
     parse_circle_url,
 )
+from threadsnap.collectors.registry import get_platform_spec
 from threadsnap.config import Settings
 from threadsnap.errors import DomainError
 from threadsnap.models import (
@@ -3221,8 +3222,59 @@ class QueueAndRetryTests(AppCase):
         )
         self.assertEqual(202, response.status_code, response.text)
         auth_task = self.container.auth.tasks[response.json()["id"]]
-        self.assertTrue(auth_task.fresh_profile)
+        self.assertFalse(auth_task.fresh_profile)
         self.assertEqual(trigger_url, auth_task.start_url)
+        self.assertEqual("PLATFORM_CHALLENGE", auth_task.recovery_error_code)
+
+        # 验证页出现后回到原帖子，系统应自动保存当前 Profile 并唤醒同一任务。
+        self.assertFalse(
+            self.container.auth._observe_interactive_control(
+                auth_task,
+                "https://safety.autohome.com.cn/userverify?backurl=example",
+            )
+        )
+        self.assertTrue(
+            self.container.auth._observe_interactive_control(auth_task, trigger_url)
+        )
+        auth_task.status = "active"
+        auth_task.page_status = "ready"
+        auth_task.profile_dir = self.container.auth.profiles.prepare("autohome", auth_task.id)
+        state = auth_state("challenge-cleared")
+        state["cookies"][0]["domain"] = ".autohome.com.cn"
+        auth_task.context = FakeAuthContext(state)  # type: ignore[assignment]
+        auth_task.playwright = FakePlaywright()  # type: ignore[assignment]
+        auth_task.page = FakeAuthPage(url=trigger_url)  # type: ignore[assignment]
+        socket = FakeAuthSocket()
+
+        asyncio.run(
+            self.container.auth._command(
+                auth_task,
+                {"type": "finish"},
+                socket,  # type: ignore[arg-type]
+            )
+        )
+
+        self.assertEqual("completed", auth_task.status)
+        self.assertEqual("completed", socket.messages[-1]["type"])
+        self.assertEqual("queued", self.container.runs.get_run(run["id"])["status"])
+
+        # 若真实任务随后明确报告登录失效，恢复入口才切换到官方登录页和全新环境。
+        with self.container.sessions.begin() as db:
+            stored_run = db.get(ExtractionRun, run["id"])
+            stored_task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            assert stored_run is not None and stored_task is not None
+            stored_run.status = "waiting_for_auth"
+            stored_task.status = "waiting_for_auth"
+            stored_task.error_code = "AUTH_REQUIRED"
+            stored_task.error_message = "登录后才能读取字段。"
+        login_response = self.client.post(
+            f"/api/v1/platforms/autohome/auth/tasks?fresh=true&run_id={run['id']}"
+        )
+        self.assertEqual(202, login_response.status_code, login_response.text)
+        login_task = self.container.auth.tasks[login_response.json()["id"]]
+        self.assertTrue(login_task.fresh_profile)
+        self.assertEqual(get_platform_spec("autohome").login_url, login_task.start_url)
+        self.assertEqual("AUTH_REQUIRED", login_task.recovery_error_code)
 
     def test_run_auth_task_rejects_non_waiting_platform(self) -> None:
         """批次恢复入口不得借任意 run_id 打开与等待任务无关的页面。"""
@@ -3806,6 +3858,36 @@ class QueueAndRetryTests(AppCase):
         self.assertTrue(self.container.worker.process_once())
         self.assertEqual("success", self.container.runs.get_run(run["id"])["status"])
         self.assertEqual(1, self.container.runs.posts(run["id"])["total"])
+
+    def test_platform_control_after_auth_refresh_keeps_specific_error(self) -> None:
+        """会话刷新后的平台控制仍按原错误分类，不能泄漏为任务内部异常。"""
+
+        circle = self.save_verified_circle()
+        run = self.container.runs.create_manual(
+            ManualRunCreate(platform_code="dongchedi", circle_ids=[circle.id], quantity=1),
+            scope="api",
+            header_key="refresh-control-0001",
+        )
+
+        class RateLimitedCollector(FakeCollector):
+            def collect_circle(
+                self,
+                _url: str,
+                _target: int,
+                skip_post_ids: set[str] | None = None,
+                on_progress=None,
+            ) -> dict:
+                raise CollectorFailure("PLATFORM_RATE_LIMITED", "平台限制了请求频率。")
+
+        collectors = iter([FakeCollector(auth=True), RateLimitedCollector()])
+        self.container.worker._collector = lambda _platform, _concurrency=None: next(collectors)  # type: ignore[method-assign]
+        self.container.worker._refresh_after_auth = lambda *_args: True  # type: ignore[method-assign]
+
+        self.assertTrue(self.container.worker.process_once())
+
+        completed = self.container.runs.get_run(run["id"])
+        self.assertEqual("failed", completed["status"])
+        self.assertEqual("PLATFORM_RATE_LIMITED", completed["tasks"][0]["error_code"])
 
     def test_restart_recovers_running_tasks_to_fifo(self) -> None:
         circle = self.save_verified_circle()

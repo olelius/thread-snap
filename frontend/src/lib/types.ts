@@ -465,6 +465,7 @@ export type AuthTask = {
   error_message?: string
   http_status?: number
   fresh_profile: boolean
+  recovery_error_code?: string
   ticket?: string
   websocket_path: string
 }

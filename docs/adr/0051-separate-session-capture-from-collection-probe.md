@@ -13,4 +13,5 @@ amends: 0007-official-login-and-encrypted-platform-session.md, 0046-require-auto
 
 - 配置页只显示“Session 已保存”和最近保存时间，不把它表述为采集验证通过。
 - 等待任务在 Session 保存后恢复原 URL；恢复请求才执行采集访问门禁，不创建替代批次。
+- 批次恢复入口保留等待错误类型：登录失效使用全新登录环境；验证码或访问验证复用当前登录 Profile，并在已观察到验证页后返回原站时自动保存更新状态和恢复同一任务。
 - 旧正式 Session 在新 storage state 结构检查或持久化失败时保持不变；真实采集控制也不通过隐藏错误或跳过字段改写为成功。
