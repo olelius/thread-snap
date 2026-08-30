@@ -1528,6 +1528,7 @@ class ApiAndConfigTests(AppCase):
         )
         self.assertFalse(autohome["capabilities"]["page_evidence"])
         self.assertTrue(autohome["capabilities"]["live_video_resolution"])
+        self.assertEqual({"min": 1, "max": 8}, autohome["concurrency_range"])
         auth_task = self.client.post("/api/v1/platforms/autohome/auth/tasks")
         self.assertEqual(202, auth_task.status_code, auth_task.text)
         self.assertEqual("autohome", auth_task.json()["platform_code"])
@@ -1548,7 +1549,7 @@ class ApiAndConfigTests(AppCase):
         )
         self.assertEqual(200, enabled.status_code, enabled.text)
         self.assertTrue(enabled.json()["enabled"])
-        self.assertEqual(1, enabled.json()["internal_concurrency"])
+        self.assertEqual(8, enabled.json()["internal_concurrency"])
         created = self.client.post(
             "/api/v1/runs/manual",
             json={
@@ -1835,11 +1836,11 @@ class ApiAndConfigTests(AppCase):
 
         autohome = self.client.put(
             "/api/v1/platforms/autohome",
-            json={"enabled": True, "internal_concurrency": 1},
+            json={"enabled": True, "internal_concurrency": 2},
         )
         self.assertEqual(200, autohome.status_code)
         self.assertTrue(autohome.json()["enabled"])
-        self.assertEqual(1, autohome.json()["internal_concurrency"])
+        self.assertEqual(2, autohome.json()["internal_concurrency"])
 
         plan = self.client.put(
             "/api/v1/extraction-plan",

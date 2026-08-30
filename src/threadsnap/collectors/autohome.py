@@ -284,8 +284,8 @@ class AutohomeCollector:
         self.storage_state = storage_state
         self.cookies = _cookies_from_state(storage_state)
         self.authenticated_member_id = _authenticated_member_id(storage_state)
-        # 正式验收前的已确认安全上限为一；直接调用也不得绕过平台注册表。
-        self.concurrency = 1
+        # 与公共平台注册合同一致：所有来源、帖子请求和即时重试共享同一总门禁。
+        self.concurrency = max(1, concurrency)
         self.timeout_seconds = timeout_seconds
         self.browser_headless = browser_headless
         self.semaphore = threading.BoundedSemaphore(self.concurrency)

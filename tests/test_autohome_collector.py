@@ -83,7 +83,7 @@ def video_media_payload(video_id: str, qualities: tuple[int, ...] = (100, 200, 3
 
 
 class AutohomeContractTests(unittest.TestCase):
-    def test_registry_publishes_local_adapter_at_conservative_bounds(self) -> None:
+    def test_registry_and_collector_publish_shared_concurrency_bounds(self) -> None:
         spec = get_platform_spec("autohome")
 
         self.assertEqual("available", spec.adapter_status)
@@ -93,10 +93,10 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertIn("account.autohome.com.cn", spec.login_url or "")
         self.assertFalse(spec.supports_page_evidence)
         self.assertTrue(spec.supports_live_video_resolution)
-        self.assertEqual(1, spec.max_concurrency)
+        self.assertEqual((1, 8), (spec.min_concurrency, spec.max_concurrency))
 
-        collector = collector_with_like(concurrency=99)
-        self.assertEqual(1, collector.concurrency)
+        collector = collector_with_like(concurrency=8)
+        self.assertEqual(8, collector.concurrency)
         self.assertTrue(collector.supports_live_video_resolution)
 
     def test_source_order_and_post_identity_are_normalized(self) -> None:

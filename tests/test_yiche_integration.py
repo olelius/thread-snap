@@ -153,6 +153,7 @@ class YicheReleaseStateTests(AppCase):
         self.assertFalse(platform["enabled"])
         self.assertFalse(platform["capabilities"]["page_evidence"])
         self.assertEqual("account_login", platform["capabilities"]["authentication_mode"])
+        self.assertEqual({"min": 1, "max": 8}, platform["concurrency_range"])
 
         enabled = self.client.put(
             "/api/v1/platforms/yiche",
@@ -297,7 +298,7 @@ class YichePublicFlowTests(AppCase):
             json={"enabled": True, "internal_concurrency": 8},
         )
         self.assertEqual(200, enabled.status_code, enabled.text)
-        self.assertEqual(1, enabled.json()["internal_concurrency"])
+        self.assertEqual(8, enabled.json()["internal_concurrency"])
         self.container.worker._collector = lambda *_args: FakeYicheCollector()  # type: ignore[method-assign]
 
     def save_yiche_sources(self) -> list[Circle]:

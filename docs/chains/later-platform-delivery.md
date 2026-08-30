@@ -5,8 +5,8 @@
 - 功能范围 owner：`docs/design/product-design.md` 的“后续正式版”和“后续两个平台接入验收边界”。
 - 技术合同 owner：`docs/design/technical-route.md` 的“后续平台接入验证合同”。
 - 验收计划 owner：`docs/research/later-platform-onboarding-plan.md`。
-- 架构决策：`docs/adr/0043-use-project-discovered-500-sample-gate-for-later-platforms.md`、`docs/adr/0044-separate-local-adapter-publication-from-formal-sample-acceptance.md`、`docs/adr/0045-preserve-cross-forum-feed-items.md`、`docs/adr/0046-require-autohome-session-for-like-count.md`、`docs/adr/0047-use-account-login-and-direct-http-for-yiche.md`、`docs/adr/0048-treat-primary-comments-as-nonblocking-post-enrichment.md`。
-- 当前阶段：汽车之家与易车均已完成本地适配器和公共业务闭环并发布为 `available`，默认停用、并发上限1。汽车之家 `autohome-club-v4` 已使用官方账号登录、加密Session和直连HTTP读取可信点赞；易车 `yiche-community-v3` 已改用相同账号登录状态机，以账号Cookie和官方用户身份接口作为门禁，并以 `pc-v311` 直连HTTP取得列表、详情及评论。两平台均按ADR 0048把主评论作为非阻塞附属快照，帖子身份和正文或媒体有效时正常入库，不因评论数量或终止标记向后补量。三平台后台帖子采集都不回退Chromium；人工登录和明确页面证据仍各自使用受控浏览器。两平台都尚未冻结或运行正式500条，正式生产验收仍未关闭，易车页面证据继续作为明确缺口。
+- 架构决策：`docs/adr/0043-use-project-discovered-500-sample-gate-for-later-platforms.md`、`docs/adr/0044-separate-local-adapter-publication-from-formal-sample-acceptance.md`、`docs/adr/0045-preserve-cross-forum-feed-items.md`、`docs/adr/0046-require-autohome-session-for-like-count.md`、`docs/adr/0047-use-account-login-and-direct-http-for-yiche.md`、`docs/adr/0048-treat-primary-comments-as-nonblocking-post-enrichment.md`、`docs/adr/0049-unify-configurable-platform-internal-concurrency.md`。
+- 当前阶段：汽车之家与易车均已完成本地适配器和公共业务闭环并发布为 `available`、默认停用；两平台与懂车帝统一允许配置 1～8 的平台内部总并发，保存值由新批次冻结并由跨来源、来源内详情和即时重试共同共享。汽车之家 `autohome-club-v4` 已使用官方账号登录、加密Session和直连HTTP读取可信点赞；易车 `yiche-community-v3` 已改用相同账号登录状态机，以账号Cookie和官方用户身份接口作为门禁，并以 `pc-v311` 直连HTTP取得列表、详情及评论。两平台均按ADR 0048把主评论作为非阻塞附属快照，帖子身份和正文或媒体有效时正常入库，不因评论数量或终止标记向后补量。三平台后台帖子采集都不回退Chromium；人工登录和明确页面证据仍各自使用受控浏览器。两平台都尚未冻结或运行正式500条，正式生产验收仍未关闭，易车页面证据继续作为明确缺口。
 - 与首平台关系：本链只负责懂车帝之后的两个适配器；`docs/chains/first-platform-delivery.md` 中既有2000条证据和目标CentOS门禁保持原状。
 
 ## 已确认边界
@@ -40,6 +40,7 @@
 | 2026-08-28 | 易车后台验证与人工认证分离浏览器显示模式 | 后台来源验证仍需页面动态签名，但真实来源已证明无头 Chromium 可完整通过；普通验证不得复用人工认证的有头参数并弹出系统窗口 |
 | 2026-08-30 | 易车改为账号登录门禁和直连HTTP，替代前两项浏览器结论 | 公开PC脚本、直连签名请求与203挑战消融已证明列表50条、详情正文和评论可在零浏览器进程下完成；历史访问会话没有账号身份，不能继续作为可用登录状态 |
 | 2026-08-30 | 汽车之家和易车主评论改为非阻塞帖子附属快照 | 评论数量与分页终止标记不决定帖子身份和正文有效性；真实批次已证明原门禁会淘汰正常帖子并制造补量 |
+| 2026-08-30 | 汽车之家和易车内部总并发开放为与懂车帝相同的1～8配置范围 | 两平台已经使用线程局部直连HTTP会话和共享有界信号量；原注册上限1导致配置保存成功后被回退，且汽车之家内部仍硬编码为1 |
 | 2026-08-27 | 易车代码完成不等于平台发布（已由下一行替代） | 当时把500/500同时作为代码状态门禁，后续用户验收证明该口径错误地隐藏了已交付能力 |
 | 2026-08-27 | 按本地开发完成口径发布易车适配器 | `available` 表达适配器、真实样本和本地业务链可用，平台仍默认停用；真实500/500保留为正式生产验收 |
 
