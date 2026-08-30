@@ -742,6 +742,68 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertEqual("PLATFORM_CAPTCHA_REQUIRED", caught.exception.code)
         self.assertEqual(1, len(visited))
 
+    def test_rate_limit_returns_only_frozen_remaining_candidates_for_retry(self) -> None:
+        """限流必须停止当前来源，并把已冻结的剩余URL交给Worker原位续跑。"""
+
+        collector = collector_with_like()
+        items = [
+            {
+                "club_bbs_id": 8232,
+                "club_bbs_type": "c",
+                "biz_id": post_id,
+                "pc_url": f"https://club.autohome.com.cn/bbs/thread/hash{post_id}/{post_id}-1.html",
+            }
+            for post_id in (115934382, 115934383, 115934384)
+        ]
+        collector._list_page = lambda _source, _page: {  # type: ignore[method-assign]
+            "items": items,
+            "total": 3,
+            "series_id": 8232,
+        }
+        visited: list[str] = []
+
+        def rate_limited(url: str, **_: object) -> None:
+            visited.append(normalize_post_url(url)[0])
+            raise CollectorFailure("PLATFORM_RATE_LIMITED", "请求频繁")
+
+        collector.fetch_post = rate_limited  # type: ignore[method-assign]
+        result = collector.collect_circle(
+            "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post", 2
+        )
+
+        self.assertEqual(["115934382"], visited)
+        self.assertEqual(
+            ["115934382", "115934383"],
+            [normalize_post_url(row["url"])[0] for row in result["failures"]],
+        )
+        self.assertEqual(
+            {"PLATFORM_RATE_LIMITED"}, {row["code"] for row in result["failures"]}
+        )
+        self.assertNotIn("115934384", json.dumps(result, ensure_ascii=False))
+
+    def test_rate_limit_stops_url_list_and_preserves_unvisited_remainder(self) -> None:
+        """已知URL重试再次限流时不能访问后续项，也不能丢失剩余固定URL。"""
+
+        collector = collector_with_like()
+        urls = [
+            "https://club.autohome.com.cn/bbs/thread/dee662/115934382-1.html",
+            "https://club.autohome.com.cn/bbs/thread/dee663/115934383-1.html",
+        ]
+        visited: list[str] = []
+
+        def rate_limited(url: str, **_: object) -> None:
+            visited.append(url)
+            raise CollectorFailure("PLATFORM_RATE_LIMITED", "请求频繁")
+
+        collector.fetch_post = rate_limited  # type: ignore[method-assign]
+        result = collector.collect_urls(urls)
+
+        self.assertEqual([urls[0]], visited)
+        self.assertEqual(urls, [row["url"] for row in result["failures"]])
+        self.assertEqual(
+            {"PLATFORM_RATE_LIMITED"}, {row["code"] for row in result["failures"]}
+        )
+
     def test_failed_fixed_candidate_is_not_replaced_by_later_row(self) -> None:
         """圈子前 N 个候选一旦冻结，详情失败也不得向后补位。"""
 

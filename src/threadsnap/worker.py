@@ -34,10 +34,29 @@ from .sentiment import SentimentService, deduplicate_media_urls
 from .services import aggregate_run, related_run_ids
 from .session_store import SessionStore
 
-RETRYABLE_ACCESS_FAILURE_CODES = {"PLATFORM_NETWORK_ERROR"}
+NETWORK_RETRYABLE_FAILURE_CODE = "PLATFORM_NETWORK_ERROR"
+RATE_LIMIT_RETRYABLE_FAILURE_CODE = "PLATFORM_RATE_LIMITED"
+RETRYABLE_ACCESS_FAILURE_CODES = {
+    NETWORK_RETRYABLE_FAILURE_CODE,
+    RATE_LIMIT_RETRYABLE_FAILURE_CODE,
+}
 INTERACTIVE_RECOVERY_CODES = {"PLATFORM_CAPTCHA_REQUIRED", "PLATFORM_CHALLENGE"}
 RETRY_BASE_SECONDS = 2
 RETRY_MAX_SECONDS = 60
+RATE_LIMIT_RETRY_BASE_SECONDS = 60
+RATE_LIMIT_RETRY_MAX_SECONDS = 900
+
+
+def _retry_delay_seconds(error_code: str, attempt: int) -> int:
+    """按失败类别返回有上限的冷却时间，限流不得按普通网络错误快速重放。"""
+
+    normalized_attempt = max(1, attempt)
+    if error_code == RATE_LIMIT_RETRYABLE_FAILURE_CODE:
+        return min(
+            RATE_LIMIT_RETRY_MAX_SECONDS,
+            RATE_LIMIT_RETRY_BASE_SECONDS * 2 ** (normalized_attempt - 1),
+        )
+    return min(RETRY_MAX_SECONDS, RETRY_BASE_SECONDS * 2 ** (normalized_attempt - 1))
 
 
 def _supports_page_evidence(collector: Collector) -> bool:
@@ -422,6 +441,27 @@ class WorkerService:
                 )
             )
             tasks = [task for task in queued_tasks if _retry_due(task, now)]
+            rate_limited_tasks = [
+                task
+                for task in tasks
+                if (task.checkpoint or {}).get("retry_error_code")
+                == RATE_LIMIT_RETRYABLE_FAILURE_CODE
+            ]
+            rate_limit_recovery = False
+            if rate_limited_tasks:
+                first_rate_limited = min(rate_limited_tasks, key=lambda item: item.queue_sequence)
+                tasks_before_rate_limit = [
+                    task
+                    for task in tasks
+                    if task.queue_sequence < first_rate_limited.queue_sequence
+                ]
+                if tasks_before_rate_limit:
+                    tasks = tasks_before_rate_limit
+                else:
+                    # 平台已经明确限流时只复访一个队首来源，并把实际请求并发收敛为1；
+                    # 成功后下一来源再按FIFO领取，避免冷却结束瞬间重新形成请求突发。
+                    tasks = [first_rate_limited]
+                    rate_limit_recovery = True
             for task in tasks:
                 task.status = "running"
                 task.started_at = task.started_at or utc_now()
@@ -441,6 +481,8 @@ class WorkerService:
                 ),
                 platform.max_concurrency,
             )
+            if rate_limit_recovery:
+                concurrency = 1
         if self.event_publisher:
             self.event_publisher(
                 "run.changed",
@@ -616,6 +658,14 @@ class WorkerService:
                 for failure in current_failures
                 if failure.get("code") in RETRYABLE_ACCESS_FAILURE_CODES
             ]
+            retry_error_code = next(
+                (
+                    RATE_LIMIT_RETRYABLE_FAILURE_CODE
+                    for failure in retryable
+                    if failure.get("code") == RATE_LIMIT_RETRYABLE_FAILURE_CODE
+                ),
+                NETWORK_RETRYABLE_FAILURE_CODE if retryable else None,
+            )
             terminal = prior_terminal_failures + [
                 failure
                 for failure in current_failures
@@ -626,6 +676,7 @@ class WorkerService:
                 "kind": "retry" if retryable else "done",
                 "validation": validation,
                 "retry_failures": retryable,
+                "retry_error_code": retry_error_code,
                 "terminal_failures": terminal,
                 **payload,
             }
@@ -648,7 +699,7 @@ class WorkerService:
                 }
             if exc.code in RETRYABLE_ACCESS_FAILURE_CODES:
                 failure = {
-                    "url": circle_url,
+                    "url": exc.trigger_url or circle_url,
                     "code": exc.code,
                     "message": exc.message,
                     "source_index": 0,
@@ -658,6 +709,7 @@ class WorkerService:
                     "records": [],
                     "failures": prior_terminal_failures + [failure],
                     "retry_failures": [failure],
+                    "retry_error_code": exc.code,
                     "terminal_failures": prior_terminal_failures,
                     "retry_scope": "source",
                     "validation": validation,
@@ -865,7 +917,18 @@ class WorkerService:
         if result["kind"] == "retry":
             retry_failures = list(result.get("retry_failures") or [])
             retry_attempt = int((task.checkpoint or {}).get("retry_attempt") or 0) + 1
-            delay_seconds = min(RETRY_MAX_SECONDS, RETRY_BASE_SECONDS * 2 ** (retry_attempt - 1))
+            retry_error_code = str(
+                result.get("retry_error_code")
+                or next(
+                    (
+                        failure.get("code")
+                        for failure in retry_failures
+                        if failure.get("code") in RETRYABLE_ACCESS_FAILURE_CODES
+                    ),
+                    NETWORK_RETRYABLE_FAILURE_CODE,
+                )
+            )
+            delay_seconds = _retry_delay_seconds(retry_error_code, retry_attempt)
             retry_scope = str(result.get("retry_scope") or "candidate")
             retry_urls = (
                 []
@@ -881,6 +944,7 @@ class WorkerService:
                     },
                     "terminal_failures": list(result.get("terminal_failures") or []),
                     "retry_attempt": retry_attempt,
+                    "retry_error_code": retry_error_code,
                     "retry_not_before": (utc_now() + timedelta(seconds=delay_seconds)).isoformat(),
                     "retry_scope": retry_scope,
                 }
@@ -904,7 +968,11 @@ class WorkerService:
             task.status = "queued"
             task.error_code = None
             task.error_message = None
-            task.stop_reason = "固定访问暂时失败，正在自动重试原 URL。"
+            task.stop_reason = (
+                "平台请求频率受限，正在冷却并自动续跑原任务。"
+                if checkpoint.get("retry_error_code") == RATE_LIMIT_RETRYABLE_FAILURE_CODE
+                else "固定访问暂时失败，正在自动重试原 URL。"
+            )
             task.finished_at = None
         elif result["kind"] == "failed":
             task.status = "partial_success" if task.completed_count else "failed"

@@ -73,6 +73,7 @@ from threadsnap.sentiment import (
     validate_modality_identity,
 )
 from threadsnap.services import bootstrap_database
+from threadsnap.worker import _retry_delay_seconds
 
 
 def sample_record(post_id: str) -> dict:
@@ -2962,6 +2963,18 @@ class AuthComponentTests(AppCase):
 
 
 class QueueAndRetryTests(AppCase):
+    def test_retry_delay_separates_network_and_rate_limit_cooldown(self) -> None:
+        """普通网络与平台限流必须使用不同退避，并保持各自上限。"""
+
+        self.assertEqual(
+            [2, 4, 8, 16, 32, 60, 60],
+            [_retry_delay_seconds("PLATFORM_NETWORK_ERROR", attempt) for attempt in range(1, 8)],
+        )
+        self.assertEqual(
+            [60, 120, 240, 480, 900, 900],
+            [_retry_delay_seconds("PLATFORM_RATE_LIMITED", attempt) for attempt in range(1, 7)],
+        )
+
     def setUp(self) -> None:
         super().setUp()
         self.container.worker._collector = lambda _platform, _snapshot_concurrency=None: (
@@ -3859,8 +3872,8 @@ class QueueAndRetryTests(AppCase):
         self.assertEqual("success", self.container.runs.get_run(run["id"])["status"])
         self.assertEqual(1, self.container.runs.posts(run["id"])["total"])
 
-    def test_platform_control_after_auth_refresh_keeps_specific_error(self) -> None:
-        """会话刷新后的平台控制仍按原错误分类，不能泄漏为任务内部异常。"""
+    def test_rate_limit_after_auth_refresh_cools_down_and_resumes_same_task(self) -> None:
+        """会话刷新后的限流应保留分类并在原任务冷却续跑。"""
 
         circle = self.save_verified_circle()
         run = self.container.runs.create_manual(
@@ -3879,15 +3892,115 @@ class QueueAndRetryTests(AppCase):
             ) -> dict:
                 raise CollectorFailure("PLATFORM_RATE_LIMITED", "平台限制了请求频率。")
 
-        collectors = iter([FakeCollector(auth=True), RateLimitedCollector()])
-        self.container.worker._collector = lambda _platform, _concurrency=None: next(collectors)  # type: ignore[method-assign]
+        observed_concurrency: list[int | None] = []
+        collectors = iter([FakeCollector(auth=True), RateLimitedCollector(), FakeCollector()])
+
+        def collector_factory(_platform, concurrency=None):
+            observed_concurrency.append(concurrency)
+            return next(collectors)
+
+        self.container.worker._collector = collector_factory  # type: ignore[method-assign]
         self.container.worker._refresh_after_auth = lambda *_args: True  # type: ignore[method-assign]
 
         self.assertTrue(self.container.worker.process_once())
 
+        waiting = self.container.runs.get_run(run["id"])
+        self.assertEqual("queued", waiting["status"])
+        self.assertEqual((0, 0), (waiting["completed_count"], waiting["failed_count"]))
+        with self.container.sessions() as db:
+            self.assertEqual(1, len(list(db.scalars(select(ExtractionRun)))))
+        with self.container.sessions.begin() as db:
+            task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            assert task is not None
+            checkpoint = dict(task.checkpoint or {})
+            self.assertEqual("PLATFORM_RATE_LIMITED", checkpoint["retry_error_code"])
+            self.assertIn("冷却", task.stop_reason or "")
+            not_before = datetime.fromisoformat(checkpoint["retry_not_before"])
+            self.assertGreaterEqual(not_before, datetime.now(timezone.utc) + timedelta(seconds=55))
+            checkpoint["retry_not_before"] = datetime.now(timezone.utc).isoformat()
+            task.checkpoint = checkpoint
+
+        self.assertTrue(self.container.worker.process_once())
         completed = self.container.runs.get_run(run["id"])
-        self.assertEqual("failed", completed["status"])
-        self.assertEqual("PLATFORM_RATE_LIMITED", completed["tasks"][0]["error_code"])
+        self.assertEqual(("success", 1, 0), tuple(completed[key] for key in (
+            "status", "completed_count", "failed_count"
+        )))
+        with self.container.sessions() as db:
+            self.assertEqual(1, len(list(db.scalars(select(ExtractionRun)))))
+        self.assertEqual(1, observed_concurrency[-1])
+
+    def test_multiple_rate_limited_sources_resume_serially_in_fifo(self) -> None:
+        """同批多个限流来源冷却后应逐个单并发恢复，避免再次形成请求突发。"""
+
+        first = self.save_verified_circle(external_id="rate-1", name="限流来源一")
+        second = self.save_verified_circle(external_id="rate-2", name="限流来源二")
+        with self.container.sessions.begin() as db:
+            platform = db.get(PlatformConfig, "dongchedi")
+            assert platform is not None
+            platform.internal_concurrency = 8
+        run = self.container.runs.create_manual(
+            ManualRunCreate(
+                platform_code="dongchedi",
+                circle_ids=[first.id, second.id],
+                quantity=1,
+            ),
+            scope="api",
+            header_key="rate-limit-serial-recovery-0001",
+        )
+
+        class AlwaysRateLimitedCollector(FakeCollector):
+            def collect_circle(
+                self,
+                _url: str,
+                _target: int,
+                skip_post_ids: set[str] | None = None,
+                on_progress=None,
+            ) -> dict:
+                raise CollectorFailure("PLATFORM_RATE_LIMITED", "平台限制了请求频率。")
+
+        observed_concurrency: list[int | None] = []
+        collectors = iter(
+            [AlwaysRateLimitedCollector(), FakeCollector(), FakeCollector()]
+        )
+
+        def collector_factory(_platform, concurrency=None):
+            observed_concurrency.append(concurrency)
+            return next(collectors)
+
+        self.container.worker._collector = collector_factory  # type: ignore[method-assign]
+
+        self.assertTrue(self.container.worker.process_once())
+        waiting = self.container.runs.get_run(run["id"])
+        self.assertEqual(("queued", 0, 0), tuple(waiting[key] for key in (
+            "status", "completed_count", "failed_count"
+        )))
+        with self.container.sessions.begin() as db:
+            tasks = list(
+                db.scalars(
+                    select(CircleTask)
+                    .where(CircleTask.run_id == run["id"])
+                    .order_by(CircleTask.queue_sequence)
+                )
+            )
+            self.assertEqual(2, len(tasks))
+            for task in tasks:
+                checkpoint = dict(task.checkpoint or {})
+                checkpoint["retry_not_before"] = datetime.now(timezone.utc).isoformat()
+                task.checkpoint = checkpoint
+
+        self.assertTrue(self.container.worker.process_once())
+        halfway = self.container.runs.get_run(run["id"])
+        self.assertEqual(("queued", 1, 0), tuple(halfway[key] for key in (
+            "status", "completed_count", "failed_count"
+        )))
+        self.assertEqual(["success", "queued"], [task["status"] for task in halfway["tasks"]])
+
+        self.assertTrue(self.container.worker.process_once())
+        completed = self.container.runs.get_run(run["id"])
+        self.assertEqual(("success", 2, 0), tuple(completed[key] for key in (
+            "status", "completed_count", "failed_count"
+        )))
+        self.assertEqual([8, 1, 1], observed_concurrency)
 
     def test_restart_recovers_running_tasks_to_fifo(self) -> None:
         circle = self.save_verified_circle()

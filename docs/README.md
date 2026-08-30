@@ -190,6 +190,7 @@
 | `docs/adr/0049-unify-configurable-platform-internal-concurrency.md` | 三个已接入平台统一使用1～8的可配置内部总并发，默认值仍分别保留 |
 | `docs/adr/0050-freeze-circle-candidates-without-replacement.md` | 圈子任务冻结来源前 N 个候选，网络错误只重试原 URL，不使用后续帖子补位 |
 | `docs/adr/0051-separate-session-capture-from-collection-probe.md` | 平台人工认证只获取并保存 Session，真实圈子与帖子访问由采集任务在原 URL 判断 |
+| `docs/adr/0052-resume-rate-limited-post-tasks-after-cooldown.md` | 普通帖子限流保留固定URL，在原任务按递增冷却和单来源单并发自动续跑 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 
