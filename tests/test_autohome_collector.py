@@ -803,14 +803,17 @@ class AutohomeContractTests(unittest.TestCase):
             b"<html><body>captcha</body></html>",
             "https://safety.autohome.com.cn/userverify?backurl=x",
         )
+        trigger_url = "https://club.autohome.com.cn/bbs/forum-c-7853-1.html?sort=post"
 
         with self.assertRaises(CollectorFailure) as challenge_error:
-            AutohomeCollector._detect_control(challenge)
+            AutohomeCollector._detect_control(challenge, trigger_url=trigger_url)
         with self.assertRaises(CollectorFailure) as captcha_error:
-            AutohomeCollector._detect_control(captcha)
+            AutohomeCollector._detect_control(captcha, trigger_url=trigger_url)
 
         self.assertEqual("PLATFORM_CHALLENGE", challenge_error.exception.code)
         self.assertEqual("PLATFORM_CAPTCHA_REQUIRED", captcha_error.exception.code)
+        self.assertEqual(trigger_url, challenge_error.exception.trigger_url)
+        self.assertEqual(trigger_url, captcha_error.exception.trigger_url)
 
 
 if __name__ == "__main__":

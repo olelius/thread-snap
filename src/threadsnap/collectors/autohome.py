@@ -306,6 +306,7 @@ class AutohomeCollector:
         url: str,
         *,
         request_headers: dict[str, str] | None = None,
+        recovery_url: str | None = None,
         **params: object,
     ) -> requests.Response:
         """执行有界 GET；平台控制分类由响应检查统一完成。"""
@@ -327,7 +328,7 @@ class AutohomeCollector:
                         time.sleep(0.5 * (attempt + 1))
                         continue
                     break
-                self._detect_control(response)
+                self._detect_control(response, trigger_url=recovery_url or url)
                 return response
             except (AuthenticationRequired, CollectorFailure):
                 raise
@@ -460,7 +461,9 @@ class AutohomeCollector:
         return urls
 
     @staticmethod
-    def _detect_control(response: requests.Response) -> None:
+    def _detect_control(
+        response: requests.Response, *, trigger_url: str | None = None
+    ) -> None:
         """保守区分登录、验证码、挑战、限流和异常空响应。"""
 
         content = bytes(response.content or b"")
@@ -477,13 +480,29 @@ class AutohomeCollector:
         if int(response.status_code) == 429 or any(
             marker in combined for marker in CONTROL_MARKERS["rate_limited"]
         ):
-            raise CollectorFailure("PLATFORM_RATE_LIMITED", "汽车之家当前限制了请求频率。")
+            raise CollectorFailure(
+                "PLATFORM_RATE_LIMITED",
+                "汽车之家当前限制了请求频率。",
+                trigger_url=trigger_url,
+            )
         if any(marker in combined for marker in CONTROL_MARKERS["captcha"]):
-            raise CollectorFailure("PLATFORM_CAPTCHA_REQUIRED", "汽车之家当前要求完成验证码。")
+            raise CollectorFailure(
+                "PLATFORM_CAPTCHA_REQUIRED",
+                "汽车之家当前要求完成验证码。",
+                trigger_url=trigger_url,
+            )
         if "safety.autohome.com.cn/userverify" in combined:
-            raise CollectorFailure("PLATFORM_CHALLENGE", "汽车之家当前返回了访问验证页面。")
+            raise CollectorFailure(
+                "PLATFORM_CHALLENGE",
+                "汽车之家当前返回了访问验证页面。",
+                trigger_url=trigger_url,
+            )
         if any(marker in combined for marker in CONTROL_MARKERS["challenge"]):
-            raise CollectorFailure("PLATFORM_CHALLENGE", "汽车之家当前返回了访问验证页面。")
+            raise CollectorFailure(
+                "PLATFORM_CHALLENGE",
+                "汽车之家当前返回了访问验证页面。",
+                trigger_url=trigger_url,
+            )
         if any(marker in combined for marker in CONTROL_MARKERS["login"]):
             raise AuthenticationRequired(
                 "汽车之家当前要求重新完成平台认证。", trigger_url=final_url
@@ -497,6 +516,7 @@ class AutohomeCollector:
         order_type = 2 if source.list_order == "latest_publish" else 1
         response = self._get(
             LIST_API_URL,
+            recovery_url=source.url,
             _appid="club",
             scenes=1,
             page_num=page_number,
@@ -822,6 +842,7 @@ class AutohomeCollector:
             )
         response = self._get(
             LIKE_COUNT_URL,
+            recovery_url=post_url,
             request_headers={
                 "Referer": post_url,
                 "Origin": BASE_URL,

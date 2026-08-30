@@ -35,6 +35,7 @@ from .services import aggregate_run, related_run_ids
 from .session_store import SessionStore
 
 RETRYABLE_ACCESS_FAILURE_CODES = {"PLATFORM_NETWORK_ERROR"}
+INTERACTIVE_RECOVERY_CODES = {"PLATFORM_CAPTCHA_REQUIRED", "PLATFORM_CHALLENGE"}
 RETRY_BASE_SECONDS = 2
 RETRY_MAX_SECONDS = 60
 
@@ -721,6 +722,19 @@ class WorkerService:
                 "terminal_failures": prior_terminal_failures,
             }
         except CollectorFailure as exc:
+            if exc.code in INTERACTIVE_RECOVERY_CODES:
+                return {
+                    "kind": "auth",
+                    "code": exc.code,
+                    "message": exc.message,
+                    "trigger_url": exc.trigger_url or circle_url,
+                    "records": [],
+                    "failures": prior_terminal_failures,
+                    "validation": validation,
+                    "retry_urls": retry_urls,
+                    "retry_source_indexes": source_indexes,
+                    "terminal_failures": prior_terminal_failures,
+                }
             if exc.code in RETRYABLE_ACCESS_FAILURE_CODES:
                 failure = {
                     "url": circle_url,

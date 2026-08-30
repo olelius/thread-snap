@@ -24,6 +24,7 @@ from patchright.async_api import (
     async_playwright,
 )
 from patchright.async_api import Error as PlaywrightError
+from sqlalchemy import select
 
 from .browser_runtime import browser_launch_args
 from .collectors import (
@@ -33,7 +34,7 @@ from .collectors import (
 from .config import Settings
 from .errors import DomainError
 from .ids import uuid7
-from .models import PlatformConfig
+from .models import CircleTask, PlatformConfig
 from .session_store import SessionStore
 from .worker import WorkerService
 
@@ -162,6 +163,7 @@ class AuthTask:
     error_message: str | None = None
     http_status: int | None = None
     fresh_profile: bool = False
+    start_url: str | None = None
     playwright: Playwright | None = None
     context: BrowserContext | None = None
     page: Page | None = None
@@ -186,7 +188,13 @@ class BrowserAuthManager:
         self.profiles = AuthProfileStore(settings.auth_profile_dir, session_store.fernet)
         self.tasks: dict[str, AuthTask] = {}
 
-    async def create(self, platform_code: str, *, fresh: bool = False) -> dict[str, Any]:
+    async def create(
+        self,
+        platform_code: str,
+        *,
+        fresh: bool = False,
+        run_id: str | None = None,
+    ) -> dict[str, Any]:
         try:
             spec = get_platform_spec(platform_code)
         except CollectorFailure as exc:
@@ -195,6 +203,7 @@ class BrowserAuthManager:
             raise DomainError(
                 "PLATFORM_NOT_INTEGRATED", "该平台暂未接入认证流程。", status_code=409
             )
+        start_url = spec.login_url
         with self.worker.factory() as db:
             platform = db.get(PlatformConfig, platform_code)
             if not platform or platform.adapter_status != "available":
@@ -202,6 +211,25 @@ class BrowserAuthManager:
                     "PLATFORM_NOT_INTEGRATED",
                     "该平台尚未通过正式可用门，当前不能创建认证任务。",
                     status_code=409,
+                )
+            if run_id:
+                waiting = db.scalar(
+                    select(CircleTask)
+                    .where(
+                        CircleTask.run_id == run_id,
+                        CircleTask.platform_code == platform_code,
+                        CircleTask.status == "waiting_for_auth",
+                    )
+                    .order_by(CircleTask.queue_sequence)
+                )
+                if not waiting:
+                    raise DomainError(
+                        "RUN_AUTH_TASK_NOT_FOUND",
+                        "该批次当前没有此平台的待处理会话任务。",
+                        status_code=409,
+                    )
+                start_url = str(
+                    (waiting.checkpoint or {}).get("trigger_url") or waiting.circle_url
                 )
         await self.cleanup_expired()
         active = next(
@@ -214,7 +242,7 @@ class BrowserAuthManager:
             ),
             None,
         )
-        if fresh and active:
+        if active and (fresh or active.start_url != start_url):
             active.status = "cancelled"
             active.page_status = "cancelled"
             await self._close(active)
@@ -225,6 +253,7 @@ class BrowserAuthManager:
             ticket=secrets.token_urlsafe(32),
             expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
             fresh_profile=fresh,
+            start_url=start_url,
         )
         self.tasks[task.id] = task
         return self.task_dict(task)
@@ -283,7 +312,7 @@ class BrowserAuthManager:
         task.page = task.context.pages[0] if task.context.pages else await task.context.new_page()
         task.page_status = "loading"
         response = await task.page.goto(
-            get_platform_spec(task.platform_code).login_url,
+            task.start_url or get_platform_spec(task.platform_code).login_url,
             wait_until="domcontentloaded",
             timeout=60_000,
         )

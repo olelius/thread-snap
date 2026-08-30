@@ -89,10 +89,14 @@ export function AuthDialog({
     setPageError(undefined)
     setValidationFailed(false)
     setFrame(undefined)
-    const next = await api<AuthTask>(`/platforms/${platformCode}/auth/tasks${fresh ? '?fresh=true' : ''}`, { method: 'POST' })
+    const params = new URLSearchParams()
+    if (fresh) params.set('fresh', 'true')
+    if (runId) params.set('run_id', runId)
+    const query = params.size ? `?${params.toString()}` : ''
+    const next = await api<AuthTask>(`/platforms/${platformCode}/auth/tasks${query}`, { method: 'POST' })
     setTask(next)
     return next
-  }, [platformCode])
+  }, [platformCode, runId])
 
   const connect = useCallback((current: AuthTask) => {
     socketRef.current?.close()
