@@ -3059,6 +3059,103 @@ class QueueAndRetryTests(AppCase):
         self.assertEqual([1, 2, 3], [event["summary"]["completed_count"] for event in events[1:4]])
         self.assertEqual("success", events[-1]["summary"]["status"])
 
+    def test_replaced_candidate_failure_does_not_become_business_failure(self) -> None:
+        """已被后续候选补足的请求错误只保留诊断，不污染任务与批次失败数。"""
+
+        observed_failed_counts: list[int] = []
+        circle = self.save_verified_circle()
+        run = self.container.runs.create_manual(
+            ManualRunCreate(platform_code="dongchedi", circle_ids=[circle.id], quantity=2),
+            scope="api",
+            header_key="replaced-candidate-failure-0001",
+        )
+        container = self.container
+        failure = {
+            "url": "https://www.dongchedi.com/ugc/article/3999",
+            "code": "PLATFORM_NETWORK_ERROR",
+            "message": "候选请求超时。",
+        }
+
+        class RecoveredCollector(FakeCollector):
+            def collect_circle(
+                self,
+                _url: str,
+                _target: int,
+                skip_post_ids: set[str] | None = None,
+                on_progress=None,
+            ) -> dict:
+                records = [sample_record("4001"), sample_record("4002")]
+                assert on_progress is not None
+                on_progress(None, failure)
+                observed_failed_counts.append(
+                    container.runs.get_run(run["id"])["failed_count"]
+                )
+                for record in records:
+                    on_progress(record, None)
+                return {
+                    "records": records,
+                    "failures": [failure],
+                    "stop_reason": "已经取得配置数量的有效帖子。",
+                }
+
+        self.container.worker._collector = lambda *_args: RecoveredCollector()  # type: ignore[method-assign]
+
+        self.assertTrue(self.container.worker.process_once())
+
+        stored_run = self.container.runs.get_run(run["id"])
+        self.assertEqual("success", stored_run["status"])
+        self.assertEqual(2, stored_run["completed_count"])
+        self.assertEqual(0, stored_run["failed_count"])
+        self.assertEqual([0], observed_failed_counts)
+        with self.container.sessions() as db:
+            task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            assert task is not None
+            self.assertEqual("success", task.status)
+            self.assertEqual(0, task.failed_count)
+            self.assertEqual([failure], task.checkpoint["failed_urls"])
+
+    def test_unresolved_candidate_failure_remains_a_business_failure(self) -> None:
+        """目标未完成时继续保留最终失败数和部分成功状态。"""
+
+        circle = self.save_verified_circle()
+        run = self.container.runs.create_manual(
+            ManualRunCreate(platform_code="dongchedi", circle_ids=[circle.id], quantity=2),
+            scope="api",
+            header_key="unresolved-candidate-failure-0001",
+        )
+        failure = {
+            "url": "https://www.dongchedi.com/ugc/article/4999",
+            "code": "PLATFORM_NETWORK_ERROR",
+            "message": "候选请求超时。",
+        }
+
+        class PartialCollector(FakeCollector):
+            def collect_circle(
+                self,
+                _url: str,
+                _target: int,
+                skip_post_ids: set[str] | None = None,
+                on_progress=None,
+            ) -> dict:
+                record = sample_record("5001")
+                if on_progress:
+                    on_progress(record, None)
+                    on_progress(None, failure)
+                return {
+                    "records": [record],
+                    "failures": [failure],
+                    "stop_reason": "候选请求失败后未达到目标。",
+                }
+
+        self.container.worker._collector = lambda *_args: PartialCollector()  # type: ignore[method-assign]
+
+        self.assertTrue(self.container.worker.process_once())
+
+        stored_run = self.container.runs.get_run(run["id"])
+        self.assertEqual("partial_success", stored_run["status"])
+        self.assertEqual(1, stored_run["completed_count"])
+        self.assertEqual(1, stored_run["failed_count"])
+
     def test_auth_resume_publishes_queued_progress_event(self) -> None:
         """认证恢复提交为排队状态后应立即通知列表，不只依赖 Session 事件。"""
 

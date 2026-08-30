@@ -752,12 +752,12 @@ class WorkerService:
             task.circle_url = validation["url"]
             task.list_order = validation["sort"]
         records = result.get("records") or []
+        failures = result.get("failures") or []
         existing = self._store_records(db, task, records)
         task.completed_count = len(existing)
-        task.failed_count = len(result.get("failures") or [])
         task.checkpoint = {
             "trigger_url": result.get("trigger_url"),
-            "failed_urls": result.get("failures") or [],
+            "failed_urls": failures,
             "completed_post_ids": sorted(existing),
         }
         if result["kind"] == "auth":
@@ -788,9 +788,14 @@ class WorkerService:
             task.error_code = "PARTIAL_RESULT" if shortage_by_error else None
             task.error_message = "部分候选帖子未能成功提取。" if shortage_by_error else None
             task.finished_at = utc_now()
+        # 候选请求错误可能已由后续候选补足，只在最终仍未完成的任务中计为失败。
+        # 成功任务与等待认证任务的业务失败数保持为零，原始诊断仍保存在检查点。
+        task.failed_count = (
+            len(failures) if task.status in {"partial_success", "failed"} else 0
+        )
 
     def _apply_progress(
-        self, task_id: str, records: list[dict[str, Any]], failed_count: int
+        self, task_id: str, records: list[dict[str, Any]], _candidate_failure_count: int
     ) -> None:
         """分段提交已完成快照，并在事务完成后通知前端回查权威进度。"""
 
@@ -800,7 +805,9 @@ class WorkerService:
                 return
             existing = self._store_records(db, task, records)
             task.completed_count = len(existing)
-            task.failed_count = max(task.failed_count, failed_count)
+            # 运行中的候选错误还可能被后续候选补足，不提前写入最终失败计数。
+            # 调用方仍以候选错误触发分段提交；终态由 _apply_result 统一判定并落库。
+            task.failed_count = 0
             checkpoint = dict(task.checkpoint or {})
             checkpoint["completed_post_ids"] = sorted(existing)
             task.checkpoint = checkpoint
