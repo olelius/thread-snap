@@ -135,6 +135,15 @@ class SessionStore:
                 record.last_verified_at = None
                 record.error_message = None
 
+    def mark_invalid(self, platform_code: str, message: str) -> None:
+        """保留加密状态供人工更新继承，同时明确撤销最近门禁结论。"""
+
+        with self.session_factory.begin() as db:
+            record = db.get(PlatformSession, platform_code)
+            if record:
+                record.status = "invalid"
+                record.error_message = message
+
     def encrypt_secret(self, value: str) -> bytes:
         """使用同一实例密钥加密应用凭证。"""
 

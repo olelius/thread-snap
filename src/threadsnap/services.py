@@ -199,6 +199,7 @@ class ConfigService:
                 "source_configuration": spec.parse_circle_url is not None,
                 "authentication": spec.supports_authentication,
                 "authentication_mode": spec.authentication_mode,
+                "background_transport": spec.background_transport,
                 "page_evidence": spec.supports_page_evidence,
                 "live_video_resolution": spec.supports_live_video_resolution,
             },

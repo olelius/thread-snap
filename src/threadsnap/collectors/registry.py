@@ -61,7 +61,7 @@ class PlatformAdapterSpec:
     authentication_mode: str = "none"
     supports_page_evidence: bool = False
     supports_live_video_resolution: bool = False
-    background_browser_headless: bool = False
+    background_transport: str = "direct_http"
     login_url: str | None = None
     auth_probe_circle_url: str | None = None
     auth_url_markers: tuple[str, ...] = ()
@@ -89,12 +89,12 @@ class PlatformAdapterSpec:
         *,
         concurrency: int,
     ) -> Collector:
-        """按平台已验证的后台浏览器模式创建采集器，不复用人工认证显示配置。"""
+        """后台采集固定使用直连传输；浏览器只属于人工认证或显式页面证据。"""
 
         return self.create_collector(
             storage_state,
             concurrency=concurrency,
-            browser_headless=self.background_browser_headless,
+            browser_headless=False,
         )
 
 
@@ -150,14 +150,14 @@ PLATFORM_ADAPTERS: dict[str, PlatformAdapterSpec] = {
         max_quantity=500,
         max_concurrency=1,
         supports_authentication=True,
-        # 当前只证明访问会话可用，尚未建立账号登录身份门禁。
-        authentication_mode="access_session",
+        authentication_mode="account_login",
         supports_page_evidence=False,
         supports_live_video_resolution=False,
-        # 易车后台验证与采集仍需页面动态签名，但无头 Chromium 已由真实来源验证通过。
-        background_browser_headless=True,
-        login_url="https://baa.yiche.com/",
-        auth_probe_circle_url="https://baa.yiche.com/",
+        login_url=(
+            "https://i.yiche.com/authenservice/login.html?returnurl=https%3A%2F%2Fbaa.yiche.com%2F"
+        ),
+        auth_probe_circle_url="https://baa.yiche.com/ruihu8/index-0-0-1.html",
+        auth_url_markers=("i.yiche.com/authenservice/login",),
     ),
 }
 

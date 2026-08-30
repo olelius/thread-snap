@@ -185,6 +185,7 @@
 | `docs/adr/0044-separate-local-adapter-publication-from-formal-sample-acceptance.md` | 分离本地适配器发布与正式样本验收，已交付平台注册为可用且默认停用 |
 | `docs/adr/0045-preserve-cross-forum-feed-items.md` | 汽车之家圈子列表中的跨论坛聚合帖保留为来源快照结果，并分别保存发现来源与原始归属 |
 | `docs/adr/0046-require-autohome-session-for-like-count.md` | 汽车之家帖子点赞数必须由登录会话证明，匿名占位零值不进入新快照 |
+| `docs/adr/0047-use-account-login-and-direct-http-for-yiche.md` | 易车使用账号登录门禁和直连 HTTP 采集，三平台普通采集均不使用浏览器回退 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 
@@ -224,7 +225,7 @@ artifacts/poc/
 - 修改功能范围或验收条件时，同步更新产品设计和相关链档。
 - 修改技术决策时，同步更新技术路线、相关 ADR 和相关链档。
 - 修改采集框架 PoC 阶段、指标、输入或结果结构时，同步更新采集 PoC 计划、模板说明和 `docs/chains/first-platform-delivery.md`。
-- 修改汽车之家或易车接入阶段、可用状态、500条样本、输入责任、认证访问模式或结果结构时，同步更新后续平台接入计划、`docs/chains/later-platform-delivery.md`、ADR 0043、ADR 0044、ADR 0045 和 ADR 0046；涉及口碑映射或指标时同时核对 `docs/chains/reputation-inspection.md`。
+- 修改汽车之家或易车接入阶段、可用状态、500条样本、输入责任、认证访问模式或结果结构时，同步更新后续平台接入计划、`docs/chains/later-platform-delivery.md`、ADR 0043、ADR 0044、ADR 0045、ADR 0046 和 ADR 0047；涉及口碑映射或指标时同时核对 `docs/chains/reputation-inspection.md`。
 - 修改舆情反馈 PoC 阶段、输入、模态覆盖或结果结构时，同步更新舆情 PoC 计划和 `docs/chains/sentiment-analysis.md`。
 - 修改圈子页面证据、关联成果合成、分片或资源门禁时，同步更新截图 PoC 计划和 `docs/chains/circle-screenshot-artifacts.md`，并核对首个平台与舆情工作线。
 - 修改垂媒口碑巡检范围、阶段门、比较、证据或汇报规则时，同步更新 `docs/chains/reputation-inspection.md`。

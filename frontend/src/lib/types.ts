@@ -11,6 +11,7 @@ export type Platform = {
     source_configuration: boolean
     authentication: boolean
     authentication_mode: 'none' | 'account_login' | 'access_session'
+    background_transport: 'direct_http'
     page_evidence: boolean
     live_video_resolution: boolean
   }

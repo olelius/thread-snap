@@ -121,7 +121,7 @@ class FakeYicheCollector:
 
 
 class YicheReleaseStateTests(AppCase):
-    def test_background_worker_uses_hidden_yiche_browser_independently_from_auth(self) -> None:
+    def test_background_worker_uses_direct_http_transport(self) -> None:
         captured: dict[str, object] = {}
 
         def collector_factory(
@@ -145,8 +145,8 @@ class YicheReleaseStateTests(AppCase):
                 self.container.worker._collector(platform)
 
         self.assertFalse(self.container.settings.auth_browser_headless)
-        self.assertTrue(spec.background_browser_headless)
-        self.assertTrue(captured["browser_headless"])
+        self.assertEqual("direct_http", spec.background_transport)
+        self.assertFalse(captured["browser_headless"])
 
     def test_released_adapter_is_available_but_default_disabled(self) -> None:
         platform = next(
@@ -155,7 +155,7 @@ class YicheReleaseStateTests(AppCase):
         self.assertEqual("available", platform["adapter_status"])
         self.assertFalse(platform["enabled"])
         self.assertFalse(platform["capabilities"]["page_evidence"])
-        self.assertEqual("access_session", platform["capabilities"]["authentication_mode"])
+        self.assertEqual("account_login", platform["capabilities"]["authentication_mode"])
 
         enabled = self.client.put(
             "/api/v1/platforms/yiche",

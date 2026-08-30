@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import re
-from contextlib import contextmanager
+import threading
+import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from math import ceil
@@ -12,15 +16,14 @@ from typing import Any, Callable, Iterable
 from urllib.parse import parse_qs, urljoin, urlsplit
 from zoneinfo import ZoneInfo
 
+from curl_cffi import requests
 from json_repair import repair_json
 from lxml import html
-from patchright.sync_api import Page, sync_playwright
 
-from ..browser_runtime import browser_launch_args
 from .base import AuthenticationRequired, CircleSource, CollectorFailure
 
 BASE_URL = "https://baa.yiche.com"
-ADAPTER_VERSION = "yiche-community-v1"
+ADAPTER_VERSION = "yiche-community-v2"
 CIRCLE_RE = re.compile(
     r"^/(?P<id>[A-Za-z0-9_-]+)/?"
     r"(?:index-0-(?P<order>[01])-(?P<page>\d+)\.html)?/?$"
@@ -30,6 +33,15 @@ WAF_MARKERS = ("TencentCaptcha", "TCaptcha.js", "/WafCaptcha", "__captcha")
 PUA_RE = re.compile("[\ue000-\uf8ff]")
 YICHE_TIMEZONE = ZoneInfo("Asia/Shanghai")
 ProgressCallback = Callable[[dict[str, Any] | None, dict[str, Any] | None], None]
+
+# 易车 PC 网页公开脚本 index-V311.min.js 的当前请求协议。任何协议变更都必须
+# 通过样本重新验证后升级版本，不能静默接受未知签名或挑战页面。
+YICHE_API_PROTOCOL = "pc-v311"
+YICHE_API_CID = "508"
+YICHE_API_SIGN_KEY = "19DDD1FBDFF065D3A4DA777D2D7A81EC"
+YICHE_CHALLENGE_KEY = "tg09It3*9h"
+YICHE_COMMENT_CONTENT_TYPE = 56
+ACCOUNT_COOKIE_NAME = "username"
 
 
 @dataclass(frozen=True)
@@ -51,7 +63,7 @@ class CommentResult:
 
 
 def _request_content_id(url: str, post_data: str | None = None) -> str | None:
-    """只从页面请求参数提取帖子身份，不保留完整动态请求。"""
+    """从查询或表单中的 param JSON 提取帖子身份，用于合同测试与诊断。"""
 
     candidates = list(parse_qs(urlsplit(url).query).get("param", []))
     if post_data:
@@ -67,6 +79,47 @@ def _request_content_id(url: str, post_data: str | None = None) -> str | None:
         if isinstance(value, dict) and value.get("contentId") is not None:
             return str(value["contentId"])
     return None
+
+
+def _cookies_from_state(storage_state: dict[str, Any] | None) -> dict[str, str]:
+    """只导入易车域 Cookie，不把值写入日志或业务结果。"""
+
+    now = time.time()
+    cookies: dict[str, str] = {}
+    for item in (storage_state or {}).get("cookies", []):
+        if not isinstance(item, dict):
+            continue
+        domain = str(item.get("domain") or "").lstrip(".").lower()
+        expires = item.get("expires")
+        if not (domain == "yiche.com" or domain.endswith(".yiche.com")):
+            continue
+        if isinstance(expires, (int, float)) and expires > 0 and expires <= now:
+            continue
+        name = str(item.get("name") or "")
+        value = item.get("value")
+        if name and isinstance(value, str):
+            cookies[name] = value
+    return cookies
+
+
+def _rc4_bytes(key: str, value: str) -> bytes:
+    """实现平台 203 控制文档公开声明的 RC4 计算，不执行页面脚本。"""
+
+    state = list(range(256))
+    key_bytes = key.encode("utf-8")
+    value_bytes = value.encode("utf-8")
+    cursor = 0
+    for index in range(256):
+        cursor = (cursor + state[index] + key_bytes[index % len(key_bytes)]) % 256
+        state[index], state[cursor] = state[cursor], state[index]
+    left = cursor = 0
+    output = bytearray()
+    for item in value_bytes:
+        left = (left + 1) % 256
+        cursor = (cursor + state[left]) % 256
+        state[left], state[cursor] = state[cursor], state[left]
+        output.append(item ^ state[(state[left] + state[cursor]) % 256])
+    return bytes(output)
 
 
 def parse_circle_url(url: str) -> CircleSource:
@@ -182,7 +235,7 @@ def _integer(value: object) -> int | None:
 
 
 class YicheCollector:
-    """使用公开网页同款 API 发现来源，并以详情页确认帖子身份与正文。"""
+    """易车账号 Session 门禁与直连 HTTP 列表、详情、评论适配器。"""
 
     code = "yiche"
     display_name = "易车"
@@ -197,98 +250,116 @@ class YicheCollector:
         timeout_seconds: int = 30,
         browser_headless: bool = False,
     ):
+        del browser_headless
         self.storage_state = storage_state
+        self.cookies = _cookies_from_state(storage_state)
         self.concurrency = max(1, concurrency)
         self.timeout_seconds = timeout_seconds
-        self.browser_headless = browser_headless
+        self.semaphore = threading.BoundedSemaphore(self.concurrency)
+        self._thread_local = threading.local()
+        self.user_guid = self.cookies.get("UserGuid") or self.cookies.get("CIGUID")
+        if not self.user_guid:
+            self.user_guid = str(uuid.uuid4())
+            self.cookies["CIGUID"] = self.user_guid
+        self._account_verified = False
 
-    @contextmanager
-    def _browser_page(self) -> Iterable[Page]:
-        """一个采集动作复用一个真实浏览器页，由页面生成动态签名请求。"""
+    def _http_session(self) -> requests.Session:
+        session = getattr(self._thread_local, "http", None)
+        if session is None:
+            session = requests.Session(impersonate="chrome")
+            session.cookies.update(self.cookies)
+            self._thread_local.http = session
+        return session
 
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch(
-                headless=self.browser_headless,
-                args=browser_launch_args(),
-            )
-            context = browser.new_context(
-                storage_state=self.storage_state,
-                locale="zh-CN",
-                timezone_id="Asia/Shanghai",
-            )
-            page = context.new_page()
+    def _get(self, url: str, **kwargs: Any) -> requests.Response:
+        """有界重试直连请求；平台业务状态由上层按响应类型分类。"""
+        last_error: Exception | None = None
+        for attempt in range(3):
             try:
-                yield page
-            finally:
-                context.close()
-                browser.close()
-
-    def _navigate(self, page: Page, url: str) -> tuple[str, list[ApiEvent], str]:
-        """加载官方页面并冻结本次页面实际产生的 API 响应。"""
-
-        responses: list[Any] = []
-
-        def handle_response(response: Any) -> None:
-            """使用可附加属性的 Python 函数接收 Patchright 页面事件。"""
-
-            responses.append(response)
-
-        handler = handle_response
-        page.on("response", handler)
-        try:
-            response = page.goto(
-                url,
-                wait_until="domcontentloaded",
-                timeout=self.timeout_seconds * 1000,
-            )
-            page.wait_for_timeout(1500)
-            status = response.status if response else None
-            content = page.content()
-            # 腾讯 WAF 实测可能以 203 返回；控制文档身份必须先于通用 HTTP 分类。
-            if is_waf_captcha(content):
-                require_content_page(content, url=url)
-            final_url = page.url
-            # goto 可能只返回挑战阶段的 203；仅以最终 URL 的后续主文档响应覆盖它。
-            for item in responses:
-                request = getattr(item, "request", None)
-                if (
-                    getattr(request, "resource_type", None) == "document"
-                    and urlsplit(str(getattr(item, "url", "")))._replace(fragment="")
-                    == urlsplit(final_url)._replace(fragment="")
-                ):
-                    status = item.status
-            if status == 429:
-                raise CollectorFailure("RATE_LIMITED", "易车页面返回限流状态，请稍后重试。")
-            if status in {401, 403}:
-                raise AuthenticationRequired("易车访问会话需要更新。", trigger_url=url)
-            if status is None:
-                raise CollectorFailure("HTTP_RESPONSE_MISSING", "易车页面没有返回主文档响应。")
-            if status != 200:
-                raise CollectorFailure("HTTP_ERROR", f"易车页面返回 HTTP {status}。")
-            require_content_page(content, url=url)
-            events: list[ApiEvent] = []
-            for item in responses:
-                path = urlsplit(item.url).path
-                if "/web_api/" not in path:
-                    continue
-                payload: Any = None
-                try:
-                    payload = item.json()
-                except Exception:
-                    pass
-                events.append(
-                    ApiEvent(
-                        path=path,
-                        status=item.status,
-                        payload=payload,
-                        content_id=_request_content_id(
-                            item.request.url, item.request.post_data
-                        ),
+                with self.semaphore:
+                    response = self._http_session().get(
+                        url, timeout=self.timeout_seconds, allow_redirects=True, **kwargs
                     )
+                if response.status_code >= 500 and attempt < 2:
+                    time.sleep(0.5 * (attempt + 1))
+                    continue
+                return response
+            except Exception as exc:
+                last_error = exc
+                if attempt < 2:
+                    time.sleep(0.5 * (attempt + 1))
+        raise CollectorFailure("PLATFORM_NETWORK_ERROR", f"访问易车失败：{last_error}")
+
+    @staticmethod
+    def _challenge_cookie(content: str) -> tuple[str, str]:
+        """严格解析当前 203 控制文档；未知脚本结构直接停止而不是执行脚本。"""
+        patterns = {
+            "xvasu": r"var\s+_xvasu\s*=\s*(\d+)\s*;",
+            "xvpfs": r"var\s+_xvpfs\s*=\s*[\"']([A-Za-z0-9_-]{1,32})[\"']\s*;",
+            "xvpts": r"var\s+_xvpts\s*=\s*([0-9]+(?:\.[0-9]+)?)\s*;",
+        }
+        values: dict[str, str] = {}
+        for name, pattern in patterns.items():
+            match = re.search(pattern, content)
+            if not match:
+                raise CollectorFailure(
+                    "YICHE_CHALLENGE_CHANGED", "易车详情控制文档结构已变化，本次请求已停止。"
                 )
-            return content, events, final_url
-        finally:
-            page.remove_listener("response", handler)
+            values[name] = match.group(1)
+        if "btoa(" not in content or "window['location']" not in content:
+            raise CollectorFailure(
+                "YICHE_CHALLENGE_CHANGED", "易车详情控制文档缺少已验证的重载边界，本次请求已停止。"
+            )
+        cookie_name = values["xvpfs"] + values["xvasu"]
+        cookie_value = base64.b64encode(
+            _rc4_bytes(YICHE_CHALLENGE_KEY, f"{values['xvpts']}:{values['xvasu']}")
+        ).decode("ascii")
+        return cookie_name, cookie_value
+
+    def _document(self, url: str) -> tuple[str, str]:
+        """直连详情页并最多处理一次平台公开 203 Cookie 挑战。"""
+        response = self._get(url, headers={"Referer": BASE_URL + "/"})
+        if response.status_code == 203:
+            cookie_name, cookie_value = self._challenge_cookie(response.text)
+            host = urlsplit(url).hostname or "baa.yiche.com"
+            self._http_session().cookies.set(cookie_name, cookie_value, domain=host, path="/")
+            response = self._get(url, headers={"Referer": BASE_URL + "/"})
+        if response.status_code == 429:
+            raise CollectorFailure("RATE_LIMITED", "易车页面返回限流状态，请稍后重试。")
+        if response.status_code in {401, 403}:
+            raise AuthenticationRequired("易车登录 Session 已失效。", trigger_url=url)
+        if response.status_code != 200:
+            raise CollectorFailure("HTTP_ERROR", f"易车页面返回 HTTP {response.status_code}。")
+        require_content_page(response.text, url=url)
+        return response.text, str(response.url)
+
+    @staticmethod
+    def _signed_request(
+        data: dict[str, Any], timestamp: int
+    ) -> tuple[dict[str, str], dict[str, str]]:
+        """按当前公开 PC 协议生成稳定查询参数与签名头。"""
+        param = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+        source = f"cid={YICHE_API_CID}&param={param}{YICHE_API_SIGN_KEY}{timestamp}"
+        headers = {
+            "x-platform": "pc",
+            "x-timestamp": str(timestamp),
+            "x-sign": hashlib.md5(source.encode("utf-8")).hexdigest(),
+        }
+        return {"cid": YICHE_API_CID, "param": param}, headers
+
+    def _api_event(
+        self, url: str, data: dict[str, Any], *, referer: str, content_id: str | None = None
+    ) -> ApiEvent:
+        timestamp = int(time.time() * 1000)
+        params, headers = self._signed_request(data, timestamp)
+        headers.update({"Referer": referer, "x-user-guid": self.user_guid})
+        response = self._get(url, params=params, headers=headers)
+        payload: Any = None
+        try:
+            payload = response.json()
+        except Exception:
+            pass
+        return ApiEvent(urlsplit(str(response.url)).path, response.status_code, payload, content_id)
 
     @staticmethod
     def _api_payload(
@@ -298,16 +369,17 @@ class YicheCollector:
         required: bool = True,
         expected_content_id: str | None = None,
     ) -> dict[str, Any] | None:
-        """读取浏览器真实响应并保留平台业务错误码。"""
-
+        """校验直连业务响应、业务码与帖子身份。"""
         matched = [item for item in events if item.path.lower().endswith(path_suffix.lower())]
         if not matched:
             if required:
-                raise CollectorFailure("API_RESPONSE_MISSING", "易车页面未产生预期业务响应。")
+                raise CollectorFailure("API_RESPONSE_MISSING", "易车未返回预期业务响应。")
             return None
         event = matched[-1]
         if event.status == 429:
             raise CollectorFailure("RATE_LIMITED", "易车接口返回限流状态，请稍后重试。")
+        if event.status in {401, 403}:
+            raise AuthenticationRequired("易车登录 Session 已失效。")
         if event.status != 200:
             raise CollectorFailure("HTTP_ERROR", f"易车接口返回 HTTP {event.status}。")
         payload = event.payload
@@ -325,72 +397,109 @@ class YicheCollector:
             raise CollectorFailure(failure_code, f"{message}（业务码 {code}）")
         if expected_content_id is not None and event.content_id != expected_content_id:
             raise CollectorFailure(
-                "COMMENTS_IDENTITY_MISMATCH",
-                "易车一级评论请求未绑定当前帖子身份。",
+                "COMMENTS_IDENTITY_MISMATCH", "易车一级评论请求未绑定当前帖子身份。"
             )
         return payload
 
-    def _list_page(self, page: Page, source: CircleSource, page_number: int) -> dict[str, Any]:
-        suffix = f"index-0-{1 if source.list_order == 'latest_publish' else 0}-{page_number}.html"
-        url = f"{BASE_URL}/{source.external_id}/{suffix}"
-        if source.list_order == "latest_publish":
-            url += "?tag=-1"
-        content, events, _final_url = self._navigate(page, url)
-        payload = self._api_payload(events, "/post/getlist")
-        assert payload is not None
-        data = payload.get("data")
+    def _require_account_cookie(self) -> None:
+        if not self.cookies.get(ACCOUNT_COOKIE_NAME):
+            raise AuthenticationRequired(
+                "易车当前没有账号登录信息，请先完成易车登录认证。",
+                trigger_url="https://i.yiche.com/authenservice/login.html",
+            )
+
+    def _ensure_account_identity(self, probe_url: str = BASE_URL + "/") -> None:
+        """每个采集器实例只做一次真实账号门禁，后续请求仍分类会话失效。"""
+
+        if self._account_verified:
+            return
+        self._require_account_cookie()
+        event = self._api_event(
+            "https://mapi.yiche.com/web_api/user_center_api/api/v1/message/get_message_num",
+            {},
+            referer=probe_url,
+        )
+        payload = self._api_payload([event], "/message/get_message_num")
+        data = payload.get("data") if payload else None
+        if not isinstance(data, dict) or not data.get("userId"):
+            raise AuthenticationRequired(
+                "易车账号身份接口未返回用户身份，请重新登录。",
+                trigger_url="https://i.yiche.com/authenservice/login.html",
+            )
+        self._account_verified = True
+
+    def validate_auth(self, probe_url: str) -> dict[str, Any]:
+        """以账号 Cookie 和官方用户消息接口双重证明登录身份。"""
+
+        self._ensure_account_identity(probe_url)
+        return {"platform": self.code, "account_login_verified": True}
+
+    def _list_page(self, source: CircleSource, page_number: int) -> dict[str, Any]:
+        """用公开网页同款签名直接请求圈子身份和帖子列表。"""
+        order = 1 if source.list_order == "latest_publish" else 0
+        referer = f"{BASE_URL}/{source.external_id}/index-0-{order}-{page_number}.html"
+        lookup = self._api_event(
+            "https://mgw.yiche.com/web_api/web_forum/api/pc/forum/getid",
+            {"seoName": source.external_id},
+            referer=referer,
+        )
+        lookup_payload = self._api_payload([lookup], "/forum/getid")
+        forum_id = _integer(lookup_payload.get("data") if lookup_payload else None)
+        if not forum_id:
+            raise CollectorFailure("CIRCLE_IDENTITY_MISMATCH", "易车社区短名没有返回稳定圈子身份。")
+        forum_event = self._api_event(
+            "https://mgw.yiche.com/web_api/web_forum/api/pc/forum/get",
+            {"forumId": forum_id},
+            referer=referer,
+        )
+        list_event = self._api_event(
+            "https://mgw.yiche.com/web_api/web_forum/api/pc/post/getlist",
+            {
+                "forumId": forum_id,
+                "order": order,
+                "pageIndex": page_number,
+                "pageSize": 50,
+                "tagId": -1,
+            },
+            referer=referer,
+        )
+        forum_payload = self._api_payload([forum_event], "/forum/get")
+        list_payload = self._api_payload([list_event], "/post/getlist")
+        data = list_payload.get("data") if list_payload else None
         if not isinstance(data, dict) or not isinstance(data.get("list"), list):
             raise CollectorFailure("LIST_RESPONSE_INVALID", "易车帖子列表响应结构无效。")
-        document = html.fromstring(content)
-        dom_ids = [
-            str(node.get("data-id") or "")
-            for node in document.cssselect(
-                '.power-list .list-theme .list-web .col-panel > a.col-row.bankuai[data-dtype="post"][data-id]'
-            )
-        ]
-        api_ids = [str(item.get("id") or "") for item in data["list"] if isinstance(item, dict)]
-        if dom_ids and dom_ids != api_ids:
-            raise CollectorFailure("LIST_IDENTITY_MISMATCH", "易车列表 DOM 与业务响应身份不一致。")
-        forum_payload = self._api_payload(events, "/forum/get", required=False)
-        forum_id_payload = self._api_payload(events, "/forum/getid", required=False)
         forum = forum_payload.get("data") if forum_payload else None
         return {
             **data,
             "forum": forum if isinstance(forum, dict) else None,
-            "forum_id_lookup": forum_id_payload.get("data") if forum_id_payload else None,
+            "forum_id_lookup": forum_id,
         }
 
     def validate_circle(self, circle_url: str) -> dict[str, Any]:
+        self._ensure_account_identity(circle_url)
         source = parse_circle_url(circle_url)
-        with self._browser_page() as browser_page:
-            page = self._list_page(browser_page, source, 1)
-            rows = page.get("list") or []
-            if not rows:
-                raise CollectorFailure(
-                    "CIRCLE_VALIDATION_FAILED", "易车社区没有返回可验证的帖子。"
-                )
-            first = rows[0] if isinstance(rows[0], dict) else {}
-            forum_id = _integer(first.get("forumId"))
-            forum_name = str(first.get("forumName") or "").strip()
-            seo_name = str(first.get("forumApp") or "").strip()
-            forum = page.get("forum") or {}
-            if not forum_id or _integer(page.get("forum_id_lookup")) != forum_id:
-                raise CollectorFailure(
-                    "CIRCLE_IDENTITY_MISMATCH", "易车社区与列表帖子身份不一致。"
-                )
-            if (
-                not forum_name
-                or not seo_name
-                or seo_name.lower() != source.external_id.lower()
-                or _integer(forum.get("id")) != forum_id
-                or str(forum.get("forumApp") or "").strip().lower() != seo_name.lower()
-                or str(forum.get("name") or "").strip() != forum_name
-            ):
-                raise CollectorFailure(
-                    "CIRCLE_IDENTITY_MISMATCH", "易车社区短名与稳定身份不一致。"
-                )
-            first_url = f"{BASE_URL}/{source.external_id}/thread-{first.get('id')}.html"
-            self._fetch_post(browser_page, first_url, list_row=first)
+        page = self._list_page(source, 1)
+        rows = page.get("list") or []
+        if not rows:
+            raise CollectorFailure("CIRCLE_VALIDATION_FAILED", "易车社区没有返回可验证的帖子。")
+        first = rows[0] if isinstance(rows[0], dict) else {}
+        forum_id = _integer(first.get("forumId"))
+        forum_name = str(first.get("forumName") or "").strip()
+        seo_name = str(first.get("forumApp") or "").strip()
+        forum = page.get("forum") or {}
+        if not forum_id or _integer(page.get("forum_id_lookup")) != forum_id:
+            raise CollectorFailure("CIRCLE_IDENTITY_MISMATCH", "易车社区与列表帖子身份不一致。")
+        if (
+            not forum_name
+            or not seo_name
+            or seo_name.lower() != source.external_id.lower()
+            or _integer(forum.get("id")) != forum_id
+            or str(forum.get("forumApp") or "").strip().lower() != seo_name.lower()
+            or str(forum.get("name") or "").strip() != forum_name
+        ):
+            raise CollectorFailure("CIRCLE_IDENTITY_MISMATCH", "易车社区短名与稳定身份不一致。")
+        first_url = f"{BASE_URL}/{source.external_id}/thread-{first.get('id')}.html"
+        self._fetch_post(first_url, list_row=first)
         return {
             "external_id": source.external_id,
             "forum_id": forum_id,
@@ -401,16 +510,6 @@ class YicheCollector:
             "sort": source.list_order,
             "adapter_version": self.adapter_version,
         }
-
-    def validate_auth(self, probe_url: str) -> dict[str, Any]:
-        """有已配置圈子时执行真实样本门禁，否则只确认根页离开 WAF。"""
-
-        if urlsplit(probe_url).path.strip("/"):
-            return self.validate_circle(probe_url)
-
-        with self._browser_page() as browser_page:
-            self._navigate(browser_page, probe_url)
-        return {"platform": self.code, "access_session_available": True}
 
     @staticmethod
     def _detail_payload(content: str, post_url: str) -> dict[str, Any]:
@@ -441,7 +540,9 @@ class YicheCollector:
             raise CollectorFailure("POST_IDENTITY_MISMATCH", "易车结构化详情身份与 URL 不一致。")
         body = str(structured.get("text") or "").strip()
         if PUA_RE.search(body):
-            raise CollectorFailure("POST_CONTENT_OBFUSCATED", "易车详情正文仍含未还原的私有区字符。")
+            raise CollectorFailure(
+                "POST_CONTENT_OBFUSCATED", "易车详情正文仍含未还原的私有区字符。"
+            )
         author = structured.get("author") if isinstance(structured.get("author"), dict) else {}
         image_values = structured.get("image")
         if not isinstance(image_values, list):
@@ -476,8 +577,7 @@ class YicheCollector:
             "platform_post_id": expected_id,
             "url": normalized_url,
             "title": str(structured.get("headline") or "").strip() or None,
-            "author": str(author.get("name") or root[0].get("data-name") or "").strip()
-            or None,
+            "author": str(author.get("name") or root[0].get("data-name") or "").strip() or None,
             "published_at": _parse_time(structured.get("datePublished")),
             "content": body or None,
             "image_urls": image_urls,
@@ -570,29 +670,39 @@ class YicheCollector:
         )
 
     def _fetch_post(
-        self, page: Page, post_url: str, *, list_row: dict[str, Any] | None = None
+        self, post_url: str, *, list_row: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         expected_circle, expected_id, normalized_url = _post_identity(post_url)
-        content, events, final_url = self._navigate(page, normalized_url)
+        content, final_url = self._document(normalized_url)
         final_circle, final_id, _ = _post_identity(final_url)
         if final_id != expected_id or final_circle.lower() != expected_circle.lower():
-            raise CollectorFailure(
-                "POST_IDENTITY_MISMATCH", "易车详情最终导航地址与请求帖子不一致。"
-            )
+            raise CollectorFailure("POST_IDENTITY_MISMATCH", "易车详情最终地址与请求帖子不一致。")
         record = self._detail_payload(content, normalized_url)
-        if record["platform_post_id"] != expected_id:
-            raise CollectorFailure("POST_IDENTITY_MISMATCH", "易车详情结果与请求帖子不一致。")
         row = list_row or {}
         row_id = str(row.get("id") or "")
         row_circle = str(row.get("forumApp") or "").strip()
-        if row_id and (
-            row_id != expected_id or row_circle.lower() != expected_circle.lower()
-        ):
+        if row_id and (row_id != expected_id or row_circle.lower() != expected_circle.lower()):
             raise CollectorFailure("POST_IDENTITY_MISMATCH", "易车列表与详情帖子身份不一致。")
         if record["reply_count"] is None:
             record["reply_count"] = _integer(row.get("repliesNum"))
+        comment_event = self._api_event(
+            "https://mapi.yiche.com/web_api/information_api/api/v1/comment/top_comment_list",
+            {
+                "contentType": YICHE_COMMENT_CONTENT_TYPE,
+                "contentId": expected_id,
+                "currentPage": 1,
+                "pageSize": 20,
+                "hotFlag": True,
+                "findStartTime": None,
+                "diffCommnetId": None,
+                "userCommentIds": None,
+                "timeClickFlag": False,
+            },
+            referer=normalized_url,
+            content_id=expected_id,
+        )
         comment_result = self._parse_comments(
-            content, events, record["reply_count"], expected_id
+            content, [comment_event], record["reply_count"], expected_id
         )
         record["comments"] = comment_result.comments
         record["raw_status"] = {
@@ -616,6 +726,8 @@ class YicheCollector:
             "comment_api_status": "success",
             "comment_identity_verified": True,
             "comment_termination": comment_result.termination,
+            "transport": "direct_http",
+            "api_protocol": YICHE_API_PROTOCOL,
         }
         if not record["content"] and not record["image_urls"] and not record["video_urls"]:
             raise CollectorFailure("POST_CONTENT_EMPTY", "易车详情没有返回正文或媒体。")
@@ -625,10 +737,9 @@ class YicheCollector:
     def fetch_post(
         self, post_url: str, *, list_row: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        """用一个短期真实浏览器上下文采集单个详情。"""
-
-        with self._browser_page() as page:
-            return self._fetch_post(page, post_url, list_row=list_row)
+        """通过直连 HTTP 取得单个帖子，不启动 Chromium。"""
+        self._ensure_account_identity(post_url)
+        return self._fetch_post(post_url, list_row=list_row)
 
     def collect_circle(
         self,
@@ -640,6 +751,7 @@ class YicheCollector:
         on_page_evidence: Callable[[dict[str, Any]], None] | None = None,
     ) -> dict[str, Any]:
         del on_page_evidence
+        self._ensure_account_identity(circle_url)
         source = parse_circle_url(circle_url)
         records: list[dict[str, Any]] = []
         failures: list[dict[str, str]] = []
@@ -649,98 +761,40 @@ class YicheCollector:
         frozen_total: int | None = None
         source_index = 0
         stop_reason = "易车列表已经没有更多帖子。"
-        with self._browser_page() as browser_page:
-            while len(records) < target_count:
-                page = self._list_page(browser_page, source, page_number)
-                rows = page.get("list") or []
-                if not rows:
-                    break
-                current_total = _integer(page.get("total"))
-                if current_total is None or current_total < 0:
-                    raise CollectorFailure("LIST_TOTAL_INVALID", "易车列表没有返回有效总量。")
-                if frozen_total is None:
-                    frozen_total = current_total
-                elif current_total != frozen_total:
-                    raise CollectorFailure(
-                        "LIST_TOTAL_CHANGED",
-                        f"易车列表分页总量从 {frozen_total} 变为 {current_total}，本次快照已停止。",
-                    )
-                new_candidates = 0
-                for row in rows:
-                    if not isinstance(row, dict):
-                        continue
-                    post_id = str(row.get("id") or "").strip()
-                    if not post_id or post_id in candidate_ids:
-                        continue
-                    candidate_ids.add(post_id)
-                    new_candidates += 1
-                    index = source_index
-                    source_index += 1
-                    if post_id in seen:
-                        continue
-                    url = f"{BASE_URL}/{source.external_id}/thread-{post_id}.html"
-                    try:
-                        record = self._fetch_post(browser_page, url, list_row=row)
-                        record["order_index"] = index
-                        records.append(record)
-                        seen.add(post_id)
-                        if on_progress:
-                            on_progress(record, None)
-                    except AuthenticationRequired as exc:
-                        exc.records = records
-                        exc.failures = failures
-                        raise
-                    except CollectorFailure as exc:
-                        failure = {
-                            "url": url,
-                            "code": exc.code,
-                            "message": exc.message,
-                            "source_index": str(index),
-                        }
-                        failures.append(failure)
-                        if on_progress:
-                            on_progress(None, failure)
-                    if len(records) >= target_count:
-                        stop_reason = "已经取得配置数量的有效帖子。"
-                        break
-                if len(records) >= target_count:
-                    break
-                if page_number * 50 >= frozen_total:
-                    break
-                if new_candidates == 0:
-                    stop_reason = "易车列表分页没有返回新的帖子身份。"
-                    break
-                page_number += 1
-        return {"records": records, "failures": failures, "stop_reason": stop_reason}
-
-    def collect_urls(
-        self, urls: list[str], *, on_progress: ProgressCallback | None = None
-    ) -> dict[str, Any]:
-        records: list[dict[str, Any]] = []
-        failures: list[dict[str, str]] = []
-        seen: set[str] = set()
-        with self._browser_page() as browser_page:
-            for source_index, raw_url in enumerate(urls):
-                try:
-                    post_id, normalized_url = normalize_post_url(raw_url)
-                except CollectorFailure as exc:
-                    failure = {
-                        "url": raw_url,
-                        "code": exc.code,
-                        "message": exc.message,
-                        "source_index": str(source_index),
-                    }
-                    failures.append(failure)
-                    if on_progress:
-                        on_progress(None, failure)
+        while len(records) < target_count:
+            page = self._list_page(source, page_number)
+            rows = page.get("list") or []
+            if not rows:
+                break
+            current_total = _integer(page.get("total"))
+            if current_total is None or current_total < 0:
+                raise CollectorFailure("LIST_TOTAL_INVALID", "易车列表没有返回有效总量。")
+            if frozen_total is None:
+                frozen_total = current_total
+            elif current_total != frozen_total:
+                raise CollectorFailure(
+                    "LIST_TOTAL_CHANGED",
+                    f"易车列表分页总量从 {frozen_total} 变为 {current_total}，本次快照已停止。",
+                )
+            new_candidates = 0
+            for row in rows:
+                if not isinstance(row, dict):
                     continue
+                post_id = str(row.get("id") or "").strip()
+                if not post_id or post_id in candidate_ids:
+                    continue
+                candidate_ids.add(post_id)
+                new_candidates += 1
+                index = source_index
+                source_index += 1
                 if post_id in seen:
                     continue
-                seen.add(post_id)
+                url = f"{BASE_URL}/{source.external_id}/thread-{post_id}.html"
                 try:
-                    record = self._fetch_post(browser_page, normalized_url)
-                    record["order_index"] = source_index
+                    record = self._fetch_post(url, list_row=row)
+                    record["order_index"] = index
                     records.append(record)
+                    seen.add(post_id)
                     if on_progress:
                         on_progress(record, None)
                 except AuthenticationRequired as exc:
@@ -749,16 +803,69 @@ class YicheCollector:
                     raise
                 except CollectorFailure as exc:
                     failure = {
-                        "url": normalized_url,
+                        "url": url,
                         "code": exc.code,
                         "message": exc.message,
-                        "source_index": str(source_index),
+                        "source_index": str(index),
                     }
                     failures.append(failure)
                     if on_progress:
                         on_progress(None, failure)
-        return {
-            "records": records,
-            "failures": failures,
-            "stop_reason": "URL 清单处理完成。",
-        }
+                if len(records) >= target_count:
+                    stop_reason = "已经取得配置数量的有效帖子。"
+                    break
+            if len(records) >= target_count:
+                break
+            if page_number * 50 >= frozen_total:
+                break
+            if new_candidates == 0:
+                stop_reason = "易车列表分页没有返回新的帖子身份。"
+                break
+            page_number += 1
+        return {"records": records, "failures": failures, "stop_reason": stop_reason}
+
+    def collect_urls(
+        self, urls: list[str], *, on_progress: ProgressCallback | None = None
+    ) -> dict[str, Any]:
+        self._ensure_account_identity(urls[0] if urls else BASE_URL + "/")
+        records: list[dict[str, Any]] = []
+        failures: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for source_index, raw_url in enumerate(urls):
+            try:
+                post_id, normalized_url = normalize_post_url(raw_url)
+            except CollectorFailure as exc:
+                failure = {
+                    "url": raw_url,
+                    "code": exc.code,
+                    "message": exc.message,
+                    "source_index": str(source_index),
+                }
+                failures.append(failure)
+                if on_progress:
+                    on_progress(None, failure)
+                continue
+            if post_id in seen:
+                continue
+            seen.add(post_id)
+            try:
+                record = self._fetch_post(normalized_url)
+                record["order_index"] = source_index
+                records.append(record)
+                if on_progress:
+                    on_progress(record, None)
+            except AuthenticationRequired as exc:
+                exc.records = records
+                exc.failures = failures
+                raise
+            except CollectorFailure as exc:
+                failure = {
+                    "url": normalized_url,
+                    "code": exc.code,
+                    "message": exc.message,
+                    "source_index": str(source_index),
+                }
+                failures.append(failure)
+                if on_progress:
+                    on_progress(None, failure)
+        return {"records": records, "failures": failures, "stop_reason": "URL 清单处理完成。"}
