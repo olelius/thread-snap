@@ -22,7 +22,7 @@ from patchright.sync_api import sync_playwright
 from ..browser_runtime import browser_launch_args
 from .base import AuthenticationRequired, CircleSource, CollectorFailure
 
-ADAPTER_VERSION = "dongchedi-dynamic-v5"
+ADAPTER_VERSION = "dongchedi-dynamic-v6"
 BASE_URL = "https://www.dongchedi.com"
 DETAIL_ROOT = f"{BASE_URL}/motor/pc/ugc/detail"
 VIDEO_TOKEN_URL = f"{BASE_URL}/motor/pc/common/token"
@@ -212,9 +212,12 @@ class DongchediCollector:
                     response = self._http_session().get(
                         url, timeout=self.timeout_seconds, allow_redirects=True
                     )
-                if response.status_code >= 500 and attempt < 2:
-                    time.sleep(0.5 * (attempt + 1))
-                    continue
+                if response.status_code >= 500:
+                    last_error = RuntimeError(f"HTTP {response.status_code}")
+                    if attempt < 2:
+                        time.sleep(0.5 * (attempt + 1))
+                        continue
+                    break
                 return response
             except Exception as exc:  # curl_cffi 抛出多种传输异常，统一有界重试。
                 last_error = exc
@@ -766,8 +769,9 @@ class DongchediCollector:
         total_count: int | None = None
         exhausted = False
         candidate_position = 0
+        selected_count = 0
         max_page_number = max(1, math.ceil((len(seen) + target_count) / 30) + 5)
-        while len(records) < target_count:
+        while selected_count < target_count:
             expected = (
                 None
                 if total_count is None
@@ -791,11 +795,12 @@ class DongchediCollector:
                     math.ceil(total_count / 30) if total_count is not None else page["page_count"]
                 )
             page_rows = page["rows"]
+            for offset, row in enumerate(page_rows):
+                row["source_position"] = candidate_position + int(
+                    row.get("order_index", row.get("source_position", offset))
+                )
+            candidate_position += len(page_rows)
             if captured is not None:
-                for row in page_rows:
-                    row["source_position"] = candidate_position + int(
-                        row.get("order_index", row.get("source_position", 0))
-                    )
                 captured["rows"] = page_rows
                 if not captured.get("persisted"):
                     on_page_evidence(captured)
@@ -815,17 +820,17 @@ class DongchediCollector:
                 exhausted = True
                 break
             candidate_cursor = 0
-            while candidate_cursor < len(candidates) and len(records) < target_count:
+            while candidate_cursor < len(candidates) and selected_count < target_count:
                 batch_size = min(
                     self.concurrency,
                     len(candidates) - candidate_cursor,
-                    target_count - len(records),
+                    target_count - selected_count,
                 )
                 batch: list[tuple[dict[str, Any], int]] = []
                 for candidate in candidates[candidate_cursor : candidate_cursor + batch_size]:
-                    batch.append((candidate, candidate_position))
-                    candidate_position += 1
+                    batch.append((candidate, int(candidate["source_position"])))
                     seen.add(candidate["post_id"])
+                    selected_count += 1
                 candidate_cursor += batch_size
 
                 def fetch_candidate(value: tuple[dict[str, Any], int]) -> tuple[Any, Any, int]:
@@ -873,7 +878,7 @@ class DongchediCollector:
                     records.append(record)
                     if on_progress:
                         on_progress(record, None)
-            if len(records) >= target_count:
+            if selected_count >= target_count:
                 break
             if page_count is not None and page_number >= page_count:
                 exhausted = True
@@ -882,12 +887,14 @@ class DongchediCollector:
                 exhausted = True
                 break
             page_number += 1
-        if len(records) >= target_count:
-            stop_reason = "已经取得配置数量的有效帖子。"
+        if selected_count >= target_count and failures:
+            stop_reason = "固定候选中存在未完成帖子，未使用后续帖子替换。"
+        elif selected_count >= target_count:
+            stop_reason = "已经处理配置数量的固定候选帖子。"
         elif exhausted:
-            stop_reason = "平台没有更多可用内容，按实际有效数量结束。"
+            stop_reason = "平台没有更多候选内容，按实际冻结清单结束。"
         else:
-            stop_reason = "候选帖子存在错误，未能取得配置数量的有效结果。"
+            stop_reason = "固定候选处理未完成。"
         return {"records": records, "failures": failures, "stop_reason": stop_reason}
 
     def collect_urls(

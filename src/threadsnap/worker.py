@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from inspect import signature
 from time import monotonic
 from typing import Any, Callable
@@ -34,6 +34,10 @@ from .sentiment import SentimentService, deduplicate_media_urls
 from .services import aggregate_run, related_run_ids
 from .session_store import SessionStore
 
+RETRYABLE_ACCESS_FAILURE_CODES = {"PLATFORM_NETWORK_ERROR"}
+RETRY_BASE_SECONDS = 2
+RETRY_MAX_SECONDS = 60
+
 
 def _supports_page_evidence(collector: Collector) -> bool:
     """同时核对能力声明与调用签名，避免把截图回调传给旧适配器。"""
@@ -41,6 +45,21 @@ def _supports_page_evidence(collector: Collector) -> bool:
     return bool(getattr(collector, "supports_page_evidence", False)) and (
         "on_page_evidence" in signature(collector.collect_circle).parameters
     )
+
+
+def _retry_due(task: CircleTask, now: datetime) -> bool:
+    """判断持久重试任务是否已到下一次固定候选访问时间。"""
+
+    value = str((task.checkpoint or {}).get("retry_not_before") or "")
+    if not value:
+        return True
+    try:
+        not_before = datetime.fromisoformat(value)
+    except ValueError:
+        return True
+    if not_before.tzinfo is None:
+        not_before = not_before.replace(tzinfo=timezone.utc)
+    return not_before <= now
 
 
 class WorkerService:
@@ -383,11 +402,14 @@ class WorkerService:
             )
             if not head:
                 return False
+            now = utc_now()
+            if not _retry_due(head, now):
+                return False
             run = db.get(ExtractionRun, head.run_id)
             platform = db.get(PlatformConfig, platform_code)
             if not run or not platform:
                 return False
-            tasks = list(
+            queued_tasks = list(
                 db.scalars(
                     select(CircleTask)
                     .where(
@@ -398,6 +420,7 @@ class WorkerService:
                     .order_by(CircleTask.queue_sequence)
                 )
             )
+            tasks = [task for task in queued_tasks if _retry_due(task, now)]
             for task in tasks:
                 task.status = "running"
                 task.started_at = task.started_at or utc_now()
@@ -451,7 +474,9 @@ class WorkerService:
                 task = db.get(CircleTask, task_id)
                 if task:
                     self._apply_result(db, task, result)
-                    if bool((task.config_snapshot or {}).get("screenshot_enabled", True)):
+                    if task.status in {"success", "partial_success", "failed"} and bool(
+                        (task.config_snapshot or {}).get("screenshot_enabled", True)
+                    ):
                         screenshot_task_ids.append(task_id)
             aggregate_run(db, run)
             summary_version = run.summary_version
@@ -484,12 +509,25 @@ class WorkerService:
             task = db.get(CircleTask, task_id)
             assert task is not None
             snapshot = dict(task.config_snapshot or {})
+            checkpoint = dict(task.checkpoint or {})
             circle_url = task.circle_url
             target = task.target_count
             transient = bool(snapshot.get("transient"))
             circle_id = task.circle_id
             known_urls = list(snapshot.get("known_post_urls") or [])
             source_indexes = dict(snapshot.get("source_indexes") or {})
+            retry_urls = [
+                str(value)
+                for value in checkpoint.get("retry_urls") or []
+                if isinstance(value, str) and value
+            ]
+            if retry_urls:
+                known_urls = retry_urls
+                source_indexes = {
+                    str(key): int(value)
+                    for key, value in dict(checkpoint.get("retry_source_indexes") or {}).items()
+                }
+            prior_terminal_failures = list(checkpoint.get("terminal_failures") or [])
             screenshot_enabled = bool(snapshot.get("screenshot_enabled", True))
             persisted_post_ids = set(
                 db.scalars(
@@ -567,6 +605,30 @@ class WorkerService:
 
         validation = None
         generation = self.refresh_generation.get(platform_code, 0)
+
+        def finalize_payload(payload: dict[str, Any]) -> dict[str, Any]:
+            """把固定候选的瞬时网络错误转为原任务持久重试。"""
+
+            current_failures = list(payload.get("failures") or [])
+            retryable = [
+                failure
+                for failure in current_failures
+                if failure.get("code") in RETRYABLE_ACCESS_FAILURE_CODES
+            ]
+            terminal = prior_terminal_failures + [
+                failure
+                for failure in current_failures
+                if failure.get("code") not in RETRYABLE_ACCESS_FAILURE_CODES
+            ]
+            payload["failures"] = terminal + retryable
+            return {
+                "kind": "retry" if retryable else "done",
+                "validation": validation,
+                "retry_failures": retryable,
+                "terminal_failures": terminal,
+                **payload,
+            }
+
         try:
             if needs_validation:
                 validation = collector.validate_circle(circle_url)
@@ -599,7 +661,7 @@ class WorkerService:
                     failure["source_index"] = int(
                         source_indexes.get(failure.get("url"), failure.get("source_index", 0))
                     )
-            return {"kind": "done", "validation": validation, **payload}
+            return finalize_payload(payload)
         except AuthenticationRequired as exc:
             trigger_url = exc.trigger_url or circle_url
             if self._refresh_after_auth(platform_code, trigger_url, generation):
@@ -643,7 +705,7 @@ class WorkerService:
                                     failure.get("url"), failure.get("source_index", 0)
                                 )
                             )
-                    return {"kind": "done", "validation": validation, **payload}
+                    return finalize_payload(payload)
                 except AuthenticationRequired as repeated:
                     exc = repeated
             return {
@@ -654,8 +716,27 @@ class WorkerService:
                 "records": exc.records,
                 "failures": exc.failures,
                 "validation": validation,
+                "retry_urls": retry_urls,
+                "retry_source_indexes": source_indexes,
+                "terminal_failures": prior_terminal_failures,
             }
         except CollectorFailure as exc:
+            if exc.code in RETRYABLE_ACCESS_FAILURE_CODES:
+                failure = {
+                    "url": circle_url,
+                    "code": exc.code,
+                    "message": exc.message,
+                    "source_index": 0,
+                }
+                return {
+                    "kind": "retry",
+                    "records": [],
+                    "failures": prior_terminal_failures + [failure],
+                    "retry_failures": [failure],
+                    "terminal_failures": prior_terminal_failures,
+                    "retry_scope": "source",
+                    "validation": validation,
+                }
             return {
                 "kind": "failed",
                 "code": exc.code,
@@ -755,16 +836,55 @@ class WorkerService:
         failures = result.get("failures") or []
         existing = self._store_records(db, task, records)
         task.completed_count = len(existing)
-        task.checkpoint = {
+        checkpoint = {
             "trigger_url": result.get("trigger_url"),
             "failed_urls": failures,
             "completed_post_ids": sorted(existing),
         }
+        if result["kind"] == "retry":
+            retry_failures = list(result.get("retry_failures") or [])
+            retry_attempt = int((task.checkpoint or {}).get("retry_attempt") or 0) + 1
+            delay_seconds = min(RETRY_MAX_SECONDS, RETRY_BASE_SECONDS * 2 ** (retry_attempt - 1))
+            retry_scope = str(result.get("retry_scope") or "candidate")
+            retry_urls = (
+                []
+                if retry_scope == "source"
+                else [str(failure["url"]) for failure in retry_failures]
+            )
+            checkpoint.update(
+                {
+                    "retry_urls": retry_urls,
+                    "retry_source_indexes": {
+                        str(failure["url"]): int(failure.get("source_index") or 0)
+                        for failure in retry_failures
+                    },
+                    "terminal_failures": list(result.get("terminal_failures") or []),
+                    "retry_attempt": retry_attempt,
+                    "retry_not_before": (utc_now() + timedelta(seconds=delay_seconds)).isoformat(),
+                    "retry_scope": retry_scope,
+                }
+            )
+        elif result["kind"] == "auth" and result.get("retry_urls"):
+            checkpoint.update(
+                {
+                    "retry_urls": list(result.get("retry_urls") or []),
+                    "retry_source_indexes": dict(result.get("retry_source_indexes") or {}),
+                    "terminal_failures": list(result.get("terminal_failures") or []),
+                    "retry_attempt": int((task.checkpoint or {}).get("retry_attempt") or 0),
+                }
+            )
+        task.checkpoint = checkpoint
         if result["kind"] == "auth":
             task.status = "waiting_for_auth"
             task.error_code = result["code"]
             task.error_message = result["message"]
             task.stop_reason = None
+        elif result["kind"] == "retry":
+            task.status = "queued"
+            task.error_code = None
+            task.error_message = None
+            task.stop_reason = "固定访问暂时失败，正在自动重试原 URL。"
+            task.finished_at = None
         elif result["kind"] == "failed":
             task.status = "partial_success" if task.completed_count else "failed"
             task.error_code = result["code"]
@@ -773,11 +893,7 @@ class WorkerService:
             task.finished_at = utc_now()
         else:
             task.stop_reason = result.get("stop_reason")
-            shortage_by_error = (
-                task.completed_count < task.target_count
-                and bool(result.get("failures"))
-                and "没有更多" not in str(task.stop_reason)
-            )
+            shortage_by_error = bool(result.get("failures"))
             task.status = (
                 "partial_success"
                 if shortage_by_error and task.completed_count
@@ -805,8 +921,8 @@ class WorkerService:
                 return
             existing = self._store_records(db, task, records)
             task.completed_count = len(existing)
-            # 运行中的候选错误还可能被后续候选补足，不提前写入最终失败计数。
-            # 调用方仍以候选错误触发分段提交；终态由 _apply_result 统一判定并落库。
+            # 运行中的访问错误尚未完成“自动重试或终态错误”分类，不提前写入失败数。
+            # 调用方仍以候选错误触发分段提交；分类与终态由 _apply_result 统一落库。
             task.failed_count = 0
             checkpoint = dict(task.checkpoint or {})
             checkpoint["completed_post_ids"] = sorted(existing)
