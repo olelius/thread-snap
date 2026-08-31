@@ -883,7 +883,7 @@ class ReputationInspectionTest(unittest.TestCase):
             include_review_article_count=True,
             include_negative_rate=True,
         )
-        adapter._thread_local.http = Session()
+        adapter._http_session = lambda: Session()  # type: ignore[method-assign]
 
         result = adapter._visit_http(target)
 
@@ -981,7 +981,7 @@ class ReputationInspectionTest(unittest.TestCase):
                 return Response()
 
         adapter = DongchediReputationAdapter(None, include_negative_rate=True)
-        adapter._thread_local.http = Session()
+        adapter._http_session = lambda: Session()  # type: ignore[method-assign]
         target = ReputationMappingTarget(
             vehicle_id="dcd-9267",
             platform_vehicle_id="9267",
@@ -1024,7 +1024,7 @@ class ReputationInspectionTest(unittest.TestCase):
                 return Response()
 
         adapter = DongchediReputationAdapter(None, include_negative_rate=True)
-        adapter._thread_local.http = Session()
+        adapter._http_session = lambda: Session()  # type: ignore[method-assign]
         target = ReputationMappingTarget(
             vehicle_id="dcd-26120",
             platform_vehicle_id="26120",

@@ -15,10 +15,9 @@ from typing import Any, Iterable
 from urllib.parse import parse_qs, unquote_plus, urljoin, urlsplit
 from zoneinfo import ZoneInfo
 
-from curl_cffi import requests
-from curl_cffi.requests import Cookies
 from lxml import html
 
+from ..scrapling_transport import ScraplingHttpPool
 from .base import (
     AuthenticationRequired,
     CircleSource,
@@ -27,7 +26,7 @@ from .base import (
     ProgressCallback,
 )
 
-ADAPTER_VERSION = "autohome-club-v6"
+ADAPTER_VERSION = "autohome-club-v7-scrapling"
 BASE_URL = "https://club.autohome.com.cn"
 LIST_API_URL = "https://club-open-api.autohome.com.cn/api/pc/bbs/index/getClubTopicList"
 VIDEO_MEDIA_URL = "https://p-vp.autohome.com.cn/api/gpi"
@@ -153,31 +152,6 @@ def _app_topic_identity(value: object) -> tuple[int, int, str] | None:
     return post_id, bbs_id, bbs_type
 
 
-def _cookies_from_state(state: dict[str, Any] | None) -> Cookies:
-    """只导入汽车之家域且仍有效的浏览器 Cookie。"""
-
-    jar = Cookies()
-    now = time.time()
-    for item in (state or {}).get("cookies", []):
-        if not isinstance(item, dict):
-            continue
-        domain = str(item.get("domain") or "")
-        if "autohome.com.cn" not in domain:
-            continue
-        expires = item.get("expires", -1)
-        if isinstance(expires, (int, float)) and expires > 0 and expires <= now:
-            continue
-        if all(item.get(key) for key in ("name", "value", "path")):
-            jar.set(
-                item["name"],
-                item["value"],
-                domain=domain,
-                path=item["path"],
-                secure=bool(item.get("secure")),
-            )
-    return jar
-
-
 def _authenticated_member_id(state: dict[str, Any] | None) -> str | None:
     """从平台自有Cookie组合中证明登录身份，只返回校验后的会员ID。"""
 
@@ -282,24 +256,18 @@ class AutohomeCollector:
         browser_headless: bool = False,
     ):
         self.storage_state = storage_state
-        self.cookies = _cookies_from_state(storage_state)
         self.authenticated_member_id = _authenticated_member_id(storage_state)
         # 与公共平台注册合同一致：所有来源、帖子请求和即时重试共享同一总门禁。
         self.concurrency = max(1, concurrency)
         self.timeout_seconds = timeout_seconds
         self.browser_headless = browser_headless
         self.semaphore = threading.BoundedSemaphore(self.concurrency)
-        self._thread_local = threading.local()
+        self.http = ScraplingHttpPool(storage_state, timeout_seconds=timeout_seconds)
 
-    def _http_session(self) -> requests.Session:
-        """为每个采集线程建立独立 Session，避免共享可变连接状态。"""
+    def _http_session(self) -> Any:
+        """返回当前线程独享的 Scrapling FetcherSession 适配器。"""
 
-        session = getattr(self._thread_local, "http", None)
-        if session is None:
-            session = requests.Session(impersonate="chrome")
-            session.cookies.update(self.cookies)
-            self._thread_local.http = session
-        return session
+        return self.http.session()
 
     def _get(
         self,
@@ -308,7 +276,7 @@ class AutohomeCollector:
         request_headers: dict[str, str] | None = None,
         recovery_url: str | None = None,
         **params: object,
-    ) -> requests.Response:
+    ) -> Any:
         """执行有界 GET；平台控制分类由响应检查统一完成。"""
 
         last_error: Exception | None = None
@@ -332,11 +300,16 @@ class AutohomeCollector:
                 return response
             except (AuthenticationRequired, CollectorFailure):
                 raise
-            except Exception as exc:  # curl_cffi 传输异常类型较多，统一有界重试。
+            except Exception as exc:  # Scrapling/传输引擎异常统一进入适配器有界重试。
                 last_error = exc
                 if attempt < 2:
                     time.sleep(0.5 * (attempt + 1))
         raise CollectorFailure("PLATFORM_NETWORK_ERROR", f"访问汽车之家失败：{last_error}")
+
+    def close(self) -> None:
+        """关闭采集线程创建的全部 Scrapling Session。"""
+
+        self.http.close()
 
     def _video_media_response(self, video_id: str) -> VideoMediaResolution | None:
         """按固化 AHVP 合同取得全部 MP4 清晰度，并归一化实际 ``copy`` URL。"""
@@ -462,7 +435,7 @@ class AutohomeCollector:
 
     @staticmethod
     def _detect_control(
-        response: requests.Response, *, trigger_url: str | None = None
+        response: Any, *, trigger_url: str | None = None
     ) -> None:
         """保守区分登录、验证码、挑战、限流和异常空响应。"""
 

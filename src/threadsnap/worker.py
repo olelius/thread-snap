@@ -323,11 +323,13 @@ class WorkerService:
         if missing:
             self._publish_validation(circle_id, job_id, "failed")
             return True
+        collector = None
         try:
             with self.factory() as db:
                 platform = db.get(PlatformConfig, platform_code)
                 assert platform is not None
-                result = self._collector(platform).validate_circle(circle_url)
+                collector = self._collector(platform)
+                result = collector.validate_circle(circle_url)
         except AuthenticationRequired as exc:
             spec = get_platform_spec(platform_code)
             with self.factory.begin() as db:
@@ -368,6 +370,10 @@ class WorkerService:
                     circle.validation_error = message
             self._publish_validation(circle_id, job_id, "failed")
             return True
+        finally:
+            close = getattr(collector, "close", None)
+            if callable(close):
+                close()
         with self.factory.begin() as db:
             job = db.get(ValidationJob, job.id)
             circle = db.get(Circle, circle_id)
@@ -493,22 +499,27 @@ class WorkerService:
             )
         collector = self._collector(platform, concurrency)
         results: dict[str, dict[str, Any]] = {}
-        with ThreadPoolExecutor(max_workers=min(concurrency, len(tasks))) as pool:
-            futures = {
-                pool.submit(self._execute_task, collector, task.id): task.id for task in tasks
-            }
-            for future in as_completed(futures):
-                task_id = futures[future]
-                try:
-                    results[task_id] = future.result()
-                except Exception as exc:
-                    results[task_id] = {
-                        "kind": "failed",
-                        "code": "TASK_INTERNAL_ERROR",
-                        "message": f"提取任务执行异常：{exc}",
-                        "records": [],
-                        "failures": [],
-                    }
+        try:
+            with ThreadPoolExecutor(max_workers=min(concurrency, len(tasks))) as pool:
+                futures = {
+                    pool.submit(self._execute_task, collector, task.id): task.id for task in tasks
+                }
+                for future in as_completed(futures):
+                    task_id = futures[future]
+                    try:
+                        results[task_id] = future.result()
+                    except Exception as exc:
+                        results[task_id] = {
+                            "kind": "failed",
+                            "code": "TASK_INTERNAL_ERROR",
+                            "message": f"提取任务执行异常：{exc}",
+                            "records": [],
+                            "failures": [],
+                        }
+        finally:
+            close = getattr(collector, "close", None)
+            if callable(close):
+                close()
         with self.factory.begin() as db:
             run = db.get(ExtractionRun, run_id)
             assert run is not None
@@ -804,6 +815,10 @@ class WorkerService:
                     exc = repeated
                 except CollectorFailure as repeated_control:
                     return collector_failure_result(repeated_control)
+                finally:
+                    close = getattr(refreshed, "close", None)
+                    if callable(close):
+                        close()
             return {
                 "kind": "auth",
                 "code": "AUTH_REQUIRED",

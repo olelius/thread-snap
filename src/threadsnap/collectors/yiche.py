@@ -16,14 +16,14 @@ from typing import Any, Callable, Iterable
 from urllib.parse import parse_qs, urljoin, urlsplit
 from zoneinfo import ZoneInfo
 
-from curl_cffi import requests
 from json_repair import repair_json
 from lxml import html
 
+from ..scrapling_transport import ScraplingHttpPool
 from .base import AuthenticationRequired, CircleSource, CollectorFailure
 
 BASE_URL = "https://baa.yiche.com"
-ADAPTER_VERSION = "yiche-community-v4"
+ADAPTER_VERSION = "yiche-community-v5-scrapling"
 CIRCLE_RE = re.compile(
     r"^/(?P<id>[A-Za-z0-9_-]+)/?"
     r"(?:index-0-(?P<order>[01])-(?P<page>\d+)\.html)?/?$"
@@ -80,27 +80,6 @@ def _request_content_id(url: str, post_data: str | None = None) -> str | None:
         if isinstance(value, dict) and value.get("contentId") is not None:
             return str(value["contentId"])
     return None
-
-
-def _cookies_from_state(storage_state: dict[str, Any] | None) -> dict[str, str]:
-    """只导入易车域 Cookie，不把值写入日志或业务结果。"""
-
-    now = time.time()
-    cookies: dict[str, str] = {}
-    for item in (storage_state or {}).get("cookies", []):
-        if not isinstance(item, dict):
-            continue
-        domain = str(item.get("domain") or "").lstrip(".").lower()
-        expires = item.get("expires")
-        if not (domain == "yiche.com" or domain.endswith(".yiche.com")):
-            continue
-        if isinstance(expires, (int, float)) and expires > 0 and expires <= now:
-            continue
-        name = str(item.get("name") or "")
-        value = item.get("value")
-        if name and isinstance(value, str):
-            cookies[name] = value
-    return cookies
 
 
 def _rc4_bytes(key: str, value: str) -> bytes:
@@ -253,26 +232,23 @@ class YicheCollector:
     ):
         del browser_headless
         self.storage_state = storage_state
-        self.cookies = _cookies_from_state(storage_state)
         self.concurrency = max(1, concurrency)
         self.timeout_seconds = timeout_seconds
         self.semaphore = threading.BoundedSemaphore(self.concurrency)
-        self._thread_local = threading.local()
+        self.http = ScraplingHttpPool(storage_state, timeout_seconds=timeout_seconds)
+        self.cookies = self.http.cookies
         self.user_guid = self.cookies.get("UserGuid") or self.cookies.get("CIGUID")
         if not self.user_guid:
             self.user_guid = str(uuid.uuid4())
-            self.cookies["CIGUID"] = self.user_guid
+            self.cookies.set("CIGUID", self.user_guid, domain=".yiche.com", path="/")
         self._account_verified = False
 
-    def _http_session(self) -> requests.Session:
-        session = getattr(self._thread_local, "http", None)
-        if session is None:
-            session = requests.Session(impersonate="chrome")
-            session.cookies.update(self.cookies)
-            self._thread_local.http = session
-        return session
+    def _http_session(self) -> Any:
+        """返回当前线程独享的 Scrapling FetcherSession 适配器。"""
 
-    def _get(self, url: str, **kwargs: Any) -> requests.Response:
+        return self.http.session()
+
+    def _get(self, url: str, **kwargs: Any) -> Any:
         """有界重试直连请求；平台业务状态由上层按响应类型分类。"""
         last_error: Exception | None = None
         for attempt in range(3):
@@ -293,6 +269,11 @@ class YicheCollector:
                 if attempt < 2:
                     time.sleep(0.5 * (attempt + 1))
         raise CollectorFailure("PLATFORM_NETWORK_ERROR", f"访问易车失败：{last_error}")
+
+    def close(self) -> None:
+        """关闭采集线程创建的全部 Scrapling Session。"""
+
+        self.http.close()
 
     @staticmethod
     def _challenge_cookie(content: str) -> tuple[str, str]:

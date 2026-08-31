@@ -16,6 +16,21 @@
 
 ---
 
+## 2026-08-31 — 正式普通HTTP最大化切换Scrapling
+**总目标**：在独立工作树中把生产采集器的普通HTML/JSON请求最大程度收敛到Scrapling，同时保留ThreadSnap对批次、平台FIFO、固定候选、Session持久状态和恢复检查点的所有权，暂不合入main。
+**状态**：✅ 独立工作树、统一传输层、四处生产适配、资源生命周期、owner文档和完整回归均已完成；变更只存在于`refactor/restore-scrapling-max`分支。
+**干到哪里了**：
+- [x] 从`main@9b56ff8`创建`H:\ThreadSnap-worktrees\scrapling-max`与分支`refactor/restore-scrapling-max`，原`H:\ThreadSnap`继续保持main工作树，不启动或替换现有服务。
+- [x] 新增Scrapling统一同步传输层：每线程独立`FetcherSession(retries=1)`，按域/路径/协议/有效期注入浏览器Cookie并保留服务端Cookie，响应适配既有采集器合同，关闭INFO级完整请求URL日志，显式收口全部线程Session。
+- [x] 懂车帝、汽车之家、易车帖子采集器及懂车帝口碑普通HTTP全部移除直接`curl_cffi`导入并接入统一传输层；Worker覆盖来源验证、任务池和认证刷新后临时采集器关闭，口碑服务覆盖正式巡检与映射验证关闭。适配器版本分别升级为`dongchedi-dynamic-v7-scrapling`、`autohome-club-v7-scrapling`、`yiche-community-v5-scrapling`和`dongchedi-reputation-v9-scrapling`。
+- [x] 保留ThreadSnap数据库批次、平台FIFO、候选冻结、持久退避、限流冷却、认证等待和不可变历史；Scrapling只拥有普通HTTP Session、TLS/请求头传输、Cookie注入、请求执行与响应。`direct_http`继续表示后台不启动浏览器；Patchright继续处理人工认证、Session刷新和页面/口碑像素证据。
+- [x] 新增本地真实HTTP夹具，覆盖四个正式适配器均使用Scrapling、响应兼容、跳转、浏览器与服务端Cookie连续性、Cookie作用域与优先级、框架无隐藏重试、日志脱敏和多线程Session关闭。完整后端`231/231`通过（121.287秒），Ruff、compileall、pip check和`git diff --check`通过。
+**下一步**：在该分支使用脱敏真实Session执行三平台小批量与目标Linux冒烟，对比切换前后的控制分类、请求放大率和吞吐；证据通过后再由用户决定是否把该分支提交PR合入main。
+**边界**：本分支未修改数据库结构、平台业务解析、认证Profile格式或前端；未让Scrapling Spider复制ThreadSnap持久调度；显式`curl-cffi`依赖继续作为Scrapling实际TLS引擎和离线wheelhouse组成；当前main和运行服务未切换。
+**关联**：`docs/adr/0054-use-scrapling-for-formal-http-execution.md`、`src/threadsnap/scrapling_transport.py`、`tests/test_scrapling_transport.py`
+
+---
+
 ## 2026-08-31 — 口碑巡检内部并发固定为2
 **总目标**：让正式口碑巡检及失败项补跑始终以两路页面并发执行，不再因帖子提取平台并发调整而突然同时打开更多浏览器窗口。
 **状态**：✅ 代码、领域口径、回归验证、本地服务加载和Git交付均已完成。
