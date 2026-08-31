@@ -26,7 +26,7 @@ from .base import (
     ProgressCallback,
 )
 
-ADAPTER_VERSION = "autohome-club-v8-scrapling-stealth"
+ADAPTER_VERSION = "autohome-club-v9-scrapling-auth-gate"
 BASE_URL = "https://club.autohome.com.cn"
 LIST_API_URL = "https://club-open-api.autohome.com.cn/api/pc/bbs/index/getClubTopicList"
 VIDEO_MEDIA_URL = "https://p-vp.autohome.com.cn/api/gpi"
@@ -285,10 +285,8 @@ class AutohomeCollector:
         """执行有界 GET；平台控制分类由响应检查统一完成。"""
 
         last_error: Exception | None = None
-        protected_recovery_attempted = False
         for attempt in range(3):
             try:
-                observed_generation = self.http.recovery_generation
                 with self.semaphore:
                     response = self._http_session().get(
                         url,
@@ -303,43 +301,10 @@ class AutohomeCollector:
                         time.sleep(0.5 * (attempt + 1))
                         continue
                     break
-                try:
-                    self._detect_control(response, trigger_url=recovery_url or url)
-                except CollectorFailure as control:
-                    if (
-                        control.code in {"PLATFORM_CAPTCHA_REQUIRED", "PLATFORM_CHALLENGE"}
-                        and not protected_recovery_attempted
-                    ):
-                        protected_recovery_attempted = True
-                        try:
-                            recovery = self.http.recover_protected(
-                                recovery_url or url,
-                                observed_generation=observed_generation,
-                                solve_cloudflare=(
-                                    b"challenges.cloudflare.com"
-                                    in bytes(response.content or b"").lower()
-                                    or b"__cf_chl_" in bytes(response.content or b"").lower()
-                                ),
-                            )
-                        except Exception:
-                            recovery = None
-                        if recovery is not None and recovery.should_retry_http:
-                            # StealthySession 已把浏览器 Cookie 回灌共享状态；只复访
-                            # 原请求一次，由相同平台控制分类器决定是否真实解除。
-                            with self.semaphore:
-                                response = self._http_session().get(
-                                    url,
-                                    params=params or None,
-                                    headers=request_headers,
-                                    timeout=self.timeout_seconds,
-                                    allow_redirects=True,
-                                )
-                            if response.status_code >= 500:
-                                raise RuntimeError(f"HTTP {response.status_code}")
-                            self._detect_control(response, trigger_url=recovery_url or url)
-                            self.http.confirm_protected_recovery(recovery.generation)
-                            return response
-                    raise
+                # 汽车之家已观察到的验证入口会把 Stealthy 浏览器导航从 HTTP
+                # 升级到返回 404 的 HTTPS 路径；这里保留原始控制分类和触发 URL，
+                # 直接交给共享认证状态机，避免额外浏览器请求掩盖真实门禁结果。
+                self._detect_control(response, trigger_url=recovery_url or url)
                 return response
             except (AuthenticationRequired, CollectorFailure):
                 raise

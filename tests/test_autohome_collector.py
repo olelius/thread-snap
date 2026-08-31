@@ -15,7 +15,6 @@ from threadsnap.collectors.autohome import (
     normalize_post_url,
     parse_circle_url,
 )
-from threadsnap.scrapling_transport import ProtectionRecoveryResult
 
 AUTH_STATE = {
     "cookies": [
@@ -105,49 +104,31 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertEqual("PLATFORM_NETWORK_ERROR", caught.exception.code)
         self.assertEqual(3, calls)
 
-    def test_challenge_uses_one_stealth_recovery_then_retries_original_request(self) -> None:
-        """浏览器通道只在控制页出现后启动，并回到相同数据请求复核。"""
+    def test_challenge_is_handed_to_formal_auth_without_stealth_navigation(self) -> None:
+        """控制页保留精确触发URL并直接进入共享认证状态机。"""
 
         collector = collector_with_like()
         trigger_url = "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post"
         request_url = "https://club-open-api.autohome.com.cn/api/fixture"
-        responses = iter(
-            [
-                FakeResponse(
-                    b"<html><body>verify</body></html>",
-                    "https://safety.autohome.com.cn/userverify?backurl=x",
-                ),
-                FakeResponse(b'{"returncode":0}', request_url),
-            ]
+        response = FakeResponse(
+            b"<html><body>verify</body></html>",
+            "https://safety.autohome.com.cn/userverify?backurl=x",
         )
         calls: list[str] = []
-        recoveries: list[tuple[str, int]] = []
 
         class FixtureSession:
             def get(self, url: str, **_kwargs: object) -> FakeResponse:
                 calls.append(url)
-                return next(responses)
+                return response
 
         collector._http_session = lambda: FixtureSession()  # type: ignore[method-assign]
 
-        confirmed: list[int] = []
+        with self.assertRaises(CollectorFailure) as caught:
+            collector._get(request_url, recovery_url=trigger_url)
 
-        def recover(
-            url: str, *, observed_generation: int, solve_cloudflare: bool
-        ) -> ProtectionRecoveryResult:
-            self.assertFalse(solve_cloudflare)
-            recoveries.append((url, observed_generation))
-            return ProtectionRecoveryResult(1, True, True, 200, 0.1)
-
-        collector.http.recover_protected = recover  # type: ignore[method-assign]
-        collector.http.confirm_protected_recovery = confirmed.append  # type: ignore[method-assign]
-
-        response = collector._get(request_url, recovery_url=trigger_url)
-
-        self.assertEqual(200, response.status_code)
-        self.assertEqual([request_url, request_url], calls)
-        self.assertEqual([(trigger_url, 0)], recoveries)
-        self.assertEqual([1], confirmed)
+        self.assertEqual("PLATFORM_CHALLENGE", caught.exception.code)
+        self.assertEqual(trigger_url, caught.exception.trigger_url)
+        self.assertEqual([request_url], calls)
 
     def test_registry_and_collector_publish_shared_concurrency_bounds(self) -> None:
         spec = get_platform_spec("autohome")

@@ -4,6 +4,8 @@ status: accepted
 
 # 为平台控制增加按需 Scrapling Stealthy 通道
 
+> 2026-08-31：汽车之家控制页恢复部分由 ADR 0056 替代；本决策继续适用于易车和通用传输资源能力。
+
 ## Context
 
 ADR 0054 已把三平台普通 HTML/JSON 请求统一到 Scrapling `FetcherSession`，但该类只提供

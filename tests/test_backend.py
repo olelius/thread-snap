@@ -73,7 +73,11 @@ from threadsnap.sentiment import (
     validate_modality_identity,
 )
 from threadsnap.services import bootstrap_database
-from threadsnap.worker import _retry_delay_seconds
+from threadsnap.worker import (
+    AUTH_RECOVERY_BLOCKED_KEY,
+    AUTH_RECOVERY_PROBE_KEY,
+    _retry_delay_seconds,
+)
 
 
 def sample_record(post_id: str) -> dict:
@@ -2999,6 +3003,96 @@ class QueueAndRetryTests(AppCase):
         self.assertTrue(self.container.worker.process_once())
         self.assertEqual("success", self.container.runs.get_run(two["id"])["status"])
 
+    def test_auth_resume_runs_one_source_probe_before_restoring_snapshot_concurrency(self) -> None:
+        """认证恢复先串行验证一个来源，成功后才释放同批次其余来源。"""
+
+        with self.container.sessions.begin() as db:
+            platform = db.get(PlatformConfig, "autohome")
+            assert platform is not None
+            platform.enabled = True
+            platform.internal_concurrency = 4
+            vehicle = Vehicle(name="认证恢复测试车")
+            db.add(vehicle)
+            db.flush()
+            circles = []
+            for external_id in ("7853", "8232"):
+                circle = Circle(
+                    platform_code="autohome",
+                    external_id=external_id,
+                    name=f"测试论坛{external_id}",
+                    url=(
+                        f"https://club.autohome.com.cn/bbs/forum-c-{external_id}-1.html"
+                        "?sort=post"
+                    ),
+                    vehicle_id=vehicle.id,
+                    source_kind="configured",
+                    validation_status="verified",
+                )
+                db.add(circle)
+                db.flush()
+                circles.append(circle.id)
+
+        run = self.container.runs.create_manual(
+            ManualRunCreate(platform_code="autohome", circle_ids=circles, quantity=1),
+            scope="api",
+            header_key="auth-recovery-probe-0001",
+        )
+        with self.container.sessions.begin() as db:
+            stored_run = db.get(ExtractionRun, run["id"])
+            tasks = list(
+                db.scalars(
+                    select(CircleTask)
+                    .where(CircleTask.run_id == run["id"])
+                    .order_by(CircleTask.queue_sequence)
+                )
+            )
+            assert stored_run is not None and len(tasks) == 2
+            stored_run.status = "waiting_for_auth"
+            for task in tasks:
+                task.status = "waiting_for_auth"
+                task.error_code = "PLATFORM_CHALLENGE"
+                task.error_message = "平台要求完成访问验证。"
+
+        requested_concurrency: list[int | None] = []
+
+        def collector_factory(
+            _platform: PlatformConfig, snapshot_concurrency: int | None = None
+        ) -> FakeCollector:
+            requested_concurrency.append(snapshot_concurrency)
+            return FakeCollector()
+
+        self.container.worker._collector = collector_factory  # type: ignore[method-assign]
+        self.container.worker.resume_platform("autohome")
+
+        with self.container.sessions() as db:
+            resumed_tasks = list(
+                db.scalars(
+                    select(CircleTask)
+                    .where(CircleTask.run_id == run["id"])
+                    .order_by(CircleTask.queue_sequence)
+                )
+            )
+            self.assertTrue(resumed_tasks[0].checkpoint[AUTH_RECOVERY_PROBE_KEY])
+            self.assertTrue(resumed_tasks[1].checkpoint[AUTH_RECOVERY_BLOCKED_KEY])
+
+        self.assertTrue(self.container.worker.process_once())
+        self.assertEqual([1], requested_concurrency)
+        with self.container.sessions() as db:
+            probed_tasks = list(
+                db.scalars(
+                    select(CircleTask)
+                    .where(CircleTask.run_id == run["id"])
+                    .order_by(CircleTask.queue_sequence)
+                )
+            )
+            self.assertEqual(["success", "queued"], [task.status for task in probed_tasks])
+            self.assertNotIn(AUTH_RECOVERY_PROBE_KEY, probed_tasks[0].checkpoint)
+            self.assertNotIn(AUTH_RECOVERY_BLOCKED_KEY, probed_tasks[1].checkpoint)
+
+        self.assertTrue(self.container.worker.process_once())
+        self.assertEqual([1, 4], requested_concurrency)
+        self.assertEqual("success", self.container.runs.get_run(run["id"])["status"])
+
     def test_worker_persists_and_publishes_progress_before_task_finishes(self) -> None:
         """小批量任务应逐条形成权威进度，而不是结束时才一次跳满。"""
 
@@ -3270,6 +3364,20 @@ class QueueAndRetryTests(AppCase):
         self.assertEqual("completed", auth_task.status)
         self.assertEqual("completed", socket.messages[-1]["type"])
         self.assertEqual("queued", self.container.runs.get_run(run["id"])["status"])
+
+        with self.container.sessions() as db:
+            resumed_task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            assert resumed_task is not None
+            self.assertTrue(resumed_task.checkpoint[AUTH_RECOVERY_PROBE_KEY])
+
+        # 原URL仍返回同类控制页时，探针保持在认证等待态，后续来源不会被释放。
+        self.assertTrue(self.container.worker.process_once())
+        self.assertEqual("waiting_for_auth", self.container.runs.get_run(run["id"])["status"])
+        with self.container.sessions() as db:
+            repeated_task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            assert repeated_task is not None
+            self.assertEqual("PLATFORM_CHALLENGE", repeated_task.error_code)
+            self.assertTrue(repeated_task.checkpoint[AUTH_RECOVERY_PROBE_KEY])
 
         # 若真实任务随后明确报告登录失效，恢复入口才切换到官方登录页和全新环境。
         with self.container.sessions.begin() as db:

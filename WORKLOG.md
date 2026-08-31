@@ -16,6 +16,21 @@
 
 ---
 
+## 2026-08-31 — 汽车之家控制分类与认证后渐进恢复
+**总目标**：依据固定全Stealth对照轮次和正式混合批次证据，把汽车之家平台控制收敛为“Scrapling HTTP分类 → 正式交互认证 → 单来源原URL探针 → 恢复冻结并发”的持久状态机。
+**状态**：✅ 状态机、适配器合同、持久恢复测试、owner文档和完整本地验证均已完成；仅存在于`refactor/restore-scrapling-max`独立工作树，暂不合入main。
+**干到哪里了**：
+- [x] 固定420访问全Stealth轮次前56次为`CONTENT_OK`，第57次进入`PLATFORM_CHALLENGE`；人工完成后同一Stealth原请求复访仍受控且验证入口为HTTPS 404。输入清单SHA-256为`318b9c2794179089526607f73facd9c443864da30e526a56c4e6c6027f18c0d4`，状态位于`artifacts/poc/results/scrapling-stealth-all/20260831-interactive-full/state.json`。
+- [x] 同日正式交互Profile更新后，既有批次从`85 / 420`原位恢复并完成`420 / 420`；据此撤回汽车之家控制页的Stealthy恢复，普通请求继续使用Scrapling FetcherSession，控制分类直接进入正式认证状态机。
+- [x] `resume_platform`为每个恢复批次持久标记一个最早等待来源探针并阻塞其余来源；Worker用实际并发1执行探针，终态后释放同批次后续来源并恢复冻结并发，再次等待认证或持久重试时保持阻塞；残留阻塞标记可自动提升最早任务，避免重启后停滞。
+- [x] 汽车之家适配器升级为`autohome-club-v9-scrapling-auth-gate`；定向及队列回归55项通过，覆盖控制页不启动Stealthy、精确触发URL、重复控制继续等待、两来源恢复先1后4并发和既有认证事件。
+- [x] 完整后端238项、Ruff、compileall、pip check、前端TypeScript检查和2468模块生产构建均通过；`git diff --check`通过。脱敏回执位于`artifacts/runtime/autohome-auth-recovery-20260831/summary.json`。
+**下一步**：保留该独立分支供后续真实新批次验证；按当前要求不创建PR、不合入main，也不切换main服务。
+**边界**：本轮关闭已取得证据的平台控制分类、正式认证、原URL内容门禁与渐进恢复，不增加验证码图像识别或直接提交协议；易车ADR 0055 Stealthy路径保持不变，数据库和Session格式不迁移。
+**关联**：`docs/adr/0056-route-autohome-control-through-auth-probe.md`、`src/threadsnap/collectors/autohome.py`、`src/threadsnap/worker.py`、`tests/test_autohome_collector.py`、`tests/test_backend.py`
+
+---
+
 ## 2026-08-31 — Scrapling单用户服务按SaaS资源边界优化
 **总目标**：先完成当前单用户服务的Scrapling功能与资源优化，以稳定执行作用域、浏览器预算和恢复确认合同承接后续SaaS资源调度，当前不引入权限、租户数据隔离或数据库迁移。
 **状态**：✅ 代码、适配器合同、并发资源测试、本地真实Chromium闭环、完整后端回归和owner文档均已完成；仍只存在于`refactor/restore-scrapling-max`独立工作树，未合入main。
