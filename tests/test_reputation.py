@@ -52,6 +52,7 @@ class OfficialFakeAdapter:
     progress_probe = None
     last_prefer_http_first: bool | None = None
     last_include_negative_rate: bool | None = None
+    last_concurrency: int | None = None
 
     def __init__(
         self,
@@ -66,6 +67,7 @@ class OfficialFakeAdapter:
         self.validation_calls = 0
         type(self).last_prefer_http_first = prefer_http_first
         type(self).last_include_negative_rate = include_negative_rate
+        type(self).last_concurrency = int(_kwargs["concurrency"])
 
     def validate_sync(self, targets, output_dir, on_result=None):
         self.validation_calls += 1
@@ -1166,6 +1168,7 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         OfficialFakeAdapter.progress_probe = None
         OfficialFakeAdapter.last_prefer_http_first = None
         OfficialFakeAdapter.last_include_negative_rate = None
+        OfficialFakeAdapter.last_concurrency = None
         self._publish_scope()
 
     def tearDown(self) -> None:
@@ -1315,6 +1318,30 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
             self.service.schedule_status()["last_event"]["message"],
             "正式口碑巡检已到达终态，汇报已生成。",
         )
+
+    def test_official_run_concurrency_is_fixed_at_two(self) -> None:
+        """帖子平台并发和异常排队快照都不得扩大巡检页面并发。"""
+
+        with self.client.app.state.container.sessions.begin() as db:
+            platform = db.get(PlatformConfig, "dongchedi")
+            platform.internal_concurrency = 8
+
+        due = self.service.check_schedule(self._at("2030-01-02", "10:00"))
+        run_id = due["queued_run_ids"][0]
+        self.assertEqual(2, self.service.get_run(run_id)["concurrency"])
+
+        # 模拟修复前遗留或异常写入的排队快照；执行入口仍须收敛回固定值。
+        with self.client.app.state.container.sessions.begin() as db:
+            db.get(ReputationRun, run_id).concurrency = 8
+
+        OfficialFakeAdapter.failures = {"official-01"}
+        finished = self.service.execute_run(run_id)
+
+        self.assertEqual(2, OfficialFakeAdapter.last_concurrency)
+        self.assertEqual(2, finished["concurrency"])
+        self.assertEqual("partial_success", finished["status"])
+        retry = self.service.retry_failed(run_id)
+        self.assertEqual(2, retry["concurrency"])
 
     def test_official_run_persists_linear_progress_before_terminal_state(self) -> None:
         """每个车型终态都应先落库并发布进度，批次结束后才冻结汇报。"""
