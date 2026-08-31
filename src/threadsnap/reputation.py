@@ -65,6 +65,9 @@ PLATFORM_NAME = "懂车帝"
 DEFAULT_PROJECT_GROUP = "奇瑞项目组"
 INSPECTION_TIME = time(10, 0)
 INSPECTION_TIME_TEXT = INSPECTION_TIME.isoformat()
+# 正式口碑巡检及其失败项补跑使用独立、固定的页面并发，避免帖子提取配置
+# 调整后在计划时点突然打开更多浏览器窗口。
+REPUTATION_RUN_CONCURRENCY = 2
 SCENARIOS: dict[str, dict[str, str]] = {
     "baseline_initialization": {
         "name": "基线初始化",
@@ -1124,7 +1127,7 @@ class ReputationService:
                 planned_at=planned_at,
                 report_planned_at=None,
                 delayed=current > planned_at + timedelta(minutes=1),
-                concurrency=max(1, min(int(platform.internal_concurrency), 8)),
+                concurrency=REPUTATION_RUN_CONCURRENCY,
                 baseline_date=baseline_date,
                 baseline_frozen_at=current,
                 baseline_source_run_id=baseline_source,
@@ -1469,10 +1472,12 @@ class ReputationService:
             run.status = "running"
             run.started_at = started
             run.error_message = None
+            # 防御旧的排队数据或异常写入；终态历史批次会在上方直接返回，不会被改写。
+            run.concurrency = REPUTATION_RUN_CONCURRENCY
             snapshot = json.loads(json.dumps(version.snapshot, ensure_ascii=False))
             target_keys = set(run.target_keys)
             baseline_snapshot = json.loads(json.dumps(run.baseline_snapshot, ensure_ascii=False))
-            concurrency = int(run.concurrency or 1)
+            concurrency = REPUTATION_RUN_CONCURRENCY
             run_type = run.run_type
             schedule_type = run.schedule_type
 
@@ -1880,7 +1885,7 @@ class ReputationService:
                 planned_at=root.planned_at,
                 report_planned_at=root.report_planned_at,
                 delayed=root.delayed,
-                concurrency=root.concurrency,
+                concurrency=REPUTATION_RUN_CONCURRENCY,
                 baseline_date=root.baseline_date,
                 baseline_frozen_at=root.baseline_frozen_at,
                 baseline_source_run_id=root.baseline_source_run_id,
