@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 
 from lxml import html
 
-from ..scrapling_transport import ScraplingHttpPool
+from ..scrapling_transport import ExecutionScopeKey, ScraplingHttpPool
 from .base import (
     AuthenticationRequired,
     CircleSource,
@@ -26,7 +26,7 @@ from .base import (
     ProgressCallback,
 )
 
-ADAPTER_VERSION = "autohome-club-v7-scrapling"
+ADAPTER_VERSION = "autohome-club-v8-scrapling-stealth"
 BASE_URL = "https://club.autohome.com.cn"
 LIST_API_URL = "https://club-open-api.autohome.com.cn/api/pc/bbs/index/getClubTopicList"
 VIDEO_MEDIA_URL = "https://p-vp.autohome.com.cn/api/gpi"
@@ -254,6 +254,7 @@ class AutohomeCollector:
         concurrency: int = 1,
         timeout_seconds: int = 30,
         browser_headless: bool = False,
+        execution_scope: ExecutionScopeKey | None = None,
     ):
         self.storage_state = storage_state
         self.authenticated_member_id = _authenticated_member_id(storage_state)
@@ -262,7 +263,11 @@ class AutohomeCollector:
         self.timeout_seconds = timeout_seconds
         self.browser_headless = browser_headless
         self.semaphore = threading.BoundedSemaphore(self.concurrency)
-        self.http = ScraplingHttpPool(storage_state, timeout_seconds=timeout_seconds)
+        self.http = ScraplingHttpPool(
+            storage_state,
+            timeout_seconds=timeout_seconds,
+            scope=(execution_scope or ExecutionScopeKey()).bind_platform("autohome"),
+        )
 
     def _http_session(self) -> Any:
         """返回当前线程独享的 Scrapling FetcherSession 适配器。"""
@@ -280,8 +285,10 @@ class AutohomeCollector:
         """执行有界 GET；平台控制分类由响应检查统一完成。"""
 
         last_error: Exception | None = None
+        protected_recovery_attempted = False
         for attempt in range(3):
             try:
+                observed_generation = self.http.recovery_generation
                 with self.semaphore:
                     response = self._http_session().get(
                         url,
@@ -296,7 +303,43 @@ class AutohomeCollector:
                         time.sleep(0.5 * (attempt + 1))
                         continue
                     break
-                self._detect_control(response, trigger_url=recovery_url or url)
+                try:
+                    self._detect_control(response, trigger_url=recovery_url or url)
+                except CollectorFailure as control:
+                    if (
+                        control.code in {"PLATFORM_CAPTCHA_REQUIRED", "PLATFORM_CHALLENGE"}
+                        and not protected_recovery_attempted
+                    ):
+                        protected_recovery_attempted = True
+                        try:
+                            recovery = self.http.recover_protected(
+                                recovery_url or url,
+                                observed_generation=observed_generation,
+                                solve_cloudflare=(
+                                    b"challenges.cloudflare.com"
+                                    in bytes(response.content or b"").lower()
+                                    or b"__cf_chl_" in bytes(response.content or b"").lower()
+                                ),
+                            )
+                        except Exception:
+                            recovery = None
+                        if recovery is not None and recovery.should_retry_http:
+                            # StealthySession 已把浏览器 Cookie 回灌共享状态；只复访
+                            # 原请求一次，由相同平台控制分类器决定是否真实解除。
+                            with self.semaphore:
+                                response = self._http_session().get(
+                                    url,
+                                    params=params or None,
+                                    headers=request_headers,
+                                    timeout=self.timeout_seconds,
+                                    allow_redirects=True,
+                                )
+                            if response.status_code >= 500:
+                                raise RuntimeError(f"HTTP {response.status_code}")
+                            self._detect_control(response, trigger_url=recovery_url or url)
+                            self.http.confirm_protected_recovery(recovery.generation)
+                            return response
+                    raise
                 return response
             except (AuthenticationRequired, CollectorFailure):
                 raise
@@ -434,9 +477,7 @@ class AutohomeCollector:
         return urls
 
     @staticmethod
-    def _detect_control(
-        response: Any, *, trigger_url: str | None = None
-    ) -> None:
+    def _detect_control(response: Any, *, trigger_url: str | None = None) -> None:
         """保守区分登录、验证码、挑战、限流和异常空响应。"""
 
         content = bytes(response.content or b"")
@@ -1059,10 +1100,7 @@ class AutohomeCollector:
                         records=records,
                         failures=failures,
                     ) from error
-                if (
-                    isinstance(error, CollectorFailure)
-                    and error.code == "PLATFORM_RATE_LIMITED"
-                ):
+                if isinstance(error, CollectorFailure) and error.code == "PLATFORM_RATE_LIMITED":
                     # 限流后的冷却续跑必须使用本轮已经冻结的剩余URL，不能重新读取
                     # 实时列表并把后续帖子补进原任务。
                     for pending in frozen_candidates[batch_start + offset :]:

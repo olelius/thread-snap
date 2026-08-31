@@ -8,12 +8,18 @@ import threading
 import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest.mock import patch
 
 from threadsnap.collectors.autohome import AutohomeCollector
 from threadsnap.collectors.dongchedi import DongchediCollector
 from threadsnap.collectors.yiche import YicheCollector
 from threadsnap.reputation_dongchedi import DongchediReputationAdapter
-from threadsnap.scrapling_transport import BrowserCookieStore, ScraplingHttpPool
+from threadsnap.scrapling_transport import (
+    BrowserCookieStore,
+    BrowserResourceBudget,
+    ExecutionScopeKey,
+    ScraplingHttpPool,
+)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -107,6 +113,254 @@ class ScraplingTransportTests(unittest.TestCase):
         finally:
             pool.close()
 
+    def test_server_cookie_is_shared_with_another_http_thread(self) -> None:
+        pool = ScraplingHttpPool(None, timeout_seconds=5)
+        echoed: list[str] = []
+        try:
+            pool.session().get(f"{self.base_url}/set-cookie")
+
+            def fetch_from_another_thread() -> None:
+                value = pool.session().get(f"{self.base_url}/echo-cookie").json()["cookie"]
+                echoed.append(value)
+
+            thread = threading.Thread(target=fetch_from_another_thread)
+            thread.start()
+            thread.join(timeout=3)
+            self.assertFalse(thread.is_alive())
+            self.assertIn("server_cookie=kept", echoed[0])
+        finally:
+            pool.close()
+
+    def test_stealth_channel_is_lazy_single_flight_and_requires_business_confirmation(
+        self,
+    ) -> None:
+        class FakeRawResponse:
+            status = 200
+            body = b"<html><body>cleared</body></html>"
+            url = "https://protected.example.test/content"
+            headers = {"content-type": "text/html; charset=utf-8"}
+            history: list[object] = []
+            encoding = "utf-8"
+
+        class FakeContext:
+            def __init__(self) -> None:
+                self.imported: list[dict[str, object]] = []
+
+            def add_cookies(self, cookies: list[dict[str, object]]) -> None:
+                self.imported.extend(cookies)
+
+            def cookies(self) -> list[dict[str, object]]:
+                return self.imported + [
+                    {
+                        "name": "clearance",
+                        "value": "shared",
+                        "domain": ".example.test",
+                        "path": "/",
+                        "secure": True,
+                        "expires": time.time() + 60,
+                    }
+                ]
+
+        class FakeStealthySession:
+            instances: list["FakeStealthySession"] = []
+
+            def __init__(self, **kwargs: object) -> None:
+                self.kwargs = kwargs
+                self.context = FakeContext()
+                self.fetch_calls: list[tuple[str, dict[str, object]]] = []
+                self.closed = False
+                self.instances.append(self)
+
+            def __enter__(self) -> "FakeStealthySession":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                self.closed = True
+
+            def fetch(self, url: str, **kwargs: object) -> FakeRawResponse:
+                self.fetch_calls.append((url, kwargs))
+                return FakeRawResponse()
+
+        state = {
+            "cookies": [
+                {
+                    "name": "session",
+                    "value": "existing",
+                    "domain": ".example.test",
+                    "path": "/",
+                    "secure": True,
+                    "expires": time.time() + 60,
+                }
+            ]
+        }
+        with patch("threadsnap.scrapling_transport.StealthySession", FakeStealthySession):
+            pool = ScraplingHttpPool(None, timeout_seconds=5)
+            pool.close()
+            self.assertEqual([], FakeStealthySession.instances)
+
+            budget = BrowserResourceBudget(maximum=1)
+            pool = ScraplingHttpPool(
+                state,
+                timeout_seconds=5,
+                scope=ExecutionScopeKey(platform="fixture"),
+                browser_budget=budget,
+            )
+            try:
+                first = pool.recover_protected(
+                    "https://protected.example.test/content",
+                    observed_generation=0,
+                    solve_cloudflare=True,
+                )
+                self.assertTrue(first.attempted)
+                self.assertTrue(first.should_retry_http)
+                self.assertEqual(0, pool.verified_recovery_generation)
+                # 第二个并发请求仍携带旧代次，只复用首个浏览器结果。
+                second = pool.recover_protected(
+                    "https://protected.example.test/content",
+                    observed_generation=0,
+                    solve_cloudflare=True,
+                )
+                self.assertTrue(second.reused)
+                self.assertEqual(first.generation, second.generation)
+                pool.confirm_protected_recovery(second.generation)
+                self.assertEqual(1, pool.verified_recovery_generation)
+                instance = FakeStealthySession.instances[0]
+                self.assertEqual(1, len(instance.fetch_calls))
+                self.assertTrue(instance.closed)
+                self.assertTrue(instance.kwargs["block_webrtc"])
+                self.assertTrue(instance.kwargs["hide_canvas"])
+                self.assertEqual(1, instance.kwargs["max_pages"])
+                self.assertTrue(instance.fetch_calls[0][1]["solve_cloudflare"])
+                self.assertEqual(0, instance.fetch_calls[0][1]["wait"])
+                self.assertEqual(
+                    "shared",
+                    pool.cookies.for_url("https://protected.example.test/next")["clearance"],
+                )
+                stats = pool.stats_snapshot()
+                self.assertEqual(
+                    (1, 1, 1),
+                    (
+                        stats.browser_attempts,
+                        stats.browser_reuses,
+                        stats.confirmed_recoveries,
+                    ),
+                )
+                self.assertEqual(
+                    (0, 1, 1),
+                    (
+                        budget.snapshot().active,
+                        budget.snapshot().peak,
+                        budget.snapshot().acquisitions,
+                    ),
+                )
+            finally:
+                pool.close()
+            self.assertTrue(FakeStealthySession.instances[0].closed)
+
+    def test_global_browser_budget_serializes_scopes_without_sharing_cookies(self) -> None:
+        class FakeRawResponse:
+            status = 200
+            body = b"ok"
+            url = "https://fixture.example.test/"
+            headers = {"content-type": "text/html; charset=utf-8"}
+            history: list[object] = []
+            encoding = "utf-8"
+
+        class FakeContext:
+            def __init__(self) -> None:
+                self.imported: list[dict[str, object]] = []
+
+            def add_cookies(self, cookies: list[dict[str, object]]) -> None:
+                self.imported.extend(cookies)
+
+            def cookies(self) -> list[dict[str, object]]:
+                return self.imported
+
+        class BlockingStealthySession:
+            lock = threading.Lock()
+            active = 0
+            peak = 0
+            instances: list["BlockingStealthySession"] = []
+
+            def __init__(self, **_kwargs: object) -> None:
+                self.context = FakeContext()
+                self.instances.append(self)
+
+            def __enter__(self) -> "BlockingStealthySession":
+                return self
+
+            def __exit__(self, *_args: object) -> None:
+                return None
+
+            def fetch(self, _url: str, **_kwargs: object) -> FakeRawResponse:
+                with self.lock:
+                    type(self).active += 1
+                    type(self).peak = max(type(self).peak, type(self).active)
+                time.sleep(0.05)
+                with self.lock:
+                    type(self).active -= 1
+                return FakeRawResponse()
+
+        def state(value: str) -> dict[str, object]:
+            return {
+                "cookies": [
+                    {
+                        "name": "identity",
+                        "value": value,
+                        "domain": ".example.test",
+                        "path": "/",
+                        "secure": True,
+                        "expires": time.time() + 60,
+                    }
+                ]
+            }
+
+        budget = BrowserResourceBudget(maximum=1)
+        pools = [
+            ScraplingHttpPool(
+                state(value),
+                timeout_seconds=5,
+                scope=ExecutionScopeKey(platform=platform),
+                browser_budget=budget,
+            )
+            for platform, value in (("alpha", "A"), ("beta", "B"))
+        ]
+        with patch("threadsnap.scrapling_transport.StealthySession", BlockingStealthySession):
+            threads = [
+                threading.Thread(
+                    target=pool.recover_protected,
+                    args=("https://fixture.example.test/",),
+                    kwargs={"observed_generation": 0},
+                )
+                for pool in pools
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=2)
+                self.assertFalse(thread.is_alive())
+
+        try:
+            self.assertEqual(1, BlockingStealthySession.peak)
+            self.assertEqual(
+                (0, 1, 2),
+                (
+                    budget.snapshot().active,
+                    budget.snapshot().peak,
+                    budget.snapshot().acquisitions,
+                ),
+            )
+            imported_values = [
+                {str(cookie["value"]) for cookie in instance.context.imported}
+                for instance in BlockingStealthySession.instances
+            ]
+            self.assertCountEqual(imported_values, [{"A"}, {"B"}])
+            self.assertEqual("alpha", pools[0].stats_snapshot().scope)
+            self.assertEqual("beta", pools[1].stats_snapshot().scope)
+        finally:
+            for pool in pools:
+                pool.close()
+
     def test_cookie_scope_filters_path_protocol_and_expiry(self) -> None:
         store = BrowserCookieStore(
             {
@@ -130,9 +384,7 @@ class ScraplingTransportTests(unittest.TestCase):
                 ]
             }
         )
-        self.assertEqual(
-            store.for_url("https://sub.example.test/private/page"), {"valid": "yes"}
-        )
+        self.assertEqual(store.for_url("https://sub.example.test/private/page"), {"valid": "yes"})
         self.assertEqual(store.for_url("http://sub.example.test/private/page"), {})
         self.assertEqual(store.for_url("https://other.test/private/page"), {})
 
@@ -165,14 +417,33 @@ class ScraplingTransportTests(unittest.TestCase):
             self.assertTrue(
                 all(isinstance(adapter.http, ScraplingHttpPool) for adapter in adapters)
             )
+            self.assertEqual(
+                ["dongchedi", "autohome", "yiche", "dongchedi-reputation"],
+                [adapter.http.scope.platform for adapter in adapters],
+            )
         finally:
             for adapter in adapters:
                 adapter.close()
 
+    def test_caller_scope_binds_to_platform_without_exposing_owner_in_stats(self) -> None:
+        caller_scope = ExecutionScopeKey(owner="fixture-customer", credential="profile-7")
+        collector = AutohomeCollector(None, execution_scope=caller_scope)
+        try:
+            self.assertEqual("autohome", collector.http.scope.platform)
+            self.assertEqual("fixture-customer", collector.http.scope.owner)
+            self.assertEqual("profile-7", collector.http.scope.credential)
+            self.assertEqual("autohome", collector.http.stats_snapshot().scope)
+        finally:
+            collector.close()
+
+        with self.assertRaises(ValueError):
+            AutohomeCollector(
+                None,
+                execution_scope=ExecutionScopeKey(platform="yiche"),
+            )
+
     def test_formal_transport_suppresses_full_request_url_info_logs(self) -> None:
-        self.assertGreaterEqual(
-            logging.getLogger("scrapling").getEffectiveLevel(), logging.WARNING
-        )
+        self.assertGreaterEqual(logging.getLogger("scrapling").getEffectiveLevel(), logging.WARNING)
 
     def test_pool_closes_every_thread_session_and_rejects_reuse(self) -> None:
         pool = ScraplingHttpPool(None, timeout_seconds=5)

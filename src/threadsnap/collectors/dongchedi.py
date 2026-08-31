@@ -18,7 +18,7 @@ from lxml import html
 from patchright.sync_api import sync_playwright
 
 from ..browser_runtime import browser_launch_args
-from ..scrapling_transport import ScraplingHttpPool
+from ..scrapling_transport import ExecutionScopeKey, ScraplingHttpPool
 from .base import AuthenticationRequired, CircleSource, CollectorFailure
 
 ADAPTER_VERSION = "dongchedi-dynamic-v7-scrapling"
@@ -160,6 +160,7 @@ class DongchediCollector:
         concurrency: int = 1,
         timeout_seconds: int = 30,
         browser_headless: bool = False,
+        execution_scope: ExecutionScopeKey | None = None,
     ):
         self.storage_state = storage_state
         self.timeout_seconds = timeout_seconds
@@ -167,7 +168,11 @@ class DongchediCollector:
         self.browser_headless = browser_headless
         self.semaphore = threading.BoundedSemaphore(self.concurrency)
         self.page_capture_lock = threading.Lock()
-        self.http = ScraplingHttpPool(storage_state, timeout_seconds=timeout_seconds)
+        self.http = ScraplingHttpPool(
+            storage_state,
+            timeout_seconds=timeout_seconds,
+            scope=(execution_scope or ExecutionScopeKey()).bind_platform("dongchedi"),
+        )
 
     def _http_session(self) -> Any:
         """返回当前线程独享的 Scrapling FetcherSession 适配器。"""

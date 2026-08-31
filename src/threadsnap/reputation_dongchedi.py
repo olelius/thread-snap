@@ -20,7 +20,7 @@ from patchright.async_api import Error as PlaywrightError
 from PIL import Image
 
 from .browser_runtime import browser_launch_args
-from .scrapling_transport import ScraplingHttpPool
+from .scrapling_transport import ExecutionScopeKey, ScraplingHttpPool
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +179,7 @@ class DongchediReputationAdapter:
         prefer_http_first: bool = False,
         include_review_article_count: bool = False,
         include_negative_rate: bool = False,
+        execution_scope: ExecutionScopeKey | None = None,
     ) -> None:
         self.storage_state = storage_state
         self.concurrency = max(1, min(int(concurrency), 8))
@@ -189,7 +190,13 @@ class DongchediReputationAdapter:
         self.prefer_http_first = prefer_http_first
         self.include_review_article_count = include_review_article_count
         self.include_negative_rate = include_negative_rate
-        self.http = ScraplingHttpPool(storage_state, timeout_seconds=timeout_seconds)
+        self.http = ScraplingHttpPool(
+            storage_state,
+            timeout_seconds=timeout_seconds,
+            scope=(execution_scope or ExecutionScopeKey()).bind_platform(
+                "dongchedi-reputation"
+            ),
+        )
 
     def _http_session(self) -> Any:
         """返回当前线程独享的 Scrapling FetcherSession 适配器。"""

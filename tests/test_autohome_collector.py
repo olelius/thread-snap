@@ -15,6 +15,7 @@ from threadsnap.collectors.autohome import (
     normalize_post_url,
     parse_circle_url,
 )
+from threadsnap.scrapling_transport import ProtectionRecoveryResult
 
 AUTH_STATE = {
     "cookies": [
@@ -99,12 +100,54 @@ class AutohomeContractTests(unittest.TestCase):
         collector._http_session = lambda: ServerErrorSession()  # type: ignore[method-assign]
         with patch("threadsnap.collectors.autohome.time.sleep"):
             with self.assertRaises(CollectorFailure) as caught:
-                collector._get(
-                    "https://club.autohome.com.cn/bbs/thread/hash/115934382-1.html"
-                )
+                collector._get("https://club.autohome.com.cn/bbs/thread/hash/115934382-1.html")
 
         self.assertEqual("PLATFORM_NETWORK_ERROR", caught.exception.code)
         self.assertEqual(3, calls)
+
+    def test_challenge_uses_one_stealth_recovery_then_retries_original_request(self) -> None:
+        """浏览器通道只在控制页出现后启动，并回到相同数据请求复核。"""
+
+        collector = collector_with_like()
+        trigger_url = "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post"
+        request_url = "https://club-open-api.autohome.com.cn/api/fixture"
+        responses = iter(
+            [
+                FakeResponse(
+                    b"<html><body>verify</body></html>",
+                    "https://safety.autohome.com.cn/userverify?backurl=x",
+                ),
+                FakeResponse(b'{"returncode":0}', request_url),
+            ]
+        )
+        calls: list[str] = []
+        recoveries: list[tuple[str, int]] = []
+
+        class FixtureSession:
+            def get(self, url: str, **_kwargs: object) -> FakeResponse:
+                calls.append(url)
+                return next(responses)
+
+        collector._http_session = lambda: FixtureSession()  # type: ignore[method-assign]
+
+        confirmed: list[int] = []
+
+        def recover(
+            url: str, *, observed_generation: int, solve_cloudflare: bool
+        ) -> ProtectionRecoveryResult:
+            self.assertFalse(solve_cloudflare)
+            recoveries.append((url, observed_generation))
+            return ProtectionRecoveryResult(1, True, True, 200, 0.1)
+
+        collector.http.recover_protected = recover  # type: ignore[method-assign]
+        collector.http.confirm_protected_recovery = confirmed.append  # type: ignore[method-assign]
+
+        response = collector._get(request_url, recovery_url=trigger_url)
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual([request_url, request_url], calls)
+        self.assertEqual([(trigger_url, 0)], recoveries)
+        self.assertEqual([1], confirmed)
 
     def test_registry_and_collector_publish_shared_concurrency_bounds(self) -> None:
         spec = get_platform_spec("autohome")
@@ -227,9 +270,7 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertEqual("resolved", record["raw_status"]["video_url_resolution"])
         self.assertEqual(10, len(record["comments"]))
         self.assertEqual("用户1", record["comments"][0]["author"])
-        self.assertEqual(
-            "detail_first_page_up_to_10", record["raw_status"]["comment_capture"]
-        )
+        self.assertEqual("detail_first_page_up_to_10", record["raw_status"]["comment_capture"])
         self.assertEqual(
             {
                 "has_more": None,
@@ -432,9 +473,7 @@ class AutohomeContractTests(unittest.TestCase):
 
         assert record is not None
         self.assertEqual([], record["comments"])
-        self.assertEqual(
-            "detail_first_page_up_to_10", record["raw_status"]["comment_capture"]
-        )
+        self.assertEqual("detail_first_page_up_to_10", record["raw_status"]["comment_capture"])
         self.assertEqual(
             {
                 "has_more": False,
@@ -643,9 +682,7 @@ class AutohomeContractTests(unittest.TestCase):
 
         assert record is not None
         self.assertEqual(1, len(record["comments"]))
-        self.assertEqual(
-            "detail_first_page_up_to_10", record["raw_status"]["comment_capture"]
-        )
+        self.assertEqual("detail_first_page_up_to_10", record["raw_status"]["comment_capture"])
 
     def test_explicit_delete_flag_maps_to_hidden(self) -> None:
         document = """
@@ -776,9 +813,7 @@ class AutohomeContractTests(unittest.TestCase):
             ["115934382", "115934383"],
             [normalize_post_url(row["url"])[0] for row in result["failures"]],
         )
-        self.assertEqual(
-            {"PLATFORM_RATE_LIMITED"}, {row["code"] for row in result["failures"]}
-        )
+        self.assertEqual({"PLATFORM_RATE_LIMITED"}, {row["code"] for row in result["failures"]})
         self.assertNotIn("115934384", json.dumps(result, ensure_ascii=False))
 
     def test_rate_limit_stops_url_list_and_preserves_unvisited_remainder(self) -> None:
@@ -800,9 +835,7 @@ class AutohomeContractTests(unittest.TestCase):
 
         self.assertEqual([urls[0]], visited)
         self.assertEqual(urls, [row["url"] for row in result["failures"]])
-        self.assertEqual(
-            {"PLATFORM_RATE_LIMITED"}, {row["code"] for row in result["failures"]}
-        )
+        self.assertEqual({"PLATFORM_RATE_LIMITED"}, {row["code"] for row in result["failures"]})
 
     def test_failed_fixed_candidate_is_not_replaced_by_later_row(self) -> None:
         """圈子前 N 个候选一旦冻结，详情失败也不得向后补位。"""
@@ -837,9 +870,7 @@ class AutohomeContractTests(unittest.TestCase):
         )
 
         self.assertEqual(["115934382", "115934383"], visited)
-        self.assertEqual(
-            ["115934383"], [row["platform_post_id"] for row in result["records"]]
-        )
+        self.assertEqual(["115934383"], [row["platform_post_id"] for row in result["records"]])
         self.assertEqual(
             ["115934382"],
             [normalize_post_url(row["url"])[0] for row in result["failures"]],

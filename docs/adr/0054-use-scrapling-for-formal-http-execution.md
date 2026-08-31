@@ -2,6 +2,10 @@
 status: accepted
 ---
 
+> 后续 ADR 0055 在本决策的普通 HTTP 快速通道之外，增加了遇到已分类平台控制时才延迟启动的
+> 单一 Scrapling Stealthy 恢复通道；本决策关于“后台不启动 Chromium”的绝对表述以 ADR 0055
+> 为准收窄。
+
 # 正式普通 HTTP 请求统一由 Scrapling 执行
 
 ## Context

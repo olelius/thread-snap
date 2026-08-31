@@ -20,6 +20,7 @@ from threadsnap.collectors.yiche import (
     parse_circle_url,
     require_content_page,
 )
+from threadsnap.scrapling_transport import ProtectionRecoveryResult
 
 FIXTURES = Path(__file__).parent / "fixtures" / "yiche"
 
@@ -158,6 +159,56 @@ class YicheKnownFactsTests(unittest.TestCase):
         with self.assertRaises(AuthenticationRequired):
             require_content_page(control, url="https://baa.yiche.com/sample/")
 
+    def test_yiche_document_retries_after_stealth_cookie_recovery(self) -> None:
+        """腾讯控制页先交给 Stealthy，解除后只复访相同详情 URL。"""
+
+        url = "https://baa.yiche.com/sample/thread-123.html"
+        responses = iter(
+            [
+                SimpleNamespace(
+                    status_code=200,
+                    text=(
+                        '<script src="TCaptcha.js"></script><script>'
+                        "TencentCaptcha();window.__captcha=true</script>"
+                        '<form action="/WafCaptcha"></form>'
+                    ),
+                    url=url,
+                ),
+                SimpleNamespace(
+                    status_code=200,
+                    text="<html><body>帖子正文</body></html>",
+                    url=url,
+                ),
+            ]
+        )
+        collector = YicheCollector(self._logged_state())
+        calls: list[str] = []
+        recoveries: list[tuple[str, int]] = []
+
+        def get(target: str, **_kwargs: object) -> object:
+            calls.append(target)
+            return next(responses)
+
+        confirmed: list[int] = []
+
+        def recover(target: str, *, observed_generation: int) -> ProtectionRecoveryResult:
+            recoveries.append((target, observed_generation))
+            return ProtectionRecoveryResult(1, True, True, 200, 0.1)
+
+        collector._get = get  # type: ignore[method-assign]
+        collector.http.recover_protected = recover  # type: ignore[method-assign]
+        collector.http.confirm_protected_recovery = confirmed.append  # type: ignore[method-assign]
+        try:
+            content, final_url = collector._document(url)
+        finally:
+            collector.close()
+
+        self.assertIn("帖子正文", content)
+        self.assertEqual(url, final_url)
+        self.assertEqual([url, url], calls)
+        self.assertEqual([(url, 0)], recoveries)
+        self.assertEqual([1], confirmed)
+
     def test_business_errors_are_classified(self) -> None:
         with self.assertRaises(CollectorFailure) as limited:
             YicheCollector._api_payload(
@@ -212,7 +263,9 @@ class YicheKnownFactsTests(unittest.TestCase):
         wrong = collector._parse_comments(
             "", [api_event(path, payload, content_id="1002")], 1, "1001"
         )
-        self.assertEqual(([], "first_page", False), (wrong.comments, wrong.termination, wrong.verified))
+        self.assertEqual(
+            ([], "first_page", False), (wrong.comments, wrong.termination, wrong.verified)
+        )
 
     def test_circle_validation_freezes_three_part_identity_over_http(self) -> None:
         collector = YicheCollector(self._logged_state())
@@ -338,7 +391,9 @@ class YicheKnownFactsTests(unittest.TestCase):
         )
         self.assertEqual("empty_list", empty.termination)
         missing = collector._parse_comments("", [], 0, "1001")
-        self.assertEqual(([], "first_page", False), (missing.comments, missing.termination, missing.verified))
+        self.assertEqual(
+            ([], "first_page", False), (missing.comments, missing.termination, missing.verified)
+        )
 
     def test_account_identity_without_user_id_stays_unverified(self) -> None:
         collector = YicheCollector(self._logged_state())

@@ -16,6 +16,22 @@
 
 ---
 
+## 2026-08-31 — Scrapling单用户服务按SaaS资源边界优化
+**总目标**：先完成当前单用户服务的Scrapling功能与资源优化，以稳定执行作用域、浏览器预算和恢复确认合同承接后续SaaS资源调度，当前不引入权限、租户数据隔离或数据库迁移。
+**状态**：✅ 代码、适配器合同、并发资源测试、本地真实Chromium闭环、完整后端回归和owner文档均已完成；仍只存在于`refactor/restore-scrapling-max`独立工作树，未合入main。
+**干到哪里了**：
+- [x] 统一传输池增加内存态执行作用域键，当前四个正式入口分别使用单用户默认owner、平台code和默认credential；Cookie、HTTP Session及浏览器上下文仍按资源池私有，不增加用户表、租户字段或持久化格式。
+- [x] 增加进程级`BrowserResourceBudget`，默认最多同时运行一个短生命周期Stealthy浏览器；只共享容量许可，不共享Cookie或账号状态。每次保护导航后立即关闭Chromium再归还许可，避免控制事件结束后长期保留约0.5 GiB进程组。
+- [x] 把“浏览器页面可导航”和“业务恢复成功”拆成两阶段：导航HTTP 200只允许复访原请求，原平台控制/内容分类器通过后才确认恢复代次；同一资源池的并发控制事件复用导航尝试，不重复启动浏览器。
+- [x] 保护页导航移除固定1000ms附加等待，参数集中为可注入策略；新增无敏感信息内存统计，区分HTTP请求、浏览器尝试、同事件复用、可复访响应、失败与业务确认。
+- [x] 定向70项与完整后端237项测试通过，覆盖四个正式入口的可注入作用域、汽车之家/易车原URL复访确认、跨作用域全局浏览器峰值1、Cookie不串用、同事件单飞和短生命周期关闭；Ruff、compileall、pip check与`git diff --check`通过。
+- [x] 本地真实Scrapling Stealthy闭环取得浏览器200、业务HTTP内容证明、Cookie回灌与确认代次1；导航约612.9ms，峰值10个子进程/462.3MiB，关闭后子进程0，预算`active=0/peak=1`。脱敏回执位于`artifacts/runtime/scrapling-saas-single-user-20260831/real-stealth-smoke.json`。
+**下一步**：保留分支供脱敏真实Session的三平台小批量与目标Linux验证；上述环境证据通过后，再决定该独立分支的PR和main合入时点。
+**边界**：本轮只稳定未来可替换的运行时资源接口，不实现SaaS账号权限、数据隔离、计费、公平调度、外部队列或数据库升级；Scrapling导航仍以原业务请求内容证明作为成功门禁，平台验证码自身是否可自动解除不作预设。
+**关联**：`docs/adr/0055-add-lazy-scrapling-stealth-protection-channel.md`、`docs/design/technical-route.md`、`src/threadsnap/scrapling_transport.py`、`tests/test_scrapling_transport.py`
+
+---
+
 ## 2026-08-31 — 正式普通HTTP最大化切换Scrapling
 **总目标**：在独立工作树中把生产采集器的普通HTML/JSON请求最大程度收敛到Scrapling，同时保留ThreadSnap对批次、平台FIFO、固定候选、Session持久状态和恢复检查点的所有权，暂不合入main。
 **状态**：✅ 独立工作树、统一传输层、四处生产适配、资源生命周期、owner文档和完整回归均已完成；变更只存在于`refactor/restore-scrapling-max`分支。

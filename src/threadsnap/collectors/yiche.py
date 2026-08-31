@@ -19,11 +19,11 @@ from zoneinfo import ZoneInfo
 from json_repair import repair_json
 from lxml import html
 
-from ..scrapling_transport import ScraplingHttpPool
+from ..scrapling_transport import ExecutionScopeKey, ScraplingHttpPool
 from .base import AuthenticationRequired, CircleSource, CollectorFailure
 
 BASE_URL = "https://baa.yiche.com"
-ADAPTER_VERSION = "yiche-community-v5-scrapling"
+ADAPTER_VERSION = "yiche-community-v6-scrapling-stealth"
 CIRCLE_RE = re.compile(
     r"^/(?P<id>[A-Za-z0-9_-]+)/?"
     r"(?:index-0-(?P<order>[01])-(?P<page>\d+)\.html)?/?$"
@@ -229,13 +229,18 @@ class YicheCollector:
         concurrency: int = 1,
         timeout_seconds: int = 30,
         browser_headless: bool = False,
+        execution_scope: ExecutionScopeKey | None = None,
     ):
         del browser_headless
         self.storage_state = storage_state
         self.concurrency = max(1, concurrency)
         self.timeout_seconds = timeout_seconds
         self.semaphore = threading.BoundedSemaphore(self.concurrency)
-        self.http = ScraplingHttpPool(storage_state, timeout_seconds=timeout_seconds)
+        self.http = ScraplingHttpPool(
+            storage_state,
+            timeout_seconds=timeout_seconds,
+            scope=(execution_scope or ExecutionScopeKey()).bind_platform("yiche"),
+        )
         self.cookies = self.http.cookies
         self.user_guid = self.cookies.get("UserGuid") or self.cookies.get("CIGUID")
         if not self.user_guid:
@@ -302,7 +307,8 @@ class YicheCollector:
         return cookie_name, cookie_value
 
     def _document(self, url: str) -> tuple[str, str]:
-        """直连详情页并最多处理一次平台公开 203 Cookie 挑战。"""
+        """直连详情页，并用按需 Stealthy 通道处理浏览器可解除的保护。"""
+        observed_generation = self.http.recovery_generation
         response = self._get(url, headers={"Referer": BASE_URL + "/"})
         if response.status_code == 203:
             cookie_name, cookie_value = self._challenge_cookie(response.text)
@@ -315,7 +321,20 @@ class YicheCollector:
             raise AuthenticationRequired("易车登录 Session 已失效。", trigger_url=url)
         if response.status_code != 200:
             raise CollectorFailure("HTTP_ERROR", f"易车页面返回 HTTP {response.status_code}。")
-        require_content_page(response.text, url=url)
+        try:
+            require_content_page(response.text, url=url)
+        except AuthenticationRequired:
+            try:
+                recovery = self.http.recover_protected(url, observed_generation=observed_generation)
+            except Exception:
+                recovery = None
+            if recovery is None or not recovery.should_retry_http:
+                raise
+            response = self._get(url, headers={"Referer": BASE_URL + "/"})
+            if response.status_code != 200:
+                raise CollectorFailure("HTTP_ERROR", f"易车页面返回 HTTP {response.status_code}。")
+            require_content_page(response.text, url=url)
+            self.http.confirm_protected_recovery(recovery.generation)
         return response.text, str(response.url)
 
     @staticmethod
