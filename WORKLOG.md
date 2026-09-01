@@ -18,17 +18,17 @@
 
 ## 2026-09-02 — 易车腾讯 WAF 完全协议化研究
 **总目标**：把既有浏览器滑块对照推进到运行时无 Chrome、无腾讯 SDK/TDC 原始脚本的普通 HTTP 全链路，并明确可复用与逐挑战重算结果。
-**状态**：🔄 协议骨架、纯HTTP双图、PoW、答案/verify合同、TDC外层VM解码、抽象语义目录和离线动态覆盖已完成；独立TDC执行器、纯HTTP业务成功、易车WAF与原正文门禁仍在进行。
+**状态**：🔄 协议骨架、纯HTTP双图、PoW、答案/verify合同、TDC外层VM解码、抽象语义目录、离线动态覆盖和P2 Node独立包执行已完成；P3通用VM、纯HTTP业务成功、易车WAF与原正文门禁仍在进行。
 **干到哪里了**：
 - [x] 建立P0-P5严格门：只有独立TDC、腾讯`errorCode="0"`、易车`/WafCaptcha`和原详情正文依次通过才称完全协议化；浏览器自动拖动、原样执行供应商TDC或仅HTTP 200均不算完成。
 - [x] 冻结两份动态TDC并完成AST与运行时差分：最大VM字符串分别为163224/172680字符，Node合成环境输出603字符`collect`，同轮真实浏览器为7426字符；依赖覆盖Canvas/WebGL、UA-CH、permissions、storage、speech、WebRTC、WebGPU、事件和定时器。
 - [x] 独立解码TDC payload：base64 -> signed-varint -> zigzag，得到92423/96474个整数流与43357/35616入口；两轮解释器有98/94个case，辅助运算内联后72个结构完全对应且编号全部重排，证实固定opcode表不具备跨挑战复用条件。
 - [x] 建立仅回环页面、拦截外部请求的离线浏览器Oracle；有效`collect`在`setData`前后发生长度与哈希变化。分阶段无上限计数得到当前样本2690208条、动态覆盖90/94，冻结样本2582681条、覆盖92/98；未动态触发case已有静态语义。
-- [x] 从去混淆解释器、当次payload和入口构建独立最小包；它与原响应各阶段前25万条轨迹哈希一致，加载、`getInfo`、`setData`和第二次`getData`总计数也一致。该包在Node环境适配层中无API异常，`collect`由旧603字符提升至约3.0K，`setData`后约3.2K；仍低于本地浏览器Oracle约7K且尚无服务器接受证据。
+- [x] 从去混淆解释器、当次payload和入口构建独立最小包；它与原响应各阶段前25万条轨迹哈希一致。该包在Node环境适配层中无API异常；按本机Canvas/WebGPU/语音/storage/WebRTC形状校准后，`collect`由旧603字符提升至约5.0K，`setData`后约5.2K。四块对照为浏览器`48/1968/2664/304->432`、Node`48/1440/1752/296->424`，P2离线门关闭，P3和服务器接受证据仍开放。
 - [x] 普通HTTP成功取得当次672×390 JPEG和682×620 PNG；确认`DynAnswerType_POS`答案数组、PoW的MD5规则、verify form字段和WAF四行正文。图像识别增加精灵配置、纹理相关和成对轮廓排除，三份冻结样本离线回归通过。
 - [x] 保存真实verify原始表单形状；新增有界在线对照观察到业务`errorCode=9/12`后停止追加挑战，没有把HTTP 200或失败响应写成协议成功。
 - [x] Git外严格合同、复用矩阵和阶段报告位于`artifacts/poc/results/yiche-waf-protocolization/20260902-0001/`；仓库汇总结论位于`docs/research/yiche-waf-protocolization-findings.md`。
-**下一步**：把94/98个静态case转成稳定的自研VM handler，并补齐Canvas/WebGL、媒体、存储、WebRTC/WebGPU和事件异步结果；与本地Oracle的`collect`结构对齐后，用一个新challenge做单次纯HTTP`errorCode=0`验证，再关闭易车WAF POST和原正文门禁。
+**下一步**：把94/98个静态case转成稳定的自研VM handler，并关闭同步环境块528字节、异步环境块912字节的结构差额；与本地Oracle对齐后，用一个新challenge做单次纯HTTP`errorCode=0`验证，再关闭易车WAF POST和原正文门禁。
 **边界**：生产继续执行ADR 0058，不加入自动滑块或TDC依赖；`sess/tdc_path/eks/collect/图片/PoW/ticket/randstr/seqid/Cookie`均为逐挑战结果，不跨challenge复用；本轮不计入正式500条。
 **关联**：`docs/research/yiche-waf-protocolization-findings.md`、`docs/research/yiche-tencent-waf-reverse-runbook.md`、`docs/adr/0058-route-yiche-control-through-classified-recovery.md`、`docs/adr/0059-allow-bounded-yiche-waf-trigger-round.md`
 

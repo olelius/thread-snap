@@ -26,6 +26,8 @@
 - Node 合成环境曾产出 603 字符 `collect`，同一轮真实浏览器为 7426 字符。差额来自尚未补齐的 Cookie、浏览器异步环境与事件采样，当前 Node 输出没有服务器接受证据。
 - 从去混淆解释器、当次 payload 和入口调用构建的独立最小包可脱离原始 TDC 响应运行。它与原响应的加载、`getInfo`、`setData` 及两次 `getData` 前 25 万条轨迹哈希逐阶段一致；除首次取数有 6 条异步时序差外，其余阶段总计数一致。
 - 独立包已在 Node `vm` 与自建环境适配层中产出 3.0K 级 `collect`，`setData` 后增至 3.2K 级，四个 API 无调用异常且 `eks` 与浏览器一致。Base64 前已是分块高熵二进制，明文序列化边界仍位于 VM 内部。
+- `collect` 经 URL 解码后是四个加密块连续拼接形成的单一 Base64。浏览器块长为 `48/1968/2664/304`，行为更新后末块为 432；Node 校准后为 `48/1440/1752/296`，末块为 424。头块等长，行为块只差 8 字节，剩余差额集中在同步与异步环境块。
+- 本机 Chrome 的回环环境快照确认 TDC 使用 8366 字符 Canvas URL、19 个 WebGPU feature、36 个 limit、6 个 Windows 语音条目、storage estimate 和 WebRTC。Node 按真实形状校准后 `collect` 达到约 5.0K/5.2K；P2 已按离线门关闭，P3/P4 仍开放。
 - 运行时依赖至少包括 Canvas/WebGL、permissions、storage、UA-CH、speechSynthesis、WebRTC、WebGPU、位置、事件监听和定时器。
 
 ### 2.3 在线对照
@@ -60,9 +62,9 @@
 
 ## 4. 当前结论与下一阶段
 
-当前关闭了协议骨架、TDC 外层编码、抽象语义目录与离线动态覆盖，但没有关闭独立 TDC 执行器、纯 HTTP verify、易车 WAF POST 和原正文门禁，因此状态是“完全协议化进行中”，不是“已经完成”。
+当前关闭了协议骨架、TDC 外层编码、抽象语义目录、离线动态覆盖和 P2 Node 独立包执行，但没有关闭 P3 通用 VM、P4 纯 HTTP verify、易车 WAF POST 和原正文门禁，因此状态是“完全协议化进行中”，不是“已经完成”。
 
-下一阶段把 94/98 个 case 转成稳定的自研 VM handler，并补齐 Canvas/WebGL、媒体、存储、WebRTC/WebGPU 和事件异步结果；完成本地 Oracle 与 Node 的 `collect` 结构对照后，再用一个新 challenge 做单次纯 HTTP `errorCode=0` 验证。只有该门通过，才继续易车 `/WafCaptcha -> 原详情正文`。
+下一阶段把 94/98 个 case 转成稳定的自研 VM handler，并补齐同步环境块 528 字节、异步环境块 912 字节的结构差额；完成本地 Oracle 与 Node 的 `collect` 对照后，再用一个新 challenge 做单次纯 HTTP `errorCode=0` 验证。只有该门通过，才继续易车 `/WafCaptcha -> 原详情正文`。
 
 生产行为不变，继续执行 ADR 0058 的控制分类、止损和原任务恢复；本研究不自动进入生产采集器。
 
@@ -81,9 +83,9 @@
 
 | 证据 | SHA-256 |
 |---|---|
-| `protocol-contract-v1.json` | `ab1e33d3d3c7259093259d3706b178ce6182e82a8cfb518b1e89ca54222edaa6` |
-| `reusability-matrix.md` | `be8ffb53697f15faa319b571de29092b6188fba6961478512df8945be098f2a8` |
-| `progress-report.md` | `f4a512b4433a5ffed278dc3ba70e205202e8eacf98e15bc20ba071e988ab403e` |
+| `protocol-contract-v1.json` | `eaee090a4d22115571e58b02b5561148a4e79ab6b9b9eb17cccc8df47c0a9484` |
+| `reusability-matrix.md` | `2aa290c469fe64e3f4ebeb1ecdd2b94ed6d5335a90ba3f5f056aba6677f830a3` |
+| `progress-report.md` | `45b31903883d4f072179e73235bbde7e6625439a2de5a58387de8786dca5c1ac` |
 | `analysis/tdc-vm-decoded.json` | `c37766d9e01c3614138cd7dd7ef72a0ece9012290fc3cedb9e448a82a9f1d3b5` |
 | `analysis/live-tdc-vm-decoded.json` | `dcfecbc0844d85689c7a982aea9984069c571b78ec2f70031f12c5b229cf9efc` |
 | `analysis/live-tdc-vm-browser-trace.json` | `6f9cc168906a0d4dceaf677ec4d7235e5283f2fe307231fda385c228627ffd8d` |
@@ -92,4 +94,7 @@
 | `analysis/live-tdc-vm-standalone.js` | `2a031f0b95460cff3625cdc4333b836d05989a812861e2e3993e7eea990b7249` |
 | `analysis/live-tdc-vm-standalone-trace.json` | `956349f6beb5afb24e7cfe9b710055607785ab1733669636af245c08e80aaf96` |
 | `analysis/live-node-tdc-standalone-v5.json` | `0ae5a01d046415c79c8761c6732762ced2fbafcf14cd9d0bbb6bfdd4af2d15c0` |
+| `analysis/live-node-tdc-standalone-v8.json` | `ad14647c8e19ab6d434dd3b3d8cfcaf26b73900f91eae00f95c8e18803f565d4` |
+| `analysis/local-browser-environment.json` | `4a09743bf68b037c35e7e06692d754bac2227cfdd508068db7560d21d4290adf` |
+| `analysis/live-tdc-vm-standalone-trace-v4.json` | `486be7295449540b962c729f72e23d777fa3877af3c0b27be1045fe076491db4` |
 | `analysis/accepted-verify-oracle.json` | `668e8a10e55a7f498e6f6573733649e035d2d725eeee1cd9787407c117a0b3d1` |
