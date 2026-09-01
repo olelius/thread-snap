@@ -25,6 +25,7 @@
 | 采集框架 PoC 样本、阶段、指标和结果格式 | `docs/research/collector-stack-poc-plan.md` |
 | 汽车之家与易车接入样本、阶段、指标和结果格式 | `docs/research/later-platform-onboarding-plan.md` |
 | 易车腾讯 WAF 逆向调研的工具固定、证据、阶段门与退出条件 | `docs/research/yiche-tencent-waf-reverse-runbook.md` |
+| 易车腾讯 WAF 完全协议化的阶段结论、动态 TDC 证据与复用边界 | `docs/research/yiche-waf-protocolization-findings.md` |
 | 舆情反馈 PoC 样本、模态覆盖、失败边界和结果格式 | `docs/research/sentiment-analysis-poc-plan.md` |
 | 舆情反馈 PoC 的真实 URL、模型用量和结构结果 | `docs/research/sentiment-analysis-poc-results.md` |
 | 圈子页面证据、成果合成、分片和资源门禁 PoC | `docs/research/circle-screenshot-poc-plan.md` |

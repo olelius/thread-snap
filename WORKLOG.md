@@ -16,6 +16,22 @@
 
 ---
 
+## 2026-09-02 — 易车腾讯 WAF 完全协议化研究
+**总目标**：把既有浏览器滑块对照推进到运行时无 Chrome、无腾讯 SDK/TDC 原始脚本的普通 HTTP 全链路，并明确可复用与逐挑战重算结果。
+**状态**：🔄 协议骨架、纯HTTP双图、PoW、答案/verify合同、TDC外层VM解码和复用矩阵已完成；独立TDC重建、纯HTTP业务成功、易车WAF与原正文门禁仍在进行。
+**干到哪里了**：
+- [x] 建立P0-P5严格门：只有独立TDC、腾讯`errorCode="0"`、易车`/WafCaptcha`和原详情正文依次通过才称完全协议化；浏览器自动拖动、原样执行供应商TDC或仅HTTP 200均不算完成。
+- [x] 冻结两份动态TDC并完成AST与运行时差分：最大VM字符串分别为163224/172680字符，Node合成环境输出603字符`collect`，同轮真实浏览器为7426字符；依赖覆盖Canvas/WebGL、UA-CH、permissions、storage、speech、WebRTC、WebGPU、事件和定时器。
+- [x] 独立解码TDC payload：base64 -> signed-varint -> zigzag，得到92423/96474个整数流与43357/35616入口；两轮解释器有98/94个case，归一化后51个结构直接对应，证实固定opcode表不可跨挑战复用。
+- [x] 普通HTTP成功取得当次672×390 JPEG和682×620 PNG；确认`DynAnswerType_POS`答案数组、PoW的MD5规则、verify form字段和WAF四行正文。图像识别增加精灵配置、纹理相关和成对轮廓排除，三份冻结样本离线回归通过。
+- [x] 保存真实verify原始表单形状；新增有界在线对照观察到业务`errorCode=9/12`后停止追加挑战，没有把HTTP 200或失败响应写成协议成功。
+- [x] Git外严格合同、复用矩阵和阶段报告位于`artifacts/poc/results/yiche-waf-protocolization/20260902-0001/`；仓库汇总结论位于`docs/research/yiche-waf-protocolization-findings.md`。
+**下一步**：离线导出当次解释器opcode映射和VM对浏览器属性/事件的准确调用图，在Node实现异步环境与事件序列；与浏览器`collect`结构对齐后，用一个新challenge做单次纯HTTP`errorCode=0`验证，再关闭易车WAF POST和原正文门禁。
+**边界**：生产继续执行ADR 0058，不加入自动滑块或TDC依赖；`sess/tdc_path/eks/collect/图片/PoW/ticket/randstr/seqid/Cookie`均为逐挑战结果，不跨challenge复用；本轮不计入正式500条。
+**关联**：`docs/research/yiche-waf-protocolization-findings.md`、`docs/research/yiche-tencent-waf-reverse-runbook.md`、`docs/adr/0058-route-yiche-control-through-classified-recovery.md`、`docs/adr/0059-allow-bounded-yiche-waf-trigger-round.md`
+
+---
+
 ## 2026-09-01 — 易车 WAF 逆向受控主动触发
 **总目标**：按严格逆向流程完成易车腾讯WAF/滑块取证，并把原“只等待自然挑战”调整为工具链门通过后允许一次有界主动触发。
 **状态**：✅ 工具链、受控触发、真实WAF冻结、动态链、双图本地识别、最小复现、单变量服务端验证和生产决策均已完成；生产保持ADR 0058现状。
