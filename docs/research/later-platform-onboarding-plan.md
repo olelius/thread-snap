@@ -126,8 +126,10 @@ sources -> discover -> freeze -> samples -> verify-inputs -> run -> verify-run
 
 - 非正式并发诊断批次`20260901-154036-001`使用8个真实来源、每来源30条、冻结并发8；该轮在59/240后8个来源全部停止。控制后的账号身份接口和三个列表接口仍为HTTP 200，详情请求序列为`203 -> 403`，因此不支持把该状态判为账号整体退出。
 - 同一Session冷却约5分43秒后，以并发1复访得到账号/列表200、详情`203 -> 200`、评论200和1条有效结果。该证据确认当前条件下并发8不稳定，与详情突发触发的短期访问控制一致；并发2或4是否稳定仍为`not_observed`，不作为正式500轮次的安全配置结论。
+- 后续独立诊断从8个已验证来源轮询冻结1000个不同详情URL，输入SHA-256为`e8a5437938d85baeefd626b82bfe541e3983bd72353072abb4e4f59ef8570d67`。批次`20260901-164445-001`关闭AI和截图、冻结实际并发1，从零运行到59/1000后进入`PLATFORM_CAPTCHA_REQUIRED`，失败0，当前保留剩余941条等待原URL交互验证。该轮确认并发1仍会遇到平台控制，但不证明每轮都在第59条触发，也不构成稳定阈值。
 - 生产分类依据ADR 0058收敛：缺少控制前置证据的普通401/403为`AUTH_REQUIRED`；203后403为`PLATFORM_CHALLENGE`；TencentCaptcha/WAF经一次有界Stealthy复访仍受控时为`PLATFORM_CAPTCHA_REQUIRED`或挑战；页面/API 429为`PLATFORM_RATE_LIMITED`。挑战和验证码继承当前Profile打开原URL并在保存后用单来源并发1探针恢复，限流在同一任务持久冷却；任一控制出现后不继续请求当前来源其他候选。
 - 脱敏回执位于`artifacts/runtime/yiche-concurrency-20260901/acceptance.json`，SHA-256为`86a80da1fefc038ea33c23675393c016a73568b6e7530fa3436e57be826bef5f`。该诊断不是正式500条验收，不与后续正式分母拼接。
+- 固定1000条诊断的回执位于`artifacts/poc/results/yiche-concurrency1/20260901-1000-url/acceptance.json`，SHA-256为`a617e3619ae1e77039c065c4b30b4a469aed7a455b1128c386991b8586b36c51`。URL清单恢复已按持久化帖子ID扣除前59条并保持原位置，用户完成验证码后只续跑剩余941条；在恢复并达到终态前，不声称完成1000条测试。
 
 ## 5. 口碑映射并行分析边界
 
