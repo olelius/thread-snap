@@ -37,7 +37,10 @@ from .models import (
 from .services import related_run_ids
 
 TERMINAL_TASK_STATUSES = {"success", "partial_success", "failed"}
-RENDERER_VERSION = "v4-full-page-evidence-background"
+RENDERER_VERSION = "v5-autohome-full-card-frame-boundaries"
+LEGACY_AUTOHOME_NARROW_FRAME_ADAPTERS = {
+    "autohome-club-v10-scrapling-page-evidence",
+}
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -143,6 +146,19 @@ def _recover_card_crop_box(source: Image.Image, item: Any) -> tuple[int, int, in
     if not 0.8 * width <= recovered_width <= 1.3 * width:
         return fallback
     return recovered_left, recovered_top, recovered_right, recovered_bottom
+
+
+def _render_card_box(source: Image.Image, item: Any, evidence: Any) -> tuple[int, int, int, int]:
+    """取得成果框边界，并恢复汽车之家 v10 清单遗漏的列表横向边距。"""
+
+    left, top, right, bottom = _recover_card_crop_box(source, item)
+    if str(getattr(evidence, "adapter_version", "")) in LEGACY_AUTOHOME_NARROW_FRAME_ADAPTERS:
+        # v10 记录的是占父栏 96% 的 li；平台 ul 左右各 2% 外边距也属于条目框。
+        # 原始证据保持不变，只在新派生成果中恢复到父栏完整宽度。
+        horizontal_gutter = max(1, int(int(item.width) * 0.02 / 0.96))
+        left = max(0, left - horizontal_gutter)
+        right = min(source.width, right + horizontal_gutter)
+    return left, top, right, bottom
 
 
 @lru_cache(maxsize=8)
@@ -547,6 +563,7 @@ class ScreenshotService:
                     "evidence_sha256": evidence.screenshot_sha256,
                     "evidence_run_id": evidence.run_id,
                     "evidence_page_number": evidence.page_number,
+                    "evidence_adapter_version": evidence.adapter_version,
                     "run_number": run_numbers[evidence.run_id],
                     "captured_at": evidence.captured_at.isoformat(),
                     "rect": [item.x, item.y, item.width, item.height],
@@ -687,7 +704,7 @@ class ScreenshotService:
                 draw = ImageDraw.Draw(canvas)
                 has_negative = False
                 for selected_index, item, post in page_cards:
-                    left, top, right, bottom = _recover_card_crop_box(source, item)
+                    left, top, right, bottom = _render_card_box(source, item, evidence)
                     effective_sentiment = inputs[selected_index].get(
                         "sentiment",
                         getattr(post, "sentiment_result", None),

@@ -28,7 +28,7 @@ from threadsnap.models import (
     ScreenshotArtifactTile,
     ScreenshotArtifactVersion,
 )
-from threadsnap.screenshots import ScreenshotService, _recover_card_crop_box
+from threadsnap.screenshots import ScreenshotService, _recover_card_crop_box, _render_card_box
 
 
 def png_fixture() -> bytes:
@@ -397,6 +397,22 @@ class ScreenshotArtifactTests(unittest.TestCase):
         self.assertEqual((20, 180, 230, 320), _recover_card_crop_box(source, second))
         source.close()
 
+    def test_renderer_restores_legacy_autohome_full_card_width(self) -> None:
+        """汽车之家 v10 旧清单只存 li 时，新成果应恢复列表父栏的横向边距。"""
+
+        source = Image.new("RGB", (1425, 900), "white")
+        item = SimpleNamespace(x=129, y=200, width=846, height=205)
+        legacy = SimpleNamespace(
+            adapter_version="autohome-club-v10-scrapling-page-evidence"
+        )
+        current = SimpleNamespace(
+            adapter_version="autohome-club-v11-scrapling-page-evidence-frame"
+        )
+
+        self.assertEqual((112, 200, 992, 405), _render_card_box(source, item, legacy))
+        self.assertEqual((129, 200, 975, 405), _render_card_box(source, item, current))
+        source.close()
+
     def test_renderer_keeps_each_original_page_as_a_full_size_tile(self) -> None:
         source_paths = [
             Path(self.temporary.name) / "source-one.png",
@@ -464,7 +480,7 @@ class ScreenshotArtifactTests(unittest.TestCase):
         with zipfile.ZipFile(rendered["package_path"]) as archive:
             manifest = json.loads(archive.read("manifest.json"))
         self.assertEqual("threadsnap.screenshot-artifact.v2", manifest["schema"])
-        self.assertEqual("v4-full-page-evidence-background", manifest["renderer_version"])
+        self.assertEqual("v5-autohome-full-card-frame-boundaries", manifest["renderer_version"])
 
 
 if __name__ == "__main__":

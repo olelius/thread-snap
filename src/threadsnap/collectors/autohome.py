@@ -28,7 +28,7 @@ from .base import (
     ProgressCallback,
 )
 
-ADAPTER_VERSION = "autohome-club-v10-scrapling-page-evidence"
+ADAPTER_VERSION = "autohome-club-v11-scrapling-page-evidence-frame"
 BASE_URL = "https://club.autohome.com.cn"
 LIST_API_URL = "https://club-open-api.autohome.com.cn/api/pc/bbs/index/getClubTopicList"
 VIDEO_MEDIA_URL = "https://p-vp.autohome.com.cn/api/gpi"
@@ -664,8 +664,13 @@ class AutohomeCollector:
             layout = cards.evaluate_all(
                 """els => els.map(e => {
                   const r=e.getBoundingClientRect();
+                  const list=e.closest('ul.post-list');
+                  const style=list?getComputedStyle(list):null;
+                  const marginLeft=Math.max(0,parseFloat(style?.marginLeft||'0')||0);
+                  const marginRight=Math.max(0,parseFloat(style?.marginRight||'0')||0);
                   const a=e.querySelector('p.post-title a[href*="/bbs/thread/"]');
-                  return {x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height,
+                  return {x:r.x+scrollX-marginLeft,y:r.y+scrollY,
+                    width:r.width+marginLeft+marginRight,height:r.height,
                     href:a?a.href:null};
                 })"""
             )
@@ -682,6 +687,25 @@ class AutohomeCollector:
                 "PAGE_EVIDENCE_LAYOUT_UNSTABLE",
                 f"汽车之家圈子第 {page_number} 页卡片布局在页首稳定窗口内仍持续变化。",
             )
+
+    @staticmethod
+    def _read_capture_rows(cards: Any) -> list[dict[str, Any]]:
+        """读取完整列表框；汽车之家 ul 的左右外边距属于条目可视范围。"""
+
+        return cards.evaluate_all(
+            """els => els.map((e,i) => {
+              const r=e.getBoundingClientRect();
+              const list=e.closest('ul.post-list');
+              const style=list?getComputedStyle(list):null;
+              const marginLeft=Math.max(0,parseFloat(style?.marginLeft||'0')||0);
+              const marginRight=Math.max(0,parseFloat(style?.marginRight||'0')||0);
+              const a=e.querySelector('p.post-title a[href*="/bbs/thread/"]');
+              return {index:i,href:a?a.href:null,text:e.innerText||'',
+                image_count:e.querySelectorAll('img').length,
+                rect:{x:r.x+scrollX-marginLeft,y:r.y+scrollY,
+                  width:r.width+marginLeft+marginRight,height:r.height}};
+            })"""
+        )
 
     @classmethod
     def _merge_capture_rows(
@@ -838,15 +862,7 @@ class AutohomeCollector:
                             f"汽车之家圈子第 {page_number} 页仍有 {len(incomplete)} 个帖子媒体处于空白、加载或破图状态。",
                         )
                     self._stabilize_capture_layout(page, cards, page_number)
-                    raw_rows = cards.evaluate_all(
-                        """els => els.map((e,i) => {
-                          const r=e.getBoundingClientRect();
-                          const a=e.querySelector('p.post-title a[href*="/bbs/thread/"]');
-                          return {index:i,href:a?a.href:null,text:e.innerText||'',
-                            image_count:e.querySelectorAll('img').length,
-                            rect:{x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height}};
-                        })"""
-                    )
+                    raw_rows = self._read_capture_rows(cards)
                     rows = self._merge_capture_rows(source, raw_rows, list_page["items"])
                     document = page.evaluate(
                         """() => ({
