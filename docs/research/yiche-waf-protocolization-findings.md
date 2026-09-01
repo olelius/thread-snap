@@ -1,100 +1,76 @@
-# 易车腾讯 WAF 完全协议化阶段结论
+# 易车腾讯 WAF 完全协议化最终结论
 
-## 1. 目标与判定标准
+## 1. 判定
 
-本轮把“完全协议化”限定为：运行时不启动 Chrome、不加载腾讯 SDK/TDC 原始脚本，由普通 HTTP 客户端独立完成 challenge 初始化、双图取得、位移计算、行为与 TDC 参数生成、腾讯 verify、易车 `/WafCaptcha` 和原详情正文门禁。
+本轮 `P0-P5` 全部通过，“完全协议化研究”已完成。这里的严格口径是：不启动 Chrome，不执行腾讯 `TCaptcha.js`、frame/dy 脚本或原始 TDC 脚本，以普通 HTTP、图像算法和自研 IR/VM 完成：
 
-只做到浏览器自动拖动、在 Node 中原样执行动态 TDC 字节码或腾讯 verify 返回 HTTP 200，都不计为完全协议化。腾讯 verify 只有业务 `errorCode="0"` 才算通过；之后还必须关闭易车正文门禁。
+`当前易车 WAF -> prehandle -> 当次双图 -> 位移 -> PoW -> TDC IR -> collect/eks -> 腾讯 verify -> 易车 /WafCaptcha -> 原 URL 正文`。
 
-## 2. 已确认事实
+动态 `tdc.js` 仍是逐 challenge 的协议响应，必须取得；实现只把它解析成 payload、入口、常量、opcode 与结构 handler 映射，再交给自研 VM，不把供应商脚本放入执行路径。
 
-### 2.1 请求链与字段
+## 2. 最终证据
 
-- `TCaptcha.js` 构造 prehandle 基础参数，frame 补充语言、入口 URL、媒体能力、WebWorker 能力、版本和 JSONP 回调。
-- prehandle 返回当次 `sess`、`tdc_path`、`pow_cfg` 和 `dyn_show_info`；背景与精灵可由普通 HTTP 客户端直接取得。
-- 滑块答案是单元素 JSON 数组：`elem_id=1`、`type=DynAnswerType_POS`、`data="X,Y"`。坐标来自当次 `fg_elem_list` 与图片，不是固定距离。
-- PoW 为 `MD5(prefix + decimal_counter) == target`；提交 `pow_answer=prefix+counter` 和计算时长。
-- verify 使用 form-urlencoded，已确认字段为 `collect/tlg/eks/sess/ans/pow_answer/pow_calc_time`，`vData` 是可选字段。
-- 易车 WAF 页面把 `ret/ticket/randstr/seqid` 四行文本提交到 `/WafCaptcha`。
+### 2.1 自研 TDC（P3）
 
-### 2.2 TDC 动态性
+- 已建立 base64、signed-varint、zigzag payload 解码、外壳归一化、解释器结构提取、canonical handler 签名、IR 编译、自研 VM 与 Node 环境适配。
+- 冻结与动态基线分别包含 98 和 94 个 opcode；72 个同构 case 的数字编号全部重排，证明必须按结构映射而不是固定 opcode 表。
+- 第三个动态 94-opcode 样本中，自研 IR 与原响应在离线 Chrome Oracle 下具有相同 TDC API、环境访问与 Base64 明文块长度。
+- 新 101-opcode 外壳把 174056 字符 payload 间接藏在字符串数组中；归一化器成功解析，IR 自动吸收新增的“寄存器间大于等于”结构，总计 75 个 handler。
+- 该 101-opcode 自研运行时在线生成 6590 字符 `collect`，腾讯业务接受；随后另一份新 94-opcode/74-handler challenge 也被接受。P3 因服务器业务成功而关闭，不再以和 Chrome 逐字节相同作为门槛。
 
-- 两次 TDC 响应的脚本长度、SHA-256、`TDC_NAME`、`info/eks`、VM payload 和入口均不同，TDC 不是可长期冻结的静态资产。
-- VM payload 使用 base64、signed-varint 和 zigzag 编码。两份样本分别解出 92423 与 96474 个整数，入口分别为 43357 与 35616。
-- 两轮解释器分别有 98 和 94 个 opcode case；解析字符串表并内联辅助运算后有 72 个 case 结构完全对应，而且这 72 个编号全部重排。解码和抽象语义识别流程可复用，单轮 opcode 编号表不应固化。
-- 仅使用回环页面且拦截全部外部请求的离线浏览器 Oracle 已取得有效 7K 级 `collect`，并确认 `setData` 会改变长度和哈希；当前/冻结样本的动态覆盖分别达到 90/94 与 92/98 个 case。当前样本其余 4 个 case 的静态语义也已明确。
-- Node 合成环境曾产出 603 字符 `collect`，同一轮真实浏览器为 7426 字符。差额来自尚未补齐的 Cookie、浏览器异步环境与事件采样，当前 Node 输出没有服务器接受证据。
-- 从去混淆解释器、当次 payload 和入口调用构建的独立最小包可脱离原始 TDC 响应运行。它与原响应的加载、`getInfo`、`setData` 及两次 `getData` 前 25 万条轨迹哈希逐阶段一致；除首次取数有 6 条异步时序差外，其余阶段总计数一致。
-- 独立包已在 Node `vm` 与自建环境适配层中产出 3.0K 级 `collect`，`setData` 后增至 3.2K 级，四个 API 无调用异常且 `eks` 与浏览器一致。Base64 前已是分块高熵二进制，明文序列化边界仍位于 VM 内部。
-- `collect` 经 URL 解码后是四个加密块连续拼接形成的单一 Base64。浏览器块长为 `48/1968/2664/304`，行为更新后末块为 432；Node 校准后为 `48/1440/1752/296`，末块为 424。头块等长，行为块只差 8 字节，剩余差额集中在同步与异步环境块。
-- 本机 Chrome 的回环环境快照确认 TDC 使用 8366 字符 Canvas URL、19 个 WebGPU feature、36 个 limit、6 个 Windows 语音条目、storage estimate 和 WebRTC。Node 按真实形状校准后 `collect` 达到约 5.0K/5.2K；P2 已按离线门关闭，P3/P4 仍开放。
-- 运行时依赖至少包括 Canvas/WebGL、permissions、storage、UA-CH、speechSynthesis、WebRTC、WebGPU、位置、事件监听和定时器。
+### 2.2 腾讯纯 HTTP verify（P4）
 
-### 2.3 在线对照
+- 101-opcode challenge：背景 29794 字节、精灵 26933 字节；识别为 `sourceX=448/sourceY=176`，PoW counter 为 158867；verify HTTP 200、`errorCode="0"`。
+- 完整 P5 中的新 challenge：背景 43970 字节、精灵 41333 字节；识别为 `sourceX=358/sourceY=136`，PoW counter 为 79544；verify 再次 HTTP 200、`errorCode="0"`。
+- 两轮均由普通 HTTP + 自研 TDC 路径完成；业务成功而非仅 HTTP 200 是接受门。
 
-- 既有浏览器对照曾取得腾讯业务成功并触发本地 `/WafCaptcha`，证明图片、拖动、verify 和回调链可以闭合。
-- 本轮保存了 verify 原始表单形状；新增在线尝试得到业务 `errorCode=9` 和 `errorCode=12`，没有取得新的成功票据。达到有界取样后停止追加挑战。
-- 图像识别暴露两类样本：单一强轮廓，以及“原图纹理区 + 目标缺口区”成对候选。识别器已增加精灵坐标输入、纹理相关和成对轮廓排除规则；三份冻结样本离线回归通过，在线成功仍待下一轮验证。
+### 2.3 易车 WAF 与原正文（P5）
 
-## 3. 复用边界
+- 同一易车 FetcherSession 首个详情请求命中当前 WAF，取得当次 169 字符 `seqid`。
+- 随即新建腾讯 challenge 并取得 463 字符 ticket、4 字符 randstr；四行正文提交 `/WafCaptcha` 返回 HTTP 200。
+- 重载原 URL 返回 HTTP 200、100469 字节正文；WAF 分类为 false，帖子身份与正文/媒体证明成立。
+- 从命中 WAF 到正文门禁关闭实测 5.221 秒，这是单次环境观测。
+- POST 前后 Cookie 名称和值哈希均没有变化；本轮放行是既有风险状态与当次 `seqid/ticket` 的服务端更新，不是产生一个可长期复用的新 Cookie。
+- 对照轮次使用“旧 ticket + 后取得的新 seqid”，POST 同为 200，但重载仍为 WAF。通过轮次严格采用“当前 WAF/seqid -> 新 challenge/ticket -> POST -> reload”。因此同轮顺序属于协议合同。
 
-### 3.1 可复用
+## 3. 可复用结果
 
-1. AppId 与 endpoint 状态机，但必须受脚本和响应字段哈希门禁约束。
-2. prehandle 查询字段集合、双图取得方式、答案 JSON 结构、PoW 算法、verify form 编码与 WAF 四行正文结构。
-3. TDC payload 的 base64、signed-varint、zigzag 解码器、解释器结构识别、辅助运算内联和抽象 opcode 目录生成方法。
-4. 只使用回环页面的 TDC Oracle、分阶段指令覆盖统计和跨挑战语义差分方法。
-5. 解释器提取、payload/入口重组、独立最小包构建和 Node 环境适配骨架，作为 P2/P3 差分工具。
-6. 图像识别流程、响应分类、差分报告和版本失效门。
+1. AppId、endpoint 状态机和严格成功分类。
+2. prehandle 参数构造、JSONP 解析、双图 URL/精灵几何解析。
+3. 纹理与轮廓结合的位移识别算法；每张新图仍重新计算。
+4. `DynAnswerType_POS` 答案 JSON、MD5 PoW、verify form-urlencoded 和 WAF 四行正文格式。
+5. TDC 直接/间接外壳归一化、payload 解码、结构 handler 目录、opcode 重映射、IR 编译、自研 VM 和环境适配层。
+6. 缓出轨迹生成策略、响应分类、版本漂移门和原正文验收门。
 
-### 3.2 只能条件复用
+## 4. 每次 challenge 必须重取或重算
 
-1. `display_width`、精灵坐标和识别阈值必须以当次模板和 prehandle 配置为准。
-2. TDC 解释器抽象语义仅在当次 AST 映射成立时复用；两份样本的 72 个完全同构 case 全部改号，不按固定 opcode 编号复用。
-3. 独立最小包只作为逐挑战 Oracle；它仍携带当次解释器语义，不作为最终 P3 运行时跨挑战冻结。
-4. 轨迹只能复用生成策略，坐标、时间和事件序列必须逐次生成。
+`sess`、`tdc_path` 动态参数、payload/入口/opcode 映射、`eks/info`、环境采样、事件轨迹、`collect`、双图、坐标、PoW、ticket、randstr、seqid、Cookie 快照和服务端风险状态。
 
-### 3.3 每次重取或重算
+旧 ticket、旧 seqid、旧 collect、旧 eks、旧图片或坐标只用于离线回归，不作为新 challenge 输入。WAF 放行结果也不应被解释成一个可以长期保存并跨轮复用的验证码 Cookie。
 
-`sess`、`tdc_path` 全部动态查询值、TDC payload、`TDC_NAME`、`eks/info`、`tokenid`、双图及其签名、目标坐标、`ans`、PoW、`collect`、可选 `vData`、`ticket`、`randstr`、`seqid`、Cookie 和风控状态。
+## 5. 失效门
 
-这些一次性结果只可保存为离线差分样本，不跨 challenge 用作运行时输入。
+以下任一变化都触发重新冻结与目标场景验证：AppId、prehandle 字段、图片/模板几何、TDC 外层 AST 家族、payload 编码、入口形状、新 handler 结构、答案 data type、verify 字段或 errorCode 语义、WAF 四行模板、seqid 形状、正文分类标志、Node 环境画像。
 
-## 4. 当前结论与下一阶段
+IR 扩展器会把未知结构标成 `structurally-derived`；它仍需经过腾讯 `errorCode="0"` 和易车正文门，而不是仅凭 AST 生成即宣布兼容。
 
-当前关闭了协议骨架、TDC 外层编码、抽象语义目录、离线动态覆盖和 P2 Node 独立包执行，但没有关闭 P3 通用 VM、P4 纯 HTTP verify、易车 WAF POST 和原正文门禁，因此状态是“完全协议化进行中”，不是“已经完成”。
+## 6. 生产决策
 
-下一阶段把 94/98 个 case 转成稳定的自研 VM handler，并补齐同步环境块 528 字节、异步环境块 912 字节的结构差额；完成本地 Oracle 与 Node 的 `collect` 对照后，再用一个新 challenge 做单次纯 HTTP `errorCode=0` 验证。只有该门通过，才继续易车 `/WafCaptcha -> 原详情正文`。
+本次关闭的是隔离研究门。生产继续执行 ADR 0058 的控制分类、首控止损、静默或人工恢复，当前不接入自动验证码链。若以后进入生产，需要单独确认产品范围、ADR、版本探针、熔断回退、敏感材料生命周期、负载与易车正式 500 条影响验收。
 
-生产行为不变，继续执行 ADR 0058 的控制分类、止损和原任务恢复；本研究不自动进入生产采集器。
+## 7. Git 外证据
 
-## 5. Git 外证据
-
-证据目录：`artifacts/poc/results/yiche-waf-protocolization/20260902-0001/`。
-
-- 严格协议合同：`protocol-contract-v1.json`
-- 详细复用矩阵：`reusability-matrix.md`
-- 阶段报告：`progress-report.md`
-- TDC 结构、运行时、VM 解码：`analysis/*tdc*.json`
-- 浏览器 verify 对照：`analysis/accepted-verify-oracle.json`
-- 脱敏和原始网络材料：`input/`、`requests/`
-
-该目录由 Git 忽略；仓库只保留本汇总结论和可复核 SHA-256。
+证据根目录：`artifacts/poc/results/yiche-waf-protocolization/20260902-0001/`。
 
 | 证据 | SHA-256 |
 |---|---|
-| `protocol-contract-v1.json` | `eaee090a4d22115571e58b02b5561148a4e79ab6b9b9eb17cccc8df47c0a9484` |
-| `reusability-matrix.md` | `2aa290c469fe64e3f4ebeb1ecdd2b94ed6d5335a90ba3f5f056aba6677f830a3` |
-| `progress-report.md` | `45b31903883d4f072179e73235bbde7e6625439a2de5a58387de8786dca5c1ac` |
-| `analysis/tdc-vm-decoded.json` | `c37766d9e01c3614138cd7dd7ef72a0ece9012290fc3cedb9e448a82a9f1d3b5` |
-| `analysis/live-tdc-vm-decoded.json` | `dcfecbc0844d85689c7a982aea9984069c571b78ec2f70031f12c5b229cf9efc` |
-| `analysis/live-tdc-vm-browser-trace.json` | `6f9cc168906a0d4dceaf677ec4d7235e5283f2fe307231fda385c228627ffd8d` |
-| `analysis/frozen-tdc-vm-browser-trace.json` | `78f68dde4376d954cd47357d80ff51522805432f992d9ca9954c6f4d76a1aa1c` |
-| `analysis/tdc-opcode-cross-challenge.json` | `d1e79b3e1ed45038c2c8f013c34cbd898dbd5b2ac1de2e1ccf55f66067ee8ff2` |
-| `analysis/live-tdc-vm-standalone.js` | `2a031f0b95460cff3625cdc4333b836d05989a812861e2e3993e7eea990b7249` |
-| `analysis/live-tdc-vm-standalone-trace.json` | `956349f6beb5afb24e7cfe9b710055607785ab1733669636af245c08e80aaf96` |
-| `analysis/live-node-tdc-standalone-v5.json` | `0ae5a01d046415c79c8761c6732762ced2fbafcf14cd9d0bbb6bfdd4af2d15c0` |
-| `analysis/live-node-tdc-standalone-v8.json` | `ad14647c8e19ab6d434dd3b3d8cfcaf26b73900f91eae00f95c8e18803f565d4` |
-| `analysis/local-browser-environment.json` | `4a09743bf68b037c35e7e06692d754bac2227cfdd508068db7560d21d4290adf` |
-| `analysis/live-tdc-vm-standalone-trace-v4.json` | `486be7295449540b962c729f72e23d777fa3877af3c0b27be1045fe076491db4` |
-| `analysis/accepted-verify-oracle.json` | `668e8a10e55a7f498e6f6573733649e035d2d725eeee1cd9787407c117a0b3d1` |
+| `acceptance.json` | `302fe545003ab48a8fc75388762c6b48a43bd3cca5f7086d0324286f7b4aa76d` |
+| `protocol-contract-v1.json` | `a7331f09d26ff1df840f3485d48322eac47f83485afec626e6a52f30b19d7cde` |
+| `progress-report.md` | `5c6a847af544c0a0e7ded75f94162c3ad04905b2307676b60a9b1e1d4cdc2a32` |
+| `reusability-matrix.md` | `becbdc26cba665487962e1d6b57c89da3a732e63d6d581da6c84a6bc95ef7637` |
+| `requests/pure-http-attempt-ir-v2/report.json` | `a994a5d8012aa2812963ae8780a2add94bf02fa575444b2479236b54c2d7faa4` |
+| `requests/yiche-waf-gate-v2/tencent/report.json` | `0b4c9474d5149a10a37a78a65a13d1b07bb4c40f779ba641e9ffe2cf5a6441e1` |
+| `requests/yiche-waf-gate-v2/report.json` | `9b15ef19345d88f8e7b7b72d108314cb659b37b254b323ef21dc7ae401b34a83` |
+| `requests/pure-http-attempt-ir-v2/analysis/tdc-handler-ir-candidate.json` | `b9e56c656933a026c02658699471c4277f2ee70475e3b9b3d53217e88f5a4983` |
+
+原始 ticket、sess、表单、图片、正文与 Cookie 证据仅保存在被 Git 忽略的目录；仓库文档只记录脱敏字段、哈希和门禁结论。

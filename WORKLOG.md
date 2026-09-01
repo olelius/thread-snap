@@ -17,19 +17,18 @@
 ---
 
 ## 2026-09-02 — 易车腾讯 WAF 完全协议化研究
-**总目标**：把既有浏览器滑块对照推进到运行时无 Chrome、无腾讯 SDK/TDC 原始脚本的普通 HTTP 全链路，并明确可复用与逐挑战重算结果。
-**状态**：🔄 协议骨架、纯HTTP双图、PoW、答案/verify合同、TDC外层VM解码、抽象语义目录、离线动态覆盖和P2 Node独立包执行已完成；P3通用VM、纯HTTP业务成功、易车WAF与原正文门禁仍在进行。
+**总目标**：把既有浏览器滑块对照推进到运行时无 Chrome、无腾讯 SDK/TDC 原始脚本执行的普通 HTTP 全链路，并明确可复用与逐挑战重算结果。
+**状态**：✅ P0-P5 全部关闭；自研 TDC IR、两次腾讯纯 HTTP 业务成功、易车 WAF POST 与原正文门禁均已取得运行时证据，生产保持 ADR 0058。
 **干到哪里了**：
-- [x] 建立P0-P5严格门：只有独立TDC、腾讯`errorCode="0"`、易车`/WafCaptcha`和原详情正文依次通过才称完全协议化；浏览器自动拖动、原样执行供应商TDC或仅HTTP 200均不算完成。
-- [x] 冻结两份动态TDC并完成AST与运行时差分：最大VM字符串分别为163224/172680字符，Node合成环境输出603字符`collect`，同轮真实浏览器为7426字符；依赖覆盖Canvas/WebGL、UA-CH、permissions、storage、speech、WebRTC、WebGPU、事件和定时器。
-- [x] 独立解码TDC payload：base64 -> signed-varint -> zigzag，得到92423/96474个整数流与43357/35616入口；两轮解释器有98/94个case，辅助运算内联后72个结构完全对应且编号全部重排，证实固定opcode表不具备跨挑战复用条件。
-- [x] 建立仅回环页面、拦截外部请求的离线浏览器Oracle；有效`collect`在`setData`前后发生长度与哈希变化。分阶段无上限计数得到当前样本2690208条、动态覆盖90/94，冻结样本2582681条、覆盖92/98；未动态触发case已有静态语义。
-- [x] 从去混淆解释器、当次payload和入口构建独立最小包；它与原响应各阶段前25万条轨迹哈希一致。该包在Node环境适配层中无API异常；按本机Canvas/WebGPU/语音/storage/WebRTC形状校准后，`collect`由旧603字符提升至约5.0K，`setData`后约5.2K。四块对照为浏览器`48/1968/2664/304->432`、Node`48/1440/1752/296->424`，P2离线门关闭，P3和服务器接受证据仍开放。
-- [x] 普通HTTP成功取得当次672×390 JPEG和682×620 PNG；确认`DynAnswerType_POS`答案数组、PoW的MD5规则、verify form字段和WAF四行正文。图像识别增加精灵配置、纹理相关和成对轮廓排除，三份冻结样本离线回归通过。
-- [x] 保存真实verify原始表单形状；新增有界在线对照观察到业务`errorCode=9/12`后停止追加挑战，没有把HTTP 200或失败响应写成协议成功。
-- [x] Git外严格合同、复用矩阵和阶段报告位于`artifacts/poc/results/yiche-waf-protocolization/20260902-0001/`；仓库汇总结论位于`docs/research/yiche-waf-protocolization-findings.md`。
-**下一步**：把94/98个静态case转成稳定的自研VM handler，并关闭同步环境块528字节、异步环境块912字节的结构差额；与本地Oracle对齐后，用一个新challenge做单次纯HTTP`errorCode=0`验证，再关闭易车WAF POST和原正文门禁。
-**边界**：生产继续执行ADR 0058，不加入自动滑块或TDC依赖；`sess/tdc_path/eks/collect/图片/PoW/ticket/randstr/seqid/Cookie`均为逐挑战结果，不跨challenge复用；本轮不计入正式500条。
+- [x] 固定严格门：浏览器自动拖动、原样执行供应商 TDC 或仅 HTTP 200 均不算完成；腾讯必须 `errorCode="0"`，随后易车 `/WafCaptcha` 与原详情正文必须依次通过。
+- [x] 完成 TDC payload 的 base64/signed-varint/zigzag 解码、直接/字符串数组间接外壳归一化、解释器结构提取、canonical handler 签名、逐轮 opcode 重映射、自研 IR/VM 与 Node 环境适配；运行路径不启动 Chrome，也不执行原始 TDC 脚本。
+- [x] 跨冻结 98-opcode、动态 94-opcode 与新 101-opcode 外壳验证；101-opcode 样本解析出 174056 字符 payload，并新增一个寄存器间大于等于 handler，总计 75 个。该自研运行时生成 6590 字符 `collect`，腾讯 verify 返回 HTTP 200、业务 `errorCode="0"`。
+- [x] 完整门禁按“当前 WAF/seqid -> 新 challenge -> 双图/识别/PoW/TDC -> verify -> 四行 WAF POST -> 原 URL”执行；新 94-opcode/74-handler challenge 再次取得 `errorCode="0"`。
+- [x] 同一易车 FetcherSession 的 `/WafCaptcha` 返回200；原 URL 重载返回100469字节正文，WAF=false，帖子身份和正文/媒体证明成立。整段从命中 WAF 到正文重载实测5.221秒。
+- [x] POST 前后 Cookie 名称和值哈希均未变化；旧 ticket 配新 seqid 的对照轮次未解除 WAF，证明需在当前 seqid 后生成同轮 ticket，且放行结果不是可长期复用的新 Cookie。
+- [x] 最终 Git 外回执 `acceptance.json` SHA-256 为 `302fe545003ab48a8fc75388762c6b48a43bd3cca5f7086d0324286f7b4aa76d`；P4 报告为 `a994a5d8012aa2812963ae8780a2add94bf02fa575444b2479236b54c2d7faa4`，P5 报告为 `9b15ef19345d88f8e7b7b72d108314cb659b37b254b323ef21dc7ae401b34a83`。
+**下一步**：研究任务已关闭。生产继续执行 ADR 0058；若提出生产接入，另开需求和 ADR，并补版本探针、熔断回退、敏感材料生命周期、负载及正式500条影响验收。
+**边界**：`sess/tdc_path/payload/opcode映射/eks/collect/图片/坐标/PoW/ticket/randstr/seqid/Cookie/风控状态`均逐挑战产生，不跨 challenge 复用；本轮不计入易车正式500条，生产代码与配置未改变。
 **关联**：`docs/research/yiche-waf-protocolization-findings.md`、`docs/research/yiche-tencent-waf-reverse-runbook.md`、`docs/adr/0058-route-yiche-control-through-classified-recovery.md`、`docs/adr/0059-allow-bounded-yiche-waf-trigger-round.md`
 
 ---
