@@ -195,9 +195,12 @@ class ScreenshotArtifactTests(unittest.TestCase):
     def test_persists_immutable_evidence_and_renders_all_negative_frames(self) -> None:
         run_id, task_id = self.create_task()
         self.service.register_task(task_id)
-        self.service.persist_page(task_id, self.evidence_payload())
+        payload = self.evidence_payload()
+        payload.update({"total_count": 2, "page_count": 1})
+        self.service.persist_page(task_id, payload)
         loaded = self.service.load_page(task_id, 1)
         self.assertTrue(loaded and loaded["persisted"])
+        self.assertEqual((2, 1), (loaded["total_count"], loaded["page_count"]))
         with self.factory() as db:
             evidence = db.scalar(select(CirclePageEvidence))
             assert evidence is not None
