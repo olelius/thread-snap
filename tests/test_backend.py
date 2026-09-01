@@ -3492,6 +3492,80 @@ class QueueAndRetryTests(AppCase):
         self.assertEqual("queued", event["summary"]["status"])
         self.assertEqual(1, event["summary"]["completed_count"])
 
+    def test_known_url_auth_resume_skips_persisted_urls_and_keeps_order(self) -> None:
+        """URL清单认证恢复只访问未完成项，并保留原清单位置。"""
+
+        urls = [
+            "https://www.dongchedi.com/ugc/article/5101",
+            "https://www.dongchedi.com/ugc/article/5102",
+            "https://www.dongchedi.com/ugc/article/5103",
+        ]
+        run = self.container.runs.create_manual(
+            ManualRunCreate(
+                platform_code="dongchedi",
+                known_post_urls=urls,
+                quantity=1,
+                ai_analysis_enabled=False,
+                screenshot_enabled=False,
+            ),
+            scope="api",
+            header_key="known-url-auth-resume-0001",
+        )
+
+        class ControlledCollector(FakeCollector):
+            def collect_urls(self, received: list[str], on_progress=None) -> dict:
+                record = sample_record("5101")
+                record["url"] = urls[0]
+                if on_progress:
+                    on_progress(record, None)
+                raise CollectorFailure(
+                    "PLATFORM_CHALLENGE",
+                    "需要完成访问验证。",
+                    trigger_url=urls[1],
+                )
+
+        self.container.worker._collector = lambda *_args: ControlledCollector()  # type: ignore[method-assign]
+        self.assertTrue(self.container.worker.process_once())
+        waiting = self.container.runs.get_run(run["id"])
+        self.assertEqual(("waiting_for_auth", 1), (waiting["status"], waiting["completed_count"]))
+
+        self.container.worker.resume_platform("dongchedi")
+        resumed_calls: list[list[str]] = []
+
+        class ResumedCollector(FakeCollector):
+            def collect_urls(self, received: list[str], on_progress=None) -> dict:
+                resumed_calls.append(list(received))
+                records = []
+                for url in received:
+                    record = sample_record(url.rsplit("/", 1)[-1])
+                    record["url"] = url
+                    records.append(record)
+                    if on_progress:
+                        on_progress(record, None)
+                return {
+                    "records": records,
+                    "failures": [],
+                    "stop_reason": "剩余URL处理完成。",
+                }
+
+        self.container.worker._collector = lambda *_args: ResumedCollector()  # type: ignore[method-assign]
+        self.assertTrue(self.container.worker.process_once())
+
+        completed = self.container.runs.get_run(run["id"])
+        self.assertEqual(("success", 3), (completed["status"], completed["completed_count"]))
+        self.assertEqual([urls[1:]], resumed_calls)
+        with self.container.sessions() as db:
+            task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            assert task is not None
+            positions = list(
+                db.execute(
+                    select(PostSnapshot.platform_post_id, PostSnapshot.order_index)
+                    .where(PostSnapshot.circle_task_id == task.id)
+                    .order_by(PostSnapshot.order_index)
+                )
+            )
+        self.assertEqual([("5101", 0), ("5102", 1), ("5103", 2)], positions)
+
     def test_plain_dynamic_body_mapping_is_persisted_to_snapshot(self) -> None:
         """普通动态的 motor_title 正文必须经 Worker 原样进入不可变快照。"""
 

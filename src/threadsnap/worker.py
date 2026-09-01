@@ -601,14 +601,21 @@ class WorkerService:
             target = task.target_count
             transient = bool(snapshot.get("transient"))
             circle_id = task.circle_id
-            known_urls = list(snapshot.get("known_post_urls") or [])
+            configured_known_urls = list(snapshot.get("known_post_urls") or [])
+            known_url_task = bool(configured_known_urls)
+            known_urls = list(configured_known_urls)
             source_indexes = dict(snapshot.get("source_indexes") or {})
+            if configured_known_urls and not source_indexes:
+                source_indexes = {
+                    str(url): index for index, url in enumerate(configured_known_urls)
+                }
             retry_urls = [
                 str(value)
                 for value in checkpoint.get("retry_urls") or []
                 if isinstance(value, str) and value
             ]
             if retry_urls:
+                known_url_task = True
                 known_urls = retry_urls
                 source_indexes = {
                     str(key): int(value)
@@ -632,6 +639,17 @@ class WorkerService:
             needs_validation = transient
             platform_code = task.platform_code
             spec = get_platform_spec(platform_code)
+            if known_urls and persisted_post_ids and spec.normalize_post_url is not None:
+                unresolved_urls: list[str] = []
+                for url in known_urls:
+                    try:
+                        post_id, _ = spec.normalize_post_url(url)
+                    except CollectorFailure:
+                        unresolved_urls.append(url)
+                        continue
+                    if post_id not in persisted_post_ids:
+                        unresolved_urls.append(url)
+                known_urls = unresolved_urls
             page_evidence_supported = _supports_page_evidence(collector)
             if circle_id:
                 circle = db.get(Circle, circle_id)
@@ -774,6 +792,12 @@ class WorkerService:
             payload = (
                 collector.collect_urls(known_urls, on_progress=report_progress)
                 if known_urls
+                else {
+                    "records": [],
+                    "failures": [],
+                    "stop_reason": "URL 清单中没有尚未完成的帖子。",
+                }
+                if known_url_task
                 else collector.collect_circle(
                     circle_url,
                     remaining,
@@ -814,6 +838,12 @@ class WorkerService:
                     payload = (
                         refreshed.collect_urls(known_urls, on_progress=report_progress)
                         if known_urls
+                        else {
+                            "records": [],
+                            "failures": [],
+                            "stop_reason": "URL 清单中没有尚未完成的帖子。",
+                        }
+                        if known_url_task
                         else refreshed.collect_circle(
                             circle_url,
                             remaining,
