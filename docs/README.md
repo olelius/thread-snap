@@ -103,8 +103,9 @@
 2. `docs/chains/later-platform-delivery.md`；
 3. `docs/research/later-platform-onboarding-plan.md`；
 4. `docs/adr/0058-route-yiche-control-through-classified-recovery.md`；
-5. `docs/research/yiche-tencent-waf-reverse-runbook.md`；
-6. Git 外既有根因回执及本轮 `artifacts/poc/results/yiche-waf-reverse/<round-id>/` 证据。
+5. `docs/adr/0059-allow-bounded-yiche-waf-trigger-round.md`；
+6. `docs/research/yiche-tencent-waf-reverse-runbook.md`；
+7. Git 外既有根因回执及本轮 `artifacts/poc/results/yiche-waf-reverse/<round-id>/` 证据。
 
 该调研不重复固定1000 URL诊断，不把视频或 MCP 工具可用性视为易车正文门禁通过，也不自动改变生产采集路径。
 
@@ -211,6 +212,7 @@
 | `docs/adr/0056-route-autohome-control-through-auth-probe.md` | 汽车之家控制页进入正式认证，Session更新后以单来源探针通过原URL门禁再恢复批次并发 |
 | `docs/adr/0057-cap-autohome-internal-concurrency-at-one.md` | 依据真实420与1000条对照把汽车之家平台内部总并发重新固定为1 |
 | `docs/adr/0058-route-yiche-control-through-classified-recovery.md` | 易车区分登录失效、详情挑战、腾讯验证码与限流，并复用单来源原URL探针或持久冷却恢复 |
+| `docs/adr/0059-allow-bounded-yiche-waf-trigger-round.md` | 工具链门通过后允许以最多80个不同URL、实际并发1和首控止损取得一次易车WAF逆向样本 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 
