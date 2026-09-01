@@ -14,15 +14,14 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Iterable
 from urllib.parse import urlencode, urljoin, urlsplit
 
-from curl_cffi import requests
-from curl_cffi.requests import Cookies
 from lxml import html
 from patchright.sync_api import sync_playwright
 
 from ..browser_runtime import browser_launch_args
+from ..scrapling_transport import ExecutionScopeKey, ScraplingHttpPool
 from .base import AuthenticationRequired, CircleSource, CollectorFailure
 
-ADAPTER_VERSION = "dongchedi-dynamic-v6"
+ADAPTER_VERSION = "dongchedi-dynamic-v7-scrapling"
 BASE_URL = "https://www.dongchedi.com"
 DETAIL_ROOT = f"{BASE_URL}/motor/pc/ugc/detail"
 VIDEO_TOKEN_URL = f"{BASE_URL}/motor/pc/common/token"
@@ -78,29 +77,6 @@ def normalize_post_url(url: str) -> tuple[str, str]:
         raise CollectorFailure("POST_URL_INVALID", "帖子链接格式无效，必须是懂车帝文章链接。")
     post_id = match.group("id")
     return post_id, f"{BASE_URL}/ugc/article/{post_id}"
-
-
-def _cookies_from_state(state: dict[str, Any] | None) -> Cookies:
-    jar = Cookies()
-    now = time.time()
-    for item in (state or {}).get("cookies", []):
-        if not isinstance(item, dict):
-            continue
-        domain = str(item.get("domain") or "")
-        if "dongchedi.com" not in domain:
-            continue
-        expires = item.get("expires", -1)
-        if isinstance(expires, (int, float)) and expires > 0 and expires <= now:
-            continue
-        if all(item.get(key) for key in ("name", "value", "path")):
-            jar.set(
-                item["name"],
-                item["value"],
-                domain=domain,
-                path=item["path"],
-                secure=bool(item.get("secure")),
-            )
-    return jar
 
 
 def _iso_time(value: object) -> datetime | None:
@@ -184,27 +160,26 @@ class DongchediCollector:
         concurrency: int = 1,
         timeout_seconds: int = 30,
         browser_headless: bool = False,
+        execution_scope: ExecutionScopeKey | None = None,
     ):
         self.storage_state = storage_state
-        self.cookies = _cookies_from_state(storage_state)
         self.timeout_seconds = timeout_seconds
         self.concurrency = max(1, concurrency)
         self.browser_headless = browser_headless
         self.semaphore = threading.BoundedSemaphore(self.concurrency)
         self.page_capture_lock = threading.Lock()
-        self._thread_local = threading.local()
+        self.http = ScraplingHttpPool(
+            storage_state,
+            timeout_seconds=timeout_seconds,
+            scope=(execution_scope or ExecutionScopeKey()).bind_platform("dongchedi"),
+        )
 
-    def _http_session(self) -> requests.Session:
-        """为每个采集线程创建独立 HTTP Session，避免跨线程共享可变请求状态。"""
+    def _http_session(self) -> Any:
+        """返回当前线程独享的 Scrapling FetcherSession 适配器。"""
 
-        session = getattr(self._thread_local, "http", None)
-        if session is None:
-            session = requests.Session(impersonate="chrome")
-            session.cookies.update(self.cookies)
-            self._thread_local.http = session
-        return session
+        return self.http.session()
 
-    def _get(self, url: str) -> requests.Response:
+    def _get(self, url: str) -> Any:
         last_error: Exception | None = None
         for attempt in range(3):
             try:
@@ -219,14 +194,19 @@ class DongchediCollector:
                         continue
                     break
                 return response
-            except Exception as exc:  # curl_cffi 抛出多种传输异常，统一有界重试。
+            except Exception as exc:  # Scrapling/传输引擎异常统一进入适配器有界重试。
                 last_error = exc
                 if attempt < 2:
                     time.sleep(0.5 * (attempt + 1))
         raise CollectorFailure("PLATFORM_NETWORK_ERROR", f"访问懂车帝失败：{last_error}")
 
+    def close(self) -> None:
+        """关闭采集线程创建的全部 Scrapling Session。"""
+
+        self.http.close()
+
     @staticmethod
-    def _detect_auth(response: requests.Response) -> None:
+    def _detect_auth(response: Any) -> None:
         path = urlsplit(str(response.url)).path
         body = response.content[:200_000].lower()
         content_type = str(getattr(response, "headers", {}).get("content-type", "")).lower()

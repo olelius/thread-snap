@@ -41,6 +41,8 @@ RETRYABLE_ACCESS_FAILURE_CODES = {
     RATE_LIMIT_RETRYABLE_FAILURE_CODE,
 }
 INTERACTIVE_RECOVERY_CODES = {"PLATFORM_CAPTCHA_REQUIRED", "PLATFORM_CHALLENGE"}
+AUTH_RECOVERY_PROBE_KEY = "auth_recovery_probe"
+AUTH_RECOVERY_BLOCKED_KEY = "auth_recovery_blocked"
 RETRY_BASE_SECONDS = 2
 RETRY_MAX_SECONDS = 60
 RATE_LIMIT_RETRY_BASE_SECONDS = 60
@@ -323,11 +325,13 @@ class WorkerService:
         if missing:
             self._publish_validation(circle_id, job_id, "failed")
             return True
+        collector = None
         try:
             with self.factory() as db:
                 platform = db.get(PlatformConfig, platform_code)
                 assert platform is not None
-                result = self._collector(platform).validate_circle(circle_url)
+                collector = self._collector(platform)
+                result = collector.validate_circle(circle_url)
         except AuthenticationRequired as exc:
             spec = get_platform_spec(platform_code)
             with self.factory.begin() as db:
@@ -368,6 +372,10 @@ class WorkerService:
                     circle.validation_error = message
             self._publish_validation(circle_id, job_id, "failed")
             return True
+        finally:
+            close = getattr(collector, "close", None)
+            if callable(close):
+                close()
         with self.factory.begin() as db:
             job = db.get(ValidationJob, job.id)
             circle = db.get(Circle, circle_id)
@@ -422,9 +430,6 @@ class WorkerService:
             )
             if not head:
                 return False
-            now = utc_now()
-            if not _retry_due(head, now):
-                return False
             run = db.get(ExtractionRun, head.run_id)
             platform = db.get(PlatformConfig, platform_code)
             if not run or not platform:
@@ -440,7 +445,40 @@ class WorkerService:
                     .order_by(CircleTask.queue_sequence)
                 )
             )
-            tasks = [task for task in queued_tasks if _retry_due(task, now)]
+            now = utc_now()
+            auth_probe_tasks = [
+                task
+                for task in queued_tasks
+                if bool((task.checkpoint or {}).get(AUTH_RECOVERY_PROBE_KEY))
+            ]
+            blocked_recovery_tasks = [
+                task
+                for task in queued_tasks
+                if bool((task.checkpoint or {}).get(AUTH_RECOVERY_BLOCKED_KEY))
+            ]
+            auth_recovery_probe = False
+            if auth_probe_tasks:
+                probe = min(auth_probe_tasks, key=lambda item: item.queue_sequence)
+                if not _retry_due(probe, now):
+                    return False
+                tasks = [probe]
+                auth_recovery_probe = True
+            elif blocked_recovery_tasks:
+                # 进程若恰在认证恢复标记落库后中断，自动提升最早的阻塞任务，
+                # 避免残留检查点让平台队列永久停住。
+                probe = min(blocked_recovery_tasks, key=lambda item: item.queue_sequence)
+                checkpoint = dict(probe.checkpoint or {})
+                checkpoint.pop(AUTH_RECOVERY_BLOCKED_KEY, None)
+                checkpoint[AUTH_RECOVERY_PROBE_KEY] = True
+                probe.checkpoint = checkpoint
+                if not _retry_due(probe, now):
+                    return False
+                tasks = [probe]
+                auth_recovery_probe = True
+            else:
+                if not _retry_due(head, now):
+                    return False
+                tasks = [task for task in queued_tasks if _retry_due(task, now)]
             rate_limited_tasks = [
                 task
                 for task in tasks
@@ -448,7 +486,7 @@ class WorkerService:
                 == RATE_LIMIT_RETRYABLE_FAILURE_CODE
             ]
             rate_limit_recovery = False
-            if rate_limited_tasks:
+            if rate_limited_tasks and not auth_recovery_probe:
                 first_rate_limited = min(rate_limited_tasks, key=lambda item: item.queue_sequence)
                 tasks_before_rate_limit = [
                     task
@@ -481,7 +519,7 @@ class WorkerService:
                 ),
                 platform.max_concurrency,
             )
-            if rate_limit_recovery:
+            if rate_limit_recovery or auth_recovery_probe:
                 concurrency = 1
         if self.event_publisher:
             self.event_publisher(
@@ -493,22 +531,27 @@ class WorkerService:
             )
         collector = self._collector(platform, concurrency)
         results: dict[str, dict[str, Any]] = {}
-        with ThreadPoolExecutor(max_workers=min(concurrency, len(tasks))) as pool:
-            futures = {
-                pool.submit(self._execute_task, collector, task.id): task.id for task in tasks
-            }
-            for future in as_completed(futures):
-                task_id = futures[future]
-                try:
-                    results[task_id] = future.result()
-                except Exception as exc:
-                    results[task_id] = {
-                        "kind": "failed",
-                        "code": "TASK_INTERNAL_ERROR",
-                        "message": f"提取任务执行异常：{exc}",
-                        "records": [],
-                        "failures": [],
-                    }
+        try:
+            with ThreadPoolExecutor(max_workers=min(concurrency, len(tasks))) as pool:
+                futures = {
+                    pool.submit(self._execute_task, collector, task.id): task.id for task in tasks
+                }
+                for future in as_completed(futures):
+                    task_id = futures[future]
+                    try:
+                        results[task_id] = future.result()
+                    except Exception as exc:
+                        results[task_id] = {
+                            "kind": "failed",
+                            "code": "TASK_INTERNAL_ERROR",
+                            "message": f"提取任务执行异常：{exc}",
+                            "records": [],
+                            "failures": [],
+                        }
+        finally:
+            close = getattr(collector, "close", None)
+            if callable(close):
+                close()
         with self.factory.begin() as db:
             run = db.get(ExtractionRun, run_id)
             assert run is not None
@@ -517,6 +560,7 @@ class WorkerService:
                 task = db.get(CircleTask, task_id)
                 if task:
                     self._apply_result(db, task, result)
+                    self._release_auth_recovery(db, task)
                     if task.status in {"success", "partial_success", "failed"} and bool(
                         (task.config_snapshot or {}).get("screenshot_enabled", True)
                     ):
@@ -804,6 +848,10 @@ class WorkerService:
                     exc = repeated
                 except CollectorFailure as repeated_control:
                     return collector_failure_result(repeated_control)
+                finally:
+                    close = getattr(refreshed, "close", None)
+                    if callable(close):
+                        close()
             return {
                 "kind": "auth",
                 "code": "AUTH_REQUIRED",
@@ -909,11 +957,15 @@ class WorkerService:
         failures = result.get("failures") or []
         existing = self._store_records(db, task, records)
         task.completed_count = len(existing)
+        previous_checkpoint = dict(task.checkpoint or {})
         checkpoint = {
             "trigger_url": result.get("trigger_url"),
             "failed_urls": failures,
             "completed_post_ids": sorted(existing),
         }
+        for recovery_key in (AUTH_RECOVERY_PROBE_KEY, AUTH_RECOVERY_BLOCKED_KEY):
+            if recovery_key in previous_checkpoint:
+                checkpoint[recovery_key] = bool(previous_checkpoint[recovery_key])
         if result["kind"] == "retry":
             retry_failures = list(result.get("retry_failures") or [])
             retry_attempt = int((task.checkpoint or {}).get("retry_attempt") or 0) + 1
@@ -998,6 +1050,30 @@ class WorkerService:
         task.failed_count = (
             len(failures) if task.status in {"partial_success", "failed"} else 0
         )
+
+    def _release_auth_recovery(self, db: Session, task: CircleTask) -> None:
+        """认证探针形成终态后释放同批次其余来源，下一轮恢复冻结并发。"""
+
+        checkpoint = dict(task.checkpoint or {})
+        if not checkpoint.get(AUTH_RECOVERY_PROBE_KEY):
+            return
+        if task.status not in {"success", "partial_success", "failed"}:
+            return
+        checkpoint.pop(AUTH_RECOVERY_PROBE_KEY, None)
+        checkpoint.pop(AUTH_RECOVERY_BLOCKED_KEY, None)
+        task.checkpoint = checkpoint
+        siblings = db.scalars(
+            select(CircleTask).where(
+                CircleTask.run_id == task.run_id,
+                CircleTask.platform_code == task.platform_code,
+                CircleTask.status == "queued",
+                CircleTask.id != task.id,
+            )
+        )
+        for sibling in siblings:
+            sibling_checkpoint = dict(sibling.checkpoint or {})
+            sibling_checkpoint.pop(AUTH_RECOVERY_BLOCKED_KEY, None)
+            sibling.checkpoint = sibling_checkpoint
 
     def _apply_progress(
         self, task_id: str, records: list[dict[str, Any]], _candidate_failure_count: int
@@ -1104,12 +1180,19 @@ class WorkerService:
 
         resumed_runs: dict[str, tuple[int, int]] = {}
         with self.factory.begin() as db:
-            for task in db.scalars(
-                select(CircleTask).where(
+            waiting_tasks = list(
+                db.scalars(
+                    select(CircleTask)
+                    .where(
                     CircleTask.platform_code == platform_code,
                     CircleTask.status == "waiting_for_auth",
                 )
-            ):
+                    .order_by(CircleTask.queue_sequence)
+                )
+            )
+            waiting_by_run: dict[str, list[CircleTask]] = {}
+            for task in waiting_tasks:
+                waiting_by_run.setdefault(task.run_id, []).append(task)
                 task.status = "queued"
                 task.error_code = None
                 task.error_message = None
@@ -1118,6 +1201,29 @@ class WorkerService:
                     run.status = "queued"
                     run.waiting_reason = None
                     resumed_runs[run.id] = (run.summary_version, run.completed_count)
+            # 当前 session 关闭了查询前自动 flush；先让状态切换进入事务视图，
+            # 后续才能同时取得刚恢复的任务与原本已排队的同批次来源。
+            db.flush()
+            for run_id, resumed_tasks in waiting_by_run.items():
+                probe = min(resumed_tasks, key=lambda item: item.queue_sequence)
+                pending_tasks = list(
+                    db.scalars(
+                        select(CircleTask).where(
+                            CircleTask.run_id == run_id,
+                            CircleTask.platform_code == platform_code,
+                            CircleTask.status == "queued",
+                        )
+                    )
+                )
+                for task in pending_tasks:
+                    checkpoint = dict(task.checkpoint or {})
+                    checkpoint.pop(AUTH_RECOVERY_PROBE_KEY, None)
+                    checkpoint.pop(AUTH_RECOVERY_BLOCKED_KEY, None)
+                    if task.id == probe.id:
+                        checkpoint[AUTH_RECOVERY_PROBE_KEY] = True
+                    else:
+                        checkpoint[AUTH_RECOVERY_BLOCKED_KEY] = True
+                    task.checkpoint = checkpoint
             circle_ids = select(Circle.id).where(Circle.platform_code == platform_code)
             for job in db.scalars(
                 select(ValidationJob).where(

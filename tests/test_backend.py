@@ -73,7 +73,11 @@ from threadsnap.sentiment import (
     validate_modality_identity,
 )
 from threadsnap.services import bootstrap_database
-from threadsnap.worker import _retry_delay_seconds
+from threadsnap.worker import (
+    AUTH_RECOVERY_BLOCKED_KEY,
+    AUTH_RECOVERY_PROBE_KEY,
+    _retry_delay_seconds,
+)
 
 
 def sample_record(post_id: str) -> dict:
@@ -267,6 +271,14 @@ class FakeCDPSession:
 
     async def detach(self) -> None:
         self.detached = True
+
+
+class IdleFakeCDPSession(FakeCDPSession):
+    """模拟静止页面，启动投屏后不产生新帧。"""
+
+    async def send(self, method: str, params: dict | None = None) -> dict:
+        self.calls.append((method, params))
+        return {}
 
 
 class FakeCDPContext(FakeAuthContext):
@@ -1511,6 +1523,7 @@ class ApiAndConfigTests(AppCase):
             assert platform is not None
             platform.adapter_status = "not_integrated"
             platform.enabled = False
+            platform.internal_concurrency = 8
 
         with self.container.sessions.begin() as db:
             bootstrap_database(db)
@@ -1520,6 +1533,7 @@ class ApiAndConfigTests(AppCase):
             assert platform is not None
             self.assertEqual("available", platform.adapter_status)
             self.assertFalse(platform.enabled)
+            self.assertEqual(1, platform.internal_concurrency)
 
     def test_autohome_registry_contract_is_available_and_can_create_runs(self) -> None:
         """本地发布状态允许显式启用并进入统一手动任务链。"""
@@ -1535,7 +1549,7 @@ class ApiAndConfigTests(AppCase):
         )
         self.assertFalse(autohome["capabilities"]["page_evidence"])
         self.assertTrue(autohome["capabilities"]["live_video_resolution"])
-        self.assertEqual({"min": 1, "max": 8}, autohome["concurrency_range"])
+        self.assertEqual({"min": 1, "max": 1}, autohome["concurrency_range"])
         auth_task = self.client.post("/api/v1/platforms/autohome/auth/tasks")
         self.assertEqual(202, auth_task.status_code, auth_task.text)
         self.assertEqual("autohome", auth_task.json()["platform_code"])
@@ -1556,7 +1570,7 @@ class ApiAndConfigTests(AppCase):
         )
         self.assertEqual(200, enabled.status_code, enabled.text)
         self.assertTrue(enabled.json()["enabled"])
-        self.assertEqual(8, enabled.json()["internal_concurrency"])
+        self.assertEqual(1, enabled.json()["internal_concurrency"])
         created = self.client.post(
             "/api/v1/runs/manual",
             json={
@@ -1847,7 +1861,7 @@ class ApiAndConfigTests(AppCase):
         )
         self.assertEqual(200, autohome.status_code)
         self.assertTrue(autohome.json()["enabled"])
-        self.assertEqual(2, autohome.json()["internal_concurrency"])
+        self.assertEqual(1, autohome.json()["internal_concurrency"])
 
         plan = self.client.put(
             "/api/v1/extraction-plan",
@@ -2730,6 +2744,37 @@ class AuthComponentTests(AppCase):
         self.assertIn(("Page.stopScreencast", None), cdp.calls)
         self.assertTrue(cdp.detached)
 
+    def test_static_auth_stream_expires_and_closes_browser(self) -> None:
+        """静止页面没有新帧时，到期任务也应主动释放浏览器资源。"""
+
+        cdp = IdleFakeCDPSession()
+        context = FakeCDPContext(auth_state("session"), cdp)
+        playwright = FakePlaywright()
+        task = AuthTask(
+            id="auth-static-expiry",
+            platform_code="dongchedi",
+            ticket="ticket",
+            expires_at=datetime.now(timezone.utc) + timedelta(milliseconds=20),
+            status="active",
+            page_status="ready",
+        )
+        task.page = FakeAuthPage()  # type: ignore[assignment]
+        task.context = context  # type: ignore[assignment]
+        task.playwright = playwright  # type: ignore[assignment]
+        self.container.auth.tasks[task.id] = task
+        socket = FakeStreamSocket()
+
+        asyncio.run(self.container.auth.stream(task.id, task.ticket, socket))  # type: ignore[arg-type]
+
+        self.assertEqual("expired", task.status)
+        self.assertEqual("expired", task.page_status)
+        self.assertTrue(context.closed)
+        self.assertTrue(playwright.stopped)
+        self.assertIsNone(task.context)
+        self.assertIsNone(task.page)
+        self.assertIn(("Page.stopScreencast", None), cdp.calls)
+        self.assertTrue(cdp.detached)
+
     def test_cdp_pointer_input_preserves_drag_state_and_clamps_coordinates(self) -> None:
         cdp = FakeCDPSession()
         asyncio.run(
@@ -2998,6 +3043,96 @@ class QueueAndRetryTests(AppCase):
         self.assertEqual("queued", self.container.runs.get_run(two["id"])["status"])
         self.assertTrue(self.container.worker.process_once())
         self.assertEqual("success", self.container.runs.get_run(two["id"])["status"])
+
+    def test_auth_resume_runs_one_source_probe_before_restoring_snapshot_concurrency(self) -> None:
+        """认证恢复先串行验证一个来源，成功后才释放同批次其余来源。"""
+
+        with self.container.sessions.begin() as db:
+            platform = db.get(PlatformConfig, "autohome")
+            assert platform is not None
+            platform.enabled = True
+            platform.internal_concurrency = 4
+            vehicle = Vehicle(name="认证恢复测试车")
+            db.add(vehicle)
+            db.flush()
+            circles = []
+            for external_id in ("7853", "8232"):
+                circle = Circle(
+                    platform_code="autohome",
+                    external_id=external_id,
+                    name=f"测试论坛{external_id}",
+                    url=(
+                        f"https://club.autohome.com.cn/bbs/forum-c-{external_id}-1.html"
+                        "?sort=post"
+                    ),
+                    vehicle_id=vehicle.id,
+                    source_kind="configured",
+                    validation_status="verified",
+                )
+                db.add(circle)
+                db.flush()
+                circles.append(circle.id)
+
+        run = self.container.runs.create_manual(
+            ManualRunCreate(platform_code="autohome", circle_ids=circles, quantity=1),
+            scope="api",
+            header_key="auth-recovery-probe-0001",
+        )
+        with self.container.sessions.begin() as db:
+            stored_run = db.get(ExtractionRun, run["id"])
+            tasks = list(
+                db.scalars(
+                    select(CircleTask)
+                    .where(CircleTask.run_id == run["id"])
+                    .order_by(CircleTask.queue_sequence)
+                )
+            )
+            assert stored_run is not None and len(tasks) == 2
+            stored_run.status = "waiting_for_auth"
+            for task in tasks:
+                task.status = "waiting_for_auth"
+                task.error_code = "PLATFORM_CHALLENGE"
+                task.error_message = "平台要求完成访问验证。"
+
+        requested_concurrency: list[int | None] = []
+
+        def collector_factory(
+            _platform: PlatformConfig, snapshot_concurrency: int | None = None
+        ) -> FakeCollector:
+            requested_concurrency.append(snapshot_concurrency)
+            return FakeCollector()
+
+        self.container.worker._collector = collector_factory  # type: ignore[method-assign]
+        self.container.worker.resume_platform("autohome")
+
+        with self.container.sessions() as db:
+            resumed_tasks = list(
+                db.scalars(
+                    select(CircleTask)
+                    .where(CircleTask.run_id == run["id"])
+                    .order_by(CircleTask.queue_sequence)
+                )
+            )
+            self.assertTrue(resumed_tasks[0].checkpoint[AUTH_RECOVERY_PROBE_KEY])
+            self.assertTrue(resumed_tasks[1].checkpoint[AUTH_RECOVERY_BLOCKED_KEY])
+
+        self.assertTrue(self.container.worker.process_once())
+        self.assertEqual([1], requested_concurrency)
+        with self.container.sessions() as db:
+            probed_tasks = list(
+                db.scalars(
+                    select(CircleTask)
+                    .where(CircleTask.run_id == run["id"])
+                    .order_by(CircleTask.queue_sequence)
+                )
+            )
+            self.assertEqual(["success", "queued"], [task.status for task in probed_tasks])
+            self.assertNotIn(AUTH_RECOVERY_PROBE_KEY, probed_tasks[0].checkpoint)
+            self.assertNotIn(AUTH_RECOVERY_BLOCKED_KEY, probed_tasks[1].checkpoint)
+
+        self.assertTrue(self.container.worker.process_once())
+        self.assertEqual([1, 1], requested_concurrency)
+        self.assertEqual("success", self.container.runs.get_run(run["id"])["status"])
 
     def test_worker_persists_and_publishes_progress_before_task_finishes(self) -> None:
         """小批量任务应逐条形成权威进度，而不是结束时才一次跳满。"""
@@ -3270,6 +3405,20 @@ class QueueAndRetryTests(AppCase):
         self.assertEqual("completed", auth_task.status)
         self.assertEqual("completed", socket.messages[-1]["type"])
         self.assertEqual("queued", self.container.runs.get_run(run["id"])["status"])
+
+        with self.container.sessions() as db:
+            resumed_task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            assert resumed_task is not None
+            self.assertTrue(resumed_task.checkpoint[AUTH_RECOVERY_PROBE_KEY])
+
+        # 原URL仍返回同类控制页时，探针保持在认证等待态，后续来源不会被释放。
+        self.assertTrue(self.container.worker.process_once())
+        self.assertEqual("waiting_for_auth", self.container.runs.get_run(run["id"])["status"])
+        with self.container.sessions() as db:
+            repeated_task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            assert repeated_task is not None
+            self.assertEqual("PLATFORM_CHALLENGE", repeated_task.error_code)
+            self.assertTrue(repeated_task.checkpoint[AUTH_RECOVERY_PROBE_KEY])
 
         # 若真实任务随后明确报告登录失效，恢复入口才切换到官方登录页和全新环境。
         with self.container.sessions.begin() as db:

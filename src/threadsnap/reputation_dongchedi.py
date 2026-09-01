@@ -7,7 +7,6 @@ import hashlib
 import json
 import logging
 import re
-import threading
 import time
 from dataclasses import dataclass, replace
 from decimal import ROUND_HALF_UP, Decimal
@@ -15,18 +14,17 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
-from curl_cffi import requests
-from curl_cffi.requests import Cookies
 from lxml import html
 from patchright.async_api import Browser, BrowserContext, Page, async_playwright
 from patchright.async_api import Error as PlaywrightError
 from PIL import Image
 
 from .browser_runtime import browser_launch_args
+from .scrapling_transport import ExecutionScopeKey, ScraplingHttpPool
 
 logger = logging.getLogger(__name__)
 
-ADAPTER_VERSION = "dongchedi-reputation-v8-presale-not-available"
+ADAPTER_VERSION = "dongchedi-reputation-v9-scrapling"
 VALIDATION_CONTRACT_VERSION = "dongchedi-reputation-mapping-v1"
 VIEWPORT = {"width": 1440, "height": 1000}
 NEGATIVE_RATE_API_URL = (
@@ -135,31 +133,6 @@ def _name_key(value: str) -> str:
     return re.sub(r"[\s·._-]+", "", value).casefold()
 
 
-def _cookies_from_state(state: dict[str, Any] | None) -> Cookies:
-    """把浏览器 storage state 中仍有效的懂车帝 Cookie 转成 HTTP CookieJar。"""
-
-    jar = Cookies()
-    now = time.time()
-    for item in (state or {}).get("cookies", []):
-        if not isinstance(item, dict):
-            continue
-        domain = str(item.get("domain") or "")
-        expires = item.get("expires", -1)
-        if "dongchedi.com" not in domain:
-            continue
-        if isinstance(expires, (int, float)) and expires > 0 and expires <= now:
-            continue
-        if all(item.get(key) for key in ("name", "value", "path")):
-            jar.set(
-                str(item["name"]),
-                str(item["value"]),
-                domain=domain,
-                path=str(item["path"]),
-                secure=bool(item.get("secure")),
-            )
-    return jar
-
-
 def _metric_rect(measurement: dict[str, Any]) -> dict[str, float]:
     boxes = [
         value
@@ -206,6 +179,7 @@ class DongchediReputationAdapter:
         prefer_http_first: bool = False,
         include_review_article_count: bool = False,
         include_negative_rate: bool = False,
+        execution_scope: ExecutionScopeKey | None = None,
     ) -> None:
         self.storage_state = storage_state
         self.concurrency = max(1, min(int(concurrency), 8))
@@ -216,18 +190,23 @@ class DongchediReputationAdapter:
         self.prefer_http_first = prefer_http_first
         self.include_review_article_count = include_review_article_count
         self.include_negative_rate = include_negative_rate
-        self.cookies = _cookies_from_state(storage_state)
-        self._thread_local = threading.local()
+        self.http = ScraplingHttpPool(
+            storage_state,
+            timeout_seconds=timeout_seconds,
+            scope=(execution_scope or ExecutionScopeKey()).bind_platform(
+                "dongchedi-reputation"
+            ),
+        )
 
-    def _http_session(self) -> requests.Session:
-        """每个取数线程独享 Session，避免跨线程共享可变请求状态。"""
+    def _http_session(self) -> Any:
+        """返回当前线程独享的 Scrapling FetcherSession 适配器。"""
 
-        session = getattr(self._thread_local, "http", None)
-        if session is None:
-            session = requests.Session(impersonate="chrome")
-            session.cookies.update(self.cookies)
-            self._thread_local.http = session
-        return session
+        return self.http.session()
+
+    def close(self) -> None:
+        """关闭巡检线程创建的全部 Scrapling Session。"""
+
+        self.http.close()
 
     @staticmethod
     def _attitude_count(

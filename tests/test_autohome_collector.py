@@ -99,14 +99,38 @@ class AutohomeContractTests(unittest.TestCase):
         collector._http_session = lambda: ServerErrorSession()  # type: ignore[method-assign]
         with patch("threadsnap.collectors.autohome.time.sleep"):
             with self.assertRaises(CollectorFailure) as caught:
-                collector._get(
-                    "https://club.autohome.com.cn/bbs/thread/hash/115934382-1.html"
-                )
+                collector._get("https://club.autohome.com.cn/bbs/thread/hash/115934382-1.html")
 
         self.assertEqual("PLATFORM_NETWORK_ERROR", caught.exception.code)
         self.assertEqual(3, calls)
 
-    def test_registry_and_collector_publish_shared_concurrency_bounds(self) -> None:
+    def test_challenge_is_handed_to_formal_auth_without_stealth_navigation(self) -> None:
+        """控制页保留精确触发URL并直接进入共享认证状态机。"""
+
+        collector = collector_with_like()
+        trigger_url = "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post"
+        request_url = "https://club-open-api.autohome.com.cn/api/fixture"
+        response = FakeResponse(
+            b"<html><body>verify</body></html>",
+            "https://safety.autohome.com.cn/userverify?backurl=x",
+        )
+        calls: list[str] = []
+
+        class FixtureSession:
+            def get(self, url: str, **_kwargs: object) -> FakeResponse:
+                calls.append(url)
+                return response
+
+        collector._http_session = lambda: FixtureSession()  # type: ignore[method-assign]
+
+        with self.assertRaises(CollectorFailure) as caught:
+            collector._get(request_url, recovery_url=trigger_url)
+
+        self.assertEqual("PLATFORM_CHALLENGE", caught.exception.code)
+        self.assertEqual(trigger_url, caught.exception.trigger_url)
+        self.assertEqual([request_url], calls)
+
+    def test_registry_and_collector_publish_single_concurrency_bound(self) -> None:
         spec = get_platform_spec("autohome")
 
         self.assertEqual("available", spec.adapter_status)
@@ -116,10 +140,10 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertIn("account.autohome.com.cn", spec.login_url or "")
         self.assertFalse(spec.supports_page_evidence)
         self.assertTrue(spec.supports_live_video_resolution)
-        self.assertEqual((1, 8), (spec.min_concurrency, spec.max_concurrency))
+        self.assertEqual((1, 1), (spec.min_concurrency, spec.max_concurrency))
 
         collector = collector_with_like(concurrency=8)
-        self.assertEqual(8, collector.concurrency)
+        self.assertEqual(1, collector.concurrency)
         self.assertTrue(collector.supports_live_video_resolution)
 
     def test_source_order_and_post_identity_are_normalized(self) -> None:
@@ -227,9 +251,7 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertEqual("resolved", record["raw_status"]["video_url_resolution"])
         self.assertEqual(10, len(record["comments"]))
         self.assertEqual("用户1", record["comments"][0]["author"])
-        self.assertEqual(
-            "detail_first_page_up_to_10", record["raw_status"]["comment_capture"]
-        )
+        self.assertEqual("detail_first_page_up_to_10", record["raw_status"]["comment_capture"])
         self.assertEqual(
             {
                 "has_more": None,
@@ -432,9 +454,7 @@ class AutohomeContractTests(unittest.TestCase):
 
         assert record is not None
         self.assertEqual([], record["comments"])
-        self.assertEqual(
-            "detail_first_page_up_to_10", record["raw_status"]["comment_capture"]
-        )
+        self.assertEqual("detail_first_page_up_to_10", record["raw_status"]["comment_capture"])
         self.assertEqual(
             {
                 "has_more": False,
@@ -643,9 +663,7 @@ class AutohomeContractTests(unittest.TestCase):
 
         assert record is not None
         self.assertEqual(1, len(record["comments"]))
-        self.assertEqual(
-            "detail_first_page_up_to_10", record["raw_status"]["comment_capture"]
-        )
+        self.assertEqual("detail_first_page_up_to_10", record["raw_status"]["comment_capture"])
 
     def test_explicit_delete_flag_maps_to_hidden(self) -> None:
         document = """
@@ -776,9 +794,7 @@ class AutohomeContractTests(unittest.TestCase):
             ["115934382", "115934383"],
             [normalize_post_url(row["url"])[0] for row in result["failures"]],
         )
-        self.assertEqual(
-            {"PLATFORM_RATE_LIMITED"}, {row["code"] for row in result["failures"]}
-        )
+        self.assertEqual({"PLATFORM_RATE_LIMITED"}, {row["code"] for row in result["failures"]})
         self.assertNotIn("115934384", json.dumps(result, ensure_ascii=False))
 
     def test_rate_limit_stops_url_list_and_preserves_unvisited_remainder(self) -> None:
@@ -800,9 +816,7 @@ class AutohomeContractTests(unittest.TestCase):
 
         self.assertEqual([urls[0]], visited)
         self.assertEqual(urls, [row["url"] for row in result["failures"]])
-        self.assertEqual(
-            {"PLATFORM_RATE_LIMITED"}, {row["code"] for row in result["failures"]}
-        )
+        self.assertEqual({"PLATFORM_RATE_LIMITED"}, {row["code"] for row in result["failures"]})
 
     def test_failed_fixed_candidate_is_not_replaced_by_later_row(self) -> None:
         """圈子前 N 个候选一旦冻结，详情失败也不得向后补位。"""
@@ -837,9 +851,7 @@ class AutohomeContractTests(unittest.TestCase):
         )
 
         self.assertEqual(["115934382", "115934383"], visited)
-        self.assertEqual(
-            ["115934383"], [row["platform_post_id"] for row in result["records"]]
-        )
+        self.assertEqual(["115934383"], [row["platform_post_id"] for row in result["records"]])
         self.assertEqual(
             ["115934382"],
             [normalize_post_url(row["url"])[0] for row in result["failures"]],

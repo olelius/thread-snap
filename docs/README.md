@@ -191,6 +191,11 @@
 | `docs/adr/0050-freeze-circle-candidates-without-replacement.md` | 圈子任务冻结来源前 N 个候选，网络错误只重试原 URL，不使用后续帖子补位 |
 | `docs/adr/0051-separate-session-capture-from-collection-probe.md` | 平台人工认证只获取并保存 Session，真实圈子与帖子访问由采集任务在原 URL 判断 |
 | `docs/adr/0052-resume-rate-limited-post-tasks-after-cooldown.md` | 普通帖子限流保留固定URL，在原任务按递增冷却和单来源单并发自动续跑 |
+| `docs/adr/0053-fix-reputation-run-concurrency-at-two.md` | 正式口碑巡检与失败项补跑固定使用两路执行项并发，不继承帖子提取并发 |
+| `docs/adr/0054-use-scrapling-for-formal-http-execution.md` | 正式普通HTTP统一由Scrapling FetcherSession执行，ThreadSnap保留持久批次与FIFO |
+| `docs/adr/0055-add-lazy-scrapling-stealth-protection-channel.md` | 平台控制出现后以执行作用域和全局资源预算按需启用Scrapling Stealthy，并由原请求确认恢复 |
+| `docs/adr/0056-route-autohome-control-through-auth-probe.md` | 汽车之家控制页进入正式认证，Session更新后以单来源探针通过原URL门禁再恢复批次并发 |
+| `docs/adr/0057-cap-autohome-internal-concurrency-at-one.md` | 依据真实420与1000条对照把汽车之家平台内部总并发重新固定为1 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 

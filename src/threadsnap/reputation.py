@@ -1625,6 +1625,10 @@ class ReputationService:
             except Exception as error:
                 final_results = [error for _ in targets]
                 attempt_counts = [1 for _ in targets]
+            finally:
+                close = getattr(adapter, "close", None)
+                if callable(close):
+                    close()
         else:
             final_results = [
                 ReputationAdapterError("AUTH_REQUIRED", "懂车帝共享Session需要更新。")
@@ -2903,6 +2907,10 @@ class ReputationService:
                 f"真实页面验证运行失败：{type(error).__name__}",
                 status_code=503,
             ) from error
+        finally:
+            close = getattr(adapter, "close", None)
+            if callable(close):
+                close()
         final_results = [retry_results.get(index, result) for index, result in enumerate(first)]
         finished = datetime.now(timezone.utc)
         succeeded = sum(isinstance(item, ReputationPageResult) for item in final_results)

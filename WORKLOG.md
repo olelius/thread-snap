@@ -16,6 +16,72 @@
 
 ---
 
+## 2026-09-01 — 汽车之家v9真实批次与认证窗口自动打开
+**总目标**：在独立Scrapling工作树执行汽车之家v9真实小批量和14来源批次，验证平台控制分类、认证入口、原任务恢复与前端操作闭环，并依据真实对照收敛平台并发上限。
+**状态**：✅ 单来源基线、420条控制分类、认证Session更新、单来源探针和单并发420/1000条对照均已取得真实运行证据；汽车之家内部总并发已固定为1，保持在独立分支且未合入main。
+**干到哪里了**：
+- [x] 单来源批次`20260901-094436-001`在约6.74秒内完成`30 / 30`、最终失败0；14来源批次`20260901-094521-001`运行到`218 / 420`后以`PLATFORM_CHALLENGE`进入等待，已完成结果和固定候选均保留，未把控制文档当成内容。
+- [x] 批次详情首次进入`waiting_for_auth`时自动打开一次认证Dialog；操作者手动关闭后本次等待期间不循环弹出，“处理会话”入口继续可用。
+- [x] 认证投屏循环增加到期唤醒：静止页面没有新帧或输入时仍按到期时间把任务标记为`expired`并关闭浏览器、Playwright和临时Profile；新增定向回归已通过。
+- [x] 分支服务重启后完成真实界面验证：批次详情自动打开汽车之家认证Dialog；任务`01a05abd-2f45-72fe-9029-3d06aad38ee5`在静止页面到期时由`active/ready`自动收敛为`expired/expired`，浏览器进程退出，批次仍保持`218 / 420`且最终失败0。
+- [x] 用户再次处理会话时，继承Profile的服务器浏览器直接返回原页面；认证任务`01a05ac8-9659-75cb-b10b-ffd7b39cf41f`保存结构有效Session并于10:24:54更新验证时间。同一批次先由T9探针从22条完成到30条并于10:24:59终态，随后恢复冻结并发2；批次于10:26:14完成`420 / 420`、最终失败0，14个来源全部成功。
+- [x] 按用户指定把汽车之家内部总并发持久调整为1，并用相同14来源、每来源30条创建独立批次`20260901-103813-001`；该轮从10:38:14运行到10:40:42，148.272秒完成`420 / 420`、最终失败0、14来源全部成功，约2.833条/秒，未进入认证等待、未出现平台控制或启动认证Chromium。该单轮证明当前Session和运行窗口下并发1稳定，不外推为长期免验证。
+- [x] 继续以并发1执行10来源、每来源100条的独立批次`20260901-105516-001`；该轮从10:55:17运行到11:09:38，860.500秒形成`1000 / 1000`来源结果、最终失败0、10来源全部成功，其中995个唯一帖子。运行期间记录20次约21秒的TCP连接超时，Worker均在原URL持久重试后恢复；未进入认证等待、未观察到验证码/挑战/限流，也未启动认证Chromium。吞吐约1.162条/秒，主要受约420秒连接超时拖累。
+- [x] 批次结束后对三个实际目标域各执行3次DNS/TCP诊断，9/9次TCP 443均成功；但DNS分别返回`198.18.0.52`、`198.18.0.51`、`198.18.0.53`，属于本机合成地址映射而非目标站公开地址，说明即使浏览器代理开关关闭，当前网络路径仍经过本机TUN/Fake-IP类DNS转发层。本轮20次连接超时优先归因该网络层的间歇连接，现有证据不归类为平台风控。
+- [x] 依据ADR 0057把汽车之家注册范围和采集器直构路径都固定为1，并让bootstrap把旧数据库高值收敛为1；配置API实时返回`concurrency_range=1..1`，提交8实际保存1。完整后端239项、Ruff、compileall、pip check、前端TypeScript检查和2468模块生产构建均通过；分支后端已重启且`/health`返回`ok`。
+- [x] 当前前后端均从`refactor/restore-scrapling-max`加载，真实运行脱敏回执位于`artifacts/runtime/autohome-v9-real-20260901/acceptance.json`。
+**下一步**：先定位并关闭或稳定当前本机TUN/Fake-IP DNS转发层，再把仍声明匿名模式的验收Provider与当前v9加密Session合同同步，最后按事前冻结清单从零执行正式500条，不用本次1000条来源结果代替500个唯一URL正式分母。
+**边界**：本轮保持独立工作树且不合入main；不改写既有218条结果，不创建替代批次，不记录Ticket、Cookie、Session或Profile内容。
+**关联**：`frontend/src/features/runs/run-detail-page.tsx`、`src/threadsnap/auth.py`、`src/threadsnap/collectors/autohome.py`、`src/threadsnap/collectors/registry.py`、`src/threadsnap/services.py`、`tests/test_backend.py`、`docs/adr/0057-cap-autohome-internal-concurrency-at-one.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`
+
+---
+
+## 2026-08-31 — 汽车之家控制分类与认证后渐进恢复
+**总目标**：依据固定全Stealth对照轮次和正式混合批次证据，把汽车之家平台控制收敛为“Scrapling HTTP分类 → 正式交互认证 → 单来源原URL探针 → 恢复冻结并发”的持久状态机。
+**状态**：✅ 状态机、适配器合同、持久恢复测试、owner文档和完整本地验证均已完成；仅存在于`refactor/restore-scrapling-max`独立工作树，暂不合入main。
+**干到哪里了**：
+- [x] 固定420访问全Stealth轮次前56次为`CONTENT_OK`，第57次进入`PLATFORM_CHALLENGE`；人工完成后同一Stealth原请求复访仍受控且验证入口为HTTPS 404。输入清单SHA-256为`318b9c2794179089526607f73facd9c443864da30e526a56c4e6c6027f18c0d4`，状态位于`artifacts/poc/results/scrapling-stealth-all/20260831-interactive-full/state.json`。
+- [x] 同日正式交互Profile更新后，既有批次从`85 / 420`原位恢复并完成`420 / 420`；据此撤回汽车之家控制页的Stealthy恢复，普通请求继续使用Scrapling FetcherSession，控制分类直接进入正式认证状态机。
+- [x] `resume_platform`为每个恢复批次持久标记一个最早等待来源探针并阻塞其余来源；Worker用实际并发1执行探针，终态后释放同批次后续来源并恢复冻结并发，再次等待认证或持久重试时保持阻塞；残留阻塞标记可自动提升最早任务，避免重启后停滞。
+- [x] 汽车之家适配器升级为`autohome-club-v9-scrapling-auth-gate`；定向及队列回归55项通过，覆盖控制页不启动Stealthy、精确触发URL、重复控制继续等待、两来源恢复先1后4并发和既有认证事件。
+- [x] 完整后端238项、Ruff、compileall、pip check、前端TypeScript检查和2468模块生产构建均通过；`git diff --check`通过。脱敏回执位于`artifacts/runtime/autohome-auth-recovery-20260831/summary.json`。
+**下一步**：保留该独立分支供后续真实新批次验证；按当前要求不创建PR、不合入main，也不切换main服务。
+**边界**：本轮关闭已取得证据的平台控制分类、正式认证、原URL内容门禁与渐进恢复，不增加验证码图像识别或直接提交协议；易车ADR 0055 Stealthy路径保持不变，数据库和Session格式不迁移。
+**关联**：`docs/adr/0056-route-autohome-control-through-auth-probe.md`、`src/threadsnap/collectors/autohome.py`、`src/threadsnap/worker.py`、`tests/test_autohome_collector.py`、`tests/test_backend.py`
+
+---
+
+## 2026-08-31 — Scrapling单用户服务按SaaS资源边界优化
+**总目标**：先完成当前单用户服务的Scrapling功能与资源优化，以稳定执行作用域、浏览器预算和恢复确认合同承接后续SaaS资源调度，当前不引入权限、租户数据隔离或数据库迁移。
+**状态**：✅ 代码、适配器合同、并发资源测试、本地真实Chromium闭环、完整后端回归和owner文档均已完成；仍只存在于`refactor/restore-scrapling-max`独立工作树，未合入main。
+**干到哪里了**：
+- [x] 统一传输池增加内存态执行作用域键，当前四个正式入口分别使用单用户默认owner、平台code和默认credential；Cookie、HTTP Session及浏览器上下文仍按资源池私有，不增加用户表、租户字段或持久化格式。
+- [x] 增加进程级`BrowserResourceBudget`，默认最多同时运行一个短生命周期Stealthy浏览器；只共享容量许可，不共享Cookie或账号状态。每次保护导航后立即关闭Chromium再归还许可，避免控制事件结束后长期保留约0.5 GiB进程组。
+- [x] 把“浏览器页面可导航”和“业务恢复成功”拆成两阶段：导航HTTP 200只允许复访原请求，原平台控制/内容分类器通过后才确认恢复代次；同一资源池的并发控制事件复用导航尝试，不重复启动浏览器。
+- [x] 保护页导航移除固定1000ms附加等待，参数集中为可注入策略；新增无敏感信息内存统计，区分HTTP请求、浏览器尝试、同事件复用、可复访响应、失败与业务确认。
+- [x] 定向70项与完整后端237项测试通过，覆盖四个正式入口的可注入作用域、汽车之家/易车原URL复访确认、跨作用域全局浏览器峰值1、Cookie不串用、同事件单飞和短生命周期关闭；Ruff、compileall、pip check与`git diff --check`通过。
+- [x] 本地真实Scrapling Stealthy闭环取得浏览器200、业务HTTP内容证明、Cookie回灌与确认代次1；导航约612.9ms，峰值10个子进程/462.3MiB，关闭后子进程0，预算`active=0/peak=1`。脱敏回执位于`artifacts/runtime/scrapling-saas-single-user-20260831/real-stealth-smoke.json`。
+**下一步**：保留分支供脱敏真实Session的三平台小批量与目标Linux验证；上述环境证据通过后，再决定该独立分支的PR和main合入时点。
+**边界**：本轮只稳定未来可替换的运行时资源接口，不实现SaaS账号权限、数据隔离、计费、公平调度、外部队列或数据库升级；Scrapling导航仍以原业务请求内容证明作为成功门禁，平台验证码自身是否可自动解除不作预设。
+**关联**：`docs/adr/0055-add-lazy-scrapling-stealth-protection-channel.md`、`docs/design/technical-route.md`、`src/threadsnap/scrapling_transport.py`、`tests/test_scrapling_transport.py`
+
+---
+
+## 2026-08-31 — 正式普通HTTP最大化切换Scrapling
+**总目标**：在独立工作树中把生产采集器的普通HTML/JSON请求最大程度收敛到Scrapling，同时保留ThreadSnap对批次、平台FIFO、固定候选、Session持久状态和恢复检查点的所有权，暂不合入main。
+**状态**：✅ 独立工作树、统一传输层、四处生产适配、资源生命周期、owner文档和完整回归均已完成；变更只存在于`refactor/restore-scrapling-max`分支。
+**干到哪里了**：
+- [x] 从`main@9b56ff8`创建`H:\ThreadSnap-worktrees\scrapling-max`与分支`refactor/restore-scrapling-max`，原`H:\ThreadSnap`继续保持main工作树，不启动或替换现有服务。
+- [x] 新增Scrapling统一同步传输层：每线程独立`FetcherSession(retries=1)`，按域/路径/协议/有效期注入浏览器Cookie并保留服务端Cookie，响应适配既有采集器合同，关闭INFO级完整请求URL日志，显式收口全部线程Session。
+- [x] 懂车帝、汽车之家、易车帖子采集器及懂车帝口碑普通HTTP全部移除直接`curl_cffi`导入并接入统一传输层；Worker覆盖来源验证、任务池和认证刷新后临时采集器关闭，口碑服务覆盖正式巡检与映射验证关闭。适配器版本分别升级为`dongchedi-dynamic-v7-scrapling`、`autohome-club-v7-scrapling`、`yiche-community-v5-scrapling`和`dongchedi-reputation-v9-scrapling`。
+- [x] 保留ThreadSnap数据库批次、平台FIFO、候选冻结、持久退避、限流冷却、认证等待和不可变历史；Scrapling只拥有普通HTTP Session、TLS/请求头传输、Cookie注入、请求执行与响应。`direct_http`继续表示后台不启动浏览器；Patchright继续处理人工认证、Session刷新和页面/口碑像素证据。
+- [x] 新增本地真实HTTP夹具，覆盖四个正式适配器均使用Scrapling、响应兼容、跳转、浏览器与服务端Cookie连续性、Cookie作用域与优先级、框架无隐藏重试、日志脱敏和多线程Session关闭。完整后端`231/231`通过（121.287秒），Ruff、compileall、pip check和`git diff --check`通过。
+**下一步**：在该分支使用脱敏真实Session执行三平台小批量与目标Linux冒烟，对比切换前后的控制分类、请求放大率和吞吐；证据通过后再由用户决定是否把该分支提交PR合入main。
+**边界**：本分支未修改数据库结构、平台业务解析、认证Profile格式或前端；未让Scrapling Spider复制ThreadSnap持久调度；显式`curl-cffi`依赖继续作为Scrapling实际TLS引擎和离线wheelhouse组成；当前main和运行服务未切换。
+**关联**：`docs/adr/0054-use-scrapling-for-formal-http-execution.md`、`src/threadsnap/scrapling_transport.py`、`tests/test_scrapling_transport.py`
+
+---
+
 ## 2026-08-31 — 口碑巡检内部并发固定为2
 **总目标**：让正式口碑巡检及失败项补跑始终以两路页面并发执行，不再因帖子提取平台并发调整而突然同时打开更多浏览器窗口。
 **状态**：✅ 代码、领域口径、回归验证、本地服务加载和Git交付均已完成。
