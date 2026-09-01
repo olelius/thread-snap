@@ -16,6 +16,23 @@
 
 ---
 
+## 2026-09-01 — 修正汽车之家成果框完整宽度
+**总目标**：修复汽车之家负面成果红框未完整覆盖条目、右边框压住浏览/回复文字的问题，同时保持原始证据、既有成果版本和数据库清单不可变。
+**状态**：✅ 根因、实现、定向测试、新捕获、完整回归和现有成果真实重建均已完成，已进入自动Git交付。
+**干到哪里了**：
+- [x] 用户截图对应批次`20260901-144851-001`、风云A9成果组`01a05bba-5170-7e46-b985-38200665f890`：v10清单框为`x=130,width=846`，5px红框内描边压住最右侧回复文字。
+- [x] 同页真实DOM证明`li/ul`为`x=129.5,width=846`，父主栏为`x=112.5,width=880`，差值来自`ul.post-list`左右各约17px外边距；不是前端弹窗缩放或纵向漂移。
+- [x] 汽车之家v11在稳定采样和最终清单中都把列表横向外边距纳入条目框；真实首屏50条统一为`x=112.5,width=880`，目标图片条目仍为`y=2359,height=205`，原图与文档均为`1425×6154`。
+- [x] 渲染器v5对既有v10证据仅在派生成果中恢复完整主栏宽度；原图SHA-256仍为`d0144b732bad3ef011cbc0cb33fbc1d4e8ae62ecf4ae65b41b6582640f2cd12a`，6个负面框只读预览中目标框为`x=113,width=880`，旧成果v1保持不变。
+- [x] 汽车之家与截图链定向45项通过，新增新清单外边距合同及v10历史成果恢复回归。
+- [x] 完整后端244项、Ruff、compileall、pip check、前端TypeScript检查和2468模块生产构建均通过；`git diff --check`通过。
+- [x] 以修复工作树代码连接现有业务数据库调用正式重建接口：目标成果组从v1生成当前v2，30条/6负面保持不变，目标框为`x=113,width=880`；原图SHA-256仍为`d0144b732bad3ef011cbc0cb33fbc1d4e8ae62ecf4ae65b41b6582640f2cd12a`，v2成果SHA-256为`f3d81d3fbdfa64b0647cb8be0a4cd044c234588acf31affcbba90d7c7c239170`，v1与v2文件均存在，前端5173代理按v2 URL下载所得哈希一致。脱敏回执位于`artifacts/runtime/autohome-card-width-20260901/acceptance.json`。
+**下一步**：完成精确提交、推送和PR合并；随后从合并后的main重启本地服务并复核前端代理仍返回v11与成果v2。
+**边界**：本次只修正汽车之家页面条目横向框，不改舆情结论、框选对象、原图、历史成果、懂车帝坐标规则、数据库结构或正式Linux发布门禁。
+**关联**：`src/threadsnap/collectors/autohome.py`、`src/threadsnap/screenshots.py`、`tests/test_autohome_collector.py`、`tests/test_screenshots.py`、`docs/design/technical-route.md`、`docs/chains/circle-screenshot-artifacts.md`、`docs/chains/later-platform-delivery.md`
+
+---
+
 ## 2026-09-01 — 汽车之家复用懂车帝圈子截图流程
 **总目标**：在独立工作树为汽车之家接入既有圈子页面证据与关联截图成果链，使截图开启时由同一浏览器页面冻结列表身份、卡片坐标和原始全页PNG，并在重启后复用不可变清单。
 **状态**：✅ 代码、真实双来源页面捕获、隔离Worker业务闭环、owner文档和完整本地验证均已完成，已进入自动Git交付。

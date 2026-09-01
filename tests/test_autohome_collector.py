@@ -944,6 +944,32 @@ class AutohomeContractTests(unittest.TestCase):
 
         self.assertEqual("PAGE_EVIDENCE_LIST_MISMATCH", caught.exception.code)
 
+    def test_capture_rows_include_post_list_horizontal_margins(self) -> None:
+        """条目边界应包含列表左右外边距，避免成果框压住最右侧统计文字。"""
+
+        class FakeCards:
+            script = ""
+
+            def evaluate_all(self, script: str) -> list[dict]:
+                self.script = script
+                return [
+                    {
+                        "index": 0,
+                        "href": "https://example.test/post",
+                        "text": "完整条目",
+                        "image_count": 0,
+                        "rect": {"x": 112.5, "y": 200, "width": 880, "height": 73},
+                    }
+                ]
+
+        cards = FakeCards()
+        rows = AutohomeCollector._read_capture_rows(cards)
+
+        self.assertEqual(880, rows[0]["rect"]["width"])
+        self.assertIn("marginLeft", cards.script)
+        self.assertIn("marginRight", cards.script)
+        self.assertIn("r.width+marginLeft+marginRight", cards.script)
+
     def test_browser_list_response_is_scoped_to_exact_source_and_order(self) -> None:
         source = parse_circle_url(
             "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=topic"
