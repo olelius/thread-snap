@@ -7,6 +7,7 @@
 - 目的：用项目从真实社区页面生成的冻结样本，验证两个新增平台适配器的来源发现、帖子详情、主评论、媒体、状态、认证和平台控制合同；
 - 决策依据：ADR 0043、ADR 0044、ADR 0045、ADR 0047、ADR 0058；
 - 非目标：重新比较Python/Node候选、重做懂车帝2000条技术选型、宣称目标CentOS连续三轮门禁通过、提前启用未完成五指标验证的口碑平台。
+- 易车腾讯 WAF 的可选逆向调研由 `docs/research/yiche-tencent-waf-reverse-runbook.md` 单独管理；它只补齐控制链证据，不替代本计划的正式500条分母，也不把调研浏览器加入普通采集数据通道。
 
 ## 2. 输入责任
 
@@ -43,6 +44,16 @@ artifacts/poc/
     ├── environment.json
     ├── run.log
     └── SHA256SUMS
+
+artifacts/poc/results/yiche-waf-reverse/<round-id>/
+├── manifest.json
+├── environment.json
+├── challenge-summary.json
+├── network/
+├── scripts/
+├── analysis/
+├── report.md
+└── SHA256SUMS
 ```
 
 仓库只记录计划、判断规则、数量与哈希；社区完整URL、帖子URL、Session、页面原文和其他真实业务输入不进入Git。
@@ -130,6 +141,7 @@ sources -> discover -> freeze -> samples -> verify-inputs -> run -> verify-run
 - 生产分类依据ADR 0058收敛：缺少控制前置证据的普通401/403为`AUTH_REQUIRED`；203后403为`PLATFORM_CHALLENGE`；TencentCaptcha/WAF经一次有界Stealthy复访仍受控时为`PLATFORM_CAPTCHA_REQUIRED`或挑战；页面/API 429为`PLATFORM_RATE_LIMITED`。挑战和验证码继承当前Profile打开原URL并在保存后用单来源并发1探针恢复，限流在同一任务持久冷却；任一控制出现后不继续请求当前来源其他候选。
 - 脱敏回执位于`artifacts/runtime/yiche-concurrency-20260901/acceptance.json`，SHA-256为`86a80da1fefc038ea33c23675393c016a73568b6e7530fa3436e57be826bef5f`。该诊断不是正式500条验收，不与后续正式分母拼接。
 - 固定1000条诊断的URL恢复修复回执位于`artifacts/poc/results/yiche-concurrency1/20260901-1000-url/acceptance.json`，SHA-256为`a617e3619ae1e77039c065c4b30b4a469aed7a455b1128c386991b8586b36c51`；该文件冻结修复完成时的59/1000状态。后续同一原批次已按持久化帖子ID扣除完成项、保持0～999原位置并最终1000/1000；终态和根因以同目录`root-cause-analysis.json`及其SHA-256为准。
+- 后续逆向调研不重跑该1000条压力轮次。下一次自然挑战只按严格流程补齐 CaptchaAppId、SDK/TDC与相关脚本哈希、iframe结构、网络发起者、调用栈、Cookie名称变化和原URL正文门禁；历史视频使用的 DevTools MCP、视频私有 Skills/Rules 与易车生产适配器分别管理。
 
 ## 5. 口碑映射并行分析边界
 

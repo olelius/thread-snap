@@ -66,6 +66,7 @@ IP封禁。验证码发生时，同出口、同保存Session的全新HTTP传输�
 - 挑战或验证码出现后，同批次已完成结果、固定候选和任务检查点保持不变；恢复不创建替代批次。
 - 限流冷却由Worker持久化并在服务重启后继续，接口429不再降级为普通字段失败。
 - 不新增数据库字段、Session格式、前端页面、验证码识别能力或隐式请求重试。
+- 后续腾讯 WAF 逆向调研按 `docs/research/yiche-tencent-waf-reverse-runbook.md` 隔离执行，复用本决策的控制分类和止损证据；MCP或视频流程出现时本决策仍保持有效，生产行为变化需要新的设计证据和ADR。
 
 ## Rejected alternatives
 

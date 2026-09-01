@@ -5,6 +5,7 @@
 - 功能范围 owner：`docs/design/product-design.md` 的“后续正式版”和“后续两个平台接入验收边界”。
 - 技术合同 owner：`docs/design/technical-route.md` 的“后续平台接入验证合同”。
 - 验收计划 owner：`docs/research/later-platform-onboarding-plan.md`。
+- 易车腾讯 WAF 逆向调研 owner：`docs/research/yiche-tencent-waf-reverse-runbook.md`；只管理隔离证据与阶段门，生产恢复状态机保持原状。
 - 架构决策：`docs/adr/0043-use-project-discovered-500-sample-gate-for-later-platforms.md`、`docs/adr/0044-separate-local-adapter-publication-from-formal-sample-acceptance.md`、`docs/adr/0045-preserve-cross-forum-feed-items.md`、`docs/adr/0046-require-autohome-session-for-like-count.md`、`docs/adr/0047-use-account-login-and-direct-http-for-yiche.md`、`docs/adr/0048-treat-primary-comments-as-nonblocking-post-enrichment.md`、`docs/adr/0049-unify-configurable-platform-internal-concurrency.md`、`docs/adr/0054-use-scrapling-for-formal-http-execution.md`、`docs/adr/0055-add-lazy-scrapling-stealth-protection-channel.md`、`docs/adr/0056-route-autohome-control-through-auth-probe.md`、`docs/adr/0057-cap-autohome-internal-concurrency-at-one.md`、`docs/adr/0058-route-yiche-control-through-classified-recovery.md`。
 - 当前阶段：汽车之家与易车均已完成本地适配器和公共业务闭环并发布为 `available`、默认停用；依据ADR 0057，汽车之家平台内部总并发固定为1，懂车帝与易车继续允许配置1～8，保存值由新批次冻结并由跨来源、来源内详情和即时重试共同共享。依据ADR 0051，三平台人工认证入口只取得并保存服务器浏览器Session，不访问圈子、首帖、点赞或用户身份业务端点；真实任务在原URL执行采集访问门禁。依据ADR 0054，汽车之家 `autohome-club-v11-scrapling-page-evidence-frame` 与易车 `yiche-community-v7-control-recovery` 的普通HTTP由线程局部Scrapling FetcherSession执行，ThreadSnap继续管理批次、FIFO、固定候选与持久恢复。汽车之家固定轮次已经证明Stealthy控制恢复无效，因此按ADR 0056把验证码或访问验证直接交给正式交互认证，Session更新后只用最早等待来源做单并发原URL探针，探针形成终态才释放其余来源；恢复后平台总并发仍为1。汽车之家已复用懂车帝的页面证据与关联成果流程，由同一Patchright页面冻结官方列表响应、最终DOM卡片和原始全页PNG，真实两个列表首屏均为50/50同序；易车页面证据仍为明确缺口。易车保留ADR 0055的一次受控Stealthy通道，并按ADR 0058把普通401/403登录失效、203后403详情挑战、TencentCaptcha/WAF验证码和HTTP/API 429限流分开处理；挑战或验证码进入继承现有Profile的原URL交互恢复，限流进入持久冷却，候选层一旦观察到控制就停止追加请求。真实并发8轮次在59/240后8个来源全部受控，账号身份与列表接口仍为200；后续固定1000个不同详情URL、实际并发1的独立批次观察到5次腾讯验证码和7次详情页面429冷却，最终同一原任务完成1000/1000、失败0；账号与列表API在验证码期间仍可用，三次验证码均在约13分钟静默后零交互自然恢复，两个干净恢复周期都新增57条再次触发。因此降低到并发1也不能消除平台控制，主因是串行但未节流的详情访问速率与复合WAF风险桶。当前运行配置仍保持1以限制请求突发，2或4尚未验证，任何并发值都未被证明可稳定免控。汽车之家继续以账号Cookie和点赞接口读取可信点赞；易车继续以账号Cookie和官方用户身份接口判断任务访问条件，并以 `pc-v311` 协议取得列表、详情及评论。两平台均按ADR 0048把主评论作为非阻塞附属快照，并按ADR 0050冻结前 N 个候选、不以列表后续帖子补位；瞬时网络错误由共享Worker持久重试原URL。依据ADR 0052，限流保持独立分类，普通帖子任务保留固定剩余URL并在同一任务按1～15分钟冷却、逐来源单并发自动续跑。两平台都尚未冻结或运行正式500条，正式生产验收仍未关闭。
 - 与首平台关系：本链只负责懂车帝之后的两个适配器；`docs/chains/first-platform-delivery.md` 中既有2000条证据和目标CentOS门禁保持原状。
@@ -49,6 +50,7 @@
 | 2026-09-01 | 汽车之家复用既有圈子页面证据与关联成果链 | 页面自身列表响应与最终DOM在最新回复、最新发布真实首屏均50/50同序，可在不二次发现列表的前提下保留跨论坛详情校验字段、完整原页和固定候选 |
 | 2026-09-01 | 易车按登录失效、详情挑战、腾讯验证码和限流分别恢复 | 并发8真实轮次在59/240后详情为203后403，但账号身份与列表仍为200；同Session冷却后并发1恢复为203后200，不能继续把该状态误报为账号退出 |
 | 2026-09-01 | 易车并发1不能作为免控阈值 | 固定1000个不同详情URL的独立批次出现5次腾讯验证码和7次详情页面429冷却后，以同一原任务完成1000/1000、失败0；两段干净恢复周期均新增57条再次触发，证明并发1只串行而未节流，恢复必须沿用原批次和剩余清单 |
+| 2026-09-01 | 易车腾讯 WAF 逆向调研与生产采集隔离 | 视频对应MCP已识别为`js-reverse-mcp`历史1.2.1工具集合，但视频私有Skills/Rules和易车协议闭环没有独立证据；后续只在自然挑战上按固定版本、单变量、首控止损和Git外产物合同补证，生产变化另行决策 |
 | 2026-08-27 | 易车代码完成不等于平台发布（已由下一行替代） | 当时把500/500同时作为代码状态门禁，后续用户验收证明该口径错误地隐藏了已交付能力 |
 | 2026-08-27 | 按本地开发完成口径发布易车适配器 | `available` 表达适配器、真实样本和本地业务链可用，平台仍默认停用；真实500/500保留为正式生产验收 |
 
@@ -57,5 +59,6 @@
 - [ ] 汇总两平台正式来源清单与哈希；汽车之家已确认 `iCAR V27论坛` 两个列表关系，易车已确认 `edge` 社区的最新回复、最新发布及规范化身份。
 - [ ] 为每个平台生成、现时复核并冻结500条帖子详情URL及分层功能样本。
 - [ ] 两平台本地适配器、媒体合同和公共/组合测试已落地，均已发布为 `available` 且默认停用；汽车之家继续关闭真实登录Session、正式清单和认证模式 `500 / 500`，易车固定1000条诊断批次已在5次腾讯验证码和7次详情页面429冷却后完成1000/1000、失败0；验证显式节流的可持续访问模式并完成真实 `500 / 500` 后，再声明对应平台正式生产接入验收完成。
+- [ ] 按严格流程冻结下一次易车自然挑战的 SDK/iframe/脚本/网络证据并完成单变量归因；未取得原URL正文门禁和新决策前，调研结果不进入生产采集器。
 - [ ] 生成两平台各27款口碑车型映射候选并完成真实映射验证。
 - [ ] 后续单独确认口碑评价篇数与差评率的数据来源、语义和证据合同，再评审正式三平台口碑启用。
