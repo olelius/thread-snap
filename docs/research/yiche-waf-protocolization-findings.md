@@ -21,8 +21,9 @@
 
 - 两次 TDC 响应的脚本长度、SHA-256、`TDC_NAME`、`info/eks`、VM payload 和入口均不同，TDC 不是可长期冻结的静态资产。
 - VM payload 使用 base64、signed-varint 和 zigzag 编码。两份样本分别解出 92423 与 96474 个整数，入口分别为 43357 与 35616。
-- 两轮解释器分别有 98 和 94 个 opcode case；标识符归一化后仅 51 个 case 结构可直接对应。解码流程可复用，单轮 opcode 编号表不应固化。
-- Node 合成环境已经能执行外层 VM，并产出 603 字符 `collect`；同一轮真实浏览器为 7426 字符。差额来自尚未补齐的浏览器异步环境与事件采样，当前 Node 输出没有服务器接受证据。
+- 两轮解释器分别有 98 和 94 个 opcode case；解析字符串表并内联辅助运算后有 72 个 case 结构完全对应，而且这 72 个编号全部重排。解码和抽象语义识别流程可复用，单轮 opcode 编号表不应固化。
+- 仅使用回环页面且拦截全部外部请求的离线浏览器 Oracle 已取得有效 7K 级 `collect`，并确认 `setData` 会改变长度和哈希；当前/冻结样本的动态覆盖分别达到 90/94 与 92/98 个 case。当前样本其余 4 个 case 的静态语义也已明确。
+- Node 合成环境曾产出 603 字符 `collect`，同一轮真实浏览器为 7426 字符。差额来自尚未补齐的 Cookie、浏览器异步环境与事件采样，当前 Node 输出没有服务器接受证据。
 - 运行时依赖至少包括 Canvas/WebGL、permissions、storage、UA-CH、speechSynthesis、WebRTC、WebGPU、位置、事件监听和定时器。
 
 ### 2.3 在线对照
@@ -37,13 +38,14 @@
 
 1. AppId 与 endpoint 状态机，但必须受脚本和响应字段哈希门禁约束。
 2. prehandle 查询字段集合、双图取得方式、答案 JSON 结构、PoW 算法、verify form 编码与 WAF 四行正文结构。
-3. TDC payload 的 base64、signed-varint、zigzag 解码器，以及解释器结构识别方法。
-4. 图像识别流程、响应分类、差分报告和版本失效门。
+3. TDC payload 的 base64、signed-varint、zigzag 解码器、解释器结构识别、辅助运算内联和抽象 opcode 目录生成方法。
+4. 只使用回环页面的 TDC Oracle、分阶段指令覆盖统计和跨挑战语义差分方法。
+5. 图像识别流程、响应分类、差分报告和版本失效门。
 
 ### 3.2 只能条件复用
 
 1. `display_width`、精灵坐标和识别阈值必须以当次模板和 prehandle 配置为准。
-2. TDC 解释器语义仅在结构映射成立时复用，不按固定 opcode 编号复用。
+2. TDC 解释器抽象语义仅在当次 AST 映射成立时复用；两份样本的 72 个完全同构 case 全部改号，不按固定 opcode 编号复用。
 3. 轨迹只能复用生成策略，坐标、时间和事件序列必须逐次生成。
 
 ### 3.3 每次重取或重算
@@ -54,9 +56,9 @@
 
 ## 4. 当前结论与下一阶段
 
-当前关闭了协议骨架和 TDC 外层编码识别，但没有关闭独立 TDC 重建、纯 HTTP verify、易车 WAF POST 和原正文门禁，因此状态是“完全协议化进行中”，不是“已经完成”。
+当前关闭了协议骨架、TDC 外层编码、抽象语义目录与离线动态覆盖，但没有关闭独立 TDC 执行器、纯 HTTP verify、易车 WAF POST 和原正文门禁，因此状态是“完全协议化进行中”，不是“已经完成”。
 
-下一阶段只做离线解释器映射和 Node 环境实现；完成浏览器与 Node 的 `collect` 结构对照后，再用一个新 challenge 做单次纯 HTTP `errorCode=0` 验证。只有该门通过，才继续易车 `/WafCaptcha -> 原详情正文`。
+下一阶段只做自研 VM 执行器和 Node 环境适配；完成本地 Oracle 与 Node 的 `collect` 结构对照后，再用一个新 challenge 做单次纯 HTTP `errorCode=0` 验证。只有该门通过，才继续易车 `/WafCaptcha -> 原详情正文`。
 
 生产行为不变，继续执行 ADR 0058 的控制分类、止损和原任务恢复；本研究不自动进入生产采集器。
 
@@ -76,8 +78,11 @@
 | 证据 | SHA-256 |
 |---|---|
 | `protocol-contract-v1.json` | `ab1e33d3d3c7259093259d3706b178ce6182e82a8cfb518b1e89ca54222edaa6` |
-| `reusability-matrix.md` | `9a071957205967bb558c75a5e8dd123cbca72ed87443727038aca32523cc6717` |
-| `progress-report.md` | `5bc560318e1a7bbe28a52465218ca52b64fbe80decf4fab4de9874a0cac6c243` |
+| `reusability-matrix.md` | `fdd45c060a0d5a02b7ed0e604596ee5e49a6b93501fc8c0cd2ebb84c38bb4725` |
+| `progress-report.md` | `c71371d0be4da9d962cf84b9914c6be3ceb60497f3c1c53ced3e19b47d68dfe0` |
 | `analysis/tdc-vm-decoded.json` | `c37766d9e01c3614138cd7dd7ef72a0ece9012290fc3cedb9e448a82a9f1d3b5` |
 | `analysis/live-tdc-vm-decoded.json` | `dcfecbc0844d85689c7a982aea9984069c571b78ec2f70031f12c5b229cf9efc` |
+| `analysis/live-tdc-vm-browser-trace.json` | `6f9cc168906a0d4dceaf677ec4d7235e5283f2fe307231fda385c228627ffd8d` |
+| `analysis/frozen-tdc-vm-browser-trace.json` | `78f68dde4376d954cd47357d80ff51522805432f992d9ca9954c6f4d76a1aa1c` |
+| `analysis/tdc-opcode-cross-challenge.json` | `d1e79b3e1ed45038c2c8f013c34cbd898dbd5b2ac1de2e1ccf55f66067ee8ff2` |
 | `analysis/accepted-verify-oracle.json` | `668e8a10e55a7f498e6f6573733649e035d2d725eeee1cd9787407c117a0b3d1` |
