@@ -24,6 +24,8 @@
 - 两轮解释器分别有 98 和 94 个 opcode case；解析字符串表并内联辅助运算后有 72 个 case 结构完全对应，而且这 72 个编号全部重排。解码和抽象语义识别流程可复用，单轮 opcode 编号表不应固化。
 - 仅使用回环页面且拦截全部外部请求的离线浏览器 Oracle 已取得有效 7K 级 `collect`，并确认 `setData` 会改变长度和哈希；当前/冻结样本的动态覆盖分别达到 90/94 与 92/98 个 case。当前样本其余 4 个 case 的静态语义也已明确。
 - Node 合成环境曾产出 603 字符 `collect`，同一轮真实浏览器为 7426 字符。差额来自尚未补齐的 Cookie、浏览器异步环境与事件采样，当前 Node 输出没有服务器接受证据。
+- 从去混淆解释器、当次 payload 和入口调用构建的独立最小包可脱离原始 TDC 响应运行。它与原响应的加载、`getInfo`、`setData` 及两次 `getData` 前 25 万条轨迹哈希逐阶段一致；除首次取数有 6 条异步时序差外，其余阶段总计数一致。
+- 独立包已在 Node `vm` 与自建环境适配层中产出 3.0K 级 `collect`，`setData` 后增至 3.2K 级，四个 API 无调用异常且 `eks` 与浏览器一致。Base64 前已是分块高熵二进制，明文序列化边界仍位于 VM 内部。
 - 运行时依赖至少包括 Canvas/WebGL、permissions、storage、UA-CH、speechSynthesis、WebRTC、WebGPU、位置、事件监听和定时器。
 
 ### 2.3 在线对照
@@ -40,13 +42,15 @@
 2. prehandle 查询字段集合、双图取得方式、答案 JSON 结构、PoW 算法、verify form 编码与 WAF 四行正文结构。
 3. TDC payload 的 base64、signed-varint、zigzag 解码器、解释器结构识别、辅助运算内联和抽象 opcode 目录生成方法。
 4. 只使用回环页面的 TDC Oracle、分阶段指令覆盖统计和跨挑战语义差分方法。
-5. 图像识别流程、响应分类、差分报告和版本失效门。
+5. 解释器提取、payload/入口重组、独立最小包构建和 Node 环境适配骨架，作为 P2/P3 差分工具。
+6. 图像识别流程、响应分类、差分报告和版本失效门。
 
 ### 3.2 只能条件复用
 
 1. `display_width`、精灵坐标和识别阈值必须以当次模板和 prehandle 配置为准。
 2. TDC 解释器抽象语义仅在当次 AST 映射成立时复用；两份样本的 72 个完全同构 case 全部改号，不按固定 opcode 编号复用。
-3. 轨迹只能复用生成策略，坐标、时间和事件序列必须逐次生成。
+3. 独立最小包只作为逐挑战 Oracle；它仍携带当次解释器语义，不作为最终 P3 运行时跨挑战冻结。
+4. 轨迹只能复用生成策略，坐标、时间和事件序列必须逐次生成。
 
 ### 3.3 每次重取或重算
 
@@ -58,7 +62,7 @@
 
 当前关闭了协议骨架、TDC 外层编码、抽象语义目录与离线动态覆盖，但没有关闭独立 TDC 执行器、纯 HTTP verify、易车 WAF POST 和原正文门禁，因此状态是“完全协议化进行中”，不是“已经完成”。
 
-下一阶段只做自研 VM 执行器和 Node 环境适配；完成本地 Oracle 与 Node 的 `collect` 结构对照后，再用一个新 challenge 做单次纯 HTTP `errorCode=0` 验证。只有该门通过，才继续易车 `/WafCaptcha -> 原详情正文`。
+下一阶段把 94/98 个 case 转成稳定的自研 VM handler，并补齐 Canvas/WebGL、媒体、存储、WebRTC/WebGPU 和事件异步结果；完成本地 Oracle 与 Node 的 `collect` 结构对照后，再用一个新 challenge 做单次纯 HTTP `errorCode=0` 验证。只有该门通过，才继续易车 `/WafCaptcha -> 原详情正文`。
 
 生产行为不变，继续执行 ADR 0058 的控制分类、止损和原任务恢复；本研究不自动进入生产采集器。
 
@@ -78,11 +82,14 @@
 | 证据 | SHA-256 |
 |---|---|
 | `protocol-contract-v1.json` | `ab1e33d3d3c7259093259d3706b178ce6182e82a8cfb518b1e89ca54222edaa6` |
-| `reusability-matrix.md` | `fdd45c060a0d5a02b7ed0e604596ee5e49a6b93501fc8c0cd2ebb84c38bb4725` |
-| `progress-report.md` | `c71371d0be4da9d962cf84b9914c6be3ceb60497f3c1c53ced3e19b47d68dfe0` |
+| `reusability-matrix.md` | `be8ffb53697f15faa319b571de29092b6188fba6961478512df8945be098f2a8` |
+| `progress-report.md` | `f4a512b4433a5ffed278dc3ba70e205202e8eacf98e15bc20ba071e988ab403e` |
 | `analysis/tdc-vm-decoded.json` | `c37766d9e01c3614138cd7dd7ef72a0ece9012290fc3cedb9e448a82a9f1d3b5` |
 | `analysis/live-tdc-vm-decoded.json` | `dcfecbc0844d85689c7a982aea9984069c571b78ec2f70031f12c5b229cf9efc` |
 | `analysis/live-tdc-vm-browser-trace.json` | `6f9cc168906a0d4dceaf677ec4d7235e5283f2fe307231fda385c228627ffd8d` |
 | `analysis/frozen-tdc-vm-browser-trace.json` | `78f68dde4376d954cd47357d80ff51522805432f992d9ca9954c6f4d76a1aa1c` |
 | `analysis/tdc-opcode-cross-challenge.json` | `d1e79b3e1ed45038c2c8f013c34cbd898dbd5b2ac1de2e1ccf55f66067ee8ff2` |
+| `analysis/live-tdc-vm-standalone.js` | `2a031f0b95460cff3625cdc4333b836d05989a812861e2e3993e7eea990b7249` |
+| `analysis/live-tdc-vm-standalone-trace.json` | `956349f6beb5afb24e7cfe9b710055607785ab1733669636af245c08e80aaf96` |
+| `analysis/live-node-tdc-standalone-v5.json` | `0ae5a01d046415c79c8761c6732762ced2fbafcf14cd9d0bbb6bfdd4af2d15c0` |
 | `analysis/accepted-verify-oracle.json` | `668e8a10e55a7f498e6f6573733649e035d2d725eeee1cd9787407c117a0b3d1` |

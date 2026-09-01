@@ -24,10 +24,11 @@
 - [x] 冻结两份动态TDC并完成AST与运行时差分：最大VM字符串分别为163224/172680字符，Node合成环境输出603字符`collect`，同轮真实浏览器为7426字符；依赖覆盖Canvas/WebGL、UA-CH、permissions、storage、speech、WebRTC、WebGPU、事件和定时器。
 - [x] 独立解码TDC payload：base64 -> signed-varint -> zigzag，得到92423/96474个整数流与43357/35616入口；两轮解释器有98/94个case，辅助运算内联后72个结构完全对应且编号全部重排，证实固定opcode表不具备跨挑战复用条件。
 - [x] 建立仅回环页面、拦截外部请求的离线浏览器Oracle；有效`collect`在`setData`前后发生长度与哈希变化。分阶段无上限计数得到当前样本2690208条、动态覆盖90/94，冻结样本2582681条、覆盖92/98；未动态触发case已有静态语义。
+- [x] 从去混淆解释器、当次payload和入口构建独立最小包；它与原响应各阶段前25万条轨迹哈希一致，加载、`getInfo`、`setData`和第二次`getData`总计数也一致。该包在Node环境适配层中无API异常，`collect`由旧603字符提升至约3.0K，`setData`后约3.2K；仍低于本地浏览器Oracle约7K且尚无服务器接受证据。
 - [x] 普通HTTP成功取得当次672×390 JPEG和682×620 PNG；确认`DynAnswerType_POS`答案数组、PoW的MD5规则、verify form字段和WAF四行正文。图像识别增加精灵配置、纹理相关和成对轮廓排除，三份冻结样本离线回归通过。
 - [x] 保存真实verify原始表单形状；新增有界在线对照观察到业务`errorCode=9/12`后停止追加挑战，没有把HTTP 200或失败响应写成协议成功。
 - [x] Git外严格合同、复用矩阵和阶段报告位于`artifacts/poc/results/yiche-waf-protocolization/20260902-0001/`；仓库汇总结论位于`docs/research/yiche-waf-protocolization-findings.md`。
-**下一步**：以逐挑战AST映射实现自研VM执行器，并把Cookie、异步能力与事件序列收敛为Node环境适配层；与本地Oracle的`collect`结构对齐后，用一个新challenge做单次纯HTTP`errorCode=0`验证，再关闭易车WAF POST和原正文门禁。
+**下一步**：把94/98个静态case转成稳定的自研VM handler，并补齐Canvas/WebGL、媒体、存储、WebRTC/WebGPU和事件异步结果；与本地Oracle的`collect`结构对齐后，用一个新challenge做单次纯HTTP`errorCode=0`验证，再关闭易车WAF POST和原正文门禁。
 **边界**：生产继续执行ADR 0058，不加入自动滑块或TDC依赖；`sess/tdc_path/eks/collect/图片/PoW/ticket/randstr/seqid/Cookie`均为逐挑战结果，不跨challenge复用；本轮不计入正式500条。
 **关联**：`docs/research/yiche-waf-protocolization-findings.md`、`docs/research/yiche-tencent-waf-reverse-runbook.md`、`docs/adr/0058-route-yiche-control-through-classified-recovery.md`、`docs/adr/0059-allow-bounded-yiche-waf-trigger-round.md`
 
