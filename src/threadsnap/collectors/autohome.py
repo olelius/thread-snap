@@ -258,8 +258,8 @@ class AutohomeCollector:
     ):
         self.storage_state = storage_state
         self.authenticated_member_id = _authenticated_member_id(storage_state)
-        # 与公共平台注册合同一致：所有来源、帖子请求和即时重试共享同一总门禁。
-        self.concurrency = max(1, concurrency)
+        # 真实420与1000条对照后收敛为平台硬上限1；即使绕过注册表直接构造也不放大。
+        self.concurrency = 1
         self.timeout_seconds = timeout_seconds
         self.browser_headless = browser_headless
         self.semaphore = threading.BoundedSemaphore(self.concurrency)

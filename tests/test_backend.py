@@ -1523,6 +1523,7 @@ class ApiAndConfigTests(AppCase):
             assert platform is not None
             platform.adapter_status = "not_integrated"
             platform.enabled = False
+            platform.internal_concurrency = 8
 
         with self.container.sessions.begin() as db:
             bootstrap_database(db)
@@ -1532,6 +1533,7 @@ class ApiAndConfigTests(AppCase):
             assert platform is not None
             self.assertEqual("available", platform.adapter_status)
             self.assertFalse(platform.enabled)
+            self.assertEqual(1, platform.internal_concurrency)
 
     def test_autohome_registry_contract_is_available_and_can_create_runs(self) -> None:
         """本地发布状态允许显式启用并进入统一手动任务链。"""
@@ -1547,7 +1549,7 @@ class ApiAndConfigTests(AppCase):
         )
         self.assertFalse(autohome["capabilities"]["page_evidence"])
         self.assertTrue(autohome["capabilities"]["live_video_resolution"])
-        self.assertEqual({"min": 1, "max": 8}, autohome["concurrency_range"])
+        self.assertEqual({"min": 1, "max": 1}, autohome["concurrency_range"])
         auth_task = self.client.post("/api/v1/platforms/autohome/auth/tasks")
         self.assertEqual(202, auth_task.status_code, auth_task.text)
         self.assertEqual("autohome", auth_task.json()["platform_code"])
@@ -1568,7 +1570,7 @@ class ApiAndConfigTests(AppCase):
         )
         self.assertEqual(200, enabled.status_code, enabled.text)
         self.assertTrue(enabled.json()["enabled"])
-        self.assertEqual(8, enabled.json()["internal_concurrency"])
+        self.assertEqual(1, enabled.json()["internal_concurrency"])
         created = self.client.post(
             "/api/v1/runs/manual",
             json={
@@ -1859,7 +1861,7 @@ class ApiAndConfigTests(AppCase):
         )
         self.assertEqual(200, autohome.status_code)
         self.assertTrue(autohome.json()["enabled"])
-        self.assertEqual(2, autohome.json()["internal_concurrency"])
+        self.assertEqual(1, autohome.json()["internal_concurrency"])
 
         plan = self.client.put(
             "/api/v1/extraction-plan",
@@ -3129,7 +3131,7 @@ class QueueAndRetryTests(AppCase):
             self.assertNotIn(AUTH_RECOVERY_BLOCKED_KEY, probed_tasks[1].checkpoint)
 
         self.assertTrue(self.container.worker.process_once())
-        self.assertEqual([1, 4], requested_concurrency)
+        self.assertEqual([1, 1], requested_concurrency)
         self.assertEqual("success", self.container.runs.get_run(run["id"])["status"])
 
     def test_worker_persists_and_publishes_progress_before_task_finishes(self) -> None:

@@ -17,8 +17,8 @@
 ---
 
 ## 2026-09-01 — 汽车之家v9真实批次与认证窗口自动打开
-**总目标**：在独立Scrapling工作树执行汽车之家v9真实小批量和14来源批次，验证平台控制分类、认证入口、原任务恢复与前端操作闭环。
-**状态**：✅ 单来源基线、420条控制分类、认证Session更新、单来源探针和冻结并发恢复均已取得真实运行证据；保持在独立分支且未合入main。
+**总目标**：在独立Scrapling工作树执行汽车之家v9真实小批量和14来源批次，验证平台控制分类、认证入口、原任务恢复与前端操作闭环，并依据真实对照收敛平台并发上限。
+**状态**：✅ 单来源基线、420条控制分类、认证Session更新、单来源探针和单并发420/1000条对照均已取得真实运行证据；汽车之家内部总并发已固定为1，保持在独立分支且未合入main。
 **干到哪里了**：
 - [x] 单来源批次`20260901-094436-001`在约6.74秒内完成`30 / 30`、最终失败0；14来源批次`20260901-094521-001`运行到`218 / 420`后以`PLATFORM_CHALLENGE`进入等待，已完成结果和固定候选均保留，未把控制文档当成内容。
 - [x] 批次详情首次进入`waiting_for_auth`时自动打开一次认证Dialog；操作者手动关闭后本次等待期间不循环弹出，“处理会话”入口继续可用。
@@ -28,10 +28,11 @@
 - [x] 按用户指定把汽车之家内部总并发持久调整为1，并用相同14来源、每来源30条创建独立批次`20260901-103813-001`；该轮从10:38:14运行到10:40:42，148.272秒完成`420 / 420`、最终失败0、14来源全部成功，约2.833条/秒，未进入认证等待、未出现平台控制或启动认证Chromium。该单轮证明当前Session和运行窗口下并发1稳定，不外推为长期免验证。
 - [x] 继续以并发1执行10来源、每来源100条的独立批次`20260901-105516-001`；该轮从10:55:17运行到11:09:38，860.500秒形成`1000 / 1000`来源结果、最终失败0、10来源全部成功，其中995个唯一帖子。运行期间记录20次约21秒的TCP连接超时，Worker均在原URL持久重试后恢复；未进入认证等待、未观察到验证码/挑战/限流，也未启动认证Chromium。吞吐约1.162条/秒，主要受约420秒连接超时拖累。
 - [x] 批次结束后对三个实际目标域各执行3次DNS/TCP诊断，9/9次TCP 443均成功；但DNS分别返回`198.18.0.52`、`198.18.0.51`、`198.18.0.53`，属于本机合成地址映射而非目标站公开地址，说明即使浏览器代理开关关闭，当前网络路径仍经过本机TUN/Fake-IP类DNS转发层。本轮20次连接超时优先归因该网络层的间歇连接，现有证据不归类为平台风控。
+- [x] 依据ADR 0057把汽车之家注册范围和采集器直构路径都固定为1，并让bootstrap把旧数据库高值收敛为1；配置API实时返回`concurrency_range=1..1`，提交8实际保存1。完整后端239项、Ruff、compileall、pip check、前端TypeScript检查和2468模块生产构建均通过；分支后端已重启且`/health`返回`ok`。
 - [x] 当前前后端均从`refactor/restore-scrapling-max`加载，真实运行脱敏回执位于`artifacts/runtime/autohome-v9-real-20260901/acceptance.json`。
-**下一步**：保持汽车之家并发1；先定位并关闭或稳定当前本机TUN/Fake-IP DNS转发层，再把仍声明匿名模式的验收Provider与当前v9加密Session合同同步，最后按事前冻结清单从零执行正式500条，不用本次1000条来源结果代替500个唯一URL正式分母。
+**下一步**：先定位并关闭或稳定当前本机TUN/Fake-IP DNS转发层，再把仍声明匿名模式的验收Provider与当前v9加密Session合同同步，最后按事前冻结清单从零执行正式500条，不用本次1000条来源结果代替500个唯一URL正式分母。
 **边界**：本轮保持独立工作树且不合入main；不改写既有218条结果，不创建替代批次，不记录Ticket、Cookie、Session或Profile内容。
-**关联**：`frontend/src/features/runs/run-detail-page.tsx`、`src/threadsnap/auth.py`、`tests/test_backend.py`、`docs/design/product-design.md`、`docs/design/technical-route.md`
+**关联**：`frontend/src/features/runs/run-detail-page.tsx`、`src/threadsnap/auth.py`、`src/threadsnap/collectors/autohome.py`、`src/threadsnap/collectors/registry.py`、`src/threadsnap/services.py`、`tests/test_backend.py`、`docs/adr/0057-cap-autohome-internal-concurrency-at-one.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`
 
 ---
 
