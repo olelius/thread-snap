@@ -24,6 +24,7 @@
 | 已冻结且确有保留价值的历史记录 | `docs/project-notes/` |
 | 采集框架 PoC 样本、阶段、指标和结果格式 | `docs/research/collector-stack-poc-plan.md` |
 | 汽车之家与易车接入样本、阶段、指标和结果格式 | `docs/research/later-platform-onboarding-plan.md` |
+| 易车腾讯 WAF 逆向调研的工具固定、证据、阶段门与退出条件 | `docs/research/yiche-tencent-waf-reverse-runbook.md` |
 | 舆情反馈 PoC 样本、模态覆盖、失败边界和结果格式 | `docs/research/sentiment-analysis-poc-plan.md` |
 | 舆情反馈 PoC 的真实 URL、模型用量和结构结果 | `docs/research/sentiment-analysis-poc-results.md` |
 | 圈子页面证据、成果合成、分片和资源门禁 PoC | `docs/research/circle-screenshot-poc-plan.md` |
@@ -93,6 +94,19 @@
 6. Git外 `artifacts/poc/inputs/later-platforms/` 中当次真实来源与冻结样本。
 
 首平台的 `docs/templates/poc/` 和2000条外部输入合同不直接套用于后续两个平台；后续平台由项目从社区页面分别生成500条冻结样本与功能子集。
+
+### 3.4.2 易车腾讯 WAF 逆向调研
+
+必须读取：
+
+1. 技术实现任务要求的全部文件；
+2. `docs/chains/later-platform-delivery.md`；
+3. `docs/research/later-platform-onboarding-plan.md`；
+4. `docs/adr/0058-route-yiche-control-through-classified-recovery.md`；
+5. `docs/research/yiche-tencent-waf-reverse-runbook.md`；
+6. Git 外既有根因回执及本轮 `artifacts/poc/results/yiche-waf-reverse/<round-id>/` 证据。
+
+该调研不重复固定1000 URL诊断，不把视频或 MCP 工具可用性视为易车正文门禁通过，也不自动改变生产采集路径。
 
 ### 3.5 舆情反馈设计、PoC 或实现
 
