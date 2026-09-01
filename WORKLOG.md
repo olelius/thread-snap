@@ -16,6 +16,24 @@
 
 ---
 
+## 2026-09-01 — 易车 WAF 逆向受控主动触发
+**总目标**：按严格逆向流程完成易车腾讯WAF/滑块取证，并把原“只等待自然挑战”调整为工具链门通过后允许一次有界主动触发。
+**状态**：✅ 工具链、受控触发、真实WAF冻结、动态链、双图本地识别、最小复现、单变量服务端验证和生产决策均已完成；生产保持ADR 0058现状。
+**干到哪里了**：
+- [x] 核验`main@8ecb7da3edcd8945717c8292b1afed4a7d601515`与`origin/main`一致、工作区清洁；从该基线创建`docs/yiche-waf-controlled-trigger`。
+- [x] 固定`js-reverse-mcp@1.2.1`与源码提交`fb74ebf122cb26b229ebaf8ed5921b1acec0cdb5`，使用Node`22.17.0`、Chrome`151.0.7922.175`和回环CDP；14个静态核心检查通过。`list_console_messages`在Patchright 1.51.1及1.61.1兼容候选上均为空，改用`playwright-core@1.61.1`sidecar关闭控制台证据缺口；静态门回执SHA-256为`d3cc032133510f1e99c27b4874be5adf875ce70afc96c434e7d63a92272682e9`。
+- [x] 既有根因报告SHA-256复核为`3737de8252999f97d1c7a9a4b577181d8d4fa26df78100997ff334486a35d800`；两段干净恢复周期均约57条再次触发，只作为本轮80条硬上限的取样依据，不写成平台阈值。
+- [x] 新增ADR 0059：工具链静态门通过后，允许最多80个现时冻结的不同详情URL、实际并发1、零人为间隔的隔离触发轮次；首次挑战、验证码或429立即止损，未触发不自动扩量或提高并发。
+- [x] 两个零重叠80 URL轮次均在前59个正文成功后由第60个请求命中`PLATFORM_CAPTCHA_REQUIRED`并立即停止；第2轮输入SHA-256为`cc37ce751b5665af4892f1ac878b4a3bdeb44cb315d2f2778eab1c08f0317ab4`，两份等字节WAF响应SHA-256均为`71aa4c873e59eca402cb1555c214e838df2753b30921d78b74f226db177f3194`。该重复观测不写成固定阈值。
+- [x] 确认`CaptchaAppId=2017163193`及`TCaptcha.js -> prehandle -> iframe/template -> dy/tdc -> 双图 -> verify -> callback -> POST /WafCaptcha`链；背景为`672×390` JPEG，精灵为`682×620` RGBA。本地Pillow/NumPy/SciPy边界相关法在两个独立样本得到`180.625px`和`141.161px`且第一/第二峰分差明确。
+- [x] 回环等字节WAF fixture固定32步轨迹，只改变算法位移；单次`93.601px`验证使腾讯verify返回HTTP 200、iframe显示验证成功并触发一次四行`ret/ticket/randstr/seqid`的`POST /WafCaptcha`。本地POST按隔离设计返回501，未声明原易车详情正文放行。
+- [x] 最终选择“协议链已理解但只保留研究产物”：不把MCP或自动滑块加入生产依赖，生产继续按ADR 0058分类、止损、人工/静默恢复。Git外最终报告SHA-256为`63942ab2b78ff531b45e6186e771ed6d33dc31bd22ac5e8bd097dc79446ab22d`，脱敏接受回执SHA-256为`90a3b8a429c663d204199c2043e5c25e51fe35ba539baee350131c827a7106e2`。
+**下一步**：易车正式500条前先以独立冻结输入验证显式请求节流；若以后提出生产自动滑块，必须另开需求和ADR，并补原风险会话`/WafCaptcha -> 原详情正文`门禁、版本失效检测、测试与回滚。
+**边界**：触发驱动器没有创建正式批次或写生产数据库/Session；本轮不计入正式500条。原风险会话的WAF POST 200、Cookie名称变化和原详情正文门禁仍未关闭，调研成功不等于生产自动化已验收。
+**关联**：`docs/adr/0059-allow-bounded-yiche-waf-trigger-round.md`、`docs/research/yiche-tencent-waf-reverse-runbook.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/later-platform-delivery.md`
+
+---
+
 ## 2026-09-01 — 易车腾讯 WAF 逆向调研严格流程
 **总目标**：识别视频中的浏览器逆向工具，冻结易车腾讯 WAF/滑块的版本、证据、动态分析、单变量验证、产物、停止和回滚流程，同时保持现有生产恢复链不变。
 **状态**：✅ MCP识别、历史版本差异、严格阶段门和相关owner文档已完成；本轮只修改文档，没有安装MCP或改变生产运行时。
@@ -25,7 +43,7 @@
 - [x] 补齐视频中的云码图像识别层：约99～108秒把云码与本地识别/OpenCV并列，约458～490秒给出云码文档、Token和“双图滑块”类型；云码只以背景图和滑块图返回缺口像素距离，尺寸换算、轨迹、加密、验签和易车正文恢复仍属其他阶段。转写SHA-256为`D022124267F3B46EF6FA1725FBFDDFDD866BADDA662EA10CCEF6EF771D774A56`。
 - [x] 新增严格流程，覆盖既有证据复用、工具链固定、自然挑战取证、状态机、最少断点、环境依赖拆分、单变量对照、正文门禁、Git外产物、脱敏、停止、回滚、版本失效和进入生产的新决策门。
 - [x] 统一更新领域术语、产品边界、技术路线、接入计划、跨任务链档、ADR 0058和文档索引；生产仍按登录失效、挑战、验证码和429分类处理，不重复固定1000 URL压力轮次。
-**下一步**：先审计并按历史提交固定Codex MCP中的`js-reverse-mcp@1.2.1`，用本地静态页关闭工具兼容性门；随后等待下一次自然易车验证码，冻结两张原图、尺寸和哈希，分别验证云码/本地识别坐标，再补齐CaptchaAppId、SDK/TDC与相关脚本哈希、iframe、网络发起者、调用栈、Cookie名称变化和原URL正文门禁。
+**下一步**：该计划已由上方“易车 WAF 逆向受控主动触发”条目执行并收敛；生产保持ADR 0058，未关闭的原风险会话正文门禁只在新的生产方案立项后补证。
 **边界**：调研不替代正式500条，不把缺口坐标、页面HTTP 200、字段同形或视频演示视为服务端通过；云码Token和挑战图片按敏感及第三方数据边界管理，MCP保持调研依赖；任何生产行为变化另开设计、ADR和目标场景验收。
 **关联**：`docs/research/yiche-tencent-waf-reverse-runbook.md`、`docs/adr/0058-route-yiche-control-through-classified-recovery.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/later-platform-delivery.md`
 
