@@ -23,7 +23,7 @@ from ..scrapling_transport import ExecutionScopeKey, ScraplingHttpPool
 from .base import AuthenticationRequired, CircleSource, CollectorFailure
 
 BASE_URL = "https://baa.yiche.com"
-ADAPTER_VERSION = "yiche-community-v6-scrapling-stealth"
+ADAPTER_VERSION = "yiche-community-v7-control-recovery"
 CIRCLE_RE = re.compile(
     r"^/(?P<id>[A-Za-z0-9_-]+)/?"
     r"(?:index-0-(?P<order>[01])-(?P<page>\d+)\.html)?/?$"
@@ -42,6 +42,11 @@ YICHE_API_SIGN_KEY = "19DDD1FBDFF065D3A4DA777D2D7A81EC"
 YICHE_CHALLENGE_KEY = "tg09It3*9h"
 YICHE_COMMENT_CONTENT_TYPE = 56
 ACCOUNT_COOKIE_NAME = "username"
+INTERRUPTING_CONTROL_CODES = {
+    "PLATFORM_CAPTCHA_REQUIRED",
+    "PLATFORM_CHALLENGE",
+    "PLATFORM_RATE_LIMITED",
+}
 
 
 @dataclass(frozen=True)
@@ -177,7 +182,8 @@ def require_content_page(content: str | bytes, *, url: str) -> None:
     """控制页不能作为列表、详情或空结果进入有效结果分母。"""
 
     if is_waf_captcha(content):
-        raise AuthenticationRequired(
+        raise CollectorFailure(
+            "PLATFORM_CAPTCHA_REQUIRED",
             "易车页面触发腾讯验证码，请在服务器浏览器完成验证后继续。",
             trigger_url=url,
         )
@@ -310,20 +316,34 @@ class YicheCollector:
         """直连详情页，并用按需 Stealthy 通道处理浏览器可解除的保护。"""
         observed_generation = self.http.recovery_generation
         response = self._get(url, headers={"Referer": BASE_URL + "/"})
+        challenge_cookie_applied = False
         if response.status_code == 203:
             cookie_name, cookie_value = self._challenge_cookie(response.text)
             host = urlsplit(url).hostname or "baa.yiche.com"
             self._http_session().cookies.set(cookie_name, cookie_value, domain=host, path="/")
             response = self._get(url, headers={"Referer": BASE_URL + "/"})
+            challenge_cookie_applied = True
         if response.status_code == 429:
-            raise CollectorFailure("RATE_LIMITED", "易车页面返回限流状态，请稍后重试。")
+            raise CollectorFailure(
+                "PLATFORM_RATE_LIMITED",
+                "易车页面返回限流状态，请稍后重试。",
+                trigger_url=url,
+            )
+        if response.status_code == 403 and challenge_cookie_applied:
+            raise CollectorFailure(
+                "PLATFORM_CHALLENGE",
+                "易车详情挑战校验后仍拒绝访问，请在服务器浏览器完成访问验证。",
+                trigger_url=url,
+            )
         if response.status_code in {401, 403}:
             raise AuthenticationRequired("易车登录 Session 已失效。", trigger_url=url)
         if response.status_code != 200:
             raise CollectorFailure("HTTP_ERROR", f"易车页面返回 HTTP {response.status_code}。")
         try:
             require_content_page(response.text, url=url)
-        except AuthenticationRequired:
+        except CollectorFailure as exc:
+            if exc.code != "PLATFORM_CAPTCHA_REQUIRED":
+                raise
             try:
                 recovery = self.http.recover_protected(url, observed_generation=observed_generation)
             except Exception:
@@ -331,6 +351,20 @@ class YicheCollector:
             if recovery is None or not recovery.should_retry_http:
                 raise
             response = self._get(url, headers={"Referer": BASE_URL + "/"})
+            if response.status_code == 429:
+                raise CollectorFailure(
+                    "PLATFORM_RATE_LIMITED",
+                    "易车页面返回限流状态，请稍后重试。",
+                    trigger_url=url,
+                )
+            if response.status_code == 401:
+                raise AuthenticationRequired("易车登录 Session 已失效。", trigger_url=url)
+            if response.status_code == 403:
+                raise CollectorFailure(
+                    "PLATFORM_CHALLENGE",
+                    "易车受保护页面经一次浏览器恢复后仍拒绝访问，请完成访问验证。",
+                    trigger_url=url,
+                )
             if response.status_code != 200:
                 raise CollectorFailure("HTTP_ERROR", f"易车页面返回 HTTP {response.status_code}。")
             require_content_page(response.text, url=url)
@@ -381,7 +415,9 @@ class YicheCollector:
             return None
         event = matched[-1]
         if event.status == 429:
-            raise CollectorFailure("RATE_LIMITED", "易车接口返回限流状态，请稍后重试。")
+            raise CollectorFailure(
+                "PLATFORM_RATE_LIMITED", "易车接口返回限流状态，请稍后重试。"
+            )
         if event.status in {401, 403}:
             raise AuthenticationRequired("易车登录 Session 已失效。")
         if event.status != 200:
@@ -608,7 +644,9 @@ class YicheCollector:
                 required=False,
                 expected_content_id=expected_content_id,
             )
-        except CollectorFailure:
+        except CollectorFailure as exc:
+            if exc.code in INTERRUPTING_CONTROL_CODES:
+                raise
             return CommentResult([], "first_page", verified=False)
         comments: list[dict[str, Any]] = []
         if payload:
@@ -692,9 +730,13 @@ class YicheCollector:
             referer=normalized_url,
             content_id=expected_id,
         )
-        comment_result = self._parse_comments(
-            content, [comment_event], record["reply_count"], expected_id
-        )
+        try:
+            comment_result = self._parse_comments(
+                content, [comment_event], record["reply_count"], expected_id
+            )
+        except CollectorFailure as exc:
+            exc.trigger_url = exc.trigger_url or normalized_url
+            raise
         record["comments"] = comment_result.comments
         record["raw_status"] = {
             "forum_id": _integer(row.get("forumId")),
@@ -794,6 +836,9 @@ class YicheCollector:
                     exc.failures = failures
                     raise
                 except CollectorFailure as exc:
+                    if exc.code in INTERRUPTING_CONTROL_CODES:
+                        exc.trigger_url = exc.trigger_url or url
+                        raise
                     failure = {
                         "url": url,
                         "code": exc.code,
@@ -852,6 +897,9 @@ class YicheCollector:
                 exc.failures = failures
                 raise
             except CollectorFailure as exc:
+                if exc.code in INTERRUPTING_CONTROL_CODES:
+                    exc.trigger_url = exc.trigger_url or normalized_url
+                    raise
                 failure = {
                     "url": normalized_url,
                     "code": exc.code,

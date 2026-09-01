@@ -156,8 +156,52 @@ class YicheKnownFactsTests(unittest.TestCase):
             'window.__captcha=true</script><form action="/WafCaptcha"></form>'
         )
         self.assertTrue(is_waf_captcha(control))
-        with self.assertRaises(AuthenticationRequired):
+        with self.assertRaises(CollectorFailure) as caught:
             require_content_page(control, url="https://baa.yiche.com/sample/")
+        self.assertEqual("PLATFORM_CAPTCHA_REQUIRED", caught.exception.code)
+        self.assertEqual("https://baa.yiche.com/sample/", caught.exception.trigger_url)
+
+    def test_203_followup_403_is_access_challenge_not_login_expiry(self) -> None:
+        """账号门禁通过后的详情挑战拒绝必须进入访问验证恢复。"""
+
+        url = "https://baa.yiche.com/sample/thread-123.html"
+        challenge = (
+            '<script>var _xvasu = 1104958252; var _xvpfs = "tws2_"; '
+            'var _xvpts = 1788060021.479; document.cookie=btoa("x"); '
+            "window['location'].reload();</script>"
+        )
+        responses = iter(
+            [
+                SimpleNamespace(status_code=203, text=challenge, url=url),
+                SimpleNamespace(status_code=403, text="", url=url),
+            ]
+        )
+        collector = YicheCollector(self._logged_state())
+        collector._get = lambda *_args, **_kwargs: next(responses)  # type: ignore[method-assign]
+        try:
+            with self.assertRaises(CollectorFailure) as caught:
+                collector._document(url)
+        finally:
+            collector.close()
+
+        self.assertEqual("PLATFORM_CHALLENGE", caught.exception.code)
+        self.assertEqual(url, caught.exception.trigger_url)
+
+    def test_plain_403_keeps_login_expiry_classification(self) -> None:
+        """缺少203挑战前置证据时，403继续保留登录失效语义。"""
+
+        url = "https://baa.yiche.com/sample/thread-123.html"
+        collector = YicheCollector(self._logged_state())
+        collector._get = lambda *_args, **_kwargs: SimpleNamespace(  # type: ignore[method-assign]
+            status_code=403,
+            text="",
+            url=url,
+        )
+        try:
+            with self.assertRaises(AuthenticationRequired):
+                collector._document(url)
+        finally:
+            collector.close()
 
     def test_yiche_document_retries_after_stealth_cookie_recovery(self) -> None:
         """腾讯控制页先交给 Stealthy，解除后只复访相同详情 URL。"""
@@ -209,17 +253,66 @@ class YicheKnownFactsTests(unittest.TestCase):
         self.assertEqual([(url, 0)], recoveries)
         self.assertEqual([1], confirmed)
 
+    def test_stealth_retry_403_enters_access_challenge_recovery(self) -> None:
+        """受保护页的一次浏览器恢复仍返回403时，不得误报普通HTTP错误。"""
+
+        url = "https://baa.yiche.com/sample/thread-123.html"
+        control = (
+            '<script src="TCaptcha.js"></script><script>'
+            "TencentCaptcha();window.__captcha=true</script>"
+            '<form action="/WafCaptcha"></form>'
+        )
+        responses = iter(
+            [
+                SimpleNamespace(status_code=200, text=control, url=url),
+                SimpleNamespace(status_code=403, text="", url=url),
+            ]
+        )
+        collector = YicheCollector(self._logged_state())
+        collector._get = lambda *_args, **_kwargs: next(responses)  # type: ignore[method-assign]
+        collector.http.recover_protected = (  # type: ignore[method-assign]
+            lambda *_args, **_kwargs: ProtectionRecoveryResult(1, True, True, 200, 0.1)
+        )
+        try:
+            with self.assertRaises(CollectorFailure) as caught:
+                collector._document(url)
+        finally:
+            collector.close()
+
+        self.assertEqual("PLATFORM_CHALLENGE", caught.exception.code)
+        self.assertEqual(url, caught.exception.trigger_url)
+
     def test_business_errors_are_classified(self) -> None:
         with self.assertRaises(CollectorFailure) as limited:
             YicheCollector._api_payload(
                 [api_event("/post/getlist", None, status=429)], "/post/getlist"
             )
-        self.assertEqual("RATE_LIMITED", limited.exception.code)
+        self.assertEqual("PLATFORM_RATE_LIMITED", limited.exception.code)
         with self.assertRaises(CollectorFailure) as unsigned:
             YicheCollector._api_payload(
                 [api_event("/post/getlist", {"status": "11036", "ercd": "11036"})], "/post/getlist"
             )
         self.assertEqual("YICHE_PUBLIC_PARAMS_MISSING", unsigned.exception.code)
+
+    def test_comment_rate_limit_is_not_downgraded_to_optional_comment_failure(self) -> None:
+        """评论可为空，但平台限流必须停止当前详情并交给Worker冷却。"""
+
+        collector = YicheCollector(self._logged_state())
+        with self.assertRaises(CollectorFailure) as caught:
+            collector._parse_comments(
+                "",
+                [
+                    api_event(
+                        "/comment/top_comment_list",
+                        None,
+                        status=429,
+                        content_id="1001",
+                    )
+                ],
+                1,
+                "1001",
+            )
+        self.assertEqual("PLATFORM_RATE_LIMITED", caught.exception.code)
 
     def test_detail_uses_structured_text_and_original_media(self) -> None:
         record = YicheCollector._detail_payload(
@@ -325,6 +418,49 @@ class YicheKnownFactsTests(unittest.TestCase):
             ["1001"], [normalize_post_url(row["url"])[0] for row in result["failures"]]
         )
         self.assertIn("未使用后续帖子替换", result["stop_reason"])
+
+    def test_candidate_control_interrupts_collection_for_worker_recovery(self) -> None:
+        """访问验证和限流不得降级为普通候选失败并继续放大请求。"""
+
+        collector = YicheCollector(self._logged_state())
+        collector._account_verified = True
+        collector._list_page = lambda *_args: {
+            "list": [{"id": 1001}, {"id": 1002}],
+            "total": 2,
+        }
+        visited: list[str] = []
+
+        def fetch(url: str, **_kwargs: object) -> dict:
+            visited.append(normalize_post_url(url)[0])
+            raise CollectorFailure(
+                "PLATFORM_CHALLENGE",
+                "需要访问验证",
+                trigger_url=url,
+            )
+
+        collector._fetch_post = fetch
+        with self.assertRaises(CollectorFailure) as caught:
+            collector.collect_circle("https://baa.yiche.com/sample/", 2)
+
+        self.assertEqual("PLATFORM_CHALLENGE", caught.exception.code)
+        self.assertEqual(["1001"], visited)
+        self.assertTrue(caught.exception.trigger_url.endswith("thread-1001.html"))
+
+    def test_url_rate_limit_interrupts_collection_for_worker_cooldown(self) -> None:
+        collector = YicheCollector(self._logged_state())
+        collector._account_verified = True
+        collector._fetch_post = lambda url, **_kwargs: (_ for _ in ()).throw(  # type: ignore[method-assign]
+            CollectorFailure("PLATFORM_RATE_LIMITED", "请求频率受限", trigger_url=url)
+        )
+        with self.assertRaises(CollectorFailure) as caught:
+            collector.collect_urls(
+                [
+                    "https://baa.yiche.com/sample/thread-1001.html",
+                    "https://baa.yiche.com/sample/thread-1002.html",
+                ]
+            )
+        self.assertEqual("PLATFORM_RATE_LIMITED", caught.exception.code)
+        self.assertTrue(caught.exception.trigger_url.endswith("thread-1001.html"))
 
     def test_exhausted_server_errors_become_persistent_network_retry(self) -> None:
         """连续5xx必须归一为共享Worker可识别的访问错误。"""

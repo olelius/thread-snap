@@ -10,6 +10,7 @@ from unittest.mock import patch
 from openpyxl import Workbook, load_workbook
 from sqlalchemy import select
 
+from threadsnap.collectors.base import CollectorFailure
 from threadsnap.collectors.registry import PLATFORM_ADAPTERS
 from threadsnap.collectors.yiche import _parse_time
 from threadsnap.models import (
@@ -20,6 +21,7 @@ from threadsnap.models import (
     ValidationJob,
 )
 from threadsnap.services import bootstrap_database
+from threadsnap.worker import AUTH_RECOVERY_BLOCKED_KEY, AUTH_RECOVERY_PROBE_KEY
 
 try:
     from .test_backend import AppCase
@@ -371,6 +373,84 @@ class YichePublicFlowTests(AppCase):
         exported = self.container.templates.create_export(run["id"], version["version_id"])
         output = load_workbook(self.container.templates.export_path(exported["id"])).active
         self.assertEqual("易车样本7001", output["A1"].value)
+
+    def test_yiche_challenge_uses_existing_profile_and_single_source_probe(self) -> None:
+        """易车访问验证复用汽车之家的原URL交互恢复与渐进放量合同。"""
+
+        circles = self.save_yiche_sources()
+        trigger_url = "https://baa.yiche.com/sample/thread-7001.html"
+
+        class ChallengeCollector(FakeYicheCollector):
+            concurrency = 8
+
+            def collect_circle(self, *_args, **_kwargs) -> dict:
+                raise CollectorFailure(
+                    "PLATFORM_CHALLENGE",
+                    "易车需要完成访问验证。",
+                    trigger_url=trigger_url,
+                )
+
+        self.container.worker._collector = lambda *_args: ChallengeCollector()  # type: ignore[method-assign]
+        created = self.client.post(
+            "/api/v1/runs/manual",
+            json={
+                "platform_code": "yiche",
+                "circle_ids": [circle.id for circle in circles],
+                "quantity": 1,
+                "ai_analysis_enabled": False,
+                "screenshot_enabled": False,
+                "idempotency_key": "yiche-interactive-control-recovery",
+            },
+        )
+        self.assertEqual(202, created.status_code, created.text)
+        self.assertTrue(self.container.worker.process_once())
+
+        waiting = self.client.get(f"/api/v1/runs/{created.json()['id']}").json()
+        self.assertEqual("waiting_for_auth", waiting["status"])
+        self.assertEqual(
+            {"PLATFORM_CHALLENGE"},
+            {task["error_code"] for task in waiting["tasks"]},
+        )
+        auth_task = self.client.post(
+            f"/api/v1/platforms/yiche/auth/tasks?fresh=true&run_id={waiting['id']}"
+        )
+        self.assertEqual(202, auth_task.status_code, auth_task.text)
+        runtime_task = self.container.auth.tasks[auth_task.json()["id"]]
+        self.assertFalse(runtime_task.fresh_profile)
+        self.assertEqual(trigger_url, runtime_task.start_url)
+        self.assertEqual("PLATFORM_CHALLENGE", runtime_task.recovery_error_code)
+
+        self.container.worker.resume_platform("yiche")
+        with self.container.sessions() as db:
+            resumed = list(
+                db.scalars(
+                    select(CircleTask)
+                    .where(CircleTask.run_id == waiting["id"])
+                    .order_by(CircleTask.queue_sequence)
+                )
+            )
+            self.assertTrue(resumed[0].checkpoint[AUTH_RECOVERY_PROBE_KEY])
+            self.assertTrue(resumed[1].checkpoint[AUTH_RECOVERY_BLOCKED_KEY])
+
+        requested_concurrency: list[int] = []
+
+        def success_factory(_platform: PlatformConfig, snapshot_concurrency: int | None = None):
+            collector = FakeYicheCollector()
+            collector.concurrency = int(snapshot_concurrency or 1)
+            requested_concurrency.append(collector.concurrency)
+            return collector
+
+        self.container.worker._collector = success_factory  # type: ignore[method-assign]
+        self.assertTrue(self.container.worker.process_once())
+        after_probe = self.client.get(f"/api/v1/runs/{waiting['id']}").json()
+        self.assertEqual(["success", "queued"], [task["status"] for task in after_probe["tasks"]])
+        self.assertEqual([1], requested_concurrency)
+
+        self.assertTrue(self.container.worker.process_once())
+        completed = self.client.get(f"/api/v1/runs/{waiting['id']}").json()
+        self.assertEqual("success", completed["status"])
+        self.assertEqual(2, completed["completed_count"])
+        self.assertEqual([1, 8], requested_concurrency)
 
     def test_yiche_normalizes_unsupported_page_evidence_for_manual_and_plan(self) -> None:
         circle = self.save_yiche_sources()[0]
