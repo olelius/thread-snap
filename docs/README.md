@@ -25,6 +25,7 @@
 | 采集框架 PoC 样本、阶段、指标和结果格式 | `docs/research/collector-stack-poc-plan.md` |
 | 汽车之家与易车接入样本、阶段、指标和结果格式 | `docs/research/later-platform-onboarding-plan.md` |
 | 易车腾讯 WAF 逆向调研的工具固定、证据、阶段门与退出条件 | `docs/research/yiche-tencent-waf-reverse-runbook.md` |
+| 易车腾讯 WAF 完全协议化的P0-P5最终结论、动态 TDC 证据与复用边界 | `docs/research/yiche-waf-protocolization-findings.md` |
 | 舆情反馈 PoC 样本、模态覆盖、失败边界和结果格式 | `docs/research/sentiment-analysis-poc-plan.md` |
 | 舆情反馈 PoC 的真实 URL、模型用量和结构结果 | `docs/research/sentiment-analysis-poc-results.md` |
 | 圈子页面证据、成果合成、分片和资源门禁 PoC | `docs/research/circle-screenshot-poc-plan.md` |
@@ -105,7 +106,8 @@
 4. `docs/adr/0058-route-yiche-control-through-classified-recovery.md`；
 5. `docs/adr/0059-allow-bounded-yiche-waf-trigger-round.md`；
 6. `docs/research/yiche-tencent-waf-reverse-runbook.md`；
-7. Git 外既有根因回执及本轮 `artifacts/poc/results/yiche-waf-reverse/<round-id>/` 证据。
+7. `docs/research/yiche-waf-protocolization-findings.md`；
+8. Git 外既有根因回执、`artifacts/poc/results/yiche-waf-reverse/<round-id>/` 及 `artifacts/poc/results/yiche-waf-protocolization/<round-id>/` 证据。
 
 该调研不重复固定1000 URL诊断，不把视频或 MCP 工具可用性视为易车正文门禁通过，也不自动改变生产采集路径。
 

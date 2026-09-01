@@ -16,6 +16,23 @@
 
 ---
 
+## 2026-09-02 — 易车腾讯 WAF 完全协议化研究
+**总目标**：把既有浏览器滑块对照推进到运行时无 Chrome、无腾讯 SDK/TDC 原始脚本执行的普通 HTTP 全链路，并明确可复用与逐挑战重算结果。
+**状态**：✅ P0-P5 全部关闭；自研 TDC IR、两次腾讯纯 HTTP 业务成功、易车 WAF POST 与原正文门禁均已取得运行时证据，生产保持 ADR 0058。
+**干到哪里了**：
+- [x] 固定严格门：浏览器自动拖动、原样执行供应商 TDC 或仅 HTTP 200 均不算完成；腾讯必须 `errorCode="0"`，随后易车 `/WafCaptcha` 与原详情正文必须依次通过。
+- [x] 完成 TDC payload 的 base64/signed-varint/zigzag 解码、直接/字符串数组间接外壳归一化、解释器结构提取、canonical handler 签名、逐轮 opcode 重映射、自研 IR/VM 与 Node 环境适配；运行路径不启动 Chrome，也不执行原始 TDC 脚本。
+- [x] 跨冻结 98-opcode、动态 94-opcode 与新 101-opcode 外壳验证；101-opcode 样本解析出 174056 字符 payload，并新增一个寄存器间大于等于 handler，总计 75 个。该自研运行时生成 6590 字符 `collect`，腾讯 verify 返回 HTTP 200、业务 `errorCode="0"`。
+- [x] 完整门禁按“当前 WAF/seqid -> 新 challenge -> 双图/识别/PoW/TDC -> verify -> 四行 WAF POST -> 原 URL”执行；新 94-opcode/74-handler challenge 再次取得 `errorCode="0"`。
+- [x] 同一易车 FetcherSession 的 `/WafCaptcha` 返回200；原 URL 重载返回100469字节正文，WAF=false，帖子身份和正文/媒体证明成立。整段从命中 WAF 到正文重载实测5.221秒。
+- [x] POST 前后 Cookie 名称和值哈希均未变化；旧 ticket 配新 seqid 的对照轮次未解除 WAF，证明需在当前 seqid 后生成同轮 ticket，且放行结果不是可长期复用的新 Cookie。
+- [x] 最终 Git 外回执 `acceptance.json` SHA-256 为 `302fe545003ab48a8fc75388762c6b48a43bd3cca5f7086d0324286f7b4aa76d`；P4 报告为 `a994a5d8012aa2812963ae8780a2add94bf02fa575444b2479236b54c2d7faa4`，P5 报告为 `9b15ef19345d88f8e7b7b72d108314cb659b37b254b323ef21dc7ae401b34a83`。
+**下一步**：研究任务已关闭。生产继续执行 ADR 0058；若提出生产接入，另开需求和 ADR，并补版本探针、熔断回退、敏感材料生命周期、负载及正式500条影响验收。
+**边界**：`sess/tdc_path/payload/opcode映射/eks/collect/图片/坐标/PoW/ticket/randstr/seqid/Cookie/风控状态`均逐挑战产生，不跨 challenge 复用；本轮不计入易车正式500条，生产代码与配置未改变。
+**关联**：`docs/research/yiche-waf-protocolization-findings.md`、`docs/research/yiche-tencent-waf-reverse-runbook.md`、`docs/adr/0058-route-yiche-control-through-classified-recovery.md`、`docs/adr/0059-allow-bounded-yiche-waf-trigger-round.md`
+
+---
+
 ## 2026-09-01 — 易车 WAF 逆向受控主动触发
 **总目标**：按严格逆向流程完成易车腾讯WAF/滑块取证，并把原“只等待自然挑战”调整为工具链门通过后允许一次有界主动触发。
 **状态**：✅ 工具链、受控触发、真实WAF冻结、动态链、双图本地识别、最小复现、单变量服务端验证和生产决策均已完成；生产保持ADR 0058现状。

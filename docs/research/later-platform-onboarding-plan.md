@@ -141,7 +141,7 @@ sources -> discover -> freeze -> samples -> verify-inputs -> run -> verify-run
 - 生产分类依据ADR 0058收敛：缺少控制前置证据的普通401/403为`AUTH_REQUIRED`；203后403为`PLATFORM_CHALLENGE`；TencentCaptcha/WAF经一次有界Stealthy复访仍受控时为`PLATFORM_CAPTCHA_REQUIRED`或挑战；页面/API 429为`PLATFORM_RATE_LIMITED`。挑战和验证码继承当前Profile打开原URL并在保存后用单来源并发1探针恢复，限流在同一任务持久冷却；任一控制出现后不继续请求当前来源其他候选。
 - 脱敏回执位于`artifacts/runtime/yiche-concurrency-20260901/acceptance.json`，SHA-256为`86a80da1fefc038ea33c23675393c016a73568b6e7530fa3436e57be826bef5f`。该诊断不是正式500条验收，不与后续正式分母拼接。
 - 固定1000条诊断的URL恢复修复回执位于`artifacts/poc/results/yiche-concurrency1/20260901-1000-url/acceptance.json`，SHA-256为`a617e3619ae1e77039c065c4b30b4a469aed7a455b1128c386991b8586b36c51`；该文件冻结修复完成时的59/1000状态。后续同一原批次已按持久化帖子ID扣除完成项、保持0～999原位置并最终1000/1000；终态和根因以同目录`root-cause-analysis.json`及其SHA-256为准。
-- 逆向调研没有重跑既有1000条压力轮次。历史`js-reverse-mcp@1.2.1`静态门通过后，两个零重叠80 URL轮次均在前59个正文成功后由第60个请求命中腾讯验证码并立即止损；已冻结`CaptchaAppId=2017163193`、SDK/TDC与相关脚本哈希、iframe、双图、验证请求和WAF客户端回调链，本地识别及固定轨迹单变量验证成功。原风险会话的WAF POST 200、Cookie名称变化和原URL正文门禁未关闭，最终决策为只保留研究产物，生产继续执行ADR 0058；历史视频MCP、私有Skills/Rules与易车生产适配器仍分别管理。
+- 逆向调研没有重跑既有1000条压力轮次。历史`js-reverse-mcp@1.2.1`静态门通过后，两个零重叠80 URL轮次均在前59个正文成功后由第60个请求命中腾讯验证码并立即止损；已冻结`CaptchaAppId=2017163193`、SDK/TDC与相关脚本哈希、iframe、双图、验证请求和WAF客户端回调链。后续完全协议化研究用自研TDC IR在两个新challenge取得腾讯业务`errorCode="0"`，并在同一易车HTTP会话关闭`/WafCaptcha -> 原URL正文`门禁；POST前后Cookie未变化，票据、seqid与挑战数据仍逐轮生成。最终决策仍为只保留研究产物，生产继续执行ADR 0058；历史视频MCP、私有Skills/Rules与易车生产适配器仍分别管理。
 
 ## 5. 口碑映射并行分析边界
 
