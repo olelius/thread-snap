@@ -22,10 +22,11 @@
 **干到哪里了**：
 - [x] 视频对应MCP高置信识别为`zhizhuodemao/js-reverse-mcp`；与视频工具集合和时间线匹配的快照为提交`fb74ebf122cb26b229ebaf8ed5921b1acec0cdb5`、包版本`1.2.1`。上游提交`a3dbdf32f018210c273c317181026860df26f51f`于2026-05-07移除了视频可见的`trace_function`和`inject_before_load`，因此最新版不等价于视频流程。
 - [x] 明确MCP、Skills/Rules和本地项目代码三层边界：MCP仓库与历史工具集合已识别，视频私有Skills/Rules及其目标站最终闭环没有公开独立证据，未记录为易车已成功。
+- [x] 补齐视频中的云码图像识别层：约99～108秒把云码与本地识别/OpenCV并列，约458～490秒给出云码文档、Token和“双图滑块”类型；云码只以背景图和滑块图返回缺口像素距离，尺寸换算、轨迹、加密、验签和易车正文恢复仍属其他阶段。转写SHA-256为`D022124267F3B46EF6FA1725FBFDDFDD866BADDA662EA10CCEF6EF771D774A56`。
 - [x] 新增严格流程，覆盖既有证据复用、工具链固定、自然挑战取证、状态机、最少断点、环境依赖拆分、单变量对照、正文门禁、Git外产物、脱敏、停止、回滚、版本失效和进入生产的新决策门。
 - [x] 统一更新领域术语、产品边界、技术路线、接入计划、跨任务链档、ADR 0058和文档索引；生产仍按登录失效、挑战、验证码和429分类处理，不重复固定1000 URL压力轮次。
-**下一步**：先审计并按历史提交固定Codex MCP中的`js-reverse-mcp@1.2.1`，用本地静态页关闭工具兼容性门；随后等待下一次自然易车验证码，只补齐CaptchaAppId、SDK/TDC与相关脚本哈希、iframe、网络发起者、调用栈、Cookie名称变化和原URL正文门禁。
-**边界**：调研不替代正式500条，不把页面HTTP 200、字段同形或视频演示视为服务端通过，不保存凭证原值，不把MCP加入生产采集依赖；任何生产行为变化另开设计、ADR和目标场景验收。
+**下一步**：先审计并按历史提交固定Codex MCP中的`js-reverse-mcp@1.2.1`，用本地静态页关闭工具兼容性门；随后等待下一次自然易车验证码，冻结两张原图、尺寸和哈希，分别验证云码/本地识别坐标，再补齐CaptchaAppId、SDK/TDC与相关脚本哈希、iframe、网络发起者、调用栈、Cookie名称变化和原URL正文门禁。
+**边界**：调研不替代正式500条，不把缺口坐标、页面HTTP 200、字段同形或视频演示视为服务端通过；云码Token和挑战图片按敏感及第三方数据边界管理，MCP保持调研依赖；任何生产行为变化另开设计、ADR和目标场景验收。
 **关联**：`docs/research/yiche-tencent-waf-reverse-runbook.md`、`docs/adr/0058-route-yiche-control-through-classified-recovery.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/later-platform-delivery.md`
 
 ---
