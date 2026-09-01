@@ -26,7 +26,8 @@
 - [x] 定向32项通过，覆盖203后403、普通403、WAF一次恢复、恢复后403、页面/列表/评论API 429、候选中断，以及两来源等待认证后先并发1探针再恢复冻结并发8。
 - [x] 分支v7使用当前加密Session、真实瑞虎8来源和实际并发1取得`1 / 1`、失败0，帖子身份和正文/媒体证明成立，耗时1.574秒；平台当前启用、配置并发1、数据库`integrity_check=ok`。脱敏回执`artifacts/runtime/yiche-control-recovery-20260901/single-source-proof.json`的SHA-256为`6b303fcc69a6fc19825cd1ab520c0f20d9f7a4dfb6218f1806b3ae775a10d447`。
 - [x] 完整后端251项、Ruff、compileall、pip check、前端TypeScript检查和2468模块生产构建均通过；`git diff --check`通过。
-**下一步**：精确提交任务文件，推送并创建PR；检查通过后合并main、清理分支，从合并后main复核运行服务版本与健康状态。
+- [x] 功能提交`b67c461`经PR #244合并为`main@597b567`，远程与本地功能分支均已清理；合并后后端已重启，`/health=ok`，平台接口返回易车`yiche-community-v7-control-recovery`、`available/enabled`、当前并发1，main与远程一致且工作区清洁。
+**下一步**：保持易车运行并发1；若后续需要提高吞吐，先以独立固定输入分别完成并发2和4的多轮对照，再决定是否收窄或调整平台注册上限。正式500条仍按既定冻结分母单独验收。
 **边界**：本次不重复并发8施压，不改数据库结构、Session格式、前端页面、页面证据能力或正式500条门禁；并发8已证实在当前条件下不稳定，但2/4安全阈值尚未验证，当前运行配置保持1。
 **关联**：`src/threadsnap/collectors/yiche.py`、`tests/test_collector_contract.py`、`tests/test_yiche_integration.py`、`docs/adr/0058-route-yiche-control-through-classified-recovery.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/later-platform-delivery.md`
 
