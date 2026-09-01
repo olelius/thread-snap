@@ -16,7 +16,9 @@ from urllib.parse import parse_qs, unquote_plus, urljoin, urlsplit
 from zoneinfo import ZoneInfo
 
 from lxml import html
+from patchright.sync_api import sync_playwright
 
+from ..browser_runtime import browser_launch_args
 from ..scrapling_transport import ExecutionScopeKey, ScraplingHttpPool
 from .base import (
     AuthenticationRequired,
@@ -26,7 +28,7 @@ from .base import (
     ProgressCallback,
 )
 
-ADAPTER_VERSION = "autohome-club-v9-scrapling-auth-gate"
+ADAPTER_VERSION = "autohome-club-v10-scrapling-page-evidence"
 BASE_URL = "https://club.autohome.com.cn"
 LIST_API_URL = "https://club-open-api.autohome.com.cn/api/pc/bbs/index/getClubTopicList"
 VIDEO_MEDIA_URL = "https://p-vp.autohome.com.cn/api/gpi"
@@ -245,7 +247,7 @@ class AutohomeCollector:
     code = "autohome"
     display_name = "汽车之家"
     adapter_version = ADAPTER_VERSION
-    supports_page_evidence = False
+    supports_page_evidence = True
     supports_live_video_resolution = True
 
     def __init__(
@@ -263,6 +265,7 @@ class AutohomeCollector:
         self.timeout_seconds = timeout_seconds
         self.browser_headless = browser_headless
         self.semaphore = threading.BoundedSemaphore(self.concurrency)
+        self.page_capture_lock = threading.Lock()
         self.http = ScraplingHttpPool(
             storage_state,
             timeout_seconds=timeout_seconds,
@@ -489,6 +492,34 @@ class AutohomeCollector:
         if not content:
             raise CollectorFailure("PLATFORM_RESPONSE_EMPTY", "汽车之家返回了异常空响应。")
 
+    @classmethod
+    def _parse_list_payload(
+        cls, content: bytes, *, trigger_url: str | None = None
+    ) -> dict[str, Any]:
+        """解析官方列表响应；浏览器截图与普通 HTTP 路径复用同一结构门禁。"""
+
+        try:
+            payload = json.loads(content)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise CollectorFailure(
+                "PLATFORM_RESPONSE_INVALID", "汽车之家列表接口返回了无法识别的数据。"
+            ) from exc
+        if not isinstance(payload, dict):
+            raise CollectorFailure("PLATFORM_RESPONSE_INVALID", "汽车之家列表接口返回结构无效。")
+        message = str(payload.get("message") or "")
+        cls._detect_payload_control(message, trigger_url=trigger_url)
+        result = payload.get("result")
+        if payload.get("returncode") != 0 or not isinstance(result, dict):
+            raise CollectorFailure("PLATFORM_RESPONSE_INVALID", "汽车之家列表接口返回结构无效。")
+        items = result.get("items")
+        if not isinstance(items, list):
+            raise CollectorFailure("PLATFORM_RESPONSE_INVALID", "汽车之家列表缺少帖子数组。")
+        return {
+            "items": items,
+            "total": _integer(result.get("total")),
+            "series_id": result.get("seriesid"),
+        }
+
     def _list_page(self, source: CircleSource, page_number: int) -> dict[str, Any]:
         """读取一个有序列表 API 页面并校验来源身份与响应结构。"""
 
@@ -506,39 +537,342 @@ class AutohomeCollector:
         )
         if int(response.status_code) == 404:
             raise CollectorFailure("CIRCLE_NOT_FOUND", "汽车之家论坛来源当前不存在。")
-        try:
-            payload = json.loads(response.content)
-        except (TypeError, json.JSONDecodeError) as exc:
-            raise CollectorFailure(
-                "PLATFORM_RESPONSE_INVALID", "汽车之家列表接口返回了无法识别的数据。"
-            ) from exc
-        if not isinstance(payload, dict):
-            raise CollectorFailure("PLATFORM_RESPONSE_INVALID", "汽车之家列表接口返回结构无效。")
-        message = str(payload.get("message") or "")
-        self._detect_payload_control(message)
-        result = payload.get("result")
-        if payload.get("returncode") != 0 or not isinstance(result, dict):
-            raise CollectorFailure("PLATFORM_RESPONSE_INVALID", "汽车之家列表接口返回结构无效。")
-        items = result.get("items")
-        if not isinstance(items, list):
-            raise CollectorFailure("PLATFORM_RESPONSE_INVALID", "汽车之家列表缺少帖子数组。")
-        return {
-            "items": items,
-            "total": _integer(result.get("total")),
-            "series_id": result.get("seriesid"),
-        }
+        return self._parse_list_payload(response.content, trigger_url=source.url)
 
     @staticmethod
-    def _detect_payload_control(message: str) -> None:
+    def _detect_payload_control(message: str, *, trigger_url: str | None = None) -> None:
         normalized = message.lower()
         if any(marker in normalized for marker in CONTROL_MARKERS["login"]):
-            raise AuthenticationRequired("汽车之家当前要求重新完成平台认证。")
+            raise AuthenticationRequired(
+                "汽车之家当前要求重新完成平台认证。", trigger_url=trigger_url
+            )
         if any(marker in normalized for marker in CONTROL_MARKERS["captcha"]):
-            raise CollectorFailure("PLATFORM_CAPTCHA_REQUIRED", "汽车之家当前要求完成验证码。")
+            raise CollectorFailure(
+                "PLATFORM_CAPTCHA_REQUIRED",
+                "汽车之家当前要求完成验证码。",
+                trigger_url=trigger_url,
+            )
         if any(marker in normalized for marker in CONTROL_MARKERS["challenge"]):
-            raise CollectorFailure("PLATFORM_CHALLENGE", "汽车之家当前返回了访问验证。")
+            raise CollectorFailure(
+                "PLATFORM_CHALLENGE",
+                "汽车之家当前返回了访问验证。",
+                trigger_url=trigger_url,
+            )
         if any(marker in normalized for marker in CONTROL_MARKERS["rate_limited"]):
-            raise CollectorFailure("PLATFORM_RATE_LIMITED", "汽车之家当前限制了请求频率。")
+            raise CollectorFailure(
+                "PLATFORM_RATE_LIMITED",
+                "汽车之家当前限制了请求频率。",
+                trigger_url=trigger_url,
+            )
+
+    @staticmethod
+    def _forum_page_url(source: CircleSource, page_number: int) -> str:
+        """按规范来源身份生成精确物理分页 URL。"""
+
+        sort = "topic" if source.list_order == "latest_publish" else "post"
+        return (
+            f"{BASE_URL}/bbs/forum-{source.raw_status.get('bbs_type', 'c')}-"
+            f"{source.external_id}-{page_number}.html?sort={sort}"
+        )
+
+    @staticmethod
+    def _is_expected_list_response(url: str, source: CircleSource, page_number: int) -> bool:
+        """只接收当前页面实际发出的同来源、同顺序、同页码列表响应。"""
+
+        parsed = urlsplit(url)
+        expected = urlsplit(LIST_API_URL)
+        if (parsed.scheme, parsed.netloc, parsed.path) != (
+            expected.scheme,
+            expected.netloc,
+            expected.path,
+        ):
+            return False
+        query = parse_qs(parsed.query)
+        expected_order = "2" if source.list_order == "latest_publish" else "1"
+        return all(
+            (query.get(key) or [None])[0] == value
+            for key, value in {
+                "page_num": str(page_number),
+                "page_size": str(PAGE_SIZE),
+                "club_bbs_type": str(source.raw_status.get("bbs_type", "c")),
+                "club_bbs_id": source.external_id,
+                "club_order_type": expected_order,
+            }.items()
+        )
+
+    @staticmethod
+    def _detect_browser_control(
+        *, final_url: str, visible_text: str, status_code: int, trigger_url: str
+    ) -> None:
+        """把截图浏览器观察到的平台控制路由到既有恢复状态机。"""
+
+        combined = f"{final_url}\n{visible_text}".lower()
+        if any(marker in combined for marker in CONTROL_MARKERS["captcha"]):
+            raise CollectorFailure(
+                "PLATFORM_CAPTCHA_REQUIRED",
+                "汽车之家当前要求完成验证码。",
+                trigger_url=trigger_url,
+            )
+        if "safety.autohome.com.cn/userverify" in combined or any(
+            marker in combined for marker in CONTROL_MARKERS["challenge"]
+        ):
+            raise CollectorFailure(
+                "PLATFORM_CHALLENGE",
+                "汽车之家当前返回了访问验证页面。",
+                trigger_url=trigger_url,
+            )
+        if status_code == 429 or any(
+            marker in combined for marker in CONTROL_MARKERS["rate_limited"]
+        ):
+            raise CollectorFailure(
+                "PLATFORM_RATE_LIMITED",
+                "汽车之家当前限制了请求频率。",
+                trigger_url=trigger_url,
+            )
+        if any(marker in combined for marker in CONTROL_MARKERS["login"]):
+            raise AuthenticationRequired(
+                "汽车之家当前要求重新完成平台认证。", trigger_url=trigger_url
+            )
+        if status_code == 404:
+            raise CollectorFailure("CIRCLE_NOT_FOUND", "汽车之家论坛来源当前不存在。")
+        if status_code >= 400:
+            raise CollectorFailure(
+                "PAGE_EVIDENCE_HTTP_ERROR",
+                f"汽车之家圈子页面返回 HTTP {status_code}。",
+                trigger_url=trigger_url,
+            )
+
+    @staticmethod
+    def _stabilize_capture_layout(page: Any, cards: Any, page_number: int) -> None:
+        """回到平台原始页首，连续确认卡片身份与坐标稳定。"""
+
+        page.evaluate(
+            """() => {
+              window.scrollTo({top:0,left:0,behavior:'instant'});
+              document.documentElement.scrollTop=0;
+              document.documentElement.scrollLeft=0;
+              if (document.body) {
+                document.body.scrollTop=0;
+                document.body.scrollLeft=0;
+              }
+            }"""
+        )
+        page.wait_for_function("() => scrollX === 0 && scrollY === 0")
+        previous_layout: list[dict[str, Any]] | None = None
+        stable_samples = 0
+        for _attempt in range(8):
+            layout = cards.evaluate_all(
+                """els => els.map(e => {
+                  const r=e.getBoundingClientRect();
+                  const a=e.querySelector('p.post-title a[href*="/bbs/thread/"]');
+                  return {x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height,
+                    href:a?a.href:null};
+                })"""
+            )
+            if layout == previous_layout:
+                stable_samples += 1
+                if stable_samples >= 2:
+                    break
+            else:
+                stable_samples = 0
+            previous_layout = layout
+            page.wait_for_timeout(250)
+        if stable_samples < 2:
+            raise CollectorFailure(
+                "PAGE_EVIDENCE_LAYOUT_UNSTABLE",
+                f"汽车之家圈子第 {page_number} 页卡片布局在页首稳定窗口内仍持续变化。",
+            )
+
+    @classmethod
+    def _merge_capture_rows(
+        cls,
+        source: CircleSource,
+        raw_rows: Iterable[dict[str, Any]],
+        api_items: Iterable[object],
+    ) -> list[dict[str, Any]]:
+        """以同一浏览器页的 DOM 冻结顺序，并用该页响应补充详情校验字段。"""
+
+        dom_rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for index, raw in enumerate(raw_rows):
+            href = str(raw.get("href") or "").strip()
+            try:
+                post_id, url = normalize_post_url(href)
+            except CollectorFailure as exc:
+                raise CollectorFailure(
+                    "PAGE_EVIDENCE_LIST_INVALID",
+                    f"汽车之家圈子页面第 {index + 1} 张帖子卡片缺少稳定详情链接。",
+                ) from exc
+            if post_id in seen:
+                raise CollectorFailure(
+                    "PAGE_EVIDENCE_LIST_INVALID", "汽车之家圈子页面包含重复帖子卡片。"
+                )
+            seen.add(post_id)
+            rect = raw.get("rect") if isinstance(raw.get("rect"), dict) else {}
+            if float(rect.get("width") or 0) <= 0 or float(rect.get("height") or 0) <= 0:
+                raise CollectorFailure(
+                    "PAGE_EVIDENCE_LAYOUT_INVALID", "汽车之家圈子页面包含无有效边界的帖子卡片。"
+                )
+            dom_rows.append(
+                {
+                    "post_id": post_id,
+                    "url": url,
+                    "order_index": index,
+                    "text": str(raw.get("text") or ""),
+                    "image_count": int(raw.get("image_count") or 0),
+                    "rect": rect,
+                }
+            )
+
+        candidates = [cls._candidate(source, item, index) for index, item in enumerate(api_items)]
+        if [item["post_id"] for item in dom_rows] != [item["post_id"] for item in candidates]:
+            raise CollectorFailure(
+                "PAGE_EVIDENCE_LIST_MISMATCH",
+                "汽车之家圈子页面卡片与同一浏览器页面的列表响应身份或顺序不一致。",
+            )
+        return [
+            {**candidate, **row}
+            for row, candidate in zip(dom_rows, candidates, strict=True)
+        ]
+
+    def capture_circle_page(self, circle_url: str, page_number: int) -> dict[str, Any]:
+        """从同一浏览器页面冻结列表响应、DOM卡片坐标和原始全页 PNG。"""
+
+        source = parse_circle_url(circle_url)
+        exact_url = self._forum_page_url(source, page_number)
+        with self.page_capture_lock, self.semaphore:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(
+                    headless=self.browser_headless, args=browser_launch_args()
+                )
+                context = browser.new_context(
+                    storage_state=self.storage_state,
+                    locale="zh-CN",
+                    timezone_id="Asia/Shanghai",
+                    viewport={"width": 1440, "height": 900},
+                    device_scale_factor=1,
+                )
+                try:
+                    browser_version = browser.version
+                    page = context.new_page()
+                    list_responses: list[Any] = []
+
+                    def record_list_response(response: Any) -> None:
+                        if self._is_expected_list_response(response.url, source, page_number):
+                            list_responses.append(response)
+
+                    page.on("response", record_list_response)
+                    navigation = page.goto(
+                        exact_url, wait_until="domcontentloaded", timeout=60_000
+                    )
+                    visible_text = ""
+                    for _attempt in range(120):
+                        try:
+                            visible_text = page.locator("body").inner_text(timeout=1_000)
+                        except Exception:
+                            visible_text = ""
+                        self._detect_browser_control(
+                            final_url=page.url,
+                            visible_text=visible_text,
+                            status_code=int(navigation.status) if navigation else 0,
+                            trigger_url=exact_url,
+                        )
+                        if list_responses:
+                            break
+                        page.wait_for_timeout(250)
+                    if not list_responses:
+                        raise CollectorFailure(
+                            "PAGE_EVIDENCE_LIST_RESPONSE_MISSING",
+                            "汽车之家圈子页面没有发出可绑定当前来源的官方列表响应。",
+                            trigger_url=exact_url,
+                        )
+                    list_response = list_responses[-1]
+                    list_page = self._parse_list_payload(
+                        list_response.body(), trigger_url=exact_url
+                    )
+                    if list_page["items"]:
+                        page.wait_for_selector("ul.post-list > li", timeout=30_000)
+                    cards = page.locator("ul.post-list > li")
+                    for index in range(cards.count()):
+                        card = cards.nth(index)
+                        card.scroll_into_view_if_needed(timeout=10_000)
+                        try:
+                            card.locator("img").evaluate_all(
+                                """imgs => Promise.all(imgs.map(img => new Promise(resolve => {
+                                  const src=img.currentSrc||img.src||'';
+                                  const pending=img.dataset.src||'';
+                                  if ((src||pending) && img.complete && img.naturalWidth>0 &&
+                                      img.naturalHeight>0 && !(pending && src.startsWith('data:image/gif')))
+                                    return resolve();
+                                  const done=()=>resolve();
+                                  img.addEventListener('load',done,{once:true});
+                                  img.addEventListener('error',done,{once:true});
+                                  setTimeout(done,8000);
+                                })))"""
+                            )
+                        except Exception:
+                            # 最终统一读取媒体状态；单个等待器异常不绕过完整性门禁。
+                            pass
+                    page.evaluate("() => document.fonts && document.fonts.ready")
+                    media_state = cards.evaluate_all(
+                        """els => els.flatMap((card,cardIndex) =>
+                          Array.from(card.querySelectorAll('img')).map(img => ({
+                            cardIndex,src:img.currentSrc||img.src||'',dataSrc:img.dataset.src||'',
+                            complete:img.complete,naturalWidth:img.naturalWidth,
+                            naturalHeight:img.naturalHeight
+                          })))"""
+                    )
+                    incomplete = [
+                        item
+                        for item in media_state
+                        if not (item.get("src") or item.get("dataSrc"))
+                        or not item.get("complete")
+                        or int(item.get("naturalWidth") or 0) <= 0
+                        or int(item.get("naturalHeight") or 0) <= 0
+                        or bool(item.get("dataSrc"))
+                        and str(item.get("src") or "").startswith("data:image/gif")
+                    ]
+                    if incomplete:
+                        raise CollectorFailure(
+                            "PAGE_EVIDENCE_MEDIA_INCOMPLETE",
+                            f"汽车之家圈子第 {page_number} 页仍有 {len(incomplete)} 个帖子媒体处于空白、加载或破图状态。",
+                        )
+                    self._stabilize_capture_layout(page, cards, page_number)
+                    raw_rows = cards.evaluate_all(
+                        """els => els.map((e,i) => {
+                          const r=e.getBoundingClientRect();
+                          const a=e.querySelector('p.post-title a[href*="/bbs/thread/"]');
+                          return {index:i,href:a?a.href:null,text:e.innerText||'',
+                            image_count:e.querySelectorAll('img').length,
+                            rect:{x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height}};
+                        })"""
+                    )
+                    rows = self._merge_capture_rows(source, raw_rows, list_page["items"])
+                    document = page.evaluate(
+                        """() => ({
+                          width:Math.max(document.documentElement.scrollWidth,document.body.scrollWidth),
+                          height:Math.max(document.documentElement.scrollHeight,document.body.scrollHeight)
+                        })"""
+                    )
+                    screenshot = page.screenshot(full_page=True, type="png")
+                    final_url = page.url
+                finally:
+                    context.close()
+                    browser.close()
+        total_count = list_page["total"]
+        return {
+            "page_number": page_number,
+            "exact_url": final_url,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "adapter_version": self.adapter_version,
+            "browser_version": browser_version,
+            "viewport": {"width": 1440, "height": 900, "device_scale_factor": 1},
+            "document": document,
+            "rows": rows,
+            "screenshot": screenshot,
+            "total_count": total_count,
+            "page_count": math.ceil(total_count / PAGE_SIZE) if total_count is not None else None,
+        }
 
     @staticmethod
     def _candidate(source: CircleSource, item: object, source_index: int) -> dict[str, Any]:
@@ -976,10 +1310,6 @@ class AutohomeCollector:
     ) -> dict[str, Any]:
         """处理来源前N个固定候选；详情失败时不向后补位。"""
 
-        if on_page_evidence is not None:
-            raise CollectorFailure(
-                "PAGE_EVIDENCE_UNSUPPORTED", "汽车之家当前尚未验证圈子页面截图合同。"
-            )
         source = parse_circle_url(circle_url)
         records: list[dict[str, Any]] = []
         failures: list[dict[str, Any]] = []
@@ -996,41 +1326,59 @@ class AutohomeCollector:
                 raise CollectorFailure(
                     "PAGINATION_UNBOUNDED", "汽车之家列表未在安全页数内给出终止证明。"
                 )
-            page = self._list_page(source, page_number)
-            if frozen_page_count is None and page["items"] and page["total"] is not None:
-                frozen_page_count = math.ceil(max(page["total"], 0) / PAGE_SIZE)
-            if not page["items"]:
+            if on_page_evidence:
+                loader = getattr(on_page_evidence, "load", None)
+                captured = loader(page_number) if callable(loader) else None
+                captured = captured or self.capture_circle_page(source.url, page_number)
+                page_rows = [dict(item) for item in captured["rows"]]
+                page_position_count = len(page_rows)
+                if frozen_page_count is None and captured.get("page_count") is not None:
+                    frozen_page_count = int(captured["page_count"])
+            else:
+                captured = None
+                page = self._list_page(source, page_number)
+                if frozen_page_count is None and page["items"] and page["total"] is not None:
+                    frozen_page_count = math.ceil(max(page["total"], 0) / PAGE_SIZE)
+                page_rows = []
+                page_position_count = len(page["items"])
+                for raw_offset, raw in enumerate(page["items"]):
+                    index = source_index + raw_offset
+                    try:
+                        page_rows.append(self._candidate(source, raw, raw_offset))
+                    except CollectorFailure as exc:
+                        raw_url = raw.get("pc_url") if isinstance(raw, dict) else source.url
+                        failure = {
+                            "url": str(raw_url or source.url),
+                            "code": exc.code,
+                            "message": exc.message,
+                            "source_index": index,
+                        }
+                        failures.append(failure)
+                        if on_progress:
+                            on_progress(None, failure)
+                        selected_count += 1
+            if not page_rows:
                 exhausted = True
                 break
             fingerprint = tuple(
-                str(item.get("biz_id") or item.get("pc_url") or "")
-                for item in page["items"]
-                if isinstance(item, dict)
+                str(item.get("post_id") or item.get("url") or "") for item in page_rows
             )
             if fingerprint in page_fingerprints:
                 exhausted = True
                 break
             page_fingerprints.add(fingerprint)
-            for raw in page["items"]:
+            for offset, candidate in enumerate(page_rows):
+                candidate["source_position"] = source_index + int(
+                    candidate.get("order_index", candidate.get("source_position", offset))
+                )
+            source_index += page_position_count
+            if captured is not None:
+                captured["rows"] = page_rows
+                if not captured.get("persisted"):
+                    on_page_evidence(captured)
+            for candidate in page_rows:
                 if selected_count >= target_count:
                     break
-                index = source_index
-                source_index += 1
-                try:
-                    candidate = self._candidate(source, raw, index)
-                except CollectorFailure as exc:
-                    raw_url = raw.get("pc_url") if isinstance(raw, dict) else source.url
-                    failure = {
-                        "url": str(raw_url or source.url),
-                        "code": exc.code,
-                        "message": exc.message,
-                        "source_index": index,
-                    }
-                    failures.append(failure)
-                    if on_progress:
-                        on_progress(None, failure)
-                    selected_count += 1
-                    continue
                 if candidate["post_id"] in seen:
                     continue
                 seen.add(candidate["post_id"])
@@ -1074,7 +1422,7 @@ class AutohomeCollector:
                                 "url": pending["url"],
                                 "code": error.code,
                                 "message": error.message,
-                                "source_index": pending["order_index"],
+                                "source_index": pending["source_position"],
                             }
                         )
                     return {
@@ -1095,13 +1443,13 @@ class AutohomeCollector:
                             if isinstance(error, CollectorFailure)
                             else "帖子详情当前不可用。"
                         ),
-                        "source_index": candidate["order_index"],
+                        "source_index": candidate["source_position"],
                     }
                     failures.append(failure)
                     if on_progress:
                         on_progress(None, failure)
                     continue
-                record["order_index"] = candidate["order_index"]
+                record["order_index"] = candidate["source_position"]
                 records.append(record)
                 if on_progress:
                     on_progress(record, None)

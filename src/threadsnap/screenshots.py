@@ -268,6 +268,9 @@ class ScreenshotService:
                 "list_schema_version": "circle-page-v1",
                 "rows": payload["rows"],
             }
+            for optional_key in ("total_count", "page_count"):
+                if optional_key in payload:
+                    manifest[optional_key] = payload[optional_key]
             manifest_bytes = json.dumps(
                 manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")
             ).encode("utf-8")

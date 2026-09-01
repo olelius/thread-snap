@@ -1547,7 +1547,7 @@ class ApiAndConfigTests(AppCase):
         self.assertEqual(
             "account_login", autohome["capabilities"]["authentication_mode"]
         )
-        self.assertFalse(autohome["capabilities"]["page_evidence"])
+        self.assertTrue(autohome["capabilities"]["page_evidence"])
         self.assertTrue(autohome["capabilities"]["live_video_resolution"])
         self.assertEqual({"min": 1, "max": 1}, autohome["concurrency_range"])
         auth_task = self.client.post("/api/v1/platforms/autohome/auth/tasks")
@@ -1584,7 +1584,7 @@ class ApiAndConfigTests(AppCase):
             },
         )
         self.assertEqual(202, created.status_code, created.text)
-        self.assertFalse(created.json()["screenshot_enabled"])
+        self.assertTrue(created.json()["screenshot_enabled"])
         self.assertEqual(["autohome"], created.json()["platform_codes"])
 
     def test_sentiment_config_worker_filters_detail_and_manual_revision(self) -> None:

@@ -16,6 +16,23 @@
 
 ---
 
+## 2026-09-01 — 汽车之家复用懂车帝圈子截图流程
+**总目标**：在独立工作树为汽车之家接入既有圈子页面证据与关联截图成果链，使截图开启时由同一浏览器页面冻结列表身份、卡片坐标和原始全页PNG，并在重启后复用不可变清单。
+**状态**：✅ 代码、真实双来源页面捕获、隔离Worker业务闭环、owner文档和完整本地验证均已完成，已进入自动Git交付。
+**干到哪里了**：
+- [x] 从`main@201d8cb`创建`H:\ThreadSnap-worktrees\autohome-screenshots`与分支`feat/autohome-screenshots`；原`H:\ThreadSnap`保持main工作树。
+- [x] 汽车之家升级为`autohome-club-v10-scrapling-page-evidence`并发布页面证据能力；截图分支只监听论坛页自身发出的同页官方列表响应，以最终`ul.post-list > li` DOM决定帖子身份、顺序和坐标，响应只补充跨论坛归属、视频和删除校验字段，50项不同序即失败。
+- [x] 捕获器逐卡触发懒加载、校验媒体终态、回到平台原始页首并连续等待布局稳定，不注入CSS；同一DOM生成manifest与全页PNG。Worker重启续跑复用已校验文件哈希的manifest，不重新请求或捕获历史页面。
+- [x] 真实风云A9最新回复与最新发布首屏均取得`50 / 50`唯一且与同页响应同序的卡片；PNG与文档尺寸分别为`1425 × 6154`、`1425 × 4834`，首中末坐标均在原图内，最终代码复验SHA-256分别为`7d80b1e7c09271a848df3f13dc4d1f6886a33ea707cf529c4b7e2d8a0aee405e`和`4af4f1d130dab5fe00d9bcd1602c9a6068d1f146632816fc358c7649b2be62eb`。脱敏回执位于`artifacts/runtime/autohome-screenshot-dev/implementation-capture/summary.json`。
+- [x] 隔离Worker真实创建截图开启、AI关闭的汽车之家1条批次并完成`1 / 1`、失败0；数据库保存1页证据、50行manifest、1条详情关联和1张成果页，成果与原图SHA-256同为`0236097cd81225dee34a2b1c1e40b3987eaca87c4856550b45ec20f2f0a86219`。回执位于`artifacts/runtime/ah-shot-loop/verification.json`。
+- [x] 汽车之家与公共截图链定向43项通过，覆盖平台注册、DOM/响应漂移关闭、冻结清单复用、多页全局位置、分页元数据持久化和原图成果。
+- [x] 完整后端242项、Ruff、compileall、pip check、前端TypeScript检查和2468模块生产构建均通过；`git diff --check`通过。
+**下一步**：完成精确提交、推送、PR合并及分支和工作树清理；汽车之家正式500条与目标CentOS发布仍按各自阶段门单独执行。
+**边界**：本次只开放汽车之家帖子圈子页面证据，不改变易车截图能力、口碑巡检截图、数据库表结构、汽车之家并发1、正式500条验收或目标CentOS发布门禁；页面证据浏览器不是普通采集失败回退。
+**关联**：`src/threadsnap/collectors/autohome.py`、`src/threadsnap/collectors/registry.py`、`src/threadsnap/screenshots.py`、`tests/test_autohome_collector.py`、`tests/test_backend.py`、`tests/test_screenshots.py`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/circle-screenshot-artifacts.md`、`docs/chains/later-platform-delivery.md`
+
+---
+
 ## 2026-09-01 — 汽车之家v9真实批次与认证窗口自动打开
 **总目标**：在独立Scrapling工作树执行汽车之家v9真实小批量和14来源批次，验证平台控制分类、认证入口、原任务恢复与前端操作闭环，并依据真实对照收敛平台并发上限。
 **状态**：✅ 单来源基线、420条控制分类、认证Session更新、单来源探针和单并发420/1000条对照均已取得真实运行证据；汽车之家内部总并发已固定为1，保持在独立分支且未合入main。

@@ -138,7 +138,7 @@ class AutohomeContractTests(unittest.TestCase):
         self.assertIsNotNone(spec.collector_factory)
         self.assertTrue(spec.supports_authentication)
         self.assertIn("account.autohome.com.cn", spec.login_url or "")
-        self.assertFalse(spec.supports_page_evidence)
+        self.assertTrue(spec.supports_page_evidence)
         self.assertTrue(spec.supports_live_video_resolution)
         self.assertEqual((1, 1), (spec.min_concurrency, spec.max_concurrency))
 
@@ -858,15 +858,152 @@ class AutohomeContractTests(unittest.TestCase):
         )
         self.assertIn("未使用后续帖子替换", result["stop_reason"])
 
-    def test_screenshot_callback_is_explicitly_rejected(self) -> None:
+    def test_screenshot_callback_reuses_frozen_browser_manifest(self) -> None:
+        """截图续跑只消费冻结清单，不再调用普通 HTTP 列表发现。"""
+
         collector = collector_with_like()
-        with self.assertRaisesRegex(CollectorFailure, "截图") as caught:
-            collector.collect_circle(
-                "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post",
-                1,
-                on_page_evidence=lambda _: None,
-            )
-        self.assertEqual("PAGE_EVIDENCE_UNSUPPORTED", caught.exception.code)
+        source_url = "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post"
+        source = parse_circle_url(source_url)
+        item = {
+            "club_bbs_id": 8232,
+            "club_bbs_type": "c",
+            "biz_id": 115934382,
+            "pc_url": (
+                "https://club.autohome.com.cn/bbs/thread/dee662/115934382-1.html"
+            ),
+            "app_url": "autohome://club/topicdetail?pageid=115934382&bbsid=8232&bbstype=c",
+        }
+        row = collector._merge_capture_rows(
+            source,
+            [
+                {
+                    "href": item["pc_url"],
+                    "text": "冻结卡片",
+                    "image_count": 0,
+                    "rect": {"x": 10, "y": 20, "width": 600, "height": 80},
+                }
+            ],
+            [item],
+        )[0]
+        payload = {
+            "rows": [{**row, "source_position": 0}],
+            "page_count": 1,
+            "persisted": True,
+        }
+
+        def callback(_payload: dict) -> None:
+            self.fail("复用冻结清单时不应再次持久化")
+
+        callback.load = lambda _page: payload  # type: ignore[attr-defined]
+        collector.capture_circle_page = lambda *_args: self.fail(  # type: ignore[method-assign]
+            "复用时不应重新抓取页面"
+        )
+        collector._list_page = lambda *_args: self.fail(  # type: ignore[method-assign]
+            "截图分支不应重新请求普通 HTTP 列表"
+        )
+        observed_candidates: list[dict] = []
+
+        def fetch(url: str, *, candidate: dict | None = None) -> dict:
+            assert candidate is not None
+            observed_candidates.append(candidate)
+            return {"platform_post_id": candidate["post_id"], "url": url}
+
+        collector.fetch_post = fetch  # type: ignore[method-assign]
+        result = collector.collect_circle(source_url, 1, on_page_evidence=callback)
+
+        self.assertEqual(["115934382"], [row["platform_post_id"] for row in result["records"]])
+        self.assertEqual(8232, observed_candidates[0]["canonical_bbs_id_hint"])
+        self.assertEqual(0, result["records"][0]["order_index"])
+
+    def test_capture_manifest_rejects_dom_and_browser_response_drift(self) -> None:
+        """浏览器响应与最终 DOM 任一身份或顺序漂移都不能形成证据。"""
+
+        collector = collector_with_like()
+        source = parse_circle_url(
+            "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post"
+        )
+        raw_rows = [
+            {
+                "href": "https://club.autohome.com.cn/bbs/thread/hash1/115934381-1.html",
+                "text": "卡片一",
+                "image_count": 0,
+                "rect": {"x": 1, "y": 2, "width": 300, "height": 80},
+            }
+        ]
+        api_items = [
+            {
+                "club_bbs_id": 8232,
+                "club_bbs_type": "c",
+                "biz_id": 115934382,
+                "pc_url": "https://club.autohome.com.cn/bbs/thread/hash2/115934382-1.html",
+            }
+        ]
+
+        with self.assertRaises(CollectorFailure) as caught:
+            collector._merge_capture_rows(source, raw_rows, api_items)
+
+        self.assertEqual("PAGE_EVIDENCE_LIST_MISMATCH", caught.exception.code)
+
+    def test_browser_list_response_is_scoped_to_exact_source_and_order(self) -> None:
+        source = parse_circle_url(
+            "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=topic"
+        )
+        exact = (
+            "https://club-open-api.autohome.com.cn/api/pc/bbs/index/getClubTopicList"
+            "?_appid=club&scenes=1&page_num=2&page_size=50&club_bbs_type=c"
+            "&club_bbs_id=8232&club_order_type=2"
+        )
+        wrong_order = exact.replace("club_order_type=2", "club_order_type=1")
+
+        self.assertTrue(AutohomeCollector._is_expected_list_response(exact, source, 2))
+        self.assertFalse(AutohomeCollector._is_expected_list_response(wrong_order, source, 2))
+
+    def test_screenshot_resume_keeps_global_position_after_skipped_page(self) -> None:
+        """复用多页清单时，第二页本地序号不能重复叠加成错误全局位置。"""
+
+        collector = collector_with_like()
+        first_page = [
+            {
+                "post_id": str(115934300 + index),
+                "url": (
+                    "https://club.autohome.com.cn/bbs/thread/"
+                    f"hash{index}/{115934300 + index}-1.html"
+                ),
+                "order_index": index,
+                "source_position": index,
+            }
+            for index in range(50)
+        ]
+        second_page = [
+            {
+                "post_id": "115934999",
+                "url": "https://club.autohome.com.cn/bbs/thread/hash999/115934999-1.html",
+                "order_index": 0,
+                "source_position": 50,
+            }
+        ]
+
+        def callback(_payload: dict) -> None:
+            self.fail("复用冻结清单时不应再次持久化")
+
+        callback.load = lambda page: {  # type: ignore[attr-defined]
+            "rows": first_page if page == 1 else second_page,
+            "page_count": 2,
+            "persisted": True,
+        }
+        collector.fetch_post = lambda url, **_kwargs: {  # type: ignore[method-assign]
+            "platform_post_id": normalize_post_url(url)[0],
+            "url": url,
+        }
+        result = collector.collect_circle(
+            "https://club.autohome.com.cn/bbs/forum-c-8232-1.html?sort=post",
+            1,
+            skip_post_ids={item["post_id"] for item in first_page},
+            on_page_evidence=callback,
+        )
+
+        self.assertEqual("115934999", result["records"][0]["platform_post_id"])
+        self.assertEqual(50, result["records"][0]["order_index"])
 
     def test_userverify_is_challenge_but_visible_captcha_takes_priority(self) -> None:
         challenge = FakeResponse(
