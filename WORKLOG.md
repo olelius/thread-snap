@@ -16,6 +16,22 @@
 
 ---
 
+## 2026-09-01 — 易车平台控制分类与原任务恢复
+**总目标**：依据易车并发8真实轮次，把登录失效、详情挑战、腾讯验证码和限流送入正确的登录恢复、继承Profile的原URL交互恢复或持久冷却链，并复用认证后的单来源探针恢复原批次。
+**状态**：✅ 代码、恢复集成、owner文档、完整回归和真实单并发无回归验证均已完成，进入自动Git交付。
+**干到哪里了**：
+- [x] 真实批次`20260901-154036-001`冻结8来源×30、并发8，在59/240后8个来源全部停止；停止后账号身份和三个列表接口仍为HTTP 200，详情为`203 -> 403`。同Session约5分43秒后并发1复访恢复为`203 -> 200`，评论200并取得1条结果；脱敏回执`artifacts/runtime/yiche-concurrency-20260901/acceptance.json`的SHA-256为`86a80da1fefc038ea33c23675393c016a73568b6e7530fa3436e57be826bef5f`。
+- [x] 易车v7保留普通FetcherSession和一次严格203挑战；203后403改为`PLATFORM_CHALLENGE`，TencentCaptcha/WAF及其Stealthy复访结果进入`PLATFORM_CAPTCHA_REQUIRED`或挑战，页面/API 429统一为`PLATFORM_RATE_LIMITED`。候选详情、URL或附属评论API一旦观察到这些控制即中断并交回Worker，不再吞成普通候选失败。
+- [x] 复用现有错误分流和恢复检查点：挑战/验证码继承现有Profile打开原触发URL，限流进入固定URL冷却；Session保存后每批次先运行一个实际并发1来源探针，终态后才释放其他来源并恢复冻结并发。
+- [x] 定向32项通过，覆盖203后403、普通403、WAF一次恢复、恢复后403、页面/列表/评论API 429、候选中断，以及两来源等待认证后先并发1探针再恢复冻结并发8。
+- [x] 分支v7使用当前加密Session、真实瑞虎8来源和实际并发1取得`1 / 1`、失败0，帖子身份和正文/媒体证明成立，耗时1.574秒；平台当前启用、配置并发1、数据库`integrity_check=ok`。脱敏回执`artifacts/runtime/yiche-control-recovery-20260901/single-source-proof.json`的SHA-256为`6b303fcc69a6fc19825cd1ab520c0f20d9f7a4dfb6218f1806b3ae775a10d447`。
+- [x] 完整后端251项、Ruff、compileall、pip check、前端TypeScript检查和2468模块生产构建均通过；`git diff --check`通过。
+**下一步**：精确提交任务文件，推送并创建PR；检查通过后合并main、清理分支，从合并后main复核运行服务版本与健康状态。
+**边界**：本次不重复并发8施压，不改数据库结构、Session格式、前端页面、页面证据能力或正式500条门禁；并发8已证实在当前条件下不稳定，但2/4安全阈值尚未验证，当前运行配置保持1。
+**关联**：`src/threadsnap/collectors/yiche.py`、`tests/test_collector_contract.py`、`tests/test_yiche_integration.py`、`docs/adr/0058-route-yiche-control-through-classified-recovery.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`、`docs/chains/later-platform-delivery.md`
+
+---
+
 ## 2026-09-01 — 修正汽车之家成果框完整宽度
 **总目标**：修复汽车之家负面成果红框未完整覆盖条目、右边框压住浏览/回复文字的问题，同时保持原始证据、既有成果版本和数据库清单不可变。
 **状态**：✅ 根因、实现、定向测试、新捕获、完整回归和现有成果真实重建均已完成，已进入自动Git交付。
