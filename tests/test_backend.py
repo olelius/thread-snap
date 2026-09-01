@@ -273,6 +273,14 @@ class FakeCDPSession:
         self.detached = True
 
 
+class IdleFakeCDPSession(FakeCDPSession):
+    """模拟静止页面，启动投屏后不产生新帧。"""
+
+    async def send(self, method: str, params: dict | None = None) -> dict:
+        self.calls.append((method, params))
+        return {}
+
+
 class FakeCDPContext(FakeAuthContext):
     def __init__(self, state: dict, cdp: FakeCDPSession):
         super().__init__(state)
@@ -2731,6 +2739,37 @@ class AuthComponentTests(AppCase):
         self.assertEqual(85, start["quality"])
         self.assertEqual(1280, start["maxWidth"])
         self.assertIn(("Page.screencastFrameAck", {"sessionId": 7}), cdp.calls)
+        self.assertIn(("Page.stopScreencast", None), cdp.calls)
+        self.assertTrue(cdp.detached)
+
+    def test_static_auth_stream_expires_and_closes_browser(self) -> None:
+        """静止页面没有新帧时，到期任务也应主动释放浏览器资源。"""
+
+        cdp = IdleFakeCDPSession()
+        context = FakeCDPContext(auth_state("session"), cdp)
+        playwright = FakePlaywright()
+        task = AuthTask(
+            id="auth-static-expiry",
+            platform_code="dongchedi",
+            ticket="ticket",
+            expires_at=datetime.now(timezone.utc) + timedelta(milliseconds=20),
+            status="active",
+            page_status="ready",
+        )
+        task.page = FakeAuthPage()  # type: ignore[assignment]
+        task.context = context  # type: ignore[assignment]
+        task.playwright = playwright  # type: ignore[assignment]
+        self.container.auth.tasks[task.id] = task
+        socket = FakeStreamSocket()
+
+        asyncio.run(self.container.auth.stream(task.id, task.ticket, socket))  # type: ignore[arg-type]
+
+        self.assertEqual("expired", task.status)
+        self.assertEqual("expired", task.page_status)
+        self.assertTrue(context.closed)
+        self.assertTrue(playwright.stopped)
+        self.assertIsNone(task.context)
+        self.assertIsNone(task.page)
         self.assertIn(("Page.stopScreencast", None), cdp.calls)
         self.assertTrue(cdp.detached)
 

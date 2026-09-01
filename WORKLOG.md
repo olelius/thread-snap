@@ -16,6 +16,20 @@
 
 ---
 
+## 2026-09-01 — 汽车之家v9真实批次与认证窗口自动打开
+**总目标**：在独立Scrapling工作树执行汽车之家v9真实小批量和14来源批次，验证平台控制分类、认证入口、原任务恢复与前端操作闭环。
+**状态**：🔄 单来源基线和420条控制分类已取得真实证据；批次保持`waiting_for_auth`，等待当前交互验证完成后验收单来源探针与冻结并发恢复。
+**干到哪里了**：
+- [x] 单来源批次`20260901-094436-001`在约6.74秒内完成`30 / 30`、最终失败0；14来源批次`20260901-094521-001`运行到`218 / 420`后以`PLATFORM_CHALLENGE`进入等待，已完成结果和固定候选均保留，未把控制文档当成内容。
+- [x] 批次详情首次进入`waiting_for_auth`时自动打开一次认证Dialog；操作者手动关闭后本次等待期间不循环弹出，“处理会话”入口继续可用。
+- [x] 认证投屏循环增加到期唤醒：静止页面没有新帧或输入时仍按到期时间把任务标记为`expired`并关闭浏览器、Playwright和临时Profile；新增定向回归已通过。
+- [x] 当前前后端均从`refactor/restore-scrapling-max`加载，真实运行脱敏回执位于`artifacts/runtime/autohome-v9-real-20260901/acceptance.json`。
+**下一步**：完成当前汽车之家交互验证；随后核对同一批次仅最早等待来源以实际并发1探针、探针终态后其余来源恢复冻结并发2，并以批次终态更新本条证据。
+**边界**：本轮保持独立工作树且不合入main；不改写既有218条结果，不创建替代批次，不记录Ticket、Cookie、Session或Profile内容。
+**关联**：`frontend/src/features/runs/run-detail-page.tsx`、`src/threadsnap/auth.py`、`tests/test_backend.py`、`docs/design/product-design.md`、`docs/design/technical-route.md`
+
+---
+
 ## 2026-08-31 — 汽车之家控制分类与认证后渐进恢复
 **总目标**：依据固定全Stealth对照轮次和正式混合批次证据，把汽车之家平台控制收敛为“Scrapling HTTP分类 → 正式交互认证 → 单来源原URL探针 → 恢复冻结并发”的持久状态机。
 **状态**：✅ 状态机、适配器合同、持久恢复测试、owner文档和完整本地验证均已完成；仅存在于`refactor/restore-scrapling-max`独立工作树，暂不合入main。

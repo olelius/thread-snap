@@ -441,11 +441,19 @@ class BrowserAuthManager:
                 )
                 receive_task = asyncio.create_task(websocket.receive_json())
                 frame_task = asyncio.create_task(frame_queue.get())
-                while task.status == "active" and datetime.now(timezone.utc) < task.expires_at:
+                while task.status == "active":
+                    remaining_seconds = (
+                        task.expires_at - datetime.now(timezone.utc)
+                    ).total_seconds()
+                    if remaining_seconds <= 0:
+                        break
                     done, _ = await asyncio.wait(
                         {receive_task, frame_task},
+                        timeout=min(remaining_seconds, 1.0),
                         return_when=asyncio.FIRST_COMPLETED,
                     )
+                    if not done:
+                        continue
                     if receive_task in done:
                         command = receive_task.result()
                         await self._command(task, command, websocket, cdp)
@@ -471,6 +479,10 @@ class BrowserAuthManager:
                             {"sessionId": frame["sessionId"]},
                         )
                         frame_task = asyncio.create_task(frame_queue.get())
+                if task.status == "active" and task.expires_at <= datetime.now(timezone.utc):
+                    task.status = "expired"
+                    task.page_status = "expired"
+                    await self._close(task)
             except WebSocketDisconnect:
                 # 连接断开只关闭本次入口，浏览器保留到任务到期，允许重新打开。
                 return

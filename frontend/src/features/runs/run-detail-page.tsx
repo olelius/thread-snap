@@ -68,6 +68,7 @@ function RunDetail({ kind }: { kind: RunDetailKind }) {
   const detailBackgroundScroll = useRef(0)
   const detailTrigger = useRef<HTMLElement | null>(null)
   const currentDetailPostId = useRef<string | undefined>(undefined)
+  const wasWaitingForAuth = useRef(false)
   const closeHighlightTimer = useRef<number | undefined>(undefined)
   const closeFocusFrame = useRef<number | undefined>(undefined)
   const debouncedTitle = useDebouncedValue(search.title)
@@ -104,6 +105,12 @@ function RunDetail({ kind }: { kind: RunDetailKind }) {
     enabled: Boolean(search.post),
     placeholderData: keepPreviousData,
   })
+
+  useEffect(() => {
+    const waiting = run.data?.status === 'waiting_for_auth'
+    if (waiting && !wasWaitingForAuth.current) setAuthOpen(true)
+    wasWaitingForAuth.current = waiting
+  }, [run.data?.status])
 
   useEffect(() => {
     if (!postSwitch || search.post !== postSwitch.id) return
