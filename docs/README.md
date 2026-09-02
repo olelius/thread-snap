@@ -217,6 +217,7 @@
 | `docs/adr/0059-allow-bounded-yiche-waf-trigger-round.md` | 工具链门通过后允许以最多80个不同URL、实际并发1和首控止损取得一次易车WAF逆向样本 |
 | `docs/adr/0060-integrate-shared-tencent-captcha-protocol-solver.md` | 腾讯验证码逆向结果封装为平台无关纯协议组件，易车只实现站点WAF回调和原正文重载 |
 | `docs/adr/0061-recover-yiche-429-by-bounded-transport-rotation.md` | 易车首次429只轮换当前线程HTTP传输一次，仍受限时进入既有持久冷却 |
+| `docs/adr/0062-reset-rate-limit-backoff-after-confirmed-progress.md` | 限流恢复已新增有效结果时重置为60秒，零进展连续429才升级冷却级别 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 

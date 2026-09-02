@@ -998,7 +998,6 @@ class WorkerService:
                 checkpoint[recovery_key] = bool(previous_checkpoint[recovery_key])
         if result["kind"] == "retry":
             retry_failures = list(result.get("retry_failures") or [])
-            retry_attempt = int((task.checkpoint or {}).get("retry_attempt") or 0) + 1
             retry_error_code = str(
                 result.get("retry_error_code")
                 or next(
@@ -1010,6 +1009,20 @@ class WorkerService:
                     NETWORK_RETRYABLE_FAILURE_CODE,
                 )
             )
+            previous_retry_attempt = int(previous_checkpoint.get("retry_attempt") or 0)
+            previous_limit_completed_value = previous_checkpoint.get(
+                "rate_limit_completed_count"
+            )
+            previous_limit_completed = (
+                task.completed_count
+                if previous_limit_completed_value is None
+                else int(previous_limit_completed_value)
+            )
+            made_progress_since_limit = (
+                retry_error_code == RATE_LIMIT_RETRYABLE_FAILURE_CODE
+                and task.completed_count > previous_limit_completed
+            )
+            retry_attempt = 1 if made_progress_since_limit else previous_retry_attempt + 1
             delay_seconds = _retry_delay_seconds(retry_error_code, retry_attempt)
             retry_scope = str(result.get("retry_scope") or "candidate")
             retry_urls = (
@@ -1031,6 +1044,8 @@ class WorkerService:
                     "retry_scope": retry_scope,
                 }
             )
+            if retry_error_code == RATE_LIMIT_RETRYABLE_FAILURE_CODE:
+                checkpoint["rate_limit_completed_count"] = task.completed_count
         elif result["kind"] == "auth" and result.get("retry_urls"):
             checkpoint.update(
                 {
