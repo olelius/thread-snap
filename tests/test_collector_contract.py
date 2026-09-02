@@ -203,6 +203,135 @@ class YicheKnownFactsTests(unittest.TestCase):
         finally:
             collector.close()
 
+    def test_page_429_rotates_transport_once_then_crosses_203_to_content(self) -> None:
+        """页面429先轮换当前传输，同一逻辑请求仍沿用已知203正文门。"""
+
+        url = "https://baa.yiche.com/sample/thread-1001.html"
+        challenge = (
+            '<script>var _xvasu = 1104958252; var _xvpfs = "tws2_"; '
+            'var _xvpts = 1788060021.479; document.cookie=btoa("x"); '
+            "window['location'].reload();</script>"
+        )
+        content = (FIXTURES / "detail.html").read_text("utf-8")
+        responses = iter(
+            [
+                SimpleNamespace(status_code=429, text="", url=url),
+                SimpleNamespace(status_code=203, text=challenge, url=url),
+                SimpleNamespace(status_code=200, text=content, url=url),
+            ]
+        )
+        collector = YicheCollector(self._logged_state())
+        calls: list[str] = []
+        rotations: list[str] = []
+        collector._get = lambda target, **_kwargs: (
+            calls.append(target)
+            or next(  # type: ignore[method-assign]
+                responses
+            )
+        )
+        collector.http.rotate_current_thread_session = (  # type: ignore[method-assign]
+            lambda: rotations.append("rotated") or collector._http_session()
+        )
+        try:
+            document, final_url = collector._document(url)
+        finally:
+            collector.close()
+
+        self.assertIn("结构化正文第一段", document)
+        self.assertEqual(url, final_url)
+        self.assertEqual([url, url, url], calls)
+        self.assertEqual(["rotated"], rotations)
+
+    def test_page_429_after_one_rotation_uses_persistent_cooldown(self) -> None:
+        """新传输仍429时停止即时复访，并交回既有Worker冷却合同。"""
+
+        url = "https://baa.yiche.com/sample/thread-1001.html"
+        collector = YicheCollector(self._logged_state())
+        calls: list[str] = []
+        rotations: list[str] = []
+        collector._get = lambda target, **_kwargs: (  # type: ignore[method-assign]
+            calls.append(target) or SimpleNamespace(status_code=429, text="", url=target)
+        )
+        collector.http.rotate_current_thread_session = (  # type: ignore[method-assign]
+            lambda: rotations.append("rotated") or collector._http_session()
+        )
+        try:
+            with self.assertRaises(CollectorFailure) as caught:
+                collector._document(url)
+        finally:
+            collector.close()
+
+        self.assertEqual("PLATFORM_RATE_LIMITED", caught.exception.code)
+        self.assertEqual(url, caught.exception.trigger_url)
+        self.assertEqual([url, url], calls)
+        self.assertEqual(["rotated"], rotations)
+
+    def test_api_429_rotates_transport_and_reissues_fresh_signed_request(self) -> None:
+        """API 429复访重新生成签名，并只把第二次响应交给业务解析。"""
+
+        url = "https://mgw.yiche.com/web_api/web_forum/api/pc/post/getlist"
+        responses = iter(
+            [
+                SimpleNamespace(status_code=429, url=url, json=lambda: None),
+                SimpleNamespace(
+                    status_code=200,
+                    url=url,
+                    json=lambda: {"status": "1", "data": {"list": []}},
+                ),
+            ]
+        )
+        collector = YicheCollector(self._logged_state())
+        calls: list[dict[str, object]] = []
+        rotations: list[str] = []
+
+        def get(_target: str, **kwargs: object) -> object:
+            calls.append(kwargs)
+            return next(responses)
+
+        collector._get = get  # type: ignore[method-assign]
+        collector.http.rotate_current_thread_session = (  # type: ignore[method-assign]
+            lambda: rotations.append("rotated") or collector._http_session()
+        )
+        try:
+            with patch("threadsnap.collectors.yiche.time.time", side_effect=[1.0, 2.0]):
+                event = collector._api_event(
+                    url, {"forumId": 9001}, referer="https://baa.yiche.com/"
+                )
+        finally:
+            collector.close()
+
+        self.assertEqual(200, event.status)
+        self.assertEqual(["rotated"], rotations)
+        self.assertEqual(2, len(calls))
+        self.assertNotEqual(
+            calls[0]["headers"]["x-sign"],  # type: ignore[index]
+            calls[1]["headers"]["x-sign"],  # type: ignore[index]
+        )
+
+    def test_api_429_after_one_rotation_uses_persistent_cooldown(self) -> None:
+        """API新传输仍429时保留精确限流分类，供Worker持久冷却。"""
+
+        url = "https://mgw.yiche.com/web_api/web_forum/api/pc/post/getlist"
+        collector = YicheCollector(self._logged_state())
+        calls: list[str] = []
+        rotations: list[str] = []
+        collector._get = lambda target, **_kwargs: (  # type: ignore[method-assign]
+            calls.append(target) or SimpleNamespace(status_code=429, url=target, json=lambda: None)
+        )
+        collector.http.rotate_current_thread_session = (  # type: ignore[method-assign]
+            lambda: rotations.append("rotated") or collector._http_session()
+        )
+        try:
+            event = collector._api_event(url, {"forumId": 9001}, referer="https://baa.yiche.com/")
+            with self.assertRaises(CollectorFailure) as caught:
+                collector._api_payload([event], "/post/getlist")
+        finally:
+            collector.close()
+
+        self.assertEqual("PLATFORM_RATE_LIMITED", caught.exception.code)
+        self.assertEqual([url, url], calls)
+        self.assertEqual(["rotated"], rotations)
+
     def test_yiche_document_retries_after_protocol_solver(self) -> None:
         """腾讯控制页由共享协议组件求解，易车仍只复访相同详情 URL。"""
 
@@ -257,6 +386,59 @@ class YicheKnownFactsTests(unittest.TestCase):
         self.assertEqual([url], recoveries)
         self.assertEqual(1, collector._captcha_generation)
 
+    def test_page_429_rotation_can_continue_into_protocol_solver(self) -> None:
+        """429轮换若转入腾讯WAF，继续复用既有纯协议组件并重载正文。"""
+
+        url = "https://baa.yiche.com/sample/thread-123.html"
+        control = (
+            '<script src="TCaptcha.js"></script><script>'
+            'var seqid="fixture__captcha";'
+            "TencentCaptcha();window.__captcha=true</script>"
+            '<form action="/WafCaptcha"></form>'
+        )
+        responses = iter(
+            [
+                SimpleNamespace(status_code=429, text="", content=b"", url=url),
+                SimpleNamespace(
+                    status_code=200,
+                    text=control,
+                    content=control.encode(),
+                    url=url,
+                ),
+                SimpleNamespace(
+                    status_code=200,
+                    text="<html><body>帖子正文</body></html>",
+                    content=b"<html><body>content</body></html>",
+                    url=url,
+                ),
+            ]
+        )
+        collector = YicheCollector(self._logged_state())
+        calls: list[str] = []
+        rotations: list[str] = []
+
+        def get(target: str, **_kwargs: object) -> object:
+            calls.append(target)
+            return next(responses)
+
+        collector._get = get  # type: ignore[method-assign]
+        collector.http.rotate_current_thread_session = (  # type: ignore[method-assign]
+            lambda: rotations.append("rotated") or collector._http_session()
+        )
+        with patch("threadsnap.collectors.yiche.submit_yiche_waf_callback") as submit:
+            submit.return_value = TencentCaptchaResult("ticket", "rand", 0.1, 5, 94, 74, 4.0)
+            try:
+                content, final_url = collector._document(url)
+            finally:
+                collector.close()
+
+        self.assertIn("帖子正文", content)
+        self.assertEqual(url, final_url)
+        self.assertEqual([url, url, url], calls)
+        self.assertEqual(["rotated"], rotations)
+        submit.assert_called_once()
+        self.assertEqual(1, collector._captcha_generation)
+
     def test_protocol_retry_403_enters_access_challenge_recovery(self) -> None:
         """协议回调后仍返回403时，继续进入访问挑战恢复。"""
 
@@ -303,7 +485,9 @@ class YicheKnownFactsTests(unittest.TestCase):
         responses = iter(
             [
                 SimpleNamespace(status_code=200, text=control, content=control.encode(), url=url),
-                SimpleNamespace(status_code=203, text=challenge, content=challenge.encode(), url=url),
+                SimpleNamespace(
+                    status_code=203, text=challenge, content=challenge.encode(), url=url
+                ),
                 SimpleNamespace(
                     status_code=200,
                     text="<html><body>帖子正文</body></html>",
