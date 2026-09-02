@@ -18,7 +18,7 @@
 
 ## 2026-09-03 — 易车429恢复固定10秒单探针
 **总目标**：把易车新HTTP传输仍返回429后的持久恢复改为固定10秒一次，不随连续次数上涨，同时保持原任务、固定候选、平台FIFO和单来源实际并发1。
-**状态**：🔄 实现、完整质量门和隔离运行验收已完成，正在同步主线并执行Git收尾。
+**状态**：✅ 实现、完整质量门、隔离运行验收和Git交付均已完成；PR #260承载本次主线合并。
 **干到哪里了**：
 - [x] 在独立工作树`H:\ThreadSnap-worktrees\yiche-rate-limit-probe-10s`和分支`fix/yiche-rate-limit-probe-10s`实施，不触碰其他工作树或功能分支。
 - [x] Worker按`platform_code`选择限流等待：易车固定10秒；其他平台继续60、120、240、480、900秒。易车`retry_attempt`仍递增用于诊断，但不参与等待计算。
@@ -27,7 +27,8 @@
 - [x] 新增ADR 0063，并同步领域词汇、产品设计、技术路线、ADR 0052/0058、文档索引和后续平台链。
 - [x] 隔离SQLite运行实例连续写入4次429检查点，观测等待`10.001、10.001、10.001、10.000`秒；到期前Worker不领取，到期后以并发1领取并完成原任务。Git外回执`artifacts/runtime/yiche-rate-limit-probe-10s/acceptance.json`的SHA-256为`3d1e5f832e265f073dd493931ac859241b72fc66dd0f93d31757cd53ef5e54f2`。
 - [x] 完整后端268项通过；Ruff、compileall、pip check、`git diff --check`、前端TypeScript检查和2468模块生产构建通过。
-**下一步**：同步`origin/main`、复核并处理真实冲突，再精确暂存本任务文件、通过PR合并，最后清理工作树和功能分支。
+- [x] 功能提交`24c1b03`已推送并创建PR #260；远端`main`在提交前仍为基线`ac424c7`，没有需要解决的并发合入冲突。
+**下一步**：PR检查通过后合并到`main`，同步本地主工作树并删除已合并的本地工作树和功能分支。
 **边界**：本变更只调整易车429恢复调度，不把10秒探针描述为已经解除平台控制；其他平台退避、易车首次单次传输轮换、腾讯验证码协议链、平台并发配置和当前运行值均不改变。
 **关联**：`docs/adr/0063-probe-yiche-rate-limit-every-ten-seconds.md`、`docs/adr/0061-recover-yiche-429-by-bounded-transport-rotation.md`、`src/threadsnap/worker.py`
 
