@@ -25,25 +25,29 @@ var ast = (0, import_parser.parse)(source, { sourceType: "script" });
 var sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex");
 var helperFunctions = /* @__PURE__ */ new Map();
 var helperConstants = /* @__PURE__ */ new Map();
-traverse(ast, {
-  VariableDeclarator(p) {
-    if (!t.isIdentifier(p.node.id) || !t.isObjectExpression(p.node.init)) return;
-    for (const property of p.node.init.properties) {
-      if (!t.isObjectProperty(property)) continue;
-      const key = t.isIdentifier(property.key) ? property.key.name : t.isStringLiteral(property.key) ? property.key.value : null;
-      if (key === null) continue;
-      const identity = `${p.node.id.name}.${key}`;
-      const value = property.value;
-      const returnStatement = (t.isFunctionExpression(value) || t.isArrowFunctionExpression(value)) && t.isBlockStatement(value.body) ? value.body.body.at(-1) : null;
-      const harmlessPrelude = (t.isFunctionExpression(value) || t.isArrowFunctionExpression(value)) && t.isBlockStatement(value.body) ? value.body.body.slice(0, -1).every((item) => t.isVariableDeclaration(item)) : false;
-      if ((t.isFunctionExpression(value) || t.isArrowFunctionExpression(value)) && t.isBlockStatement(value.body) && harmlessPrelude && t.isReturnStatement(returnStatement) && returnStatement.argument && value.params.every((param) => t.isIdentifier(param))) {
-        helperFunctions.set(identity, { params: value.params.map((param) => param.name), expression: returnStatement.argument });
-      } else if (t.isStringLiteral(value) || t.isNumericLiteral(value) || t.isBooleanLiteral(value) || t.isNullLiteral(value)) {
-        helperConstants.set(identity, value);
+var collectHelpers = () => {
+  helperFunctions.clear();
+  helperConstants.clear();
+  traverse(ast, {
+    VariableDeclarator(p) {
+      if (!t.isIdentifier(p.node.id) || !t.isObjectExpression(p.node.init)) return;
+      for (const property of p.node.init.properties) {
+        if (!t.isObjectProperty(property)) continue;
+        const key = t.isIdentifier(property.key) ? property.key.name : t.isStringLiteral(property.key) ? property.key.value : null;
+        if (key === null) continue;
+        const identity = `${p.node.id.name}.${key}`;
+        const value = property.value;
+        const returnStatement = (t.isFunctionExpression(value) || t.isArrowFunctionExpression(value)) && t.isBlockStatement(value.body) ? value.body.body.at(-1) : null;
+        const harmlessPrelude = (t.isFunctionExpression(value) || t.isArrowFunctionExpression(value)) && t.isBlockStatement(value.body) ? value.body.body.slice(0, -1).every((item) => t.isVariableDeclaration(item)) : false;
+        if ((t.isFunctionExpression(value) || t.isArrowFunctionExpression(value)) && t.isBlockStatement(value.body) && harmlessPrelude && t.isReturnStatement(returnStatement) && returnStatement.argument && value.params.every((param) => t.isIdentifier(param))) {
+          helperFunctions.set(identity, { params: value.params.map((param) => param.name), expression: returnStatement.argument });
+        } else if (t.isStringLiteral(value) || t.isNumericLiteral(value) || t.isBooleanLiteral(value) || t.isNullLiteral(value)) {
+          helperConstants.set(identity, value);
+        }
       }
     }
-  }
-});
+  });
+};
 var memberIdentity = (node) => {
   if (!t.isMemberExpression(node) || !t.isIdentifier(node.object)) return null;
   const key = !node.computed && t.isIdentifier(node.property) ? node.property.name : t.isStringLiteral(node.property) ? node.property.value : null;
@@ -62,6 +66,7 @@ var substitute = (expression, params, args) => {
   return wrapper.program.body[0].expression;
 };
 for (let pass = 0; pass < 12; pass += 1) {
+  collectHelpers();
   let changed = 0;
   traverse(ast, {
     CallExpression: {

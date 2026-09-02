@@ -17,25 +17,29 @@ const sha256 = (value) => crypto.createHash("sha256").update(value).digest("hex"
 
 const helperFunctions = new Map();
 const helperConstants = new Map();
-traverse(ast, {
-  VariableDeclarator(p) {
-    if (!t.isIdentifier(p.node.id) || !t.isObjectExpression(p.node.init)) return;
-    for (const property of p.node.init.properties) {
-      if (!t.isObjectProperty(property)) continue;
-      const key = t.isIdentifier(property.key) ? property.key.name : t.isStringLiteral(property.key) ? property.key.value : null;
-      if (key === null) continue;
-      const identity = `${p.node.id.name}.${key}`;
-      const value = property.value;
-      const returnStatement = (t.isFunctionExpression(value) || t.isArrowFunctionExpression(value)) && t.isBlockStatement(value.body) ? value.body.body.at(-1) : null;
-      const harmlessPrelude = (t.isFunctionExpression(value) || t.isArrowFunctionExpression(value)) && t.isBlockStatement(value.body) ? value.body.body.slice(0, -1).every((item) => t.isVariableDeclaration(item)) : false;
-      if ((t.isFunctionExpression(value) || t.isArrowFunctionExpression(value)) && t.isBlockStatement(value.body) && harmlessPrelude && t.isReturnStatement(returnStatement) && returnStatement.argument && value.params.every((param) => t.isIdentifier(param))) {
-        helperFunctions.set(identity, { params: value.params.map((param) => param.name), expression: returnStatement.argument });
-      } else if (t.isStringLiteral(value) || t.isNumericLiteral(value) || t.isBooleanLiteral(value) || t.isNullLiteral(value)) {
-        helperConstants.set(identity, value);
+const collectHelpers = () => {
+  helperFunctions.clear();
+  helperConstants.clear();
+  traverse(ast, {
+    VariableDeclarator(p) {
+      if (!t.isIdentifier(p.node.id) || !t.isObjectExpression(p.node.init)) return;
+      for (const property of p.node.init.properties) {
+        if (!t.isObjectProperty(property)) continue;
+        const key = t.isIdentifier(property.key) ? property.key.name : t.isStringLiteral(property.key) ? property.key.value : null;
+        if (key === null) continue;
+        const identity = `${p.node.id.name}.${key}`;
+        const value = property.value;
+        const returnStatement = (t.isFunctionExpression(value) || t.isArrowFunctionExpression(value)) && t.isBlockStatement(value.body) ? value.body.body.at(-1) : null;
+        const harmlessPrelude = (t.isFunctionExpression(value) || t.isArrowFunctionExpression(value)) && t.isBlockStatement(value.body) ? value.body.body.slice(0, -1).every((item) => t.isVariableDeclaration(item)) : false;
+        if ((t.isFunctionExpression(value) || t.isArrowFunctionExpression(value)) && t.isBlockStatement(value.body) && harmlessPrelude && t.isReturnStatement(returnStatement) && returnStatement.argument && value.params.every((param) => t.isIdentifier(param))) {
+          helperFunctions.set(identity, { params: value.params.map((param) => param.name), expression: returnStatement.argument });
+        } else if (t.isStringLiteral(value) || t.isNumericLiteral(value) || t.isBooleanLiteral(value) || t.isNullLiteral(value)) {
+          helperConstants.set(identity, value);
+        }
       }
-    }
-  },
-});
+    },
+  });
+};
 
 const memberIdentity = (node) => {
   if (!t.isMemberExpression(node) || !t.isIdentifier(node.object)) return null;
@@ -55,6 +59,9 @@ const substitute = (expression, params, args) => {
   return wrapper.program.body[0].expression;
 };
 for (let pass = 0; pass < 12; pass += 1) {
+  // 第一轮会先把 helperA.key 替换到 helperB.alias 的对象属性中；下一轮重新收集，
+  // 才能把 helperB.alias 继续解析为最终常量，避免把同一VM原语误判为新handler。
+  collectHelpers();
   let changed = 0;
   traverse(ast, {
     CallExpression: {

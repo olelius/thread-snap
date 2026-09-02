@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -108,16 +112,18 @@ class TencentCaptchaSolverTests(unittest.TestCase):
             app_id="fixture-app", runtime=runtime, circuit_breaker=breaker
         )
         offset = SliderOffset(358, 136, 155.833, 4.7, "strongest-outline")
-        with patch(
-            "threadsnap.tencent_captcha.solver.analyze_slider_offset", return_value=offset
-        ):
+        with patch("threadsnap.tencent_captcha.solver.analyze_slider_offset", return_value=offset):
             result = solver.solve(
                 entry_url="https://target.example/thread-1.html", transport=transport
             )
 
         self.assertEqual(("ticket-fixture", "R4nd"), (result.ticket, result.randstr))
-        self.assertEqual((5, 94, 74), (result.network_request_count, result.opcode_count, result.handler_count))
-        self.assertEqual([(b"tdc-source", 155.833, "https://target.example/thread-1.html")], runtime.calls)
+        self.assertEqual(
+            (5, 94, 74), (result.network_request_count, result.opcode_count, result.handler_count)
+        )
+        self.assertEqual(
+            [(b"tdc-source", 155.833, "https://target.example/thread-1.html")], runtime.calls
+        )
         verify_call = transport.calls[-1]
         self.assertEqual("POST", verify_call[0])
         self.assertEqual("fixture#2", verify_call[2]["data"]["pow_answer"])
@@ -131,6 +137,54 @@ class TencentCaptchaSolverTests(unittest.TestCase):
         with self.assertRaises(TencentCaptchaError) as caught:
             breaker.before_attempt()
         self.assertEqual("TENCENT_CAPTCHA_CIRCUIT_OPEN", caught.exception.code)
+
+    @unittest.skipUnless(shutil.which("node"), "腾讯TDC目录回归需要Node.js")
+    def test_tdc_catalog_resolves_transitive_helper_constant_alias(self) -> None:
+        """二级helper别名必须固定点解析回既有length原语。"""
+
+        runtime = TdcRuntime()
+        script = runtime.root / "dist" / "catalog-tdc-primitives.js"
+        filler = "\n".join(
+            f"case {opcode}: regs[code[++pc]] = code[++pc]; break;" for opcode in range(1, 41)
+        )
+        source = f"""
+        var helperA = {{ key: "length" }};
+        function execute(code) {{
+          var helperB = {{ alias: helperA.key }};
+          var pc = 0, regs = [];
+          switch (code[pc]) {{
+            case 0:
+              try {{
+                Object.defineProperty(regs[code[pc - 1]], helperB.alias, {{
+                  "value": code[++pc], "configurable": !![],
+                  "writable": ![], "enumerable": ![]
+                }});
+              }} catch (error) {{}}
+              break;
+            {filler}
+          }}
+        }}
+        """
+        with tempfile.TemporaryDirectory(prefix="threadsnap-tdc-alias-") as temporary:
+            input_path = Path(temporary) / "interpreter.js"
+            output_path = Path(temporary) / "catalog.json"
+            input_path.write_text(source, encoding="utf-8")
+            subprocess.run(
+                [str(shutil.which("node")), str(script), str(input_path), str(output_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            catalog = json.loads(output_path.read_text(encoding="utf-8"))
+
+        primitive = next(item for item in catalog["cases"] if item["opcode"] == 0)["primitives"][0]
+        self.assertIn('"length"', primitive["canonicalSource"])
+        self.assertNotIn(".alias", primitive["canonicalSource"])
+        self.assertEqual(
+            "a5e9e5c6f1405f1bee3d8b734c4f89e7b1796a7045fc35dcbc106c93615dc007",
+            primitive["structuralSha256"],
+        )
 
 
 class YicheWafCallbackTests(unittest.TestCase):
