@@ -73,3 +73,14 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+## Babel / esbuild
+
+腾讯验证码 TDC 的平台无关生产运行时使用 Babel 解析与转换 JavaScript AST，并在发布前
+使用 esbuild 生成不携带 `node_modules` 的 Node.js bundle：
+
+- Babel parser, traverse, generator and types: <https://github.com/babel/babel>
+- Versions: `7.28.3` / `7.28.4`
+- esbuild: <https://github.com/evanw/esbuild>
+- Version: `0.25.9`
+- License: MIT

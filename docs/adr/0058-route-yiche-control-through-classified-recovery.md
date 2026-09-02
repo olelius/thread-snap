@@ -67,6 +67,7 @@ IP封禁。验证码发生时，同出口、同保存Session的全新HTTP传输�
 - 限流冷却由Worker持久化并在服务重启后继续，接口429不再降级为普通字段失败。
 - 不新增数据库字段、Session格式、前端页面、验证码识别能力或隐式请求重试。
 - 后续腾讯 WAF 逆向调研按 `docs/research/yiche-tencent-waf-reverse-runbook.md` 隔离执行，复用本决策的控制分类和止损证据；MCP或视频流程出现时本决策仍保持有效，生产行为变化需要新的设计证据和ADR。
+- 2026-09-02 的 ADR 0060 已用新的设计证据接受共享腾讯纯协议组件，并替代本决策中“验证码先尝试Stealthy”的分支；本决策继续管理自动链失败后的`waiting_for_auth`以及账号失效、详情挑战和限流分类。
 
 ## Rejected alternatives
 

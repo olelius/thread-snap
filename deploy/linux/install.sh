@@ -98,6 +98,16 @@ if [[ "$SKIP_SYSTEM_DEPS" == false ]]; then
   bash "$SCRIPT_DIR/install-system-deps.sh"
 fi
 
+command -v node >/dev/null 2>&1 || {
+  echo "ERROR: Tencent captcha runtime requires Node.js" >&2
+  exit 3
+}
+NODE_MAJOR="$(node -p 'Number(process.versions.node.split(".")[0])')"
+((NODE_MAJOR >= 22)) || {
+  echo "ERROR: Tencent captcha runtime requires Node.js 22+, found $(node --version)" >&2
+  exit 3
+}
+
 python3 - <<'PY'
 import sys
 if sys.version_info < (3, 11):

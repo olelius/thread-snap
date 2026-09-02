@@ -19,6 +19,8 @@
 # 前端本地依赖和构建产物
 /frontend/node_modules/
 /frontend/dist/
+/src/threadsnap/tencent_captcha/js/node_modules/
+/src/threadsnap/tencent_captcha/js/dist/*.map
 
 # PoC 本地依赖、缓存与构建产物
 **/__pycache__/

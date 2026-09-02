@@ -113,7 +113,7 @@ PLAYWRIGHT_BROWSERS_PATH="$STAGE/browsers" \
   "$WORK_ROOT/verify-venv/bin/patchright" install --no-shell chromium
 
 rpm_packages=(
-  python3 python3-pip nginx weston
+  python3 python3-pip nodejs nginx weston
   tar gzip curl ca-certificates shadow-utils findutils util-linux procps-ng iproute
   policycoreutils-python-utils
   alsa-lib atk at-spi2-atk cups-libs libdrm libXcomposite libXdamage libXfixes

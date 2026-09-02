@@ -29,6 +29,16 @@ check "threadsnap service active" systemctl is-active --quiet threadsnap.service
 check "Wayland service active" systemctl is-active --quiet threadsnap-wayland.service
 check "ThreadSnap Nginx service active" systemctl is-active --quiet threadsnap-nginx.service
 check "ThreadSnap Nginx configuration" nginx -t -c /etc/threadsnap/nginx.conf
+check "Node.js 22+ for Tencent captcha runtime" bash -c \
+  'command -v node >/dev/null && test "$(node -p '\''Number(process.versions.node.split(".")[0])'\'')" -ge 22'
+check "Tencent captcha runtime assets" /opt/threadsnap/current/venv/bin/python - <<'PY'
+from pathlib import Path
+from threadsnap.tencent_captcha.tdc import TdcRuntime
+
+runtime = TdcRuntime()
+required = runtime.required_asset_paths()
+assert all(Path(path).is_file() for path in required)
+PY
 
 health_ready=false
 for _ in $(seq 1 30); do
