@@ -9,7 +9,7 @@ ThreadSnap 正式目标包为 `fully-offline`：
 - `frontend/`：已经完成 Vite 生产构建的静态文件；
 - `browsers/`：与锁定 Patchright 版本匹配的 Linux Chromium；
 - `models/paddlenlp/`：已经下载并转换完成的 UIE-Senta-Nano 与 UTC-Nano 本地文字模型；
-- `rpms/`：Python、Nginx、Weston 和 Chromium 系统共享库及其 RPM 依赖，并包含本地仓库元数据；
+- `rpms/`：Python、Node.js 22+、Nginx、Weston 和 Chromium 系统共享库及其 RPM 依赖，并包含本地仓库元数据；
 - `SYSTEM-PACKAGES.txt`：目标机向本地 RPM 仓库请求的顶层运行组件，避免强制安装全部递归 RPM；
 - `deploy/`：主机检查、安装、systemd、Nginx、验证、备份与回滚脚本；
 - `SHA256SUMS`：包内逐文件校验；压缩包旁另有整体 `.sha256`。
@@ -76,7 +76,7 @@ sudo bash deploy/assemble-offline-package.sh "$PWD/output"
 4. 在临时虚拟环境中执行纯离线安装与 `pip check`；
 5. 使用离线安装后的 PaddleNLP 下载并转换 UIE-Senta-Nano 与 UTC-Nano，执行一次真实本地推理后写入 `models/paddlenlp/`；
 6. 下载锁定 Patchright 对应的完整 Linux Chromium，并跳过未使用的 headless shell；
-7. 使用 `dnf download --resolve --alldeps` 收集系统 RPM 闭包，并用 `createrepo_c` 生成包内本地仓库元数据；
+7. 使用 `dnf download --resolve --alldeps` 收集含 Node.js 22+ 在内的系统 RPM 闭包，并用 `createrepo_c` 生成包内本地仓库元数据；
 8. 记录顶层系统组件清单，让目标 DNF 复用已安装的兼容版本并只补齐缺失依赖；
 9. 生成新的逐文件校验清单和压缩包整体校验值；
 9. 输出 `*-centos-stream-10-x86_64-offline.tar.gz`。
@@ -97,7 +97,7 @@ sudo bash deploy/install.sh --data-dir /var/lib/threadsnap --server-name HOST
 
 安装脚本执行以下动作：
 
-- 从包内本地 RPM 仓库安装 Python、Nginx、Weston 和共享库，禁用所有外部 DNF 仓库；
+- 从包内本地 RPM 仓库安装 Python、Node.js 22+、Nginx、Weston 和共享库，禁用所有外部 DNF 仓库；
 - 建立 `threadsnap` 系统账号；
 - 在新 release 中建立虚拟环境并从本地 wheelhouse 安装；
 - 从包内复制 Chromium；
@@ -117,7 +117,7 @@ sudo systemctl status threadsnap threadsnap-wayland threadsnap-nginx --no-pager
 sudo journalctl -u threadsnap -n 200 --no-pager
 ```
 
-脚本检查 systemd、Nginx、SPA、API、`/internal/v1` 屏蔽、端口绑定、Fernet 配置、Wayland 有头 Chromium启动，并在完整验证模式下以目标服务账号离线执行本地文字模型推理。此后仍需真实执行：
+脚本检查 systemd、Nginx、SPA、API、`/internal/v1` 屏蔽、端口绑定、Fernet 配置、Node.js 22+、腾讯验证码运行时bundle、Wayland有头Chromium启动，并在完整验证模式下以目标服务账号离线执行本地文字模型推理。此后仍需真实执行：
 
 1. 前端创建认证任务；
 2. Dialog 收到非空连续画面；

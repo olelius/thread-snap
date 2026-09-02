@@ -20,10 +20,16 @@ from json_repair import repair_json
 from lxml import html
 
 from ..scrapling_transport import ExecutionScopeKey, ScraplingHttpPool
+from ..tencent_captcha import (
+    TencentCaptchaError,
+    TencentCaptchaSolver,
+    TencentCaptchaSolverProtocol,
+)
 from .base import AuthenticationRequired, CircleSource, CollectorFailure
+from .yiche_waf import YicheWafCallbackError, submit_yiche_waf_callback
 
 BASE_URL = "https://baa.yiche.com"
-ADAPTER_VERSION = "yiche-community-v7-control-recovery"
+ADAPTER_VERSION = "yiche-community-v8-tencent-protocol-solver"
 CIRCLE_RE = re.compile(
     r"^/(?P<id>[A-Za-z0-9_-]+)/?"
     r"(?:index-0-(?P<order>[01])-(?P<page>\d+)\.html)?/?$"
@@ -41,6 +47,7 @@ YICHE_API_CID = "508"
 YICHE_API_SIGN_KEY = "19DDD1FBDFF065D3A4DA777D2D7A81EC"
 YICHE_CHALLENGE_KEY = "tg09It3*9h"
 YICHE_COMMENT_CONTENT_TYPE = 56
+YICHE_TENCENT_CAPTCHA_APP_ID = "2017163193"
 ACCOUNT_COOKIE_NAME = "username"
 INTERRUPTING_CONTROL_CODES = {
     "PLATFORM_CAPTCHA_REQUIRED",
@@ -236,6 +243,7 @@ class YicheCollector:
         timeout_seconds: int = 30,
         browser_headless: bool = False,
         execution_scope: ExecutionScopeKey | None = None,
+        tencent_captcha_solver: TencentCaptchaSolverProtocol | None = None,
     ):
         del browser_headless
         self.storage_state = storage_state
@@ -253,6 +261,12 @@ class YicheCollector:
             self.user_guid = str(uuid.uuid4())
             self.cookies.set("CIGUID", self.user_guid, domain=".yiche.com", path="/")
         self._account_verified = False
+        self._captcha_solver = tencent_captcha_solver or TencentCaptchaSolver(
+            app_id=YICHE_TENCENT_CAPTCHA_APP_ID,
+            timeout_seconds=max(20.0, float(timeout_seconds)),
+        )
+        self._captcha_lock = threading.Lock()
+        self._captcha_generation = 0
 
     def _http_session(self) -> Any:
         """返回当前线程独享的 Scrapling FetcherSession 适配器。"""
@@ -313,8 +327,8 @@ class YicheCollector:
         return cookie_name, cookie_value
 
     def _document(self, url: str) -> tuple[str, str]:
-        """直连详情页，并用按需 Stealthy 通道处理浏览器可解除的保护。"""
-        observed_generation = self.http.recovery_generation
+        """直连详情页，并以共享腾讯协议组件处理易车 WAF。"""
+        observed_generation = self._captcha_generation
         response = self._get(url, headers={"Referer": BASE_URL + "/"})
         challenge_cookie_applied = False
         if response.status_code == 203:
@@ -345,12 +359,32 @@ class YicheCollector:
             if exc.code != "PLATFORM_CAPTCHA_REQUIRED":
                 raise
             try:
-                recovery = self.http.recover_protected(url, observed_generation=observed_generation)
-            except Exception:
-                recovery = None
-            if recovery is None or not recovery.should_retry_http:
-                raise
+                with self._captcha_lock:
+                    if self._captcha_generation <= observed_generation:
+                        with self.semaphore:
+                            submit_yiche_waf_callback(
+                                content=response.content,
+                                entry_url=url,
+                                transport=self._http_session(),
+                                solver=self._captcha_solver,
+                                timeout_seconds=self.timeout_seconds,
+                            )
+                        self._captcha_generation += 1
+            except (TencentCaptchaError, YicheWafCallbackError) as solve_error:
+                code = solve_error.code
+                raise CollectorFailure(
+                    "PLATFORM_CAPTCHA_REQUIRED",
+                    f"易车腾讯验证码协议处理未完成（{code}），请处理当前访问验证。",
+                    trigger_url=url,
+                ) from solve_error
             response = self._get(url, headers={"Referer": BASE_URL + "/"})
+            if response.status_code == 203:
+                cookie_name, cookie_value = self._challenge_cookie(response.text)
+                host = urlsplit(url).hostname or "baa.yiche.com"
+                self._http_session().cookies.set(
+                    cookie_name, cookie_value, domain=host, path="/"
+                )
+                response = self._get(url, headers={"Referer": BASE_URL + "/"})
             if response.status_code == 429:
                 raise CollectorFailure(
                     "PLATFORM_RATE_LIMITED",
@@ -362,13 +396,12 @@ class YicheCollector:
             if response.status_code == 403:
                 raise CollectorFailure(
                     "PLATFORM_CHALLENGE",
-                    "易车受保护页面经一次浏览器恢复后仍拒绝访问，请完成访问验证。",
+                    "易车验证码回调后仍拒绝访问，请处理当前访问验证。",
                     trigger_url=url,
                 )
             if response.status_code != 200:
                 raise CollectorFailure("HTTP_ERROR", f"易车页面返回 HTTP {response.status_code}。")
             require_content_page(response.text, url=url)
-            self.http.confirm_protected_recovery(recovery.generation)
         return response.text, str(response.url)
 
     @staticmethod

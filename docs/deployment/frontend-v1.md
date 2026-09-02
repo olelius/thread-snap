@@ -39,7 +39,7 @@ npm.cmd run build
 4. WebSocket 转发保留 Upgrade/Connection 头；
 5. `/internal/v1` 不通过前端入口发布。
 
-第一版 Linux 部署依据 ADR 0017 固定使用 Nginx 和 systemd。前端生产构建直接进入完整离线包，目标服务器运行期不安装 Node.js；Nginx 配置、同源代理、SSE、WebSocket、`/internal/v1` 屏蔽和 SPA 回退模板位于 `deploy/linux/nginx/threadsnap.conf`，完整流程见 `docs/deployment/linux-v1.md`。
+第一版 Linux 部署依据 ADR 0017 固定使用 Nginx 和 systemd。前端生产构建直接进入完整离线包，前端静态文件在目标服务器运行期不依赖 Node.js；后端腾讯验证码IR组件按ADR 0060使用离线包安装的系统Node.js。Nginx 配置、同源代理、SSE、WebSocket、`/internal/v1` 屏蔽和 SPA 回退模板位于 `deploy/linux/nginx/threadsnap.conf`，完整流程见 `docs/deployment/linux-v1.md`。
 
 ## 4. 验证
 

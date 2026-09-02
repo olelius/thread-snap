@@ -20,7 +20,7 @@ from threadsnap.collectors.yiche import (
     parse_circle_url,
     require_content_page,
 )
-from threadsnap.scrapling_transport import ProtectionRecoveryResult
+from threadsnap.tencent_captcha import TencentCaptchaError, TencentCaptchaResult
 
 FIXTURES = Path(__file__).parent / "fixtures" / "yiche"
 
@@ -203,8 +203,8 @@ class YicheKnownFactsTests(unittest.TestCase):
         finally:
             collector.close()
 
-    def test_yiche_document_retries_after_stealth_cookie_recovery(self) -> None:
-        """腾讯控制页先交给 Stealthy，解除后只复访相同详情 URL。"""
+    def test_yiche_document_retries_after_protocol_solver(self) -> None:
+        """腾讯控制页由共享协议组件求解，易车仍只复访相同详情 URL。"""
 
         url = "https://baa.yiche.com/sample/thread-123.html"
         responses = iter(
@@ -213,8 +213,15 @@ class YicheKnownFactsTests(unittest.TestCase):
                     status_code=200,
                     text=(
                         '<script src="TCaptcha.js"></script><script>'
+                        'var seqid="fixture__captcha";'
                         "TencentCaptcha();window.__captcha=true</script>"
                         '<form action="/WafCaptcha"></form>'
+                    ),
+                    content=(
+                        b'<script src="TCaptcha.js"></script><script>'
+                        b'var seqid="fixture__captcha";'
+                        b"TencentCaptcha();window.__captcha=true</script>"
+                        b'<form action="/WafCaptcha"></form>'
                     ),
                     url=url,
                 ),
@@ -227,34 +234,31 @@ class YicheKnownFactsTests(unittest.TestCase):
         )
         collector = YicheCollector(self._logged_state())
         calls: list[str] = []
-        recoveries: list[tuple[str, int]] = []
+        recoveries: list[str] = []
 
         def get(target: str, **_kwargs: object) -> object:
             calls.append(target)
             return next(responses)
 
-        confirmed: list[int] = []
-
-        def recover(target: str, *, observed_generation: int) -> ProtectionRecoveryResult:
-            recoveries.append((target, observed_generation))
-            return ProtectionRecoveryResult(1, True, True, 200, 0.1)
-
         collector._get = get  # type: ignore[method-assign]
-        collector.http.recover_protected = recover  # type: ignore[method-assign]
-        collector.http.confirm_protected_recovery = confirmed.append  # type: ignore[method-assign]
-        try:
-            content, final_url = collector._document(url)
-        finally:
-            collector.close()
+        with patch("threadsnap.collectors.yiche.submit_yiche_waf_callback") as submit:
+            submit.side_effect = lambda **kwargs: (
+                recoveries.append(str(kwargs["entry_url"])),
+                TencentCaptchaResult("ticket", "rand", 0.1, 5, 94, 74, 4.0),
+            )[1]
+            try:
+                content, final_url = collector._document(url)
+            finally:
+                collector.close()
 
         self.assertIn("帖子正文", content)
         self.assertEqual(url, final_url)
         self.assertEqual([url, url], calls)
-        self.assertEqual([(url, 0)], recoveries)
-        self.assertEqual([1], confirmed)
+        self.assertEqual([url], recoveries)
+        self.assertEqual(1, collector._captcha_generation)
 
-    def test_stealth_retry_403_enters_access_challenge_recovery(self) -> None:
-        """受保护页的一次浏览器恢复仍返回403时，不得误报普通HTTP错误。"""
+    def test_protocol_retry_403_enters_access_challenge_recovery(self) -> None:
+        """协议回调后仍返回403时，继续进入访问挑战恢复。"""
 
         url = "https://baa.yiche.com/sample/thread-123.html"
         control = (
@@ -264,23 +268,98 @@ class YicheKnownFactsTests(unittest.TestCase):
         )
         responses = iter(
             [
-                SimpleNamespace(status_code=200, text=control, url=url),
+                SimpleNamespace(status_code=200, text=control, content=control.encode(), url=url),
                 SimpleNamespace(status_code=403, text="", url=url),
             ]
         )
         collector = YicheCollector(self._logged_state())
         collector._get = lambda *_args, **_kwargs: next(responses)  # type: ignore[method-assign]
-        collector.http.recover_protected = (  # type: ignore[method-assign]
-            lambda *_args, **_kwargs: ProtectionRecoveryResult(1, True, True, 200, 0.1)
-        )
-        try:
-            with self.assertRaises(CollectorFailure) as caught:
-                collector._document(url)
-        finally:
-            collector.close()
+        with patch("threadsnap.collectors.yiche.submit_yiche_waf_callback") as submit:
+            submit.return_value = TencentCaptchaResult("ticket", "rand", 0.1, 5, 94, 74, 4.0)
+            try:
+                with self.assertRaises(CollectorFailure) as caught:
+                    collector._document(url)
+            finally:
+                collector.close()
 
         self.assertEqual("PLATFORM_CHALLENGE", caught.exception.code)
         self.assertEqual(url, caught.exception.trigger_url)
+
+    def test_protocol_callback_reapplies_known_203_cookie_before_content(self) -> None:
+        """WAF回调后若再次出现已知203，仍沿用一次RC4挑战合同。"""
+
+        url = "https://baa.yiche.com/sample/thread-123.html"
+        control = (
+            '<script src="TCaptcha.js"></script><script>'
+            'var seqid="fixture__captcha";'
+            "TencentCaptcha();window.__captcha=true</script>"
+            '<form action="/WafCaptcha"></form>'
+        )
+        challenge = (
+            '<script>var _xvasu = 1104958252; var _xvpfs = "tws2_"; '
+            'var _xvpts = 1788060021.479; document.cookie=btoa("x"); '
+            "window['location'].reload();</script>"
+        )
+        responses = iter(
+            [
+                SimpleNamespace(status_code=200, text=control, content=control.encode(), url=url),
+                SimpleNamespace(status_code=203, text=challenge, content=challenge.encode(), url=url),
+                SimpleNamespace(
+                    status_code=200,
+                    text="<html><body>帖子正文</body></html>",
+                    content=b"<html><body>content</body></html>",
+                    url=url,
+                ),
+            ]
+        )
+        collector = YicheCollector(self._logged_state())
+        calls: list[str] = []
+
+        def get(target: str, **_kwargs: object) -> object:
+            calls.append(target)
+            return next(responses)
+
+        collector._get = get  # type: ignore[method-assign]
+        with patch("threadsnap.collectors.yiche.submit_yiche_waf_callback") as submit:
+            submit.return_value = TencentCaptchaResult("ticket", "rand", 0.1, 5, 94, 74, 4.0)
+            try:
+                content, _final_url = collector._document(url)
+            finally:
+                collector.close()
+
+        self.assertIn("帖子正文", content)
+        self.assertEqual([url, url, url], calls)
+
+    def test_protocol_solver_failure_keeps_manual_recovery_checkpoint(self) -> None:
+        """共享组件漂移后保留原URL，并交回既有会话恢复。"""
+
+        url = "https://baa.yiche.com/sample/thread-123.html"
+        control = (
+            '<script src="TCaptcha.js"></script><script>'
+            'var seqid="fixture__captcha";'
+            "TencentCaptcha();window.__captcha=true</script>"
+            '<form action="/WafCaptcha"></form>'
+        )
+        collector = YicheCollector(self._logged_state())
+        collector._get = lambda *_args, **_kwargs: SimpleNamespace(  # type: ignore[method-assign]
+            status_code=200,
+            text=control,
+            content=control.encode(),
+            url=url,
+        )
+        with patch("threadsnap.collectors.yiche.submit_yiche_waf_callback") as submit:
+            submit.side_effect = TencentCaptchaError(
+                "TENCENT_CAPTCHA_TDC_DRIFT", "fixture", stage="tdc"
+            )
+            try:
+                with self.assertRaises(CollectorFailure) as caught:
+                    collector._document(url)
+            finally:
+                collector.close()
+
+        self.assertEqual("PLATFORM_CAPTCHA_REQUIRED", caught.exception.code)
+        self.assertEqual(url, caught.exception.trigger_url)
+        self.assertIn("TENCENT_CAPTCHA_TDC_DRIFT", caught.exception.message)
 
     def test_business_errors_are_classified(self) -> None:
         with self.assertRaises(CollectorFailure) as limited:

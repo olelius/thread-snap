@@ -16,6 +16,24 @@
 
 ---
 
+## 2026-09-02 — 腾讯验证码共享协议组件与易车生产接入
+**总目标**：复用已完成的腾讯验证码逆向结果，封装平台无关纯协议组件，由易车专属WAF适配器调用，并为后续其他平台保留复用合同。
+**状态**：✅ 共享组件、易车接入、两级实时目标链、完整回归和部署构建门均已通过；正在执行自动Git交付。
+**干到哪里了**：
+- [x] 从`main@7786fef`创建`feat/tencent-captcha-protocol-solver`；新增`threadsnap.tencent_captcha`，AppId和入口URL由平台注入，Python负责prehandle、双图、识别、PoW和verify，Node bundle负责TDC归一化、结构映射、IR编译与自研VM。
+- [x] 新增易车专属`collectors.yiche_waf`，严格执行“当前seqid -> 全新challenge -> 四行WAF POST -> 原URL重载”；同采集器单飞，失败进入现有`PLATFORM_CAPTCHA_REQUIRED`恢复，不改批次、FIFO或已完成URL。
+- [x] 生产bundle用既有冻结94-opcode样本真实执行得到6882字符collect、352字符eks、74个handler；腾讯全新challenge实时取得业务成功，5请求、4.038秒、95个opcode/74个handler，脱敏回执位于`artifacts/runtime/tencent-captcha-production-integration/live-tencent-verify.json`。
+- [x] 当前易车加密Session的80条有界轮次在第60个详情命中WAF后由新生产代码自动处理，60/60均有正文证明、验证码代次1、整轮24.028秒；脱敏回执位于`artifacts/runtime/tencent-captcha-production-integration/live-yiche-waf-gate.json`。
+- [x] ADR 0060、领域/产品/技术/跨任务链、部署说明和第三方声明已同步；共享包静态扫描没有易车、WAF回调或易车AppId引用，平台适配器仍独立保存易车入口和回调合同。
+- [x] 完整259项后端测试、`ruff check src tests`、`compileall`、`pip check`、前端类型检查与2468模块构建、3个部署脚本Bash语法及`git diff --check`全部通过。
+- [x] 目标CentOS离线依赖已加入Node.js；wheel只携带预构建bundle、共享chunk和handler IR，不携带`node_modules`。从最终builder内wheel隔离安装后，冻结98-opcode样本得到6762字符collect、352字符eks和74个handler。
+- [x] 最终builder SHA-256为`3917edb04860dfe58fabb92f5a927a4a7b56722f83aafa891f67af82145ff4b3`，wheel为`e8ae2cf4cde73e28bca62ad05a0855382139c52bf90c39c58bdd558c40b9729d`；Git外验收回执为`artifacts/runtime/tencent-captcha-production-integration/acceptance.json`，SHA-256为`7f7ffcb4838c6ef126407b0361cf78f7a11835917f90aa1a257cf8e300f86206`。
+**下一步**：精确暂存本任务文件，复核暂存差异与敏感材料，提交、推送、PR合并并清理功能分支；随后从合并后的`main`核验运行服务。
+**边界**：每次challenge的`sess/TDC/图片/坐标/PoW/collect/eks/ticket/randstr/seqid`仍即时生成；实时轮次不替代易车正式500条验收；原始材料和票据不进入Git、日志或数据库。
+**关联**：`docs/adr/0060-integrate-shared-tencent-captcha-protocol-solver.md`、`src/threadsnap/tencent_captcha/`、`src/threadsnap/collectors/yiche_waf.py`、`src/threadsnap/collectors/yiche.py`
+
+---
+
 ## 2026-09-02 — 易车腾讯 WAF 完全协议化研究
 **总目标**：把既有浏览器滑块对照推进到运行时无 Chrome、无腾讯 SDK/TDC 原始脚本执行的普通 HTTP 全链路，并明确可复用与逐挑战重算结果。
 **状态**：✅ P0-P5 全部关闭；自研 TDC IR、两次腾讯纯 HTTP 业务成功、易车 WAF POST 与原正文门禁均已取得运行时证据，生产保持 ADR 0058。

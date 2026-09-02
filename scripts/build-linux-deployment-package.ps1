@@ -66,6 +66,27 @@ $wheel = $wheels[0]
 if ($wheel.Name -notlike "threadsnap-$Version-*.whl") {
     throw "Requested version $Version does not match wheel $($wheel.Name)"
 }
+& $python -c @'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    names = set(archive.namelist())
+required = {
+    "threadsnap/tencent_captcha/js/tdc-handler-ir-v2.json",
+    "threadsnap/tencent_captcha/js/dist/normalize-tdc-payload.js",
+    "threadsnap/tencent_captcha/js/dist/deobfuscate-tdc-interpreter.js",
+    "threadsnap/tencent_captcha/js/dist/catalog-tdc-primitives.js",
+    "threadsnap/tencent_captcha/js/dist/extend-tdc-handler-ir.js",
+    "threadsnap/tencent_captcha/js/dist/build-tdc-ir-runtime.js",
+    "threadsnap/tencent_captcha/js/dist/run-node-tdc-standalone.js",
+}
+missing = sorted(required - names)
+chunk_prefix = "threadsnap/tencent_captcha/js/dist/chunk-"
+if not any(name.startswith(chunk_prefix) and name.endswith(".js") for name in names):
+    missing.append(f"{chunk_prefix}*.js")
+if missing:
+    raise SystemExit(f"Tencent captcha wheel assets missing: {missing}")
+'@ $wheel.FullName
+if ($LASTEXITCODE -ne 0) { throw 'Tencent captcha wheel asset verification failed' }
 
 $stagingDirectories = @(
     (Join-Path $staging 'backend')
