@@ -330,6 +330,12 @@ export type ReputationCapabilities = {
   real_adapter_status: 'not_configured' | 'available'
   real_adapter_message: string
   scenarios: Array<{ id: string; name: string; description: string }>
+  reputation_platforms: Array<{
+    code: string
+    display_name: string
+    adapter_version: string
+    validation_contract_version: string
+  }>
 }
 
 export type ReputationScopeMapping = {
@@ -341,7 +347,7 @@ export type ReputationScopeMapping = {
   validation_attempt_id?: string
   validated_at?: string
   actual_name?: string
-  latest_metrics?: { score?: string; rank?: string; volume?: string; rank_scope?: string }
+  latest_metrics?: { score?: string; rank?: string; volume?: string; review_article_count?: string; negative_rate?: string; rank_scope?: string }
   validation_error?: string
 }
 
@@ -361,7 +367,7 @@ export type ReputationMappingValidation = {
     attempt_number: number
     status: string
     actual_name?: string
-    metrics: { score?: string; rank?: string; volume?: string; rank_scope?: string }
+    metrics: { score?: string; rank?: string; volume?: string; review_article_count?: string; negative_rate?: string; rank_scope?: string }
     error_code?: string
     error_message?: string
     duration_ms?: number

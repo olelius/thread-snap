@@ -20,7 +20,7 @@ from openpyxl import Workbook
 from openpyxl.drawing.image import Image as WorksheetImage
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 from pydantic import BaseModel
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -45,18 +45,12 @@ from .models import (
     ReputationTombstone,
     ValidationJob,
 )
-from .reputation_dongchedi import (
-    ADAPTER_VERSION as REAL_ADAPTER_VERSION,
-)
-from .reputation_dongchedi import (
-    VALIDATION_CONTRACT_VERSION,
-    VIEWPORT,
-    DongchediReputationAdapter,
+from .reputation_adapter import (
     ReputationAdapterError,
     ReputationMappingTarget,
     ReputationPageResult,
-    normalize_series_url,
 )
+from .reputation_registry import REPUTATION_PLATFORMS, ReputationPlatformSpec
 from .session_store import SessionStore
 
 FIXTURE_VERSION = "reputation-synthetic-v2-all-evidence"
@@ -115,6 +109,7 @@ class ScopePublishRequest(BaseModel):
 
 class MappingValidationRequest(BaseModel):
     revision: int
+    platform_code: str = PLATFORM_CODE
     vehicle_ids: list[str] | None = None
 
 
@@ -161,13 +156,15 @@ def _text_hash(value: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _mapping_hash(vehicle_id: str, mapping: dict[str, Any]) -> str:
+def _mapping_hash(
+    vehicle_id: str, mapping: dict[str, Any], platform_code: str = PLATFORM_CODE
+) -> str:
     """绑定内部车型与全部身份关键映射字段。"""
 
     return _text_hash(
         {
             "vehicle_id": vehicle_id,
-            "platform_code": PLATFORM_CODE,
+            "platform_code": platform_code,
             "platform_vehicle_id": mapping.get("platform_vehicle_id"),
             "platform_url": mapping.get("platform_url"),
             "platform_display_name": mapping.get("platform_display_name"),
@@ -365,7 +362,21 @@ class ReputationService:
         self.settings = settings
         self.session_store = session_store
         self.event_publisher = event_publisher
-        self.adapter_factory = adapter_factory or DongchediReputationAdapter
+        # adapter_factory 是既有测试注入口，仅覆盖懂车帝；其他平台始终按注册表解析。
+        self.adapter_factories = {
+            code: spec.adapter_factory for code, spec in REPUTATION_PLATFORMS.items()
+        }
+        self.adapter_factory = adapter_factory or self.adapter_factories[PLATFORM_CODE]
+        self.adapter_factories[PLATFORM_CODE] = self.adapter_factory
+
+    @staticmethod
+    def _platform_spec(platform_code: str) -> ReputationPlatformSpec:
+        """把外部平台代码收敛为已接入口碑平台注册项。"""
+
+        try:
+            return REPUTATION_PLATFORMS[platform_code.strip().lower()]
+        except KeyError as error:
+            raise DomainError("REPUTATION_SCOPE_PLATFORM", "口碑平台尚未接入。") from error
 
     @property
     def synthetic_enabled(self) -> bool:
@@ -380,9 +391,18 @@ class ReputationService:
             "reputation_synthetic_runs": self.synthetic_enabled,
             "real_adapter_status": "available",
             "real_adapter_message": (
-                f"懂车帝真实页面适配器 {REAL_ADAPTER_VERSION} 已接入；"
-                "映射验证读取实时页面并只保存车型口碑指标区域截图。"
+                "懂车帝、汽车之家和易车真实页面适配器已接入；"
+                "各平台映射验证均读取实时页面并只保存车型口碑指标区域截图。"
             ),
+            "reputation_platforms": [
+                {
+                    "code": spec.code,
+                    "display_name": spec.display_name,
+                    "adapter_version": spec.adapter_version,
+                    "validation_contract_version": spec.validation_contract_version,
+                }
+                for spec in REPUTATION_PLATFORMS.values()
+            ],
             "scenarios": [
                 {"id": key, **value} for key, value in SCENARIOS.items()
             ]
@@ -760,18 +780,35 @@ class ReputationService:
             vehicles = [
                 item for item in snapshot.get("vehicles", []) if item.get("enabled", True)
             ]
-            by_vehicle = {item.vehicle_id: item for item in attempts}
-            missing = [item["id"] for item in vehicles if item["id"] not in by_vehicle]
+            run_platforms = {
+                item.id: item.platform_code for item in validation_runs if item is not None
+            }
+            by_target = {
+                (run_platforms[item.run_id], item.vehicle_id): item for item in attempts
+            }
+            platform_codes = [
+                code
+                for code in REPUTATION_PLATFORMS
+                if any(vehicle.get("mappings", {}).get(code) for vehicle in vehicles)
+            ]
+            targets = [
+                (vehicle, code) for vehicle in vehicles for code in platform_codes
+            ]
+            missing = [
+                {"vehicle_id": vehicle["id"], "platform_code": code}
+                for vehicle, code in targets
+                if (code, vehicle["id"]) not in by_target
+            ]
             if missing:
                 raise DomainError(
                     "REPUTATION_ACCEPTANCE_INCOMPLETE",
                     "真实验证结果尚未覆盖全部已发布车型。",
-                    details=[{"vehicle_id": item, "reason": "缺少成功结果"} for item in missing],
+                    details=[{**item, "reason": "缺少成功结果"} for item in missing],
                 )
-            for vehicle in vehicles:
-                mapping = vehicle.get("mappings", {}).get(PLATFORM_CODE) or {}
-                attempt = by_vehicle[vehicle["id"]]
-                if attempt.mapping_hash != _mapping_hash(vehicle["id"], mapping):
+            for vehicle, code in targets:
+                mapping = vehicle.get("mappings", {}).get(code) or {}
+                attempt = by_target[(code, vehicle["id"])]
+                if attempt.mapping_hash != _mapping_hash(vehicle["id"], mapping, code):
                     raise DomainError(
                         "REPUTATION_ACCEPTANCE_MAPPING_CHANGED",
                         f"车型{vehicle['id']}的成功结果不属于当前已发布映射。",
@@ -787,7 +824,7 @@ class ReputationService:
                 {
                     "scope_version_id": version.id,
                     "validation_run_ids": run_ids,
-                    "attempt_ids": [by_vehicle[item["id"]].id for item in vehicles],
+                    "attempt_ids": [by_target[(code, vehicle["id"])].id for vehicle, code in targets],
                 }
             )
             existing = db.scalar(
@@ -816,12 +853,12 @@ class ReputationService:
             scope_version_id=version.id,
             planned_date=now.astimezone(ZoneInfo(self.settings.timezone)).date().isoformat(),
             status="success",
-            platform_codes=[PLATFORM_CODE],
-            planned_count=len(vehicles),
-            completed_count=len(vehicles),
+            platform_codes=platform_codes,
+            planned_count=len(targets),
+            completed_count=len(targets),
             failed_count=0,
-            required_evidence_count=len(vehicles),
-            complete_evidence_count=len(vehicles),
+            required_evidence_count=len(targets),
+            complete_evidence_count=len(targets),
             report_status="success",
             created_at=now,
             started_at=started_at,
@@ -839,8 +876,9 @@ class ReputationService:
             with self.sessions.begin() as db:
                 db.add(run)
                 db.flush()
-                for vehicle in vehicles:
-                    attempt = by_vehicle[vehicle["id"]]
+                for vehicle, platform_code in targets:
+                    attempt = by_target[(platform_code, vehicle["id"])]
+                    spec = self._platform_spec(platform_code)
                     result = ReputationResult(
                         run_id=run_id,
                         vehicle_id=vehicle["id"],
@@ -849,20 +887,26 @@ class ReputationService:
                         role=vehicle["role"],
                         role_position=0 if vehicle["role"] == "focus" else 1,
                         vehicle_position=int(vehicle["role_order"]),
-                        platform_code=PLATFORM_CODE,
-                        platform_name=PLATFORM_NAME,
+                        platform_code=platform_code,
+                        platform_name=spec.display_name,
                         status="success",
                         metrics={
                             "score": metric(attempt.metrics.get("score")),
                             "rank": metric(attempt.metrics.get("rank"), inverse=True),
                             "volume": metric(attempt.metrics.get("volume")),
+                            "review_article_count": metric(
+                                attempt.metrics.get("review_article_count")
+                            ),
+                            "negative_rate": metric(
+                                attempt.metrics.get("negative_rate"), inverse=True
+                            ),
                         },
                         evidence_required=True,
                         collected_at=attempt.finished_at,
                     )
                     db.add(result)
                     db.flush()
-                    evidence_dir = run_dir / "evidence" / vehicle["id"]
+                    evidence_dir = run_dir / "evidence" / platform_code / vehicle["id"]
                     evidence_dir.mkdir(parents=True, exist_ok=True)
                     metric_path = evidence_dir / "region.png"
                     shutil.copy2(attempt.metric_region_path, metric_path)
@@ -1066,14 +1110,27 @@ class ReputationService:
                 )
                 return None
             snapshot = json.loads(json.dumps(version.snapshot, ensure_ascii=False))
-            target_keys = [
-                f"{vehicle['id']}|{PLATFORM_CODE}"
-                for vehicle in snapshot.get("vehicles", [])
-                if vehicle.get("enabled", True)
-                and vehicle.get("mappings", {}).get(PLATFORM_CODE)
+            vehicles = [
+                vehicle for vehicle in snapshot.get("vehicles", []) if vehicle.get("enabled", True)
             ]
-            platform = db.get(PlatformConfig, PLATFORM_CODE)
-            if not target_keys or not platform or not platform.enabled:
+            platform_codes = [
+                code
+                for code in REPUTATION_PLATFORMS
+                if any(vehicle.get("mappings", {}).get(code) for vehicle in vehicles)
+            ]
+            target_keys = [
+                f"{vehicle['id']}|{code}"
+                for vehicle in vehicles
+                for code in platform_codes
+                if vehicle.get("mappings", {}).get(code)
+            ]
+            expected_count = len(vehicles) * len(platform_codes)
+            platforms = {code: db.get(PlatformConfig, code) for code in platform_codes}
+            if (
+                not target_keys
+                or len(target_keys) != expected_count
+                or any(not platforms[code] or not platforms[code].enabled for code in platform_codes)
+            ):
                 db.add(
                     ReputationScheduleEvent(
                         planned_date=planned_date,
@@ -1133,7 +1190,7 @@ class ReputationService:
                 baseline_source_run_id=baseline_source,
                 baseline_snapshot=baseline_snapshot,
                 status="queued",
-                platform_codes=[PLATFORM_CODE],
+                platform_codes=platform_codes,
                 planned_count=len(target_keys),
                 report_status="waiting",
                 created_at=current,
@@ -1213,10 +1270,11 @@ class ReputationService:
         *,
         inverse: bool = False,
         scope: str | None = None,
+        missing_state: Literal["not_available", "unknown"] = "not_available",
     ) -> dict[str, Any]:
         current = cls._decimal_value(raw)
         if current is None:
-            value = _metric(None, None, state="not_available", raw=raw)
+            value = _metric(None, None, state=missing_state, raw=raw)
         else:
             baseline_metric = baseline or {}
             baseline_value = cls._decimal_value(baseline_metric.get("value"))
@@ -1248,14 +1306,20 @@ class ReputationService:
         cls, page: ReputationPageResult, baseline_row: dict[str, Any] | None
     ) -> dict[str, Any]:
         baseline = (baseline_row or {}).get("metrics", {})
+        missing_state: Literal["not_available", "unknown"] = (
+            "not_available" if page.reputation_not_available else "unknown"
+        )
         review_article_count = cls._official_metric(
-            page.review_article_count_raw, baseline.get("review_article_count")
+            page.review_article_count_raw,
+            baseline.get("review_article_count"),
+            missing_state=missing_state,
         )
         review_article_count["source_url"] = page.review_article_count_url
         negative_rate = cls._official_metric(
             page.negative_rate_raw,
             baseline.get("negative_rate"),
             inverse=True,
+            missing_state=missing_state,
         )
         negative_rate.update(
             {
@@ -1265,14 +1329,19 @@ class ReputationService:
             }
         )
         return {
-            "score": cls._official_metric(page.score_raw, baseline.get("score")),
+            "score": cls._official_metric(
+                page.score_raw, baseline.get("score"), missing_state=missing_state
+            ),
             "rank": cls._official_metric(
                 page.rank_raw,
                 baseline.get("rank"),
                 inverse=True,
                 scope=page.rank_scope,
+                missing_state=missing_state,
             ),
-            "volume": cls._official_metric(page.volume_raw, baseline.get("volume")),
+            "volume": cls._official_metric(
+                page.volume_raw, baseline.get("volume"), missing_state=missing_state
+            ),
             "review_article_count": review_article_count,
             "negative_rate": negative_rate,
         }
@@ -1292,6 +1361,7 @@ class ReputationService:
     def _persist_official_result(
         self,
         run_id: str,
+        platform_code: str,
         target: ReputationMappingTarget,
         vehicle: dict[str, Any],
         baseline: dict[str, Any] | None,
@@ -1310,7 +1380,7 @@ class ReputationService:
                 select(ReputationResult).where(
                     ReputationResult.run_id == run_id,
                     ReputationResult.vehicle_id == target.vehicle_id,
-                    ReputationResult.platform_code == PLATFORM_CODE,
+                    ReputationResult.platform_code == platform_code,
                 )
             )
             if row:
@@ -1332,10 +1402,21 @@ class ReputationService:
                 row_status = "success"
                 error_code = None
                 error_message = None
+                unknown_names = [
+                    name
+                    for name, metric in metrics.items()
+                    if metric.get("comparison_status") == "unknown"
+                ]
+                if unknown_names:
+                    row_status = "partial_success"
+                    error_code = "REPUTATION_METRIC_UNKNOWN"
+                    error_message = f"指标来源尚未取得可靠值：{','.join(unknown_names)}。"
                 if evidence_required and not has_evidence:
                     row_status = "partial_success"
                     error_code = "REPUTATION_EVIDENCE_MISSING"
-                    error_message = "指标已取得，但本项必需页面证据缺失。"
+                    error_message = (
+                        f"{error_message or ''}本项必需页面证据缺失。"
+                    )
                 duration_ms = result.duration_ms
             else:
                 metrics = {
@@ -1364,12 +1445,12 @@ class ReputationService:
                 "role": vehicle["role"],
                 "role_position": 0 if vehicle["role"] == "focus" else 1,
                 "vehicle_position": int(vehicle["role_order"]),
-                "platform_code": PLATFORM_CODE,
-                "platform_name": PLATFORM_NAME,
+                "platform_code": platform_code,
+                "platform_name": REPUTATION_PLATFORMS[platform_code].display_name,
                 "status": row_status,
                 "metrics": metrics,
                 "evidence_required": evidence_required,
-                "mapping_snapshot": vehicle.get("mappings", {}).get(PLATFORM_CODE) or {},
+                "mapping_snapshot": vehicle.get("mappings", {}).get(platform_code) or {},
                 "attempt_count": attempt_count,
                 "duration_ms": duration_ms,
                 "error_code": error_code,
@@ -1487,24 +1568,28 @@ class ReputationService:
             if item.get("enabled", True)
         }
         targets: list[ReputationMappingTarget] = []
+        target_platform_codes: list[str] = []
         for vehicle in vehicles.values():
-            key = f"{vehicle['id']}|{PLATFORM_CODE}"
-            if target_keys and key not in target_keys:
-                continue
-            mapping = vehicle.get("mappings", {}).get(PLATFORM_CODE)
-            if not mapping:
-                continue
-            targets.append(
-                ReputationMappingTarget(
-                    vehicle_id=vehicle["id"],
-                    platform_vehicle_id=str(mapping["platform_vehicle_id"]),
-                    platform_url=normalize_series_url(
-                        str(mapping["platform_url"]), str(mapping["platform_vehicle_id"])
-                    ),
-                    platform_display_name=str(mapping["platform_display_name"]),
-                    mapping_hash=_mapping_hash(vehicle["id"], mapping),
+            for platform_code in run.platform_codes:
+                key = f"{vehicle['id']}|{platform_code}"
+                if target_keys and key not in target_keys:
+                    continue
+                mapping = vehicle.get("mappings", {}).get(platform_code)
+                if not mapping:
+                    continue
+                spec = self._platform_spec(platform_code)
+                targets.append(
+                    ReputationMappingTarget(
+                        vehicle_id=vehicle["id"],
+                        platform_vehicle_id=str(mapping["platform_vehicle_id"]),
+                        platform_url=spec.normalize_url(
+                            str(mapping["platform_url"]), str(mapping["platform_vehicle_id"])
+                        ),
+                        platform_display_name=str(mapping["platform_display_name"]),
+                        mapping_hash=_mapping_hash(vehicle["id"], mapping, platform_code),
+                    )
                 )
-            )
+                target_platform_codes.append(platform_code)
 
         required_count = len(targets)
         with self.sessions.begin() as db:
@@ -1534,32 +1619,17 @@ class ReputationService:
                 complete_evidence_count=0,
             )
 
-        def evidence_policy(target: ReputationMappingTarget, measurement: dict[str, Any]) -> bool:
-            vehicle = vehicles[target.vehicle_id]
-            baseline = baseline_snapshot.get(f"{target.vehicle_id}|{PLATFORM_CODE}")
-            metrics = {
-                "score": self._official_metric(
-                    measurement.get("score_raw"), (baseline or {}).get("metrics", {}).get("score")
-                ),
-                "rank": self._official_metric(
-                    measurement.get("rank_raw"),
-                    (baseline or {}).get("metrics", {}).get("rank"),
-                    inverse=True,
-                    scope=str(measurement.get("rank_scope") or "同级车评分"),
-                ),
-            }
-            return self._needs_evidence(run_type, schedule_type, vehicle["role"], metrics)
-
         root = self.settings.reputation_dir / run_id / "collection"
         root.mkdir(parents=True, exist_ok=True)
-        storage_state = self.session_store.get_state(PLATFORM_CODE) if self.session_store else None
         persisted_indexes: set[int] = set()
 
         def persist(index: int, result: ReputationPageResult | Exception, attempt: int) -> None:
             target = targets[index]
-            key = f"{target.vehicle_id}|{PLATFORM_CODE}"
+            platform_code = target_platform_codes[index]
+            key = f"{target.vehicle_id}|{platform_code}"
             self._persist_official_result(
                 run_id,
+                platform_code,
                 target,
                 vehicles[target.vehicle_id],
                 baseline_snapshot.get(key),
@@ -1569,27 +1639,80 @@ class ReputationService:
             )
             persisted_indexes.add(index)
 
-        if storage_state:
-            deadline = monotonic() + 45 * 60
-            adapter = self.adapter_factory(
+        deadline = monotonic() + 45 * 60
+        final_results: list[ReputationPageResult | Exception] = [
+            ReputationAdapterError("REPUTATION_NOT_STARTED", "口碑平台项尚未执行。")
+            for _ in targets
+        ]
+        attempt_counts = [1 for _ in targets]
+        for platform_code in run.platform_codes:
+            indexes = [
+                index
+                for index, code in enumerate(target_platform_codes)
+                if code == platform_code
+            ]
+            if not indexes:
+                continue
+            spec = self._platform_spec(platform_code)
+            storage_state = (
+                self.session_store.get_state(platform_code) if self.session_store else None
+            )
+            if not storage_state:
+                for index in indexes:
+                    final_results[index] = ReputationAdapterError(
+                        "AUTH_REQUIRED", f"{spec.display_name}共享Session需要更新。"
+                    )
+                continue
+            remaining = int(deadline - monotonic())
+            if remaining <= 0:
+                for index in indexes:
+                    final_results[index] = ReputationAdapterError(
+                        "REPUTATION_BATCH_TIMEOUT", "口碑巡检达到45分钟批次上限。"
+                    )
+                continue
+
+            def evidence_policy(target: ReputationMappingTarget, measurement: dict[str, Any]) -> bool:
+                vehicle = vehicles[target.vehicle_id]
+                baseline = baseline_snapshot.get(f"{target.vehicle_id}|{platform_code}")
+                metrics = {
+                    "score": self._official_metric(
+                        measurement.get("score_raw") or measurement.get("score"),
+                        (baseline or {}).get("metrics", {}).get("score"),
+                    ),
+                    "rank": self._official_metric(
+                        measurement.get("rank_raw") or measurement.get("rank"),
+                        (baseline or {}).get("metrics", {}).get("rank"),
+                        inverse=True,
+                        scope=str(measurement.get("rank_scope") or "同级车评分"),
+                    ),
+                }
+                return self._needs_evidence(run_type, schedule_type, vehicle["role"], metrics)
+
+            factory = (
+                self.adapter_factory
+                if platform_code == PLATFORM_CODE
+                else self.adapter_factories[platform_code]
+            )
+            adapter = factory(
                 storage_state,
                 concurrency=concurrency,
                 headless=self.settings.auth_browser_headless,
                 timeout_seconds=90,
-                batch_timeout_seconds=45 * 60,
+                batch_timeout_seconds=remaining,
                 evidence_policy=evidence_policy,
                 prefer_http_first=False,
                 include_review_article_count=True,
                 include_negative_rate=True,
             )
+            group_targets = [targets[index] for index in indexes]
             try:
                 first = adapter.validate_sync(
-                    targets,
-                    root / f"attempt-1-{uuid7()}",
+                    group_targets,
+                    root / platform_code / f"attempt-1-{uuid7()}",
                     on_result=lambda index, _target, result: (
                         None
                         if isinstance(result, ReputationAdapterError) and result.retryable
-                        else persist(index, result, 1)
+                        else persist(indexes[index], result, 1)
                     ),
                 )
                 retry_indexes = [
@@ -1601,10 +1724,10 @@ class ReputationService:
                 if retry_indexes and remaining > 0:
                     adapter.batch_timeout_seconds = remaining
                     retried = adapter.validate_sync(
-                        [targets[index] for index in retry_indexes],
-                        root / f"attempt-2-{uuid7()}",
+                        [group_targets[index] for index in retry_indexes],
+                        root / platform_code / f"attempt-2-{uuid7()}",
                         on_result=lambda index, _target, result: persist(
-                            retry_indexes[index], result, 2
+                            indexes[retry_indexes[index]], result, 2
                         ),
                     )
                 elif retry_indexes:
@@ -1618,23 +1741,19 @@ class ReputationService:
                 else:
                     retried = []
                 retry_results = dict(zip(retry_indexes, retried, strict=True))
-                final_results = [
+                group_results = [
                     retry_results.get(index, result) for index, result in enumerate(first)
                 ]
-                attempt_counts = [2 if index in retry_results else 1 for index in range(len(first))]
+                for local_index, global_index in enumerate(indexes):
+                    final_results[global_index] = group_results[local_index]
+                    attempt_counts[global_index] = 2 if local_index in retry_results else 1
             except Exception as error:
-                final_results = [error for _ in targets]
-                attempt_counts = [1 for _ in targets]
+                for index in indexes:
+                    final_results[index] = error
             finally:
                 close = getattr(adapter, "close", None)
                 if callable(close):
                     close()
-        else:
-            final_results = [
-                ReputationAdapterError("AUTH_REQUIRED", "懂车帝共享Session需要更新。")
-                for _ in targets
-            ]
-            attempt_counts = [1 for _ in targets]
 
         for index, (result, attempt_count) in enumerate(
             zip(final_results, attempt_counts, strict=True)
@@ -1651,10 +1770,21 @@ class ReputationService:
             failed = run.failed_count
             required = run.required_evidence_count
             complete_evidence = run.complete_evidence_count
+            partial = int(
+                db.scalar(
+                    select(func.count())
+                    .select_from(ReputationResult)
+                    .where(
+                        ReputationResult.run_id == run_id,
+                        ReputationResult.status == "partial_success",
+                    )
+                )
+                or 0
+            )
             run.finished_at = finished
             if completed == 0:
                 run.status = "failed"
-            elif failed or complete_evidence < required:
+            elif failed or partial or complete_evidence < required:
                 run.status = "partial_success"
             else:
                 run.status = "success"
@@ -1774,7 +1904,7 @@ class ReputationService:
             }
             run_dir = self.settings.reputation_dir / run.id
             run_dir.mkdir(parents=True, exist_ok=True)
-            report = self._render_report(run, results)
+            report = self._render_report(run, results, set(evidence_by_result))
             report_path = run_dir / f"{run.number}.txt"
             xlsx_path = run_dir / f"{run.number}.xlsx"
             report_temp = run_dir / f".{run.number}.{uuid7()}.tmp.txt"
@@ -2426,18 +2556,18 @@ class ReputationService:
             )
         return draft
 
-    @staticmethod
-    def _scope_vehicle_fields(value: ScopeVehicleCreateRequest) -> dict[str, str]:
+    @classmethod
+    def _scope_vehicle_fields(cls, value: ScopeVehicleCreateRequest) -> dict[str, str]:
         """校验并规范化新增与修改对话框共用的车型字段。"""
 
-        if value.platform_code != PLATFORM_CODE:
-            raise DomainError("REPUTATION_SCOPE_PLATFORM", "当前阶段只接受已接入平台的车型映射。")
+        spec = cls._platform_spec(value.platform_code)
         fields = {
             "series_name": value.series_name.strip(),
             "vehicle_name": value.vehicle_name.strip(),
             "project_group": value.project_group.strip(),
             "platform_vehicle_id": value.platform_vehicle_id.strip(),
             "platform_display_name": value.platform_display_name.strip(),
+            "platform_code": spec.code,
         }
         if not all(fields.values()):
             raise DomainError(
@@ -2449,7 +2579,7 @@ class ReputationService:
                 "REPUTATION_SCOPE_PROJECT_GROUP_TOO_LONG", "项目组归属不能超过80个字符。"
             )
         try:
-            fields["platform_url"] = normalize_series_url(
+            fields["platform_url"] = spec.normalize_url(
                 value.platform_url, fields["platform_vehicle_id"]
             )
         except ReputationAdapterError as error:
@@ -2467,7 +2597,7 @@ class ReputationService:
             data = json.loads(json.dumps(draft.data, ensure_ascii=False))
             vehicles = data.setdefault("vehicles", [])
             if any(
-                str(vehicle.get("mappings", {}).get(PLATFORM_CODE, {}).get("platform_vehicle_id"))
+                str(vehicle.get("mappings", {}).get(fields["platform_code"], {}).get("platform_vehicle_id"))
                 == fields["platform_vehicle_id"]
                 for vehicle in vehicles
             ):
@@ -2491,7 +2621,7 @@ class ReputationService:
                     "role_order": role_order,
                     "enabled": True,
                     "mappings": {
-                        PLATFORM_CODE: {
+                        fields["platform_code"]: {
                             "platform_vehicle_id": fields["platform_vehicle_id"],
                             "platform_url": fields["platform_url"],
                             "platform_display_name": fields["platform_display_name"],
@@ -2528,7 +2658,7 @@ class ReputationService:
                 row.get("id") != vehicle_id
                 and str(
                     row.get("mappings", {})
-                    .get(PLATFORM_CODE, {})
+                    .get(fields["platform_code"], {})
                     .get("platform_vehicle_id")
                 )
                 == fields["platform_vehicle_id"]
@@ -2536,7 +2666,7 @@ class ReputationService:
             ):
                 raise DomainError("REPUTATION_SCOPE_DUPLICATE", "平台车型 ID 已被现有车型使用。")
 
-            mapping = vehicle.setdefault("mappings", {}).get(PLATFORM_CODE) or {}
+            mapping = vehicle.setdefault("mappings", {}).get(fields["platform_code"]) or {}
             mapping_changed = any(
                 str(mapping.get(key) or "") != fields[key]
                 for key in (
@@ -2560,7 +2690,7 @@ class ReputationService:
                     }
                 )
                 if mapping_changed:
-                    vehicle["mappings"][PLATFORM_CODE] = {
+                    vehicle["mappings"][fields["platform_code"]] = {
                         "platform_vehicle_id": fields["platform_vehicle_id"],
                         "platform_url": fields["platform_url"],
                         "platform_display_name": fields["platform_display_name"],
@@ -2671,7 +2801,7 @@ class ReputationService:
             if row["platform_code"] != PLATFORM_CODE:
                 raise DomainError("REPUTATION_SCOPE_PLATFORM", "当前初始化只接受已接入平台映射。")
             try:
-                normalized_url = normalize_series_url(
+                normalized_url = REPUTATION_PLATFORMS[PLATFORM_CODE].normalize_url(
                     row["platform_url"], row["platform_vehicle_id"]
                 )
             except ReputationAdapterError as error:
@@ -2729,11 +2859,7 @@ class ReputationService:
                 "范围草稿已经变化，请刷新后重试。",
                 status_code=409,
             )
-        if value.platform_code != PLATFORM_CODE:
-            raise DomainError(
-                "REPUTATION_SCOPE_PLATFORM",
-                "当前阶段只接受已接入平台的车型映射。",
-            )
+        spec = self._platform_spec(getattr(value, "platform_code", PLATFORM_CODE))
         vehicle_ids = {row["id"] for row in scope["vehicles"]}
         errors: list[dict[str, str]] = []
         seen_vehicle: set[str] = set()
@@ -2746,7 +2872,7 @@ class ReputationService:
             if row.platform_vehicle_id in seen_platform:
                 errors.append({"row": str(index), "reason": "平台车型ID重复"})
             try:
-                normalize_series_url(row.platform_url, row.platform_vehicle_id)
+                spec.normalize_url(row.platform_url, row.platform_vehicle_id)
             except ReputationAdapterError as error:
                 errors.append({"row": str(index), "reason": error.message})
             if not row.platform_vehicle_id.strip():
@@ -2786,7 +2912,9 @@ class ReputationService:
             for row in value.rows:
                 by_id[row.vehicle_id].setdefault("mappings", {})[value.platform_code] = {
                     "platform_vehicle_id": row.platform_vehicle_id,
-                    "platform_url": row.platform_url,
+                    "platform_url": self._platform_spec(value.platform_code).normalize_url(
+                        row.platform_url, row.platform_vehicle_id
+                    ),
                     "platform_display_name": row.platform_display_name,
                     "validation_status": "unverified",
                 }
@@ -2797,6 +2925,7 @@ class ReputationService:
     def validate_mappings(self, value: MappingValidationRequest) -> dict[str, Any]:
         """并发验证当前草稿映射，并把单次三门禁结果绑定回草稿。"""
 
+        spec = self._platform_spec(getattr(value, "platform_code", PLATFORM_CODE))
         scope = self.get_scope()
         if not scope["initialized"]:
             raise DomainError("REPUTATION_SCOPE_UNINITIALIZED", "请先初始化口碑车型范围。")
@@ -2830,16 +2959,21 @@ class ReputationService:
             raise DomainError(
                 "REPUTATION_SESSION_STORE_MISSING", "真实口碑适配器未连接共享Session。"
             )
-        storage_state = self.session_store.get_state(PLATFORM_CODE)
+        storage_state = self.session_store.get_state(spec.code)
         if not storage_state:
-            raise DomainError("AUTH_REQUIRED", "请先在平台配置完成懂车帝认证。", status_code=409)
+            raise DomainError(
+                "AUTH_REQUIRED", f"请先在平台配置完成{spec.display_name}认证。", status_code=409
+            )
         targets: list[ReputationMappingTarget] = []
         for vehicle_id in requested_ids:
-            mapping = by_id[vehicle_id].get("mappings", {}).get(PLATFORM_CODE)
+            mapping = by_id[vehicle_id].get("mappings", {}).get(spec.code)
             if not mapping:
-                raise DomainError("REPUTATION_MAPPING_MISSING", f"车型{vehicle_id}缺少懂车帝映射。")
+                raise DomainError(
+                    "REPUTATION_MAPPING_MISSING",
+                    f"车型{vehicle_id}缺少{spec.display_name}映射。",
+                )
             try:
-                normalized_url = normalize_series_url(
+                normalized_url = spec.normalize_url(
                     str(mapping.get("platform_url") or ""),
                     str(mapping.get("platform_vehicle_id") or ""),
                 )
@@ -2851,11 +2985,11 @@ class ReputationService:
                     platform_vehicle_id=str(mapping["platform_vehicle_id"]),
                     platform_url=normalized_url,
                     platform_display_name=str(mapping["platform_display_name"]),
-                    mapping_hash=_mapping_hash(vehicle_id, mapping),
+                    mapping_hash=_mapping_hash(vehicle_id, mapping, spec.code),
                 )
             )
         with self.sessions() as db:
-            platform = db.get(PlatformConfig, PLATFORM_CODE)
+            platform = db.get(PlatformConfig, spec.code)
             concurrency = max(1, min(int(platform.internal_concurrency if platform else 2), 8))
         run_id = uuid7()
         input_hash = _text_hash(
@@ -2866,7 +3000,7 @@ class ReputationService:
             db.add(
                 ReputationMappingValidationRun(
                     id=run_id,
-                    platform_code=PLATFORM_CODE,
+                    platform_code=spec.code,
                     status="running",
                     input_hash=input_hash,
                     concurrency=concurrency,
@@ -2874,7 +3008,8 @@ class ReputationService:
                     started_at=now,
                 )
             )
-        adapter = self.adapter_factory(
+        factory = self.adapter_factory if spec.code == PLATFORM_CODE else self.adapter_factories[spec.code]
+        adapter = factory(
             storage_state,
             concurrency=concurrency,
             headless=self.settings.auth_browser_headless,
@@ -2932,12 +3067,12 @@ class ReputationService:
                 attempt_records: list[ReputationMappingValidationAttempt] = []
                 for attempt_number, result in enumerate(attempts, start=1):
                     record = self._validation_attempt_record(
-                        run_id, target, attempt_number, result, finished
+                        run_id, target, attempt_number, result, finished, spec
                     )
                     attempt_records.append(record)
                     db.add(record)
-                mapping = current_by_id[target.vehicle_id]["mappings"][PLATFORM_CODE]
-                if _mapping_hash(target.vehicle_id, mapping) != target.mapping_hash:
+                mapping = current_by_id[target.vehicle_id]["mappings"][spec.code]
+                if _mapping_hash(target.vehicle_id, mapping, spec.code) != target.mapping_hash:
                     continue
                 if isinstance(final_result, ReputationPageResult):
                     final_attempt_number = 2 if index in retry_results else 1
@@ -2947,7 +3082,7 @@ class ReputationService:
                             "validation_run_id": run_id,
                             "validation_attempt_number": final_attempt_number,
                             "validation_attempt_id": attempt_records[-1].id,
-                            "validation_contract_version": VALIDATION_CONTRACT_VERSION,
+                            "validation_contract_version": spec.validation_contract_version,
                             "validated_mapping_hash": target.mapping_hash,
                             "validated_at": finished.isoformat(),
                             "actual_name": final_result.actual_name,
@@ -2955,6 +3090,8 @@ class ReputationService:
                                 "score": final_result.score_raw,
                                 "rank": final_result.rank_raw,
                                 "volume": final_result.volume_raw,
+                                "review_article_count": final_result.review_article_count_raw,
+                                "negative_rate": final_result.negative_rate_raw,
                                 "rank_scope": final_result.rank_scope,
                             },
                             "validation_error": None,
@@ -3002,6 +3139,7 @@ class ReputationService:
         attempt_number: int,
         result: ReputationPageResult | Exception,
         finished: datetime,
+        spec: ReputationPlatformSpec,
     ) -> ReputationMappingValidationAttempt:
         if isinstance(result, ReputationPageResult):
             return ReputationMappingValidationAttempt(
@@ -3010,8 +3148,8 @@ class ReputationService:
                 vehicle_id=target.vehicle_id,
                 attempt_number=attempt_number,
                 mapping_hash=target.mapping_hash,
-                contract_version=VALIDATION_CONTRACT_VERSION,
-                adapter_version=REAL_ADAPTER_VERSION,
+                contract_version=spec.validation_contract_version,
+                adapter_version=spec.adapter_version,
                 status="success",
                 actual_name=result.actual_name,
                 final_url=result.final_url,
@@ -3019,6 +3157,8 @@ class ReputationService:
                     "score": result.score_raw,
                     "rank": result.rank_raw,
                     "volume": result.volume_raw,
+                    "review_article_count": result.review_article_count_raw,
+                    "negative_rate": result.negative_rate_raw,
                     "rank_scope": result.rank_scope,
                 },
                 gate_results={
@@ -3027,7 +3167,7 @@ class ReputationService:
                     "evidence": "passed",
                     "measurements": result.measurements,
                     "metric_rect": result.metric_rect,
-                    "viewport": VIEWPORT,
+                    "viewport": spec.viewport,
                     "document": {
                         "width": result.measurements[-1].get("document_width"),
                         "height": result.measurements[-1].get("document_height"),
@@ -3048,8 +3188,8 @@ class ReputationService:
             vehicle_id=target.vehicle_id,
             attempt_number=attempt_number,
             mapping_hash=target.mapping_hash,
-            contract_version=VALIDATION_CONTRACT_VERSION,
-            adapter_version=REAL_ADAPTER_VERSION,
+            contract_version=spec.validation_contract_version,
+            adapter_version=spec.adapter_version,
             status="failed",
             metrics={},
             gate_results={},
@@ -3131,7 +3271,16 @@ class ReputationService:
         if not scope["initialized"]:
             raise DomainError("REPUTATION_SCOPE_UNINITIALIZED", "请先初始化口碑车型范围。")
         vehicles = [row for row in scope["vehicles"] if row.get("enabled", True)]
-        verified = sum(1 for vehicle in vehicles if self._mapping_is_verified(vehicle))
+        platform_codes = [
+            code
+            for code in REPUTATION_PLATFORMS
+            if any(vehicle.get("mappings", {}).get(code) for vehicle in vehicles)
+        ]
+        verified = sum(
+            self._mapping_is_verified(vehicle, code)
+            for vehicle in vehicles
+            for code in platform_codes
+        )
         with self.sessions() as db:
             draft = db.get(ReputationScopeDraft, "current")
             published = (
@@ -3150,10 +3299,12 @@ class ReputationService:
         disabled_ids = previous_by_id.keys() - current_by_id.keys()
 
         def business_mapping(row: dict[str, Any]) -> dict[str, Any]:
-            mapping = row.get("mappings", {}).get(PLATFORM_CODE, {})
             return {
-                key: mapping.get(key)
-                for key in ("platform_vehicle_id", "platform_url", "platform_display_name")
+                code: {
+                    key: row.get("mappings", {}).get(code, {}).get(key)
+                    for key in ("platform_vehicle_id", "platform_url", "platform_display_name")
+                }
+                for code in platform_codes
             }
 
         shared_ids = current_by_id.keys() & previous_by_id.keys()
@@ -3180,7 +3331,13 @@ class ReputationService:
             or mapping_changed
             or identity_changed
         )
-        verified_all = bool(vehicles) and verified == len(vehicles)
+        expected_mapping_count = len(vehicles) * len(platform_codes)
+        complete_mapping_count = sum(
+            bool(vehicle.get("mappings", {}).get(code))
+            for vehicle in vehicles
+            for code in platform_codes
+        )
+        verified_all = bool(expected_mapping_count) and verified == expected_mapping_count
         can_publish = verified_all and has_changes
         return {
             "revision": scope["revision"],
@@ -3189,7 +3346,9 @@ class ReputationService:
             "focus_count": sum(row["role"] == "focus" for row in vehicles),
             "competitor_count": sum(row["role"] == "competitor" for row in vehicles),
             "verified_mapping_count": verified,
-            "expected_mapping_count": len(vehicles),
+            "expected_mapping_count": expected_mapping_count,
+            "complete_mapping_count": complete_mapping_count,
+            "platform_codes": platform_codes,
             "added_count": len(added_ids),
             "disabled_count": len(disabled_ids),
             "role_changed_count": role_changed,
@@ -3207,13 +3366,14 @@ class ReputationService:
         }
 
     @staticmethod
-    def _mapping_is_verified(vehicle: dict[str, Any]) -> bool:
-        mapping = vehicle.get("mappings", {}).get(PLATFORM_CODE, {})
+    def _mapping_is_verified(vehicle: dict[str, Any], platform_code: str) -> bool:
+        spec = REPUTATION_PLATFORMS[platform_code]
+        mapping = vehicle.get("mappings", {}).get(platform_code, {})
         return (
             mapping.get("validation_status") == "verified"
-            and mapping.get("validation_contract_version") == VALIDATION_CONTRACT_VERSION
+            and mapping.get("validation_contract_version") == spec.validation_contract_version
             and mapping.get("validated_mapping_hash")
-            == _mapping_hash(str(vehicle.get("id") or ""), mapping)
+            == _mapping_hash(str(vehicle.get("id") or ""), mapping, platform_code)
         )
 
     def publish_scope(self, value: ScopePublishRequest) -> dict[str, Any]:
@@ -3321,63 +3481,83 @@ class ReputationService:
             draw.text((52, size[1] - 64), "ThreadSnap reputation inspection acceptance fixture", fill="#64748B")
         image.save(path, format="PNG", optimize=False)
 
-    def _render_report(self, run: ReputationRun, results: list[ReputationResult]) -> str:
+    def _render_report(
+        self,
+        run: ReputationRun,
+        results: list[ReputationResult],
+        evidence_result_ids: set[str] | None = None,
+    ) -> str:
         prefix = "【不完整汇报】" if run.status == "partial_success" else ""
         title = f"{prefix}{run.planned_date}口碑巡检指标变动如下："
-        lines = [title, "", f"【{PLATFORM_NAME}】"]
+        lines = [title]
         if run.run_type == "baseline_initialization":
-            lines.extend(["首次基线初始化，无前日变化可比较。", f"全量页面证据：{run.complete_evidence_count}/{run.required_evidence_count}"])
+            for platform_code in run.platform_codes:
+                platform_results = [
+                    item for item in results if item.platform_code == platform_code
+                ]
+                lines.extend(
+                    [
+                        "",
+                        f"【{REPUTATION_PLATFORMS[platform_code].display_name}】",
+                        "首次基线初始化，无前日变化可比较。",
+                        "页面证据："
+                        f"{sum(item.id in evidence_result_ids for item in platform_results) if evidence_result_ids is not None else sum(bool(item.evidence_required and item.status == 'success') for item in platform_results)}"
+                        f"/{len(platform_results)}",
+                    ]
+                )
             if run.schedule_type == "month_end":
                 lines.append("月末巡检：本批次同时作为首次基线并执行当前范围全量页面证据。")
             missing = [item for item in results if item.status != "success"]
             if missing:
                 lines.extend(
                     ["", "异常与缺失："]
-                    + [f"- {item.vehicle_name}：{item.error_message or item.status}" for item in missing]
+                    + [f"- {item.platform_name}/{item.vehicle_name}：{item.error_message or item.status}" for item in missing]
                 )
             return "\n".join(lines) + "\n"
-        changed_count = 0
-        anomalies: list[str] = []
-        for result in results:
-            changes: list[str] = []
-            for key, name in (
+        for platform_code in run.platform_codes:
+            lines.extend(["", f"【{REPUTATION_PLATFORMS[platform_code].display_name}】"])
+            platform_changed = 0
+            platform_anomalies: list[str] = []
+            for result in [item for item in results if item.platform_code == platform_code]:
+                changes: list[str] = []
+                for key, name in (
                 ("score", "口碑分"),
                 ("rank", "排名"),
                 ("volume", "口碑量"),
                 ("review_article_count", "口碑评价篇数"),
                 ("negative_rate", "差评率"),
             ):
-                metric = result.metrics.get(key)
-                if not metric:
-                    continue
-                if metric.get("direction") in {"up", "down"}:
-                    direction = "上升" if metric["direction"] == "up" else "下降"
-                    changes.append(
-                        f"{name}{metric['raw']}，较昨日{direction}{str(metric['delta']).lstrip('+-')}"
+                    metric = result.metrics.get(key)
+                    if not metric:
+                        continue
+                    if metric.get("direction") in {"up", "down"}:
+                        direction = "上升" if metric["direction"] == "up" else "下降"
+                        changes.append(
+                            f"{name}{metric['raw']}，较昨日{direction}{str(metric['delta']).lstrip('+-')}"
+                        )
+                if changes:
+                    platform_changed += 1
+                    lines.append(f"{platform_changed}. 【{result.vehicle_name}】" + "；".join(changes) + "。")
+                if result.status != "success" or any(
+                    item.get("comparison_status") not in {"comparable"}
+                    for item in result.metrics.values()
+                ):
+                    states = sorted(
+                        {
+                            item.get("comparison_status", "unknown")
+                            for item in result.metrics.values()
+                            if item.get("comparison_status") != "comparable"
+                        }
                     )
-            if changes:
-                changed_count += 1
-                lines.append(f"{changed_count}. 【{result.vehicle_name}】" + "；".join(changes) + "。")
-            if result.status != "success" or any(
-                item.get("comparison_status") not in {"comparable"}
-                for item in result.metrics.values()
-            ):
-                states = sorted(
-                    {
-                        item.get("comparison_status", "unknown")
-                        for item in result.metrics.values()
-                        if item.get("comparison_status") != "comparable"
-                    }
-                )
-                anomalies.append(
-                    f"- {result.vehicle_name}：{result.error_message or '、'.join(states)}"
-                )
-        if not changed_count and not anomalies:
-            lines.append("今日无口碑指标变化。")
-        elif not changed_count:
-            lines.append("今日没有可确认的正常变化。")
-        if anomalies:
-            lines.extend(["", "异常与缺失：", *anomalies])
+                    platform_anomalies.append(
+                        f"- {result.vehicle_name}：{result.error_message or '、'.join(states)}"
+                    )
+            if not platform_changed and not platform_anomalies:
+                lines.append("今日无口碑指标变化。")
+            elif not platform_changed:
+                lines.append("今日没有可确认的正常变化。")
+            if platform_anomalies:
+                lines.extend(["", "异常与缺失：", *platform_anomalies])
         if run.schedule_type == "month_end" or run.run_type == "month_end":
             lines.extend(["", "月末巡检：已执行当前范围全量页面证据。"])
         return "\n".join(lines) + "\n"
@@ -3392,66 +3572,186 @@ class ReputationService:
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "口碑巡检"
-        headers = [
-            "日期",
-            "角色",
-            "车系",
-            "车型",
-            "口碑分",
-            "排名",
-            "口碑量",
-            "口碑评价篇数",
-            "差评率",
-            "备注",
-        ]
+        platform_codes = list(run.platform_codes or [PLATFORM_CODE])
+        single_platform = len(platform_codes) == 1
+        metric_headers = ("口碑分", "排名", "口碑量", "口碑评价篇数", "差评率")
+        headers = ["日期", "角色", "车系", "车型"] + [
+            label if single_platform else f"{REPUTATION_PLATFORMS[code].display_name}-{label}"
+            for code in platform_codes
+            for label in metric_headers
+        ] + ["备注"]
         sheet.append(headers)
         for cell in sheet[1]:
             cell.fill = HEADER_FILL
             cell.font = Font(bold=True)
             cell.alignment = Alignment(horizontal="center", vertical="center")
-        for row_index, result in enumerate(results, start=2):
+        vehicles = list({result.vehicle_id: result for result in results}.values())
+        by_target = {(result.vehicle_id, result.platform_code): result for result in results}
+        preview_dir = path.parent / "xlsx-previews"
+        preview_manifest: list[dict[str, Any]] = []
+        for row_index, vehicle in enumerate(vehicles, start=2):
             values = [
                 run.planned_date,
-                "重点车型" if result.role == "focus" else "竞品车型",
-                result.series_name,
-                result.vehicle_name,
-                result.metrics["score"].get("raw") or "—",
-                result.metrics["rank"].get("raw") or "—",
-                result.metrics["volume"].get("raw") or "—",
-                result.metrics.get("review_article_count", {}).get("raw") or "—",
-                (
-                    result.metrics["negative_rate"].get("raw") or "—"
-                    if "negative_rate" in result.metrics
-                    else "历史未采集"
-                ),
-                "",
+                "重点车型" if vehicle.role == "focus" else "竞品车型",
+                vehicle.series_name,
+                vehicle.vehicle_name,
             ]
-            sheet.append(values)
-            for column, metric_name in (
-                (5, "score"),
-                (6, "rank"),
-                (7, "volume"),
-                (8, "review_article_count"),
-                (9, "negative_rate"),
-            ):
-                tone = result.metrics.get(metric_name, {}).get("tone")
-                sheet.cell(row_index, column).fill = (
-                    GREEN_FILL if tone == "positive" else RED_FILL if tone == "negative" else NEUTRAL_FILL
+            for code in platform_codes:
+                result = by_target.get((vehicle.vehicle_id, code))
+                values.extend(
+                    [
+                        result.metrics["score"].get("raw") or "—" if result else "—",
+                        result.metrics["rank"].get("raw") or "—" if result else "—",
+                        result.metrics["volume"].get("raw") or "—" if result else "—",
+                        result.metrics.get("review_article_count", {}).get("raw") or "—" if result else "—",
+                        result.metrics.get("negative_rate", {}).get("raw") or "—" if result else "—",
+                    ]
                 )
-                sheet.cell(row_index, column).alignment = Alignment(horizontal="center")
-            evidence = evidence_by_result.get(result.id)
-            if evidence:
-                preview = WorksheetImage(evidence.metric_region_path)
-                preview.width = 294
-                preview.height = 66
-                sheet.add_image(preview, f"J{row_index}")
-                sheet.row_dimensions[row_index].height = 52
-        widths = [13, 12, 18, 22, 12, 12, 14, 16, 12, 44]
+            missing: list[str] = []
+            for code in platform_codes:
+                result = by_target.get((vehicle.vehicle_id, code))
+                evidence = evidence_by_result.get(result.id) if result else None
+                if not evidence:
+                    reason = result.error_message if result and result.error_message else "证据缺失"
+                    missing.append(f"{REPUTATION_PLATFORMS[code].display_name}：{reason}")
+            values.append("；".join(missing))
+            sheet.append(values)
+            for platform_index, code in enumerate(platform_codes):
+                result = by_target.get((vehicle.vehicle_id, code))
+                first_column = 5 + platform_index * 5
+                for offset, metric_name in enumerate(
+                    ("score", "rank", "volume", "review_article_count", "negative_rate")
+                ):
+                    tone = result.metrics.get(metric_name, {}).get("tone") if result else None
+                    cell = sheet.cell(row_index, first_column + offset)
+                    cell.fill = GREEN_FILL if tone == "positive" else RED_FILL if tone == "negative" else NEUTRAL_FILL
+                    cell.alignment = Alignment(horizontal="center")
+            preview_path, preview_record = self._xlsx_preview(
+                vehicle.vehicle_id,
+                platform_codes,
+                by_target,
+                evidence_by_result,
+                preview_dir,
+            )
+            if preview_path:
+                preview = WorksheetImage(preview_path)
+                if single_platform:
+                    preview.width, preview.height = 294, 66
+                    sheet.row_dimensions[row_index].height = 52
+                else:
+                    preview.width, preview.height = 720, 135
+                    sheet.row_dimensions[row_index].height = 104
+                note_column = 5 + len(platform_codes) * 5
+                sheet.add_image(preview, f"{get_column_letter(note_column)}{row_index}")
+            if preview_record:
+                preview_manifest.append(preview_record)
+        widths = [13, 12, 18, 22] + [
+            value for _ in platform_codes for value in (12, 12, 14, 16, 12)
+        ] + [105 if not single_platform else 44]
         for index, width in enumerate(widths, start=1):
             sheet.column_dimensions[get_column_letter(index)].width = width
         sheet.freeze_panes = "E2"
-        sheet.auto_filter.ref = f"A1:J{len(results) + 1}"
+        sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{len(vehicles) + 1}"
         workbook.save(path)
+        if preview_manifest:
+            (preview_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "reputation-xlsx-preview-v1",
+                        "run_id": run.id,
+                        "items": preview_manifest,
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+
+    @staticmethod
+    def _xlsx_preview(
+        vehicle_id: str,
+        platform_codes: list[str],
+        by_target: dict[tuple[str, str], ReputationResult],
+        evidence_by_result: dict[str, ReputationEvidence],
+        preview_dir: Path,
+    ) -> tuple[str | None, dict[str, Any] | None]:
+        """为多平台XLSX生成单张可追溯预览，独立证据字节保持不变。"""
+
+        sources: list[dict[str, Any]] = []
+        for code in platform_codes:
+            result = by_target.get((vehicle_id, code))
+            evidence = evidence_by_result.get(result.id) if result else None
+            sources.append(
+                {
+                    "platform_code": code,
+                    "platform_name": REPUTATION_PLATFORMS[code].display_name,
+                    "result_id": result.id if result else None,
+                    "evidence_id": evidence.id if evidence else None,
+                    "source_sha256": evidence.metric_region_sha256 if evidence else None,
+                    "source_path": evidence.metric_region_path if evidence else None,
+                }
+            )
+        available = [source for source in sources if source["source_path"]]
+        if len(platform_codes) == 1:
+            return (str(available[0]["source_path"]), None) if available else (None, None)
+        if not available:
+            return None, None
+
+        input_hash = _text_hash(
+            [
+                {
+                    "platform_code": source["platform_code"],
+                    "source_sha256": source["source_sha256"],
+                }
+                for source in sources
+            ]
+        )
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        preview_path = preview_dir / f"{vehicle_id}-{input_hash[:16]}.png"
+        if not preview_path.is_file():
+            tile_width, content_height, label_height = 320, 180, 28
+            canvas = Image.new(
+                "RGB", (tile_width * len(platform_codes), content_height + label_height), "white"
+            )
+            draw = ImageDraw.Draw(canvas)
+            try:
+                font = ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", 16)
+            except OSError:
+                font = ImageFont.load_default()
+            for index, source in enumerate(sources):
+                left = index * tile_width
+                draw.rectangle(
+                    (left, 0, left + tile_width - 1, label_height - 1),
+                    fill="#E8EEF8",
+                    outline="#CBD5E1",
+                )
+                draw.text((left + 10, 4), source["platform_name"], fill="#0F172A", font=font)
+                draw.rectangle(
+                    (left, label_height, left + tile_width - 1, label_height + content_height - 1),
+                    outline="#CBD5E1",
+                )
+                if source["source_path"]:
+                    with Image.open(source["source_path"]) as original:
+                        tile = original.convert("RGB")
+                        tile.thumbnail((tile_width - 12, content_height - 12), Image.Resampling.LANCZOS)
+                    x = left + (tile_width - tile.width) // 2
+                    y = label_height + (content_height - tile.height) // 2
+                    canvas.paste(tile, (x, y))
+                else:
+                    draw.text(
+                        (left + 94, label_height + 78),
+                        "EVIDENCE MISSING",
+                        fill="#B91C1C",
+                    )
+            canvas.save(preview_path, format="PNG", optimize=False)
+        record = {
+            "vehicle_id": vehicle_id,
+            "input_hash": input_hash,
+            "preview_path": str(preview_path),
+            "preview_sha256": _sha256(preview_path),
+            "sources": sources,
+        }
+        return str(preview_path), record
 
     @staticmethod
     def _run_dict(run: ReputationRun) -> dict[str, Any]:
