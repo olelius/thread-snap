@@ -215,6 +215,8 @@
 | `docs/adr/0057-cap-autohome-internal-concurrency-at-one.md` | 依据真实420与1000条对照把汽车之家平台内部总并发重新固定为1 |
 | `docs/adr/0058-route-yiche-control-through-classified-recovery.md` | 易车区分登录失效、详情挑战、腾讯验证码与限流，并复用单来源原URL探针或持久冷却恢复 |
 | `docs/adr/0059-allow-bounded-yiche-waf-trigger-round.md` | 工具链门通过后允许以最多80个不同URL、实际并发1和首控止损取得一次易车WAF逆向样本 |
+| `docs/adr/0060-integrate-shared-tencent-captcha-protocol-solver.md` | 腾讯验证码逆向结果封装为平台无关纯协议组件，易车只实现站点WAF回调和原正文重载 |
+| `docs/adr/0061-recover-yiche-429-by-bounded-transport-rotation.md` | 易车首次429只轮换当前线程HTTP传输一次，仍受限时进入既有持久冷却 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 

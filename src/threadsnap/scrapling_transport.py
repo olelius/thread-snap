@@ -140,6 +140,7 @@ class ScraplingTransportSnapshot:
 
     scope: str
     http_requests: int
+    http_rotations: int
     browser_attempts: int
     browser_reuses: int
     browser_usable_responses: int
@@ -501,6 +502,7 @@ class ScraplingHttpPool:
         self._last_recovery: ProtectionRecoveryResult | None = None
         self._sessions: list[ScraplingHttpSession] = []
         self._http_requests = 0
+        self._http_rotations = 0
         self._browser_attempts = 0
         self._browser_reuses = 0
         self._browser_usable_responses = 0
@@ -529,6 +531,31 @@ class ScraplingHttpPool:
 
         with self._lock:
             self._http_requests += 1
+
+    def rotate_current_thread_session(self) -> ScraplingHttpSession:
+        """关闭并替换当前线程的HTTP传输，同时保留共享Cookie状态。"""
+
+        with self._lock:
+            if self._closed:
+                raise RuntimeError("Scrapling HTTP 资源池已经关闭。")
+        replacement = ScraplingHttpSession(
+            self.cookies,
+            timeout_seconds=self.timeout_seconds,
+            impersonate=self.impersonate,
+            request_observer=self._record_http_request,
+        )
+        previous = getattr(self._thread_local, "session", None)
+        with self._lock:
+            if self._closed:
+                replacement.close()
+                raise RuntimeError("Scrapling HTTP 资源池已经关闭。")
+            self._thread_local.session = replacement
+            self._sessions = [item for item in self._sessions if item is not previous]
+            self._sessions.append(replacement)
+            self._http_rotations += 1
+        if previous is not None:
+            previous.close()
+        return replacement
 
     @property
     def recovery_generation(self) -> int:
@@ -638,6 +665,7 @@ class ScraplingHttpPool:
             return ScraplingTransportSnapshot(
                 scope=self.scope.platform,
                 http_requests=self._http_requests,
+                http_rotations=self._http_rotations,
                 browser_attempts=self._browser_attempts,
                 browser_reuses=self._browser_reuses,
                 browser_usable_responses=self._browser_usable_responses,

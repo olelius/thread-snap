@@ -16,6 +16,23 @@
 
 ---
 
+## 2026-09-02 — 易车429当前线程HTTP传输轮换恢复
+**总目标**：把固定1000 URL诊断中已经确认的429恢复条件接入生产链：首次429只重建当前线程传输并复访原请求，仍受限再进入既有持久冷却，转为腾讯WAF时继续共享纯协议组件。
+**状态**：🔄 核心实现、组合回归、owner文档和本地验证阶梯已完成；正在执行Git交付，合并后追加实际并发4任务计时与运行核验。
+**干到哪里了**：
+- [x] 复核Git外`ip-account-cookie-ab-20260901.json`和`root-cause-analysis.json`：生产长会话429期间，同出口四种新HTTP传输均在约0.4～0.6秒取得`203 -> 200正文`；验证码则跨新传输存在，两类控制继续分流。
+- [x] `ScraplingHttpPool`新增当前线程会话轮换：关闭旧FetcherSession、沿用共享CookieStore、登记`http_rotations`，不重建其他线程或平台资源。
+- [x] 易车升级为`yiche-community-v9-rate-limit-transport-rotation`；详情逻辑链首次429最多轮换一次，复访继续衔接203与腾讯WAF；API复访重新生成时间戳和签名；第二次429仍返回`PLATFORM_RATE_LIMITED`给60～900秒Worker冷却。
+- [x] 新增页面`429 -> 203 -> 正文`、持续页面429、API重新签名、持续API 429、`429 -> 腾讯WAF -> 正文`和共享Cookie保留回归；传输与采集器定向53项通过，Ruff通过。
+- [x] 新增ADR 0061，并同步CONTEXT、产品设计、技术路线、ADR 0052/0058和后续平台链；修正“腾讯逆向仍未接入生产”的旧表述。
+- [x] 本地真实HTTP/1.1服务以不同客户端端口证明旧传输关闭、新传输复用连接完成`429 -> 203 -> 200正文`；3次请求、1次轮换、耗时0.510秒，Git外回执`artifacts/runtime/yiche-429-transport-rotation/acceptance.json`的SHA-256为`be73aa02854b421d83d196dbd89f2ef558184a2b56f0aa76c0ebbfb00bd8f66f`。
+- [x] 完整后端265项通过；Ruff、4个变更文件格式检查、compileall、pip check、`git diff --check`、前端TypeScript检查和2468模块生产构建通过。部署Shell未变化；本机未安装Git Bash/WSL发行版，本轮未重复该项。wheel尝试因现有环境缺少`build`入口和`bdist_wheel`停止，本任务未改变依赖或打包输入。
+**下一步**：精确暂存、提交、推送、PR合并并清理分支；从合并后的main重启后端确认v9，再以实际并发4运行一轮有界任务记录总耗时、吞吐和控制响应，结束后恢复并发1。
+**边界**：每个逻辑请求最多轮换一次，不清空账号Session、不循环新建传输、不提高易车并发；研究观测不是固定服务时延；正式500条生产验收仍为独立阶段门。
+**关联**：`docs/adr/0061-recover-yiche-429-by-bounded-transport-rotation.md`、`src/threadsnap/scrapling_transport.py`、`src/threadsnap/collectors/yiche.py`
+
+---
+
 ## 2026-09-02 — 腾讯验证码共享协议组件与易车生产接入
 **总目标**：复用已完成的腾讯验证码逆向结果，封装平台无关纯协议组件，由易车专属WAF适配器调用，并为后续其他平台保留复用合同。
 **状态**：✅ 共享组件、易车接入、两级实时目标链、完整回归、部署构建门、Git交付及合并后运行态核验均已完成。

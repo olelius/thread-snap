@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import re
 import threading
 import time
@@ -29,7 +30,7 @@ from .base import AuthenticationRequired, CircleSource, CollectorFailure
 from .yiche_waf import YicheWafCallbackError, submit_yiche_waf_callback
 
 BASE_URL = "https://baa.yiche.com"
-ADAPTER_VERSION = "yiche-community-v8-tencent-protocol-solver"
+ADAPTER_VERSION = "yiche-community-v9-rate-limit-transport-rotation"
 CIRCLE_RE = re.compile(
     r"^/(?P<id>[A-Za-z0-9_-]+)/?"
     r"(?:index-0-(?P<order>[01])-(?P<page>\d+)\.html)?/?$"
@@ -54,6 +55,8 @@ INTERRUPTING_CONTROL_CODES = {
     "PLATFORM_CHALLENGE",
     "PLATFORM_RATE_LIMITED",
 }
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -267,6 +270,7 @@ class YicheCollector:
         )
         self._captcha_lock = threading.Lock()
         self._captcha_generation = 0
+        self._rate_limit_rotation_lock = threading.Lock()
 
     def _http_session(self) -> Any:
         """返回当前线程独享的 Scrapling FetcherSession 适配器。"""
@@ -294,6 +298,17 @@ class YicheCollector:
                 if attempt < 2:
                     time.sleep(0.5 * (attempt + 1))
         raise CollectorFailure("PLATFORM_NETWORK_ERROR", f"访问易车失败：{last_error}")
+
+    def _retry_after_transport_rotation(self, request: Callable[[], Any]) -> Any:
+        """首次429后串行轮换当前线程传输，并对同一逻辑请求只复访一次。"""
+
+        response = request()
+        if int(response.status_code) != 429:
+            return response
+        with self._rate_limit_rotation_lock:
+            self.http.rotate_current_thread_session()
+            logger.info("易车429已轮换当前HTTP传输并复访一次。")
+            return request()
 
     def close(self) -> None:
         """关闭采集线程创建的全部 Scrapling Session。"""
@@ -329,13 +344,26 @@ class YicheCollector:
     def _document(self, url: str) -> tuple[str, str]:
         """直连详情页，并以共享腾讯协议组件处理易车 WAF。"""
         observed_generation = self._captcha_generation
-        response = self._get(url, headers={"Referer": BASE_URL + "/"})
+        rotation_used = False
+
+        def fetch_document() -> Any:
+            nonlocal rotation_used
+            response = self._get(url, headers={"Referer": BASE_URL + "/"})
+            if int(response.status_code) != 429 or rotation_used:
+                return response
+            with self._rate_limit_rotation_lock:
+                self.http.rotate_current_thread_session()
+                rotation_used = True
+                logger.info("易车详情429已轮换当前HTTP传输并复访一次。")
+                return self._get(url, headers={"Referer": BASE_URL + "/"})
+
+        response = fetch_document()
         challenge_cookie_applied = False
         if response.status_code == 203:
             cookie_name, cookie_value = self._challenge_cookie(response.text)
             host = urlsplit(url).hostname or "baa.yiche.com"
             self._http_session().cookies.set(cookie_name, cookie_value, domain=host, path="/")
-            response = self._get(url, headers={"Referer": BASE_URL + "/"})
+            response = fetch_document()
             challenge_cookie_applied = True
         if response.status_code == 429:
             raise CollectorFailure(
@@ -377,14 +405,12 @@ class YicheCollector:
                     f"易车腾讯验证码协议处理未完成（{code}），请处理当前访问验证。",
                     trigger_url=url,
                 ) from solve_error
-            response = self._get(url, headers={"Referer": BASE_URL + "/"})
+            response = fetch_document()
             if response.status_code == 203:
                 cookie_name, cookie_value = self._challenge_cookie(response.text)
                 host = urlsplit(url).hostname or "baa.yiche.com"
-                self._http_session().cookies.set(
-                    cookie_name, cookie_value, domain=host, path="/"
-                )
-                response = self._get(url, headers={"Referer": BASE_URL + "/"})
+                self._http_session().cookies.set(cookie_name, cookie_value, domain=host, path="/")
+                response = fetch_document()
             if response.status_code == 429:
                 raise CollectorFailure(
                     "PLATFORM_RATE_LIMITED",
@@ -421,10 +447,13 @@ class YicheCollector:
     def _api_event(
         self, url: str, data: dict[str, Any], *, referer: str, content_id: str | None = None
     ) -> ApiEvent:
-        timestamp = int(time.time() * 1000)
-        params, headers = self._signed_request(data, timestamp)
-        headers.update({"Referer": referer, "x-user-guid": self.user_guid})
-        response = self._get(url, params=params, headers=headers)
+        def request() -> Any:
+            timestamp = int(time.time() * 1000)
+            params, headers = self._signed_request(data, timestamp)
+            headers.update({"Referer": referer, "x-user-guid": self.user_guid})
+            return self._get(url, params=params, headers=headers)
+
+        response = self._retry_after_transport_rotation(request)
         payload: Any = None
         try:
             payload = response.json()
@@ -448,9 +477,7 @@ class YicheCollector:
             return None
         event = matched[-1]
         if event.status == 429:
-            raise CollectorFailure(
-                "PLATFORM_RATE_LIMITED", "易车接口返回限流状态，请稍后重试。"
-            )
+            raise CollectorFailure("PLATFORM_RATE_LIMITED", "易车接口返回限流状态，请稍后重试。")
         if event.status in {401, 403}:
             raise AuthenticationRequired("易车登录 Session 已失效。")
         if event.status != 200:

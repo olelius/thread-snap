@@ -464,6 +464,25 @@ class ScraplingTransportTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             pool.session()
 
+    def test_current_thread_transport_rotation_preserves_shared_cookies(self) -> None:
+        """轮换只替换当前线程连接，服务端新Cookie继续由共享存储注入。"""
+
+        pool = ScraplingHttpPool(None, timeout_seconds=5)
+        try:
+            previous = pool.session()
+            previous.get(f"{self.base_url}/set-cookie")
+
+            replacement = pool.rotate_current_thread_session()
+            echoed = replacement.get(f"{self.base_url}/echo-cookie").json()["cookie"]
+            snapshot = pool.stats_snapshot()
+
+            self.assertIsNot(previous, replacement)
+            self.assertTrue(previous._closed)
+            self.assertIn("server_cookie=kept", echoed)
+            self.assertEqual((2, 1), (snapshot.http_requests, snapshot.http_rotations))
+        finally:
+            pool.close()
+
 
 if __name__ == "__main__":
     unittest.main()
