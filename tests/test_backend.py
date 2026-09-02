@@ -4225,6 +4225,70 @@ class QueueAndRetryTests(AppCase):
         )))
         self.assertEqual([8, 1, 1], observed_concurrency)
 
+    def test_rate_limit_cooldown_resets_after_progress_and_escalates_without_progress(
+        self,
+    ) -> None:
+        """新增有效结果后按新限流事件从60秒计，零进展连续限流才升级。"""
+
+        circle = self.save_verified_circle(external_id="rate-progress", name="限流进展圈")
+        run = self.container.runs.create_manual(
+            ManualRunCreate(
+                platform_code="dongchedi",
+                circle_ids=[circle.id],
+                quantity=3,
+            ),
+            scope="api",
+            header_key="rate-limit-progress-reset-0001",
+        )
+
+        def retry_result(records: list[dict]) -> dict:
+            failure = {
+                "url": "https://www.dongchedi.com/ugc/article/limited",
+                "code": "PLATFORM_RATE_LIMITED",
+                "message": "平台限制了请求频率。",
+                "source_index": 0,
+            }
+            return {
+                "kind": "retry",
+                "records": records,
+                "failures": [failure],
+                "retry_failures": [failure],
+                "retry_error_code": "PLATFORM_RATE_LIMITED",
+                "terminal_failures": [],
+                "retry_scope": "source",
+                "validation": None,
+            }
+
+        with self.container.sessions.begin() as db:
+            task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            assert task is not None
+            self.container.worker._apply_result(
+                db, task, retry_result([sample_record("1001")])
+            )
+            first = dict(task.checkpoint or {})
+            self.assertEqual(1, first["retry_attempt"])
+            self.assertEqual(1, first["rate_limit_completed_count"])
+
+            self.container.worker._apply_result(
+                db, task, retry_result([sample_record("1002")])
+            )
+            progressed = dict(task.checkpoint or {})
+            self.assertEqual(1, progressed["retry_attempt"])
+            self.assertEqual(2, progressed["rate_limit_completed_count"])
+
+            self.container.worker._apply_result(db, task, retry_result([]))
+            stalled = dict(task.checkpoint or {})
+            self.assertEqual(2, stalled["retry_attempt"])
+            self.assertEqual(2, stalled["rate_limit_completed_count"])
+
+            first_not_before = datetime.fromisoformat(first["retry_not_before"])
+            progressed_not_before = datetime.fromisoformat(progressed["retry_not_before"])
+            stalled_not_before = datetime.fromisoformat(stalled["retry_not_before"])
+            now = datetime.now(timezone.utc)
+            self.assertLess(first_not_before, now + timedelta(seconds=65))
+            self.assertLess(progressed_not_before, now + timedelta(seconds=65))
+            self.assertGreaterEqual(stalled_not_before, now + timedelta(seconds=115))
+
     def test_restart_recovers_running_tasks_to_fifo(self) -> None:
         circle = self.save_verified_circle()
         run = self.container.runs.create_manual(
