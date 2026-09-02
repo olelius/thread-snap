@@ -413,6 +413,19 @@ class ScreenshotArtifactTests(unittest.TestCase):
         self.assertEqual((129, 200, 975, 405), _render_card_box(source, item, current))
         source.close()
 
+    def test_renderer_keeps_verified_yiche_full_row_for_first_card(self) -> None:
+        """易车首条紧邻表头时不得把表头边界误识别为卡片上边界。"""
+
+        source = Image.new("RGB", (1440, 900), "white")
+        draw = ImageDraw.Draw(source)
+        draw.rectangle((120, 411, 1319, 495), fill="#f5f5f5")
+        draw.rectangle((121, 496, 1318, 556), fill="white", outline="#eeeeee")
+        item = SimpleNamespace(x=121, y=496, width=1198, height=61)
+        evidence = SimpleNamespace(adapter_version="yiche-community-v10-page-evidence")
+
+        self.assertEqual((121, 496, 1319, 557), _render_card_box(source, item, evidence))
+        source.close()
+
     def test_renderer_keeps_each_original_page_as_a_full_size_tile(self) -> None:
         source_paths = [
             Path(self.temporary.name) / "source-one.png",
@@ -480,7 +493,7 @@ class ScreenshotArtifactTests(unittest.TestCase):
         with zipfile.ZipFile(rendered["package_path"]) as archive:
             manifest = json.loads(archive.read("manifest.json"))
         self.assertEqual("threadsnap.screenshot-artifact.v2", manifest["schema"])
-        self.assertEqual("v5-autohome-full-card-frame-boundaries", manifest["renderer_version"])
+        self.assertEqual("v6-yiche-full-row-boundaries", manifest["renderer_version"])
 
 
 if __name__ == "__main__":

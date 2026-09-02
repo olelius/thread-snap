@@ -71,7 +71,7 @@ class CollectorRegistryTests(unittest.TestCase):
         )
         self.assertFalse(spec.default_enabled)
         self.assertEqual("available", spec.adapter_status)
-        self.assertFalse(spec.supports_page_evidence)
+        self.assertTrue(spec.supports_page_evidence)
         self.assertEqual("account_login", spec.authentication_mode)
         self.assertEqual("direct_http", spec.background_transport)
 
@@ -821,8 +821,89 @@ class YicheKnownFactsTests(unittest.TestCase):
         page = collector._list_page(parse_circle_url("https://baa.yiche.com/sample/"), 1)
         self.assertEqual((9001, 1), (page["forum_id_lookup"], len(page["list"])))
         self.assertIn(
-            {"forumId": 9001, "order": 0, "pageIndex": 1, "pageSize": 50, "tagId": -1}, calls
+            {"forumId": 9001, "order": 0, "pageIndex": 1, "pageSize": 50, "tagId": 0}, calls
         )
+
+    def test_yiche_page_evidence_matches_same_page_response_and_full_row(self) -> None:
+        source = parse_circle_url("https://baa.yiche.com/sample/")
+        api_items = [
+            {"id": 1001, "forumApp": "sample", "forumId": 9001, "repliesNum": 3},
+            {"id": 1002, "forumApp": "sample", "forumId": 9001, "repliesNum": 4},
+        ]
+        rows = YicheCollector._merge_capture_rows(
+            source,
+            [
+                {
+                    "post_id": "1001",
+                    "href": "https://baa.yiche.com/sample/thread-1001.html",
+                    "text": "第一条 作者 回复 最后回复",
+                    "image_count": 1,
+                    "rect": {"x": 121, "y": 496, "width": 1198, "height": 61},
+                },
+                {
+                    "post_id": "1002",
+                    "href": "https://baa.yiche.com/sample/thread-1002.html",
+                    "text": "第二条 作者 回复 最后回复",
+                    "image_count": 0,
+                    "rect": {"x": 121, "y": 557, "width": 1198, "height": 61},
+                },
+            ],
+            api_items,
+        )
+        self.assertEqual(["1001", "1002"], [item["post_id"] for item in rows])
+        self.assertEqual(
+            (121, 1198, 3), (rows[0]["rect"]["x"], rows[0]["rect"]["width"], rows[0]["repliesNum"])
+        )
+
+    def test_yiche_page_evidence_rejects_dom_and_api_order_mismatch(self) -> None:
+        source = parse_circle_url("https://baa.yiche.com/sample/")
+        with self.assertRaises(CollectorFailure) as caught:
+            YicheCollector._merge_capture_rows(
+                source,
+                [
+                    {
+                        "post_id": "1001",
+                        "href": "https://baa.yiche.com/sample/thread-1001.html",
+                        "rect": {"x": 121, "y": 496, "width": 1198, "height": 61},
+                    }
+                ],
+                [{"id": 1002, "forumApp": "sample"}],
+            )
+        self.assertEqual("PAGE_EVIDENCE_LIST_MISMATCH", caught.exception.code)
+
+    def test_yiche_resume_reuses_frozen_page_without_recapture(self) -> None:
+        collector = YicheCollector(self._logged_state())
+        collector._account_verified = True
+        payload = {
+            "rows": [
+                {
+                    "id": "1001",
+                    "post_id": "1001",
+                    "url": "https://baa.yiche.com/sample/thread-1001.html",
+                    "order_index": 0,
+                    "forumApp": "sample",
+                    "rect": {"x": 121, "y": 496, "width": 1198, "height": 61},
+                }
+            ],
+            "total_count": 1,
+            "persisted": True,
+        }
+
+        def callback(_payload: dict) -> None:
+            self.fail("复用冻结清单时不应再次持久化")
+
+        callback.load = lambda _page: payload  # type: ignore[attr-defined]
+        collector.capture_circle_page = lambda *_args: self.fail(  # type: ignore[method-assign]
+            "复用冻结清单时不应重新打开页面"
+        )
+        collector._fetch_post = lambda url, **_kwargs: {
+            "platform_post_id": normalize_post_url(url)[0],
+            "url": url,
+        }
+        result = collector.collect_circle(
+            "https://baa.yiche.com/sample/", 1, on_page_evidence=callback
+        )
+        self.assertEqual(["1001"], [item["platform_post_id"] for item in result["records"]])
 
     def test_collection_stops_when_http_total_changes(self) -> None:
         collector = YicheCollector(self._logged_state())
