@@ -18,7 +18,7 @@
 
 ## 2026-09-03 — 易车同页冻结截图与完整表格行框选
 **总目标**：完全复用懂车帝、汽车之家的冻结 DOM、不可变原图/清单、成品版本和审计下载流程，为易车圈子最新回复与最新发布接入截图。
-**状态**：🚧 代码、文档、真实批次与完整质量门均已完成，正在执行 Git 交付、合并及最终 main 运行核验。
+**状态**：✅ 代码、文档、真实批次、完整质量门、冲突整合、PR 合并及最终 main 运行核验均已完成。
 **干到哪里了**：
 - [x] 从 `main@ac424c7` 创建隔离工作树 `H:\ThreadSnap-worktrees\yiche-page-evidence` 和分支 `feat/yiche-page-evidence`，未触碰其他工作树或分支。
 - [x] 易车升级为 `yiche-community-v10-page-evidence`：浏览器物理页只绑定同来源、同排序、同页码的 `/post/getlist` 响应；同一 DOM 冻结 50 条身份、顺序和 `div.col-panel > a.col-row.bankuai` 完整表格行矩形，并保存原始全页 PNG 后再进入详情流程；恢复时复用既有清单，不重新截图。
@@ -26,7 +26,9 @@
 - [x] 正式批次 `20260903-002738-001` 成功 1/1、截图 `ready`：冻结 50 条、仅目标 1 条关联快照；原图、清单、API 下载、成品 tile 与 ZIP 的 12 项哈希/关系检查全部通过。回执 `official-batch-acceptance.json` SHA-256 为 `2ea3aeda62839be91fea161178281a840eabb0633d5ad60d598aa4b9117a99b1`。
 - [x] 成品渲染器升级为 `v6-yiche-full-row-boundaries`；易车 v10 使用已验证的精确 DOM 整行矩形，避免首条紧邻表头时被通用像素恢复误扩到表头。真实第 1、25、50 行均目视确认框住标题、作者、回复和最后回复且不遮挡文字，QA 回执 SHA-256 为 `851c54c31ac2af2aaa220031c01e2c147e32cdc9aef8ce0871209411d328c66c`。
 - [x] 易车/截图专项 63 项、与 PR #260 组合后的完整后端 272 项通过；Ruff、compileall、pip check、`git diff --check`、前端 TypeScript 检查和 2468 模块生产构建通过。
-**下一步**：精确提交本任务文件，基于最新 `origin/main` 整合其他工作线增量，推送并经 PR 合并；随后清理本工作树并从最终 main 重启验证接口、批次和截图哈希。
+- [x] 功能提交 `ee4b31e` 在两次 rebase 中依次吸收 PR #260 的易车 10 秒探针和 PR #261/#262 的账本收尾；冲突只发生于 owner 文档，整合后两条业务线语义均保留。提交经 PR #263 合并为 `main@5f4b054`，远端功能分支已删除。
+- [x] 从 `main@5f4b054` 重启后端后 `/health=ok`，接口确认易车 v10、页面证据开启、当前并发 1；正式批次仍为 `success/ready`，API 返回的原图、成品 tile 与来源 SHA-256 均为 `338fbcc1ebde476ea9ce7b05d0368252aa3525ab7d2457c15eb12482ae87f8e4`。
+**下一步**：本任务已关闭；后续若页面 DOM、列表协议或表格行布局变化，按新适配器版本重新执行两种排序的同页 50/50、正式批次、哈希和目视框选门禁，不修改本次不可变证据。
 **边界**：原始 PNG 与清单不可变，修正只进入新成品版本；截图不注入 CSS、不伪造 DOM、不把 API 拼接成页面；本任务不改变易车并发、429/WAF恢复、正式 500 条生产验收或其他智能体分支。
 **关联**：`docs/chains/circle-screenshot-artifacts.md`、`docs/chains/later-platform-delivery.md`、`src/threadsnap/collectors/yiche.py`、`src/threadsnap/screenshots.py`
 
