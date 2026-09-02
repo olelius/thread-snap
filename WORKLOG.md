@@ -27,7 +27,7 @@
 - [x] 新增ADR 0063，并同步领域词汇、产品设计、技术路线、ADR 0052/0058、文档索引和后续平台链。
 - [x] 隔离SQLite运行实例连续写入4次429检查点，观测等待`10.001、10.001、10.001、10.000`秒；到期前Worker不领取，到期后以并发1领取并完成原任务。Git外回执`artifacts/runtime/yiche-rate-limit-probe-10s/acceptance.json`的SHA-256为`3d1e5f832e265f073dd493931ac859241b72fc66dd0f93d31757cd53ef5e54f2`。
 - [x] 完整后端268项通过；Ruff、compileall、pip check、`git diff --check`、前端TypeScript检查和2468模块生产构建通过。
-- [x] 功能提交`24c1b03`与账本提交`a8d37b1`经PR #260合并为`main@ae95ce4`；合并前远端`main`仍为基线`ac424c7`，没有并发冲突，远端/本地功能分支及独立工作树均已清理，另外两个智能体工作树保持原分支和原提交。
+- [x] 功能提交`24c1b03`与账本提交`a8d37b1`经PR #260合并为`main@ae95ce4`；合并前远端`main`仍为基线`ac424c7`，没有并发冲突，远端/本地功能分支及独立工作树均已清理；本任务未对其他智能体工作树执行checkout、reset、clean或删除。
 **下一步**：本任务已关闭；后续真实易车批次按回执同样观测429次数、每次恢复时间和最终完成率，不把隔离调度验收外推为平台已解除限流。
 **边界**：本变更只调整易车429恢复调度，不把10秒探针描述为已经解除平台控制；其他平台退避、易车首次单次传输轮换、腾讯验证码协议链、平台并发配置和当前运行值均不改变。
 **关联**：`docs/adr/0063-probe-yiche-rate-limit-every-ten-seconds.md`、`docs/adr/0061-recover-yiche-429-by-bounded-transport-rotation.md`、`src/threadsnap/worker.py`
