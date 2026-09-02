@@ -47,13 +47,16 @@ RETRY_BASE_SECONDS = 2
 RETRY_MAX_SECONDS = 60
 RATE_LIMIT_RETRY_BASE_SECONDS = 60
 RATE_LIMIT_RETRY_MAX_SECONDS = 900
+YICHE_RATE_LIMIT_PROBE_SECONDS = 10
 
 
-def _retry_delay_seconds(error_code: str, attempt: int) -> int:
-    """按失败类别返回有上限的冷却时间，限流不得按普通网络错误快速重放。"""
+def _retry_delay_seconds(error_code: str, attempt: int, *, platform_code: str | None = None) -> int:
+    """按失败类别和平台返回持久恢复等待时间。"""
 
     normalized_attempt = max(1, attempt)
     if error_code == RATE_LIMIT_RETRYABLE_FAILURE_CODE:
+        if platform_code == "yiche":
+            return YICHE_RATE_LIMIT_PROBE_SECONDS
         return min(
             RATE_LIMIT_RETRY_MAX_SECONDS,
             RATE_LIMIT_RETRY_BASE_SECONDS * 2 ** (normalized_attempt - 1),
@@ -1023,7 +1026,11 @@ class WorkerService:
                 and task.completed_count > previous_limit_completed
             )
             retry_attempt = 1 if made_progress_since_limit else previous_retry_attempt + 1
-            delay_seconds = _retry_delay_seconds(retry_error_code, retry_attempt)
+            delay_seconds = _retry_delay_seconds(
+                retry_error_code,
+                retry_attempt,
+                platform_code=task.platform_code,
+            )
             retry_scope = str(result.get("retry_scope") or "candidate")
             retry_urls = (
                 []
@@ -1065,11 +1072,14 @@ class WorkerService:
             task.status = "queued"
             task.error_code = None
             task.error_message = None
-            task.stop_reason = (
-                "平台请求频率受限，正在冷却并自动续跑原任务。"
-                if checkpoint.get("retry_error_code") == RATE_LIMIT_RETRYABLE_FAILURE_CODE
-                else "固定访问暂时失败，正在自动重试原 URL。"
-            )
+            if checkpoint.get("retry_error_code") == RATE_LIMIT_RETRYABLE_FAILURE_CODE:
+                task.stop_reason = (
+                    "易车请求频率受限，10秒后以单来源单并发探针自动续跑原任务。"
+                    if task.platform_code == "yiche"
+                    else "平台请求频率受限，正在冷却并自动续跑原任务。"
+                )
+            else:
+                task.stop_reason = "固定访问暂时失败，正在自动重试原 URL。"
             task.finished_at = None
         elif result["kind"] == "failed":
             task.status = "partial_success" if task.completed_count else "failed"
