@@ -37,9 +37,12 @@ from .models import (
 from .services import related_run_ids
 
 TERMINAL_TASK_STATUSES = {"success", "partial_success", "failed"}
-RENDERER_VERSION = "v5-autohome-full-card-frame-boundaries"
+RENDERER_VERSION = "v6-yiche-full-row-boundaries"
 LEGACY_AUTOHOME_NARROW_FRAME_ADAPTERS = {
     "autohome-club-v10-scrapling-page-evidence",
+}
+EXACT_YICHE_ROW_FRAME_ADAPTERS = {
+    "yiche-community-v10-page-evidence",
 }
 
 
@@ -149,10 +152,20 @@ def _recover_card_crop_box(source: Image.Image, item: Any) -> tuple[int, int, in
 
 
 def _render_card_box(source: Image.Image, item: Any, evidence: Any) -> tuple[int, int, int, int]:
-    """取得成果框边界，并恢复汽车之家 v10 清单遗漏的列表横向边距。"""
+    """按适配器证据合同取得成果框边界。"""
 
-    left, top, right, bottom = _recover_card_crop_box(source, item)
-    if str(getattr(evidence, "adapter_version", "")) in LEGACY_AUTOHOME_NARROW_FRAME_ADAPTERS:
+    adapter_version = str(getattr(evidence, "adapter_version", ""))
+    if adapter_version in EXACT_YICHE_ROW_FRAME_ADAPTERS:
+        # 易车 v10 在截图前后同一原始页首布局中验证整行矩形。首条上方紧邻
+        # 列表表头，通用像素恢复会把表头边界误认成卡片上边界，因此直接
+        # 使用清单中的精确 DOM 坐标；原图和清单仍保持不可变。
+        left = max(0, int(item.x))
+        top = max(0, int(item.y))
+        right = min(source.width, left + max(1, int(item.width)))
+        bottom = min(source.height, top + max(1, int(item.height)))
+    else:
+        left, top, right, bottom = _recover_card_crop_box(source, item)
+    if adapter_version in LEGACY_AUTOHOME_NARROW_FRAME_ADAPTERS:
         # v10 记录的是占父栏 96% 的 li；平台 ul 左右各 2% 外边距也属于条目框。
         # 原始证据保持不变，只在新派生成果中恢复到父栏完整宽度。
         horizontal_gutter = max(1, int(int(item.width) * 0.02 / 0.96))

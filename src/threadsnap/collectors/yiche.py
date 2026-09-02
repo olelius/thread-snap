@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from math import ceil
 from typing import Any, Callable, Iterable
 from urllib.parse import parse_qs, urljoin, urlsplit
@@ -19,18 +19,25 @@ from zoneinfo import ZoneInfo
 
 from json_repair import repair_json
 from lxml import html
+from patchright.sync_api import sync_playwright
 
+from ..browser_runtime import browser_launch_args
 from ..scrapling_transport import ExecutionScopeKey, ScraplingHttpPool
 from ..tencent_captcha import (
     TencentCaptchaError,
     TencentCaptchaSolver,
     TencentCaptchaSolverProtocol,
 )
-from .base import AuthenticationRequired, CircleSource, CollectorFailure
+from .base import (
+    AuthenticationRequired,
+    CircleSource,
+    CollectorFailure,
+    PageEvidenceCallback,
+)
 from .yiche_waf import YicheWafCallbackError, submit_yiche_waf_callback
 
 BASE_URL = "https://baa.yiche.com"
-ADAPTER_VERSION = "yiche-community-v9-rate-limit-transport-rotation"
+ADAPTER_VERSION = "yiche-community-v10-page-evidence"
 CIRCLE_RE = re.compile(
     r"^/(?P<id>[A-Za-z0-9_-]+)/?"
     r"(?:index-0-(?P<order>[01])-(?P<page>\d+)\.html)?/?$"
@@ -49,6 +56,8 @@ YICHE_API_SIGN_KEY = "19DDD1FBDFF065D3A4DA777D2D7A81EC"
 YICHE_CHALLENGE_KEY = "tg09It3*9h"
 YICHE_COMMENT_CONTENT_TYPE = 56
 YICHE_TENCENT_CAPTCHA_APP_ID = "2017163193"
+YICHE_LIST_API_PATH = "/web_api/web_forum/api/pc/post/getlist"
+YICHE_LIST_PAGE_SIZE = 50
 ACCOUNT_COOKIE_NAME = "username"
 INTERRUPTING_CONTROL_CODES = {
     "PLATFORM_CAPTCHA_REQUIRED",
@@ -236,7 +245,7 @@ class YicheCollector:
     code = "yiche"
     display_name = "易车"
     adapter_version = ADAPTER_VERSION
-    supports_page_evidence = False
+    supports_page_evidence = True
     supports_live_video_resolution = False
 
     def __init__(
@@ -248,11 +257,12 @@ class YicheCollector:
         execution_scope: ExecutionScopeKey | None = None,
         tencent_captcha_solver: TencentCaptchaSolverProtocol | None = None,
     ):
-        del browser_headless
         self.storage_state = storage_state
         self.concurrency = max(1, concurrency)
         self.timeout_seconds = timeout_seconds
+        self.browser_headless = browser_headless
         self.semaphore = threading.BoundedSemaphore(self.concurrency)
+        self.page_capture_lock = threading.Lock()
         self.http = ScraplingHttpPool(
             storage_state,
             timeout_seconds=timeout_seconds,
@@ -558,8 +568,10 @@ class YicheCollector:
                 "forumId": forum_id,
                 "order": order,
                 "pageIndex": page_number,
-                "pageSize": 50,
-                "tagId": -1,
+                "pageSize": YICHE_LIST_PAGE_SIZE,
+                # 现时 PC 页面在两种排序下均发送 tagId=0；截图路径必须与
+                # 同页响应严格一致，普通 HTTP 路径沿用同一公开协议值。
+                "tagId": 0,
             },
             referer=referer,
         )
@@ -573,6 +585,364 @@ class YicheCollector:
             **data,
             "forum": forum if isinstance(forum, dict) else None,
             "forum_id_lookup": forum_id,
+        }
+
+    @staticmethod
+    def _forum_page_url(source: CircleSource, page_number: int) -> str:
+        """按来源排序生成易车社区的精确物理分页 URL。"""
+
+        order = 1 if source.list_order == "latest_publish" else 0
+        suffix = "?tag=-1" if source.list_order == "latest_publish" else ""
+        return f"{BASE_URL}/{source.external_id}/index-0-{order}-{page_number}.html{suffix}"
+
+    @staticmethod
+    def _is_expected_list_response(url: str, source: CircleSource, page_number: int) -> bool:
+        """只接收当前物理页实际发出的同排序、同页码列表响应。"""
+
+        parsed = urlsplit(url)
+        if parsed.netloc.lower() not in {"mgw.yiche.com", "mapi.yiche.com"}:
+            return False
+        if parsed.path.lower() != YICHE_LIST_API_PATH:
+            return False
+        query = parse_qs(parsed.query)
+        if (query.get("cid") or [None])[0] != YICHE_API_CID:
+            return False
+        try:
+            params = json.loads((query.get("param") or [""])[0])
+        except (TypeError, json.JSONDecodeError):
+            return False
+        expected_order = 1 if source.list_order == "latest_publish" else 0
+        return isinstance(params, dict) and all(
+            params.get(key) == value
+            for key, value in {
+                "order": expected_order,
+                "pageIndex": page_number,
+                "pageSize": YICHE_LIST_PAGE_SIZE,
+                "tagId": 0,
+            }.items()
+        )
+
+    @classmethod
+    def _browser_list_page(cls, response: Any, *, trigger_url: str) -> dict[str, Any]:
+        """把浏览器同页 XHR 收敛到普通 HTTP 路径使用的业务结构门禁。"""
+
+        payload: Any = None
+        try:
+            payload = response.json()
+        except Exception:
+            pass
+        event = ApiEvent(urlsplit(response.url).path, int(response.status), payload)
+        parsed = cls._api_payload([event], "/post/getlist")
+        data = parsed.get("data") if parsed else None
+        if not isinstance(data, dict) or not isinstance(data.get("list"), list):
+            raise CollectorFailure("LIST_RESPONSE_INVALID", "易车帖子列表响应结构无效。")
+        return data
+
+    @staticmethod
+    def _detect_capture_control(
+        *, final_url: str, content: str, status_code: int, trigger_url: str
+    ) -> None:
+        """在同页列表响应缺失时，把页面状态路由到既有恢复类别。"""
+
+        if is_waf_captcha(content):
+            raise CollectorFailure(
+                "PLATFORM_CAPTCHA_REQUIRED",
+                "易车页面触发腾讯验证码，请在服务器浏览器完成验证后继续。",
+                trigger_url=trigger_url,
+            )
+        if status_code == 429:
+            raise CollectorFailure(
+                "PLATFORM_RATE_LIMITED",
+                "易车圈子页面返回限流状态，请稍后重试。",
+                trigger_url=trigger_url,
+            )
+        if "i.yiche.com/authenservice/login" in final_url.lower():
+            raise AuthenticationRequired("易车当前要求重新完成平台认证。", trigger_url=final_url)
+        if status_code >= 400:
+            raise CollectorFailure(
+                "PAGE_EVIDENCE_HTTP_ERROR",
+                f"易车圈子页面返回 HTTP {status_code}。",
+                trigger_url=trigger_url,
+            )
+        if not content.strip():
+            raise CollectorFailure("EMPTY_RESPONSE", "易车圈子页面返回空响应。")
+
+    @staticmethod
+    def _stabilize_capture_layout(page: Any, cards: Any, page_number: int) -> None:
+        """回到平台原始页首，连续确认卡片身份与坐标稳定。"""
+
+        page.evaluate(
+            """() => {
+              window.scrollTo({top:0,left:0,behavior:'instant'});
+              document.documentElement.scrollTop=0;
+              document.documentElement.scrollLeft=0;
+              if (document.body) {
+                document.body.scrollTop=0;
+                document.body.scrollLeft=0;
+              }
+            }"""
+        )
+        page.wait_for_function("() => scrollX === 0 && scrollY === 0")
+        previous_layout: list[dict[str, Any]] | None = None
+        stable_samples = 0
+        for _attempt in range(8):
+            layout = cards.evaluate_all(
+                """els => els.map(e => {
+                  const r=e.getBoundingClientRect();
+                  return {href:e.href,x:r.x+scrollX,y:r.y+scrollY,
+                    width:r.width,height:r.height};
+                })"""
+            )
+            if layout == previous_layout:
+                stable_samples += 1
+                if stable_samples >= 2:
+                    break
+            else:
+                stable_samples = 0
+            previous_layout = layout
+            page.wait_for_timeout(250)
+        if stable_samples < 2:
+            raise CollectorFailure(
+                "PAGE_EVIDENCE_LAYOUT_UNSTABLE",
+                f"易车圈子第 {page_number} 页卡片布局在页首稳定窗口内仍持续变化。",
+            )
+
+    @staticmethod
+    def _read_capture_rows(cards: Any) -> list[dict[str, Any]]:
+        """读取易车列表整行边界，保留标题、作者、回复和最后回复区域。"""
+
+        return cards.evaluate_all(
+            """els => els.map((e,i) => {
+              const r=e.getBoundingClientRect();
+              const match=e.href.match(/thread-([0-9]+)[.]html/);
+              return {index:i,post_id:match?match[1]:null,href:e.href,
+                text:e.innerText||'',image_count:e.querySelectorAll('img').length,
+                rect:{x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height}};
+            })"""
+        )
+
+    @staticmethod
+    def _candidate(source: CircleSource, item: object, source_index: int) -> dict[str, Any]:
+        """收敛易车列表候选，并保留详情身份校验所需的公开字段。"""
+
+        if not isinstance(item, dict):
+            raise CollectorFailure("PLATFORM_RESPONSE_INVALID", "易车列表包含无效帖子项。")
+        post_id = str(item.get("id") or item.get("post_id") or "").strip()
+        if not post_id:
+            raise CollectorFailure("PLATFORM_RESPONSE_INVALID", "易车列表帖子缺少稳定身份。")
+        forum_app = str(item.get("forumApp") or "").strip()
+        if forum_app and forum_app.lower() != source.external_id.lower():
+            raise CollectorFailure("WRONG_POST", "易车列表帖子不属于当前社区来源。")
+        result = {
+            key: item.get(key)
+            for key in (
+                "forumId",
+                "forumName",
+                "forumApp",
+                "repliesNum",
+                "postType",
+                "isBanned",
+                "isAllBanned",
+                "isClosed",
+                "lockStatus",
+                "verifyStatus",
+                "source",
+            )
+        }
+        result.update(
+            {
+                "id": post_id,
+                "post_id": post_id,
+                "url": f"{BASE_URL}/{source.external_id}/thread-{post_id}.html",
+                "order_index": source_index,
+            }
+        )
+        return result
+
+    @classmethod
+    def _merge_capture_rows(
+        cls,
+        source: CircleSource,
+        raw_rows: Iterable[dict[str, Any]],
+        api_items: Iterable[object],
+    ) -> list[dict[str, Any]]:
+        """以同一浏览器 DOM 冻结顺序，并用同页 XHR 补充详情校验字段。"""
+
+        dom_rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for index, raw in enumerate(raw_rows):
+            post_id = str(raw.get("post_id") or "").strip()
+            try:
+                normalized_id, url = normalize_post_url(str(raw.get("href") or ""))
+            except CollectorFailure as exc:
+                raise CollectorFailure(
+                    "PAGE_EVIDENCE_LIST_INVALID",
+                    f"易车圈子页面第 {index + 1} 张帖子卡片缺少稳定详情链接。",
+                ) from exc
+            if not post_id or normalized_id != post_id:
+                raise CollectorFailure(
+                    "PAGE_EVIDENCE_LIST_INVALID", "易车圈子页面帖子卡片身份不一致。"
+                )
+            if post_id in seen:
+                raise CollectorFailure(
+                    "PAGE_EVIDENCE_LIST_INVALID", "易车圈子页面包含重复帖子卡片。"
+                )
+            seen.add(post_id)
+            rect = raw.get("rect") if isinstance(raw.get("rect"), dict) else {}
+            if float(rect.get("width") or 0) <= 0 or float(rect.get("height") or 0) <= 0:
+                raise CollectorFailure(
+                    "PAGE_EVIDENCE_LAYOUT_INVALID", "易车圈子页面包含无有效边界的帖子卡片。"
+                )
+            dom_rows.append(
+                {
+                    "post_id": post_id,
+                    "url": url,
+                    "order_index": index,
+                    "text": str(raw.get("text") or ""),
+                    "image_count": int(raw.get("image_count") or 0),
+                    "rect": rect,
+                }
+            )
+        candidates = [cls._candidate(source, item, index) for index, item in enumerate(api_items)]
+        if [item["post_id"] for item in dom_rows] != [item["post_id"] for item in candidates]:
+            raise CollectorFailure(
+                "PAGE_EVIDENCE_LIST_MISMATCH",
+                "易车圈子页面卡片与同一浏览器页面的列表响应身份或顺序不一致。",
+            )
+        return [{**candidate, **row} for row, candidate in zip(dom_rows, candidates, strict=True)]
+
+    def capture_circle_page(self, circle_url: str, page_number: int) -> dict[str, Any]:
+        """从同一浏览器页面冻结列表响应、DOM整行边界和原始全页 PNG。"""
+
+        source = parse_circle_url(circle_url)
+        exact_url = self._forum_page_url(source, page_number)
+        self._ensure_account_identity(exact_url)
+        with self.page_capture_lock, self.semaphore:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(
+                    headless=self.browser_headless, args=browser_launch_args()
+                )
+                context = browser.new_context(
+                    storage_state=self.storage_state,
+                    locale="zh-CN",
+                    timezone_id="Asia/Shanghai",
+                    viewport={"width": 1440, "height": 900},
+                    device_scale_factor=1,
+                )
+                try:
+                    browser_version = browser.version
+                    page = context.new_page()
+                    list_responses: list[Any] = []
+
+                    def record_list_response(response: Any) -> None:
+                        if self._is_expected_list_response(response.url, source, page_number):
+                            list_responses.append(response)
+
+                    page.on("response", record_list_response)
+                    navigation = page.goto(exact_url, wait_until="domcontentloaded", timeout=60_000)
+                    for _attempt in range(120):
+                        if list_responses:
+                            break
+                        page.wait_for_timeout(250)
+                    if not list_responses:
+                        content = page.content()
+                        self._detect_capture_control(
+                            final_url=page.url,
+                            content=content,
+                            status_code=int(navigation.status) if navigation else 0,
+                            trigger_url=exact_url,
+                        )
+                        raise CollectorFailure(
+                            "PAGE_EVIDENCE_LIST_RESPONSE_MISSING",
+                            "易车圈子页面没有发出可绑定当前来源的官方列表响应。",
+                            trigger_url=exact_url,
+                        )
+                    list_page = self._browser_list_page(list_responses[-1], trigger_url=exact_url)
+                    api_items = list_page["list"]
+                    selector = 'div.col-panel > a.col-row.bankuai[href*="/thread-"]'
+                    cards = page.locator(selector)
+                    for _attempt in range(120):
+                        if cards.count() == len(api_items):
+                            break
+                        page.wait_for_timeout(250)
+                    if cards.count() != len(api_items):
+                        raise CollectorFailure(
+                            "PAGE_EVIDENCE_LIST_MISMATCH",
+                            "易车圈子页面卡片数量与同页列表响应不一致。",
+                        )
+                    for index in range(cards.count()):
+                        for retry in range(3):
+                            try:
+                                page.locator(selector).nth(index).scroll_into_view_if_needed(
+                                    timeout=10_000
+                                )
+                                break
+                            except Exception as exc:
+                                if retry == 2:
+                                    raise CollectorFailure(
+                                        "PAGE_EVIDENCE_LAYOUT_UNSTABLE",
+                                        f"易车圈子第 {page_number} 页卡片在懒加载期间持续被替换。",
+                                    ) from exc
+                                page.wait_for_timeout(250)
+                    page.evaluate("() => document.fonts && document.fonts.ready")
+                    cards = page.locator(selector)
+                    media_state = cards.evaluate_all(
+                        """els => els.flatMap((card,cardIndex) =>
+                          Array.from(card.querySelectorAll('img')).map(img => {
+                            const rect=img.getBoundingClientRect();
+                            const style=getComputedStyle(img);
+                            return {cardIndex,src:img.currentSrc||img.src||'',
+                              complete:img.complete,naturalWidth:img.naturalWidth,
+                              naturalHeight:img.naturalHeight,
+                              visible:style.display!=='none'&&style.visibility!=='hidden'&&
+                                rect.width>0&&rect.height>0};
+                          }))"""
+                    )
+                    incomplete = [
+                        item
+                        for item in media_state
+                        if item.get("visible")
+                        and (
+                            not item.get("src")
+                            or not item.get("complete")
+                            or int(item.get("naturalWidth") or 0) <= 0
+                            or int(item.get("naturalHeight") or 0) <= 0
+                        )
+                    ]
+                    if incomplete:
+                        raise CollectorFailure(
+                            "PAGE_EVIDENCE_MEDIA_INCOMPLETE",
+                            f"易车圈子第 {page_number} 页仍有 {len(incomplete)} 个可见媒体处于空白、加载或破图状态。",
+                        )
+                    self._stabilize_capture_layout(page, cards, page_number)
+                    raw_rows = self._read_capture_rows(cards)
+                    rows = self._merge_capture_rows(source, raw_rows, api_items)
+                    document = page.evaluate(
+                        """() => ({
+                          width:Math.max(document.documentElement.scrollWidth,document.body.scrollWidth),
+                          height:Math.max(document.documentElement.scrollHeight,document.body.scrollHeight)
+                        })"""
+                    )
+                    screenshot = page.screenshot(full_page=True, type="png")
+                    final_url = page.url
+                finally:
+                    context.close()
+                    browser.close()
+        total_count = _integer(list_page.get("total"))
+        if total_count is None or total_count < 0:
+            raise CollectorFailure("LIST_TOTAL_INVALID", "易车列表没有返回有效总量。")
+        return {
+            "page_number": page_number,
+            "exact_url": final_url,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "adapter_version": self.adapter_version,
+            "browser_version": browser_version,
+            "viewport": {"width": 1440, "height": 900, "device_scale_factor": 1},
+            "document": document,
+            "rows": rows,
+            "screenshot": screenshot,
+            "total_count": total_count,
+            "page_count": ceil(total_count / YICHE_LIST_PAGE_SIZE),
         }
 
     def validate_circle(self, circle_url: str) -> dict[str, Any]:
@@ -838,9 +1208,8 @@ class YicheCollector:
         *,
         skip_post_ids: set[str] | None = None,
         on_progress: ProgressCallback | None = None,
-        on_page_evidence: Callable[[dict[str, Any]], None] | None = None,
+        on_page_evidence: PageEvidenceCallback | None = None,
     ) -> dict[str, Any]:
-        del on_page_evidence
         self._ensure_account_identity(circle_url)
         source = parse_circle_url(circle_url)
         records: list[dict[str, Any]] = []
@@ -853,11 +1222,22 @@ class YicheCollector:
         selected_count = 0
         stop_reason = "易车列表已经没有更多帖子。"
         while selected_count < target_count:
-            page = self._list_page(source, page_number)
-            rows = page.get("list") or []
+            if on_page_evidence:
+                loader = getattr(on_page_evidence, "load", None)
+                captured = loader(page_number) if callable(loader) else None
+                captured = captured or self.capture_circle_page(source.url, page_number)
+                rows = [dict(item) for item in captured["rows"]]
+                current_total = _integer(captured.get("total_count"))
+            else:
+                captured = None
+                page = self._list_page(source, page_number)
+                rows = [
+                    self._candidate(source, row, index)
+                    for index, row in enumerate(page.get("list") or [])
+                ]
+                current_total = _integer(page.get("total"))
             if not rows:
                 break
-            current_total = _integer(page.get("total"))
             if current_total is None or current_total < 0:
                 raise CollectorFailure("LIST_TOTAL_INVALID", "易车列表没有返回有效总量。")
             if frozen_total is None:
@@ -867,23 +1247,29 @@ class YicheCollector:
                     "LIST_TOTAL_CHANGED",
                     f"易车列表分页总量从 {frozen_total} 变为 {current_total}，本次快照已停止。",
                 )
+            for offset, candidate in enumerate(rows):
+                candidate["source_position"] = source_index + int(
+                    candidate.get("order_index", candidate.get("source_position", offset))
+                )
+            source_index += len(rows)
+            if captured is not None:
+                captured["rows"] = rows
+                if not captured.get("persisted"):
+                    on_page_evidence(captured)
             new_candidates = 0
             for row in rows:
                 if selected_count >= target_count:
                     break
-                if not isinstance(row, dict):
-                    continue
-                post_id = str(row.get("id") or "").strip()
+                post_id = str(row.get("post_id") or row.get("id") or "").strip()
                 if not post_id or post_id in candidate_ids:
                     continue
                 candidate_ids.add(post_id)
                 new_candidates += 1
-                index = source_index
-                source_index += 1
+                index = int(row["source_position"])
                 if post_id in seen:
                     continue
                 selected_count += 1
-                url = f"{BASE_URL}/{source.external_id}/thread-{post_id}.html"
+                url = str(row["url"])
                 try:
                     record = self._fetch_post(url, list_row=row)
                     record["order_index"] = index
@@ -910,7 +1296,7 @@ class YicheCollector:
                         on_progress(None, failure)
             if selected_count >= target_count:
                 break
-            if page_number * 50 >= frozen_total:
+            if page_number * YICHE_LIST_PAGE_SIZE >= frozen_total:
                 break
             if new_candidates == 0:
                 stop_reason = "易车列表分页没有返回新的帖子身份。"

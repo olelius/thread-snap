@@ -16,6 +16,22 @@
 
 ---
 
+## 2026-09-03 — 易车同页冻结截图与完整表格行框选
+**总目标**：完全复用懂车帝、汽车之家的冻结 DOM、不可变原图/清单、成品版本和审计下载流程，为易车圈子最新回复与最新发布接入截图。
+**状态**：🚧 代码、文档、真实批次与完整质量门均已完成，正在执行 Git 交付、合并及最终 main 运行核验。
+**干到哪里了**：
+- [x] 从 `main@ac424c7` 创建隔离工作树 `H:\ThreadSnap-worktrees\yiche-page-evidence` 和分支 `feat/yiche-page-evidence`，未触碰其他工作树或分支。
+- [x] 易车升级为 `yiche-community-v10-page-evidence`：浏览器物理页只绑定同来源、同排序、同页码的 `/post/getlist` 响应；同一 DOM 冻结 50 条身份、顺序和 `div.col-panel > a.col-row.bankuai` 完整表格行矩形，并保存原始全页 PNG 后再进入详情流程；恢复时复用既有清单，不重新截图。
+- [x] 现时 `latest_reply` 与 `latest_publish` 均在 `1440×900` 视口取得 API 50 / DOM 50 且身份顺序完全一致、可见媒体完整、页首布局稳定的全页证据；正式原图为 `1425×3905`，最新发布同时与普通 HTTP 直连 50 条逐项一致。Git 外合同回执 `artifacts/runtime/yiche-page-evidence-20260903/contract-probe.json` SHA-256 为 `ac7c1c9667ee72634b93b4fac33cdfa55c813c431262dac46898ec0f107c40cb`。
+- [x] 正式批次 `20260903-002738-001` 成功 1/1、截图 `ready`：冻结 50 条、仅目标 1 条关联快照；原图、清单、API 下载、成品 tile 与 ZIP 的 12 项哈希/关系检查全部通过。回执 `official-batch-acceptance.json` SHA-256 为 `2ea3aeda62839be91fea161178281a840eabb0633d5ad60d598aa4b9117a99b1`。
+- [x] 成品渲染器升级为 `v6-yiche-full-row-boundaries`；易车 v10 使用已验证的精确 DOM 整行矩形，避免首条紧邻表头时被通用像素恢复误扩到表头。真实第 1、25、50 行均目视确认框住标题、作者、回复和最后回复且不遮挡文字，QA 回执 SHA-256 为 `851c54c31ac2af2aaa220031c01e2c147e32cdc9aef8ce0871209411d328c66c`。
+- [x] 易车/截图专项 63 项、与 PR #260 组合后的完整后端 272 项通过；Ruff、compileall、pip check、`git diff --check`、前端 TypeScript 检查和 2468 模块生产构建通过。
+**下一步**：精确提交本任务文件，基于最新 `origin/main` 整合其他工作线增量，推送并经 PR 合并；随后清理本工作树并从最终 main 重启验证接口、批次和截图哈希。
+**边界**：原始 PNG 与清单不可变，修正只进入新成品版本；截图不注入 CSS、不伪造 DOM、不把 API 拼接成页面；本任务不改变易车并发、429/WAF恢复、正式 500 条生产验收或其他智能体分支。
+**关联**：`docs/chains/circle-screenshot-artifacts.md`、`docs/chains/later-platform-delivery.md`、`src/threadsnap/collectors/yiche.py`、`src/threadsnap/screenshots.py`
+
+---
+
 ## 2026-09-03 — 易车429恢复固定10秒单探针
 **总目标**：把易车新HTTP传输仍返回429后的持久恢复改为固定10秒一次，不随连续次数上涨，同时保持原任务、固定候选、平台FIFO和单来源实际并发1。
 **状态**：✅ 实现、完整质量门、隔离运行验收、PR合并及分支清理均已完成。
@@ -31,6 +47,8 @@
 **下一步**：本任务已关闭；后续真实易车批次按回执同样观测429次数、每次恢复时间和最终完成率，不把隔离调度验收外推为平台已解除限流。
 **边界**：本变更只调整易车429恢复调度，不把10秒探针描述为已经解除平台控制；其他平台退避、易车首次单次传输轮换、腾讯验证码协议链、平台并发配置和当前运行值均不改变。
 **关联**：`docs/adr/0063-probe-yiche-rate-limit-every-ten-seconds.md`、`docs/adr/0061-recover-yiche-429-by-bounded-transport-rotation.md`、`src/threadsnap/worker.py`
+
+---
 
 ## 2026-09-02 — 限流恢复取得进展后重置冷却级别
 **总目标**：修正易车并发4在两段有效采集之间仍把429冷却从60秒升级到120秒的问题，并核对“换传输即可解除429”的证据前提。

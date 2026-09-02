@@ -153,7 +153,7 @@ class YicheReleaseStateTests(AppCase):
         )
         self.assertEqual("available", platform["adapter_status"])
         self.assertFalse(platform["enabled"])
-        self.assertFalse(platform["capabilities"]["page_evidence"])
+        self.assertTrue(platform["capabilities"]["page_evidence"])
         self.assertEqual("account_login", platform["capabilities"]["authentication_mode"])
         self.assertEqual({"min": 1, "max": 8}, platform["concurrency_range"])
 
@@ -452,7 +452,7 @@ class YichePublicFlowTests(AppCase):
         self.assertEqual(2, completed["completed_count"])
         self.assertEqual([1, 8], requested_concurrency)
 
-    def test_yiche_normalizes_unsupported_page_evidence_for_manual_and_plan(self) -> None:
+    def test_yiche_preserves_page_evidence_for_manual_and_plan(self) -> None:
         circle = self.save_yiche_sources()[0]
         manual = self.client.post(
             "/api/v1/runs/manual",
@@ -465,12 +465,12 @@ class YichePublicFlowTests(AppCase):
             },
         )
         self.assertEqual(202, manual.status_code, manual.text)
-        self.assertFalse(manual.json()["screenshot_enabled"])
+        self.assertTrue(manual.json()["screenshot_enabled"])
         with self.container.sessions() as db:
             stored = db.get(ExtractionRun, manual.json()["id"])
             assert stored is not None
             self.assertTrue(stored.config_snapshot["requested_screenshot_enabled"])
-            self.assertFalse(stored.config_snapshot["screenshot_enabled"])
+            self.assertTrue(stored.config_snapshot["screenshot_enabled"])
 
         plan = self.client.put(
             "/api/v1/extraction-plan",
@@ -506,8 +506,8 @@ class YichePublicFlowTests(AppCase):
         )
         assert scheduled is not None
         detail = self.container.runs.get_run(scheduled["id"])
-        self.assertFalse(detail["screenshot_enabled"])
-        self.assertFalse(detail["tasks"][0]["screenshot_enabled"])
+        self.assertTrue(detail["screenshot_enabled"])
+        self.assertTrue(detail["tasks"][0]["screenshot_enabled"])
 
     def test_weekly_and_recurring_runs_share_yiche_fifo(self) -> None:
         circle = self.save_yiche_sources()[0]
