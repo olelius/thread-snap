@@ -18,7 +18,7 @@
 
 ## 2026-09-02 — 腾讯验证码共享协议组件与易车生产接入
 **总目标**：复用已完成的腾讯验证码逆向结果，封装平台无关纯协议组件，由易车专属WAF适配器调用，并为后续其他平台保留复用合同。
-**状态**：✅ 共享组件、易车接入、两级实时目标链、完整回归和部署构建门均已通过；正在执行自动Git交付。
+**状态**：✅ 共享组件、易车接入、两级实时目标链、完整回归、部署构建门、Git交付及合并后运行态核验均已完成。
 **干到哪里了**：
 - [x] 从`main@7786fef`创建`feat/tencent-captcha-protocol-solver`；新增`threadsnap.tencent_captcha`，AppId和入口URL由平台注入，Python负责prehandle、双图、识别、PoW和verify，Node bundle负责TDC归一化、结构映射、IR编译与自研VM。
 - [x] 新增易车专属`collectors.yiche_waf`，严格执行“当前seqid -> 全新challenge -> 四行WAF POST -> 原URL重载”；同采集器单飞，失败进入现有`PLATFORM_CAPTCHA_REQUIRED`恢复，不改批次、FIFO或已完成URL。
@@ -28,7 +28,9 @@
 - [x] 完整259项后端测试、`ruff check src tests`、`compileall`、`pip check`、前端类型检查与2468模块构建、3个部署脚本Bash语法及`git diff --check`全部通过。
 - [x] 目标CentOS离线依赖已加入Node.js；wheel只携带预构建bundle、共享chunk和handler IR，不携带`node_modules`。从最终builder内wheel隔离安装后，冻结98-opcode样本得到6762字符collect、352字符eks和74个handler。
 - [x] 最终builder SHA-256为`3917edb04860dfe58fabb92f5a927a4a7b56722f83aafa891f67af82145ff4b3`，wheel为`e8ae2cf4cde73e28bca62ad05a0855382139c52bf90c39c58bdd558c40b9729d`；Git外验收回执为`artifacts/runtime/tencent-captcha-production-integration/acceptance.json`，SHA-256为`7f7ffcb4838c6ef126407b0361cf78f7a11835917f90aa1a257cf8e300f86206`。
-**下一步**：精确暂存本任务文件，复核暂存差异与敏感材料，提交、推送、PR合并并清理功能分支；随后从合并后的`main`核验运行服务。
+- [x] 功能提交`eb1b4fb`经PR #253合并为`main@1f3e7f1`；本地和远端功能分支均已删除，本地`main`与`origin/main`一致且工作区清洁。
+- [x] 从合并后的代码启动本地后端，`/health`返回`ok`；`/api/v1/platforms`确认易车为`yiche-community-v8-tencent-protocol-solver`、已启用且内部并发1。
+**下一步**：本任务已关闭；正式易车500条验收仍按既有独立阶段门执行，腾讯协议结构漂移时依据ADR 0060的熔断与人工恢复边界另行处理。
 **边界**：每次challenge的`sess/TDC/图片/坐标/PoW/collect/eks/ticket/randstr/seqid`仍即时生成；实时轮次不替代易车正式500条验收；原始材料和票据不进入Git、日志或数据库。
 **关联**：`docs/adr/0060-integrate-shared-tencent-captcha-protocol-solver.md`、`src/threadsnap/tencent_captcha/`、`src/threadsnap/collectors/yiche_waf.py`、`src/threadsnap/collectors/yiche.py`
 
