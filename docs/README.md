@@ -219,6 +219,7 @@
 | `docs/adr/0061-recover-yiche-429-by-bounded-transport-rotation.md` | 易车首次429只轮换当前线程HTTP传输一次，仍受限时进入既有持久冷却 |
 | `docs/adr/0062-reset-rate-limit-backoff-after-confirmed-progress.md` | 限流恢复已新增有效结果时重置为60秒，零进展连续429才升级冷却级别 |
 | `docs/adr/0063-probe-yiche-rate-limit-every-ten-seconds.md` | 易车持久429恢复固定每10秒执行一次单来源单并发原URL探针，间隔不随次数上涨 |
+| `docs/adr/0064-register-autohome-and-yiche-reputation-adapters.md` | 以平台注册表接入汽车之家与易车口碑巡检，复用完整业务流程并保留平台指标语义和缺失状态 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 

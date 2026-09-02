@@ -6,7 +6,7 @@
 - 技术合同 owner：`docs/design/technical-route.md` 的“后续平台接入验证合同”。
 - 验收计划 owner：`docs/research/later-platform-onboarding-plan.md`。
 - 易车腾讯 WAF 逆向调研 owner：`docs/research/yiche-tencent-waf-reverse-runbook.md`；生产共享组件与易车接入由ADR 0060、技术路线和本链共同管理。
-- 架构决策：`docs/adr/0043-use-project-discovered-500-sample-gate-for-later-platforms.md`、`docs/adr/0044-separate-local-adapter-publication-from-formal-sample-acceptance.md`、`docs/adr/0045-preserve-cross-forum-feed-items.md`、`docs/adr/0046-require-autohome-session-for-like-count.md`、`docs/adr/0047-use-account-login-and-direct-http-for-yiche.md`、`docs/adr/0048-treat-primary-comments-as-nonblocking-post-enrichment.md`、`docs/adr/0049-unify-configurable-platform-internal-concurrency.md`、`docs/adr/0054-use-scrapling-for-formal-http-execution.md`、`docs/adr/0055-add-lazy-scrapling-stealth-protection-channel.md`、`docs/adr/0056-route-autohome-control-through-auth-probe.md`、`docs/adr/0057-cap-autohome-internal-concurrency-at-one.md`、`docs/adr/0058-route-yiche-control-through-classified-recovery.md`、`docs/adr/0059-allow-bounded-yiche-waf-trigger-round.md`、`docs/adr/0060-integrate-shared-tencent-captcha-protocol-solver.md`、`docs/adr/0061-recover-yiche-429-by-bounded-transport-rotation.md`、`docs/adr/0062-reset-rate-limit-backoff-after-confirmed-progress.md`、`docs/adr/0063-probe-yiche-rate-limit-every-ten-seconds.md`。
+- 架构决策：`docs/adr/0043-use-project-discovered-500-sample-gate-for-later-platforms.md`、`docs/adr/0044-separate-local-adapter-publication-from-formal-sample-acceptance.md`、`docs/adr/0045-preserve-cross-forum-feed-items.md`、`docs/adr/0046-require-autohome-session-for-like-count.md`、`docs/adr/0047-use-account-login-and-direct-http-for-yiche.md`、`docs/adr/0048-treat-primary-comments-as-nonblocking-post-enrichment.md`、`docs/adr/0049-unify-configurable-platform-internal-concurrency.md`、`docs/adr/0054-use-scrapling-for-formal-http-execution.md`、`docs/adr/0055-add-lazy-scrapling-stealth-protection-channel.md`、`docs/adr/0056-route-autohome-control-through-auth-probe.md`、`docs/adr/0057-cap-autohome-internal-concurrency-at-one.md`、`docs/adr/0058-route-yiche-control-through-classified-recovery.md`、`docs/adr/0059-allow-bounded-yiche-waf-trigger-round.md`、`docs/adr/0060-integrate-shared-tencent-captcha-protocol-solver.md`、`docs/adr/0061-recover-yiche-429-by-bounded-transport-rotation.md`、`docs/adr/0062-reset-rate-limit-backoff-after-confirmed-progress.md`、`docs/adr/0063-probe-yiche-rate-limit-every-ten-seconds.md`、`docs/adr/0064-register-autohome-and-yiche-reputation-adapters.md`。
 - 当前阶段：汽车之家与易车均已完成本地适配器和公共业务闭环并发布为 `available`、默认停用；依据ADR 0057，汽车之家平台内部总并发固定为1，懂车帝与易车继续允许配置1～8，保存值由新批次冻结并由跨来源、来源内详情和即时重试共同共享。依据ADR 0051，三平台人工认证入口只取得并保存服务器浏览器Session，不访问圈子、首帖、点赞或用户身份业务端点；真实任务在原URL执行采集访问门禁。依据ADR 0054，汽车之家 `autohome-club-v11-scrapling-page-evidence-frame` 与易车 `yiche-community-v10-page-evidence` 的普通HTTP由线程局部Scrapling FetcherSession执行，ThreadSnap继续管理批次、FIFO、固定候选与持久恢复。汽车之家固定轮次已经证明Stealthy控制恢复无效，因此按ADR 0056把验证码或访问验证直接交给正式交互认证，Session更新后只用最早等待来源做单并发原URL探针，探针形成终态才释放其余来源；恢复后平台总并发仍为1。汽车之家与易车均已复用懂车帝的页面证据与关联成果流程，由同一Patchright页面冻结官方列表响应、最终DOM卡片和原始全页PNG；两平台真实两个列表首屏均为50/50同序。易车v10完整整行框约为`x=114,width=1198,height=61`，渲染器v6直接使用同DOM/PNG坐标，避免首条表头边界误吸附。易车按ADR 0058把普通401/403登录失效、203后403详情挑战、TencentCaptcha/WAF验证码和HTTP/API 429限流分开处理，并按ADR 0060让验证码先调用平台无关纯协议组件和易车专属WAF回调；成功后继续原任务，漂移、拒绝或正文门未关闭时进入继承现有Profile的原URL交互恢复。依据ADR 0061，页面或签名API首次429只轮换当前线程HTTP传输并复访一次，页面复访仍衔接203或腾讯WAF链，API重新签名；新传输仍429才进入持久冷却，候选层一旦观察到未恢复控制就停止追加请求。真实并发8轮次在59/240后8个来源全部受控，账号身份与列表接口仍为200；后续固定1000个不同详情URL、实际并发1的独立批次观察到5次腾讯验证码和7次详情页面429冷却，最终同一原任务完成1000/1000、失败0；账号与列表API在验证码期间仍可用，三次验证码均在约13分钟静默后零交互自然恢复，两个干净恢复周期都新增57条再次触发。因此降低到并发1也不能消除平台控制，主因是串行但未节流的详情访问速率与复合WAF风险桶。后续同范围并发4真实批次在14.188秒、59条时触发WAF，修正TDC别名漂移后沿原批次完成222条、失败0，有效运行耗时上界165.554秒；期间仍出现WAF和429冷却。当前运行配置仍保持1以限制请求突发，并发4不是免控配置、并发2尚未验证，任何并发值都未被证明可稳定免控。汽车之家继续以账号Cookie和点赞接口读取可信点赞；易车继续以账号Cookie和官方用户身份接口判断任务访问条件，并以 `pc-v311` 协议取得列表、详情及评论。两平台均按ADR 0048把主评论作为非阻塞附属快照，并按ADR 0050冻结前 N 个候选、不以列表后续帖子补位；瞬时网络错误由共享Worker持久重试原URL。依据ADR 0052、0062与0063，限流保持独立分类，普通帖子任务保留固定剩余URL并在同一任务逐来源单并发自动续跑；易车每次固定等待10秒且连续次数不扩大间隔，其他平台有新增结果的新限流从1分钟重新开始，零进展连续限流才逐级升到15分钟。两平台都尚未冻结或运行正式500条，正式生产验收仍未关闭。
 - 与首平台关系：本链只负责懂车帝之后的两个适配器；`docs/chains/first-platform-delivery.md` 中既有2000条证据和目标CentOS门禁保持原状。
 
@@ -20,8 +20,8 @@
 - 500条用于关闭新增平台适配器的发现、详情、评论、媒体、状态、认证和控制分类合同，不重复执行采集框架候选选型，也不声称达到懂车帝2000条/小时及目标CentOS连续三轮门禁。
 - 功能样本由项目从真实发现池分层生成；未观察到的场景如实记录为覆盖缺口，不要求外部填写功能样本表，也不根据字段名编造预期结果。
 - 汽车之家与易车帖子采集都固定复用官方账号登录、服务器交互登录浏览器、加密Session、真实账号身份门禁、有界刷新和平台FIFO隔离，不接收账号密码进入业务配置或Git；采集阶段只使用直连HTTP，浏览器不作为失败回退。
-- 汽车之家和易车各27款口碑车型映射候选由项目分析平台稳定身份、页面URL与展示名称后生成，进入既有批量映射草稿、真实三门禁验证和显式发布流程；名称只用于候选提示。
-- 两个平台的口碑评价篇数和差评率来源暂缓；在来源语义、原始值、计算方式和同期证据全部验证前，不启用正式口碑巡检，不把当前27项分母扩张为81。
+- 汽车之家和易车各27款口碑车型映射候选已经生成：汽车之家14个同名、12个唯一非同名、1个无候选；易车25个同名、2个聚合车系歧义。候选与原始响应保存在Git外，只用于单平台草稿输入，名称相似不自动发布。
+- 两个平台已通过平台注册表接入懂车帝同一口碑巡检流程。汽车之家从官方车系接口取得全部口碑篇数，易车从点评列表实际签名响应取得点评总数；差评率当前没有可靠分子与分母，保存为 `unknown` 并使真实执行项部分成功。现有生产范围仍为懂车帝27项；只有54项后续平台映射逐项确认、真实验证并显式发布后，新批次才扩为81。
 
 ## 决策链
 
@@ -31,6 +31,7 @@
 | 2026-08-27 | 易车已标记缺失来源按真实缺失保留 | 不用占位或同名猜测制造不存在的配置 |
 | 2026-08-27 | 后续两个平台各以500条冻结帖子验收 | 通用框架和首平台规模可行性已有证据，本阶段重点是平台适配正确性 |
 | 2026-08-27 | 功能样本、访问条件和映射候选由项目生成 | 这些内容可以从真实社区、平台页面和现有认证链取得，避免把项目分析职责转交外部 |
+| 2026-09-03 | 两平台口碑通过平台注册表接入共享流程 | 真实代表样本关闭身份、四项指标和区域截图门禁；平台差评率缺失保持 `unknown`，候选映射继续显式确认和发布 |
 | 2026-08-27 | 新平台额外口碑指标来源延期 | 当前来源与语义未确认，先关闭帖子适配和稳定车型映射，不制造五指标完成度 |
 | 2026-08-27 | 汽车之家先合入休眠适配器，不提前打开平台注册 | 真实来源与候选池已证明，但匿名预检遇到访问验证；当时500/500和实际视频URL合同均未关闭 |
 | 2026-08-27 | 汽车之家本地代码闭环与平台注册启用门分开判定（后由ADR 0044调整） | 当时决定只有真实500/500才切换 `available`；后续用户明确要求按本地开发完成口径发布 |
@@ -66,5 +67,7 @@
 - [ ] 为每个平台生成、现时复核并冻结500条帖子详情URL及分层功能样本。
 - [ ] 两平台本地适配器、媒体合同和公共/组合测试已落地，均已发布为 `available` 且默认停用；汽车之家继续关闭真实登录Session、正式清单和认证模式 `500 / 500`，易车固定1000条诊断批次已在5次腾讯验证码和7次详情页面429冷却后完成1000/1000、失败0；验证显式节流的可持续访问模式并完成真实 `500 / 500` 后，再声明对应平台正式生产接入验收完成。
 - [x] 易车WAF逆向结果已按ADR 0060封装为平台无关腾讯组件并由易车v9调用；全新腾讯challenge取得95-opcode/74-handler业务成功，当前易车Session在第60个详情命中WAF后自动回调并恢复正文，失败路径仍由ADR 0058承接。
-- [ ] 生成两平台各27款口碑车型映射候选并完成真实映射验证。
-- [ ] 后续单独确认口碑评价篇数与差评率的数据来源、语义和证据合同，再评审正式三平台口碑启用。
+- [x] 已生成两平台各27款口碑车型映射候选、规范入口和代表样本；候选未写入生产范围。
+- [ ] 人工确认汽车之家13个待定项和易车2个聚合车系歧义，完成54项真实映射验证并显式发布。
+- [x] 两平台评价篇数来源、平台适配器、区域截图和81项合成流程已确认。
+- [ ] 后续取得两平台可靠差评率来源并执行81项真实全量运行；当前保持 `unknown` 和部分成功语义。

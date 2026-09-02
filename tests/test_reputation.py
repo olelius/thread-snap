@@ -31,6 +31,7 @@ from threadsnap.models import (
     ReputationScopeVersion,
     ReputationTombstone,
 )
+from threadsnap.reputation_autohome import normalize_series_url as normalize_autohome_url
 from threadsnap.reputation_dongchedi import (
     DongchediReputationAdapter,
     ReputationAdapterError,
@@ -40,6 +41,7 @@ from threadsnap.reputation_dongchedi import (
     normalize_series_url,
 )
 from threadsnap.reputation_scheduler import ReputationCoordinator
+from threadsnap.reputation_yiche import normalize_series_url as normalize_yiche_url
 
 
 class OfficialFakeAdapter:
@@ -171,6 +173,149 @@ class ReputationInspectionTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 202, response.text)
         return response.json()
+
+    def test_three_platform_registry_mapping_validation_and_publish_denominator(self) -> None:
+        """汽车之家和易车复用懂车帝映射验证，并把发布门扩为27乘3。"""
+
+        scope = self.initialize_scope("three-platform-scope.csv")
+        container = self.client.app.state.container
+        platform_rows = {
+            "autohome": [
+                {
+                    "vehicle_id": vehicle["id"],
+                    "platform_vehicle_id": str(7000 + index),
+                    "platform_url": f"https://k.autohome.com.cn/{7000 + index}/",
+                    "platform_display_name": vehicle["vehicle_name"],
+                }
+                for index, vehicle in enumerate(scope["vehicles"])
+            ],
+            "yiche": [
+                {
+                    "vehicle_id": vehicle["id"],
+                    "platform_vehicle_id": str(9000 + index),
+                    "platform_url": f"https://dianping.yiche.com/fixture{index}/koubei/",
+                    "platform_display_name": vehicle["vehicle_name"],
+                }
+                for index, vehicle in enumerate(scope["vehicles"])
+            ],
+        }
+        for platform_code, rows in platform_rows.items():
+            saved = self.client.put(
+                "/api/v1/reputation/scope/mappings",
+                json={
+                    "revision": scope["revision"],
+                    "platform_code": platform_code,
+                    "rows": rows,
+                },
+            )
+            self.assertEqual(200, saved.status_code, saved.text)
+            scope = saved.json()
+            container.session_store.import_state(
+                platform_code,
+                {"cookies": [{"name": "fixture", "value": "session", "domain": ".example.com", "path": "/"}]},
+            )
+            container.reputation.adapter_factories[platform_code] = OfficialFakeAdapter
+            validated = self.client.post(
+                "/api/v1/reputation/scope/mapping-validations",
+                json={"revision": scope["revision"], "platform_code": platform_code},
+            )
+            self.assertEqual(200, validated.status_code, validated.text)
+            payload = validated.json()
+            self.assertEqual(27, payload["succeeded_count"])
+            self.assertEqual(platform_code, payload["platform_code"])
+            scope = payload["scope"]
+
+        preview = self.client.get("/api/v1/reputation/scope/publish-preview")
+        self.assertEqual(200, preview.status_code, preview.text)
+        self.assertEqual(81, preview.json()["expected_mapping_count"])
+        self.assertEqual(54, preview.json()["verified_mapping_count"])
+        self.assertFalse(preview.json()["can_publish"])
+
+        container.session_store.import_state(
+            "dongchedi",
+            {"cookies": [{"name": "fixture", "value": "session", "domain": ".example.com", "path": "/"}]},
+        )
+        container.reputation.adapter_factory = OfficialFakeAdapter
+        container.reputation.adapter_factories["dongchedi"] = OfficialFakeAdapter
+        validated = self.client.post(
+            "/api/v1/reputation/scope/mapping-validations",
+            json={"revision": scope["revision"], "platform_code": "dongchedi"},
+        )
+        self.assertEqual(200, validated.status_code, validated.text)
+        scope = validated.json()["scope"]
+        preview = self.client.get("/api/v1/reputation/scope/publish-preview").json()
+        self.assertEqual(81, preview["verified_mapping_count"])
+        self.assertTrue(preview["can_publish"])
+        published = self.client.post(
+            "/api/v1/reputation/scope/publish",
+            json={
+                "revision": scope["revision"],
+                "initial_review_acknowledged": True,
+            },
+        )
+        self.assertEqual(200, published.status_code, published.text)
+        with container.sessions.begin() as db:
+            for platform_code in ("dongchedi", "autohome", "yiche"):
+                db.get(PlatformConfig, platform_code).enabled = True
+
+        due = container.reputation.check_schedule(
+            datetime(2030, 1, 2, 2, 0, tzinfo=timezone.utc)
+        )
+        self.assertEqual(1, len(due["queued_run_ids"]))
+        finished = container.reputation.execute_run(due["queued_run_ids"][0])
+        self.assertEqual(["dongchedi", "autohome", "yiche"], finished["platform_codes"])
+        self.assertEqual(81, finished["planned_count"])
+        self.assertEqual(81, finished["completed_count"])
+        self.assertEqual(81, finished["complete_evidence_count"])
+        self.assertEqual(2, finished["concurrency"])
+        self.assertEqual(2, OfficialFakeAdapter.last_concurrency)
+        self.assertEqual(
+            81,
+            len(
+                {
+                    (item["vehicle_id"], item["platform_code"])
+                    for item in finished["results"]
+                }
+            ),
+        )
+        generated = container.reputation.generate_report(
+            finished["id"], datetime(2030, 1, 2, 2, 1, tzinfo=timezone.utc)
+        )
+        xlsx_response = self.client.get(generated["downloads"]["xlsx"])
+        self.assertEqual(200, xlsx_response.status_code)
+        xlsx_path = self.root / "three-platform.xlsx"
+        xlsx_path.write_bytes(xlsx_response.content)
+        sheet = load_workbook(xlsx_path)["口碑巡检"]
+        self.assertEqual((28, 20), (sheet.max_row, sheet.max_column))
+        self.assertEqual("懂车帝-口碑分", sheet["E1"].value)
+        self.assertEqual("汽车之家-口碑分", sheet["J1"].value)
+        self.assertEqual("易车-口碑分", sheet["O1"].value)
+        self.assertEqual("备注", sheet["T1"].value)
+        self.assertEqual(27, len(sheet._images))
+        preview_manifest = (
+            self.settings.reputation_dir
+            / finished["id"]
+            / "xlsx-previews"
+            / "manifest.json"
+        )
+        self.assertEqual(
+            27,
+            len(json.loads(preview_manifest.read_text(encoding="utf-8"))["items"]),
+        )
+
+    def test_later_platform_url_contracts(self) -> None:
+        """两个后续平台都规范到已验证的车型口碑入口。"""
+
+        self.assertEqual(
+            "https://k.autohome.com.cn/6664/",
+            normalize_autohome_url("https://k.autohome.com.cn/6664", "6664"),
+        )
+        self.assertEqual(
+            "https://dianping.yiche.com/ruihu8/koubei/",
+            normalize_yiche_url("https://car.yiche.com/ruihu8/", "5313"),
+        )
+        with self.assertRaises(ReputationAdapterError):
+            normalize_autohome_url("https://k.autohome.com.cn/6664/", "5313")
 
     def test_browser_runtime_error_is_logged_and_marked_retryable(self) -> None:
         """Patchright通用异常必须保留服务端阶段诊断并标记为可重试。"""
@@ -1342,6 +1487,26 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         self.assertEqual("partial_success", finished["status"])
         retry = self.service.retry_failed(run_id)
         self.assertEqual(2, retry["concurrency"])
+
+    def test_available_page_with_unknown_metric_stays_partial(self) -> None:
+        """页面有口碑但缺可靠指标来源时应保留截图并显式标记部分成功。"""
+
+        due = self.service.check_schedule(self._at("2030-01-02", "10:00"))
+        run_id = due["queued_run_ids"][0]
+        OfficialFakeAdapter.negative_rate_overrides = {"official-01": ""}
+
+        finished = self.service.execute_run(run_id)
+        first = next(
+            item for item in finished["results"] if item["vehicle_id"] == "official-01"
+        )
+
+        self.assertEqual("partial_success", first["status"])
+        self.assertEqual(
+            "unknown", first["metrics"]["negative_rate"]["comparison_status"]
+        )
+        self.assertIsNotNone(first["evidence"])
+        self.assertEqual(27, finished["complete_evidence_count"])
+        self.assertEqual("partial_success", finished["status"])
 
     def test_official_run_persists_linear_progress_before_terminal_state(self) -> None:
         """每个车型终态都应先落库并发布进度，批次结束后才冻结汇报。"""

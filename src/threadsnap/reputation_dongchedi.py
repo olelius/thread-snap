@@ -8,7 +8,7 @@ import json
 import logging
 import re
 import time
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any, Callable
@@ -20,6 +20,11 @@ from patchright.async_api import Error as PlaywrightError
 from PIL import Image
 
 from .browser_runtime import browser_launch_args
+from .reputation_adapter import (
+    ReputationAdapterError,
+    ReputationMappingTarget,
+    ReputationPageResult,
+)
 from .scrapling_transport import ExecutionScopeKey, ScraplingHttpPool
 
 logger = logging.getLogger(__name__)
@@ -49,58 +54,6 @@ SERIES_URL_RE = re.compile(
     r"^https://www\.dongchedi\.com/auto/series/(?:score/)?(?P<id>\d+)(?:-x-x-x-x-x)?/?(?:\?.*)?$"
 )
 VOLUME_RE = re.compile(r"共\s*([0-9,]+)\s*人评价")
-
-
-class ReputationAdapterError(RuntimeError):
-    """携带稳定阶段错误码的真实页面验证失败。"""
-
-    def __init__(self, code: str, message: str, *, retryable: bool = False):
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.retryable = retryable
-
-
-@dataclass(frozen=True)
-class ReputationMappingTarget:
-    """一次真实页面验证所需的冻结车型映射。"""
-
-    vehicle_id: str
-    platform_vehicle_id: str
-    platform_url: str
-    platform_display_name: str
-    mapping_hash: str
-
-
-@dataclass(frozen=True)
-class ReputationPageResult:
-    """一次轻量响应或浏览器页面完整通过身份与指标门禁后的真实结果。"""
-
-    vehicle_id: str
-    platform_vehicle_id: str
-    mapping_hash: str
-    final_url: str
-    actual_name: str
-    score_raw: str | None
-    rank_raw: str | None
-    volume_raw: str | None
-    review_article_count_raw: str | None
-    review_article_count_url: str | None
-    rank_scope: str
-    measurements: list[dict[str, Any]]
-    full_page_path: Path | None
-    metric_region_path: Path | None
-    full_page_sha256: str | None
-    metric_region_sha256: str | None
-    width: int
-    height: int
-    metric_rect: dict[str, float]
-    duration_ms: int
-    negative_rate_raw: str | None = None
-    negative_rate_url: str | None = None
-    negative_rate_positive_count: int | None = None
-    negative_rate_negative_count: int | None = None
-    reputation_not_available: bool = False
 
 
 def normalize_series_url(url: str, expected_id: str | None = None) -> str:
