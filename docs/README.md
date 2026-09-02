@@ -218,6 +218,7 @@
 | `docs/adr/0060-integrate-shared-tencent-captcha-protocol-solver.md` | 腾讯验证码逆向结果封装为平台无关纯协议组件，易车只实现站点WAF回调和原正文重载 |
 | `docs/adr/0061-recover-yiche-429-by-bounded-transport-rotation.md` | 易车首次429只轮换当前线程HTTP传输一次，仍受限时进入既有持久冷却 |
 | `docs/adr/0062-reset-rate-limit-backoff-after-confirmed-progress.md` | 限流恢复已新增有效结果时重置为60秒，零进展连续429才升级冷却级别 |
+| `docs/adr/0063-probe-yiche-rate-limit-every-ten-seconds.md` | 易车持久429恢复固定每10秒执行一次单来源单并发原URL探针，间隔不随次数上涨 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 

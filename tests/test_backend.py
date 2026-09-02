@@ -3019,6 +3019,13 @@ class QueueAndRetryTests(AppCase):
             [60, 120, 240, 480, 900, 900],
             [_retry_delay_seconds("PLATFORM_RATE_LIMITED", attempt) for attempt in range(1, 7)],
         )
+        self.assertEqual(
+            [10, 10, 10, 10, 10, 10],
+            [
+                _retry_delay_seconds("PLATFORM_RATE_LIMITED", attempt, platform_code="yiche")
+                for attempt in range(1, 7)
+            ],
+        )
 
     def setUp(self) -> None:
         super().setUp()
@@ -4288,6 +4295,65 @@ class QueueAndRetryTests(AppCase):
             self.assertLess(first_not_before, now + timedelta(seconds=65))
             self.assertLess(progressed_not_before, now + timedelta(seconds=65))
             self.assertGreaterEqual(stalled_not_before, now + timedelta(seconds=115))
+
+    def test_yiche_rate_limit_uses_fixed_ten_second_probe_without_escalation(self) -> None:
+        """易车零进展连续429只累计诊断次数，单探针间隔固定为10秒。"""
+
+        run = ExtractionRun(
+            number="20260903-100000-001",
+            trigger_type="manual",
+            status="running",
+            idempotency_scope="test",
+            idempotency_key="yiche-fixed-probe",
+            request_hash="f" * 64,
+            planned_count=1,
+        )
+        failure = {
+            "url": "https://baa.yiche.com/test/thread-1001.html",
+            "code": "PLATFORM_RATE_LIMITED",
+            "message": "平台限制了请求频率。",
+            "source_index": 0,
+        }
+        result = {
+            "kind": "retry",
+            "records": [],
+            "failures": [failure],
+            "retry_failures": [failure],
+            "retry_error_code": "PLATFORM_RATE_LIMITED",
+            "terminal_failures": [],
+            "retry_scope": "source",
+            "validation": None,
+        }
+
+        with self.container.sessions.begin() as db:
+            db.add(run)
+            db.flush()
+            task = CircleTask(
+                run_id=run.id,
+                platform_code="yiche",
+                external_id="test",
+                circle_url="https://baa.yiche.com/test/",
+                status="running",
+                queue_sequence=1,
+                target_count=1,
+            )
+            db.add(task)
+            db.flush()
+
+            observed_attempts = []
+            observed_delays = []
+            for _ in range(4):
+                before = datetime.now(timezone.utc)
+                self.container.worker._apply_result(db, task, result)
+                checkpoint = dict(task.checkpoint or {})
+                observed_attempts.append(checkpoint["retry_attempt"])
+                not_before = datetime.fromisoformat(checkpoint["retry_not_before"])
+                observed_delays.append((not_before - before).total_seconds())
+                task.status = "running"
+
+            self.assertEqual([1, 2, 3, 4], observed_attempts)
+            self.assertTrue(all(9 <= delay <= 11 for delay in observed_delays))
+            self.assertIn("10秒后", task.stop_reason or "")
 
     def test_restart_recovers_running_tasks_to_fifo(self) -> None:
         circle = self.save_verified_circle()
