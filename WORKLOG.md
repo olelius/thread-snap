@@ -18,13 +18,13 @@
 
 ## 2026-09-03 — 来源级页面证据异常批次收尾重试
 **总目标**：页面列表响应偶发缺失时，不在首轮立即形成最终失败；等待同批次首轮来源完成后统一复访一次，成功后恢复来源结果。
-**状态**：🔄 已完成代码、定向回归和完整质量门，Git 收尾待执行。
+**状态**：✅ 代码、定向回归、完整质量门与 Git 收尾均已完成。
 **干到哪里了**：
 - [x] `PAGE_EVIDENCE_LIST_RESPONSE_MISSING` 纳入来源级批次重试，使用 `batch_retry_wave` 检查点标记，最多复访一次。
 - [x] 首轮未完成时保持批次运行中并让同批其他来源继续；首轮结束后按原来源 URL、新采集上下文和平台 FIFO 统一复访。
 - [x] 新增回归验证来源首轮失败、同批首轮继续、收尾复访成功的完整顺序。
-**下一步**：运行完整后端测试、前端检查/构建和 `git diff --check`，提交并合并。
 **验证**：新增定向回归2项通过；后端全量 `python -m unittest discover -s tests` 278项通过；Ruff、compileall、pip check、前端 `npm run check` 与 `npm run build`、`git diff --check`均通过。
+**收尾**：提交 `2782b11` 经 PR #269 合并为 `main@9c33c3c`；远端功能分支已删除，`git fetch --prune` 后本地 `main` 与 `origin/main` 一致且工作区干净。
 **边界**：网络错误、429限流、认证恢复沿用既有即时退避和状态机；明确身份/映射错误保持终态失败。
 **关联**：`docs/adr/0067-batch-final-source-retry.md`、`src/threadsnap/worker.py`、`src/threadsnap/services.py`
 
