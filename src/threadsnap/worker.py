@@ -40,6 +40,9 @@ RETRYABLE_ACCESS_FAILURE_CODES = {
     NETWORK_RETRYABLE_FAILURE_CODE,
     RATE_LIMIT_RETRYABLE_FAILURE_CODE,
 }
+# 页面证据列表偶发未触发时，等同一批次首轮来源全部完成后统一复访一次。
+BATCH_RETRYABLE_SOURCE_FAILURE_CODES = {"PAGE_EVIDENCE_LIST_RESPONSE_MISSING"}
+BATCH_RETRY_WAVE_KEY = "batch_retry_wave"
 INTERACTIVE_RECOVERY_CODES = {"PLATFORM_CAPTCHA_REQUIRED", "PLATFORM_CHALLENGE"}
 AUTH_RECOVERY_PROBE_KEY = "auth_recovery_probe"
 AUTH_RECOVERY_BLOCKED_KEY = "auth_recovery_blocked"
@@ -85,6 +88,12 @@ def _retry_due(task: CircleTask, now: datetime) -> bool:
     if not_before.tzinfo is None:
         not_before = not_before.replace(tzinfo=timezone.utc)
     return not_before <= now
+
+
+def _is_batch_retry_task(task: CircleTask) -> bool:
+    """识别等待批次首轮收尾后再复访的来源任务。"""
+
+    return bool((task.checkpoint or {}).get(BATCH_RETRY_WAVE_KEY))
 
 
 class WorkerService:
@@ -432,17 +441,41 @@ class WorkerService:
                 )
             ):
                 return False
-            head = db.scalar(
-                select(CircleTask)
-                .where(
-                    CircleTask.platform_code == platform_code,
-                    CircleTask.status == "queued",
+            platform_queued = list(
+                db.scalars(
+                    select(CircleTask)
+                    .where(
+                        CircleTask.platform_code == platform_code,
+                        CircleTask.status == "queued",
+                    )
+                    .order_by(CircleTask.queue_sequence)
                 )
-                .order_by(CircleTask.queue_sequence)
-                .limit(1)
             )
-            if not head:
+            if not platform_queued:
                 return False
+            head = platform_queued[0]
+            if _is_batch_retry_task(head):
+                run_tasks = list(
+                    db.scalars(
+                        select(CircleTask).where(CircleTask.run_id == head.run_id)
+                    )
+                )
+                first_wave_pending = any(
+                    task.status in {"queued", "running"} and not _is_batch_retry_task(task)
+                    for task in run_tasks
+                )
+                if first_wave_pending:
+                    # 同批次同平台后续首轮来源先完成；其他平台仍可并行推进。
+                    head = next(
+                        (
+                            task
+                            for task in platform_queued
+                            if task.run_id == head.run_id and not _is_batch_retry_task(task)
+                        ),
+                        None,
+                    )
+                    if head is None:
+                        return False
             run = db.get(ExtractionRun, head.run_id)
             platform = db.get(PlatformConfig, platform_code)
             if not run or not platform:
@@ -458,6 +491,15 @@ class WorkerService:
                     .order_by(CircleTask.queue_sequence)
                 )
             )
+            run_tasks = list(db.scalars(select(CircleTask).where(CircleTask.run_id == run.id)))
+            first_wave_pending = any(
+                task.status in {"queued", "running"} and not _is_batch_retry_task(task)
+                for task in run_tasks
+            )
+            if first_wave_pending:
+                queued_tasks = [task for task in queued_tasks if not _is_batch_retry_task(task)]
+                if not queued_tasks:
+                    return False
             now = utc_now()
             auth_probe_tasks = [
                 task
@@ -789,6 +831,34 @@ class WorkerService:
                     "retry_scope": "source",
                     "validation": validation,
                 }
+            if exc.code in BATCH_RETRYABLE_SOURCE_FAILURE_CODES:
+                previous_batch_retry = bool((checkpoint or {}).get(BATCH_RETRY_WAVE_KEY))
+                if previous_batch_retry:
+                    return {
+                        "kind": "failed",
+                        "code": exc.code,
+                        "message": exc.message,
+                        "records": [],
+                        "failures": [],
+                        "validation": validation,
+                    }
+                failure = {
+                    "url": exc.trigger_url or circle_url,
+                    "code": exc.code,
+                    "message": exc.message,
+                    "source_index": 0,
+                }
+                return {
+                    "kind": "retry",
+                    "records": [],
+                    "failures": [failure],
+                    "retry_failures": [failure],
+                    "retry_error_code": exc.code,
+                    "terminal_failures": prior_terminal_failures,
+                    "retry_scope": "source",
+                    "retry_wave": "batch",
+                    "validation": validation,
+                }
             return {
                 "kind": "failed",
                 "code": exc.code,
@@ -1017,7 +1087,8 @@ class WorkerService:
                     (
                         failure.get("code")
                         for failure in retry_failures
-                        if failure.get("code") in RETRYABLE_ACCESS_FAILURE_CODES
+                        if failure.get("code")
+                        in RETRYABLE_ACCESS_FAILURE_CODES | BATCH_RETRYABLE_SOURCE_FAILURE_CODES
                     ),
                     NETWORK_RETRYABLE_FAILURE_CODE,
                 )
@@ -1061,6 +1132,8 @@ class WorkerService:
                     "retry_scope": retry_scope,
                 }
             )
+            if retry_error_code in BATCH_RETRYABLE_SOURCE_FAILURE_CODES:
+                checkpoint[BATCH_RETRY_WAVE_KEY] = True
             if retry_error_code == RATE_LIMIT_RETRYABLE_FAILURE_CODE:
                 checkpoint["rate_limit_completed_count"] = task.completed_count
         elif result["kind"] == "auth" and result.get("retry_urls"):
@@ -1088,6 +1161,8 @@ class WorkerService:
                     if task.platform_code == "yiche"
                     else "平台请求频率受限，正在冷却并自动续跑原任务。"
                 )
+            elif checkpoint.get(BATCH_RETRY_WAVE_KEY):
+                task.stop_reason = "首轮批次完成后统一复访来源。"
             else:
                 task.stop_reason = "固定访问暂时失败，正在自动重试原 URL。"
             task.finished_at = None
