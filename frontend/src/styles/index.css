@@ -55,7 +55,8 @@
 
 @layer components {
   .reputation-sticky-head {
-    background: color-mix(in oklab, var(--muted) 35%, var(--card));
+    /* 表头覆盖滚动正文时必须完全不透明，避免首行数据从两级表头下方透出。 */
+    background: var(--background);
   }
 }
 

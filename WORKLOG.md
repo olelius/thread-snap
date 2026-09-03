@@ -16,6 +16,18 @@
 
 ---
 
+## 2026-09-03 — 口碑排名表头滚动穿透二次修复
+**总目标**：消除排名表纵向滚动时首行数据从固定双层表头下方透出的残余问题。
+**状态**：✅ 前端修复、类型检查、生产构建与真实滚动渲染核验完成。
+**干到哪里了**：
+- [x] 固定表头及指标表头改用完全不透明的页面背景，并建立独立层叠上下文；滚动中的正文不再透出到表头区域。
+- [x] 首屏、纵向滚动后的真实批次截图均确认两级表头、平台分组和左侧冻结列清晰可读。
+**验证**：`frontend\npm run check`、`frontend\npm run build`、`git diff --check`通过；`artifacts/runtime/ui-ranking-header-fixed-top-v2.png`、`artifacts/runtime/ui-ranking-header-fixed-scrolled-v2.png`已人工核验。
+**边界**：仅调整表头背景与层叠样式，不改变排名数据、批次状态或证据内容。
+**关联**：`frontend/src/features/reputation/reputation-detail-page.tsx`、`frontend/src/styles/index.css`
+
+---
+
 ## 2026-09-03 — 口碑排名表头遮挡修复
 **总目标**：修复多平台口碑排名表滚动时首行内容穿透表头的问题，保证两级表头和左侧冻结列在实际渲染中保持清晰层级。
 **状态**：✅ 前端修复、类型检查、生产构建与真实浏览器渲染核验完成。
