@@ -7,6 +7,7 @@ import csv
 import hashlib
 import json
 import tempfile
+import threading
 import unittest
 import zipfile
 from datetime import datetime, timezone
@@ -55,6 +56,7 @@ class OfficialFakeAdapter:
     last_prefer_http_first: bool | None = None
     last_include_negative_rate: bool | None = None
     last_concurrency: int | None = None
+    parallel_probe = None
 
     def __init__(
         self,
@@ -73,6 +75,11 @@ class OfficialFakeAdapter:
 
     def validate_sync(self, targets, output_dir, on_result=None):
         self.validation_calls += 1
+        if type(self).parallel_probe and targets:
+            lock, barrier, entered = type(self).parallel_probe
+            with lock:
+                entered.add(targets[0].platform_url.split("/")[2])
+            barrier.wait(timeout=5)
         output_dir.mkdir(parents=True)
         values = []
         for index, target in enumerate(targets):
@@ -258,11 +265,19 @@ class ReputationInspectionTest(unittest.TestCase):
             for platform_code in ("dongchedi", "autohome", "yiche"):
                 db.get(PlatformConfig, platform_code).enabled = True
 
-        due = container.reputation.check_schedule(
-            datetime(2030, 1, 2, 2, 0, tzinfo=timezone.utc)
+        entered: set[str] = set()
+        OfficialFakeAdapter.parallel_probe = (threading.Lock(), threading.Barrier(3), entered)
+        try:
+            due = container.reputation.check_schedule(
+                datetime(2030, 1, 2, 2, 0, tzinfo=timezone.utc)
+            )
+            self.assertEqual(1, len(due["queued_run_ids"]))
+            finished = container.reputation.execute_run(due["queued_run_ids"][0])
+        finally:
+            OfficialFakeAdapter.parallel_probe = None
+        self.assertEqual(
+            {"www.dongchedi.com", "k.autohome.com.cn", "dianping.yiche.com"}, entered
         )
-        self.assertEqual(1, len(due["queued_run_ids"]))
-        finished = container.reputation.execute_run(due["queued_run_ids"][0])
         self.assertEqual(["dongchedi", "autohome", "yiche"], finished["platform_codes"])
         self.assertEqual(81, finished["planned_count"])
         self.assertEqual(81, finished["completed_count"])

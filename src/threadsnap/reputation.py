@@ -7,7 +7,9 @@ import hashlib
 import io
 import json
 import shutil
+import threading
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
@@ -1637,7 +1639,8 @@ class ReputationService:
                 attempt,
                 required_count,
             )
-            persisted_indexes.add(index)
+            with persisted_indexes_lock:
+                persisted_indexes.add(index)
 
         deadline = monotonic() + 45 * 60
         final_results: list[ReputationPageResult | Exception] = [
@@ -1645,14 +1648,17 @@ class ReputationService:
             for _ in targets
         ]
         attempt_counts = [1 for _ in targets]
-        for platform_code in run.platform_codes:
+        persisted_indexes_lock = threading.Lock()
+        global_limiter = threading.BoundedSemaphore(REPUTATION_RUN_CONCURRENCY)
+
+        def execute_platform(platform_code: str) -> None:
             indexes = [
                 index
                 for index, code in enumerate(target_platform_codes)
                 if code == platform_code
             ]
             if not indexes:
-                continue
+                return
             spec = self._platform_spec(platform_code)
             storage_state = (
                 self.session_store.get_state(platform_code) if self.session_store else None
@@ -1662,14 +1668,14 @@ class ReputationService:
                     final_results[index] = ReputationAdapterError(
                         "AUTH_REQUIRED", f"{spec.display_name}共享Session需要更新。"
                     )
-                continue
+                return
             remaining = int(deadline - monotonic())
             if remaining <= 0:
                 for index in indexes:
                     final_results[index] = ReputationAdapterError(
                         "REPUTATION_BATCH_TIMEOUT", "口碑巡检达到45分钟批次上限。"
                     )
-                continue
+                return
 
             def evidence_policy(target: ReputationMappingTarget, measurement: dict[str, Any]) -> bool:
                 vehicle = vehicles[target.vehicle_id]
@@ -1703,6 +1709,7 @@ class ReputationService:
                 prefer_http_first=False,
                 include_review_article_count=True,
                 include_negative_rate=True,
+                global_limiter=global_limiter,
             )
             group_targets = [targets[index] for index in indexes]
             try:
@@ -1754,6 +1761,11 @@ class ReputationService:
                 close = getattr(adapter, "close", None)
                 if callable(close):
                     close()
+
+        with ThreadPoolExecutor(max_workers=max(1, len(run.platform_codes))) as pool:
+            futures = [pool.submit(execute_platform, platform_code) for platform_code in run.platform_codes]
+            for future in futures:
+                future.result()
 
         for index, (result, attempt_count) in enumerate(
             zip(final_results, attempt_counts, strict=True)

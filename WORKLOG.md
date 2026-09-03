@@ -16,6 +16,21 @@
 
 ---
 
+## 2026-09-03 — 口碑巡检三平台同时进入执行
+**总目标**：让完整三平台口碑巡检批次的懂车帝、汽车之家和易车通道同时进入执行，同时保留已确认的全局内部并发2、独立Session和逐项不可变证据。
+**状态**：🔄 代码、三平台同步屏障回归和完整质量门已完成，Git 收尾进行中。
+**干到哪里了**：
+- [x] 从已合并 `main@e127ec5` 创建分支 `feat/parallel-reputation-channels`。
+- [x] 口碑服务为每个平台启动独立执行线程；平台顺序继续用于冻结目标、汇报和导出，实际适配器启动不再串行等待。
+- [x] 汽车之家、易车浏览器骨架和懂车帝 HTTP/浏览器路径接入共享跨线程信号量，所有平台页面活动总并发仍固定为2。
+- [x] 三平台口碑回归使用同步屏障确认三个平台同时进入 `validate_sync`；既有逐项持久化、重试和证据流程保持。
+**验证**：`python -m unittest tests.test_reputation` 25项通过；`python -m unittest discover -s tests` 276项通过；Ruff、compileall、pip check、前端 `npm run check` 与 `npm run build`、`git diff --check`均通过。
+**下一步**：提交、推送、PR 合并并核对合并后的 `main`，再补充精确身份。
+**边界**：本变更只调整口碑巡检平台通道启动方式；普通帖子提取的三平台并行、平台内部并发、认证和限流合同保持独立。
+**关联**：`docs/adr/0066-parallelize-three-platform-reputation-channels.md`、`src/threadsnap/reputation.py`、`src/threadsnap/reputation_browser.py`
+
+---
+
 ## 2026-09-03 — 三平台普通帖子提取并行通道
 **总目标**：让同一普通帖子提取批次的汽车之家、懂车帝和易车平台通道同步运行，同时保留平台独立 FIFO、平台内部并发和认证/限流隔离。
 **状态**：✅ 代码、完整质量门、PR 合并及合并后 main 核验均已完成。
