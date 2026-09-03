@@ -21,7 +21,8 @@ class Settings(BaseSettings):
     worker_poll_seconds: float = Field(default=1.0, gt=0)
     local_sentiment_num_threads: int = Field(default=2, ge=1, le=4)
     start_background_services: bool = True
-    platform_level_concurrency: int = Field(default=1, ge=1, le=1)
+    # 三个平台各自占用一个执行通道；平台内部并发仍由平台配置单独控制。
+    platform_level_concurrency: int = Field(default=3, ge=1, le=3)
     dongchedi_storage_state: Path | None = None
     session_fernet_key: str | None = None
     # 懂车帝当前会对无头浏览器返回 HTTP 200 零字节文档；认证浏览器默认使用

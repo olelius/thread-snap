@@ -121,6 +121,7 @@ class Container:
             self.sessions,
             self.session_store,
             settings.worker_poll_seconds,
+            platform_level_concurrency=settings.platform_level_concurrency,
             event_publisher=self.events.publish,
             sentiment_service=self.sentiment,
             screenshot_service=self.screenshots,
