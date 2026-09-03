@@ -16,6 +16,21 @@
 
 ---
 
+## 2026-09-03 — 三平台普通帖子提取并行通道
+**总目标**：让同一普通帖子提取批次的汽车之家、懂车帝和易车平台通道同步运行，同时保留平台独立 FIFO、平台内部并发和认证/限流隔离。
+**状态**：✅ 代码、完整质量门和定向并行回归已通过；Git 收尾待执行。
+**干到哪里了**：
+- [x] 从 `main@f61aef9` 创建分支 `feat/parallel-platform-workers`。
+- [x] Worker 在一个进程内通过最多三个平台执行通道并发领取平台队首；每个平台在线程内创建独立 Collector，平台内部并发继续使用任务快照。
+- [x] 平台级配置范围改为 `1..3`，默认 `3`；部署示例同步更新。
+- [x] 新增三个同步屏障回归，验证三个可用平台在同一 `process_once` 轮次同时进入执行。
+- [x] 验证：`python -m unittest discover -s tests` 共276项通过；Ruff、compileall、pip check、前端 `npm run check` 与 `npm run build`、`git diff --check`均通过。
+**下一步**：提交、推送并完成合并后核验。
+**边界**：本变更只改普通帖子提取的平台级调度；口碑巡检固定内部并发2、平台 FIFO、认证恢复、限流策略和历史批次语义保持独立。
+**关联**：`docs/adr/0065-parallelize-platform-collection-channels.md`、`src/threadsnap/worker.py`、`src/threadsnap/config.py`
+
+---
+
 ## 2026-09-03 — 汽车之家与易车口碑巡检接入
 **总目标**：在隔离工作树中让汽车之家和易车复用懂车帝的映射、正式巡检、截图、汇报和XLSX闭环，并保留平台真实指标语义与历史范围。
 **状态**：✅ 代码、真实代表样本、完整验证、PR合并及合并后核验均已完成。

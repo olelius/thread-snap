@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import tempfile
+import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
@@ -3008,6 +3009,28 @@ class AuthComponentTests(AppCase):
 
 
 class QueueAndRetryTests(AppCase):
+    def test_available_platform_heads_run_concurrently(self) -> None:
+        """三个平台各自占用一个通道，并在同一轮同时进入执行。"""
+
+        entered = set()
+        entered_lock = threading.Lock()
+        barrier = threading.Barrier(3)
+
+        def process_head(platform_code: str) -> bool:
+            with entered_lock:
+                entered.add(platform_code)
+            barrier.wait(timeout=3)
+            return True
+
+        with (
+            patch.object(self.container.worker, "_official_reputation_waiting", return_value=False),
+            patch.object(self.container.worker, "_process_validation_job", return_value=False),
+            patch.object(self.container.worker, "_process_platform_head", side_effect=process_head),
+        ):
+            self.assertTrue(self.container.worker.process_once())
+
+        self.assertEqual({"autohome", "dongchedi", "yiche"}, entered)
+
     def test_retry_delay_separates_network_and_rate_limit_cooldown(self) -> None:
         """普通网络与平台限流必须使用不同退避，并保持各自上限。"""
 

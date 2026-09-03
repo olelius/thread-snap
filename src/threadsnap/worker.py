@@ -88,13 +88,14 @@ def _retry_due(task: CircleTask, now: datetime) -> bool:
 
 
 class WorkerService:
-    """一个协调线程按平台 FIFO 驱动持久任务。"""
+    """一个协调线程通过独立平台通道驱动持久 FIFO 任务。"""
 
     def __init__(
         self,
         factory: sessionmaker[Session],
         session_store: SessionStore,
         poll_seconds: float = 1.0,
+        platform_level_concurrency: int = 3,
         event_publisher: Callable[..., Any] | None = None,
         sentiment_service: SentimentService | None = None,
         screenshot_service: ScreenshotService | None = None,
@@ -102,6 +103,7 @@ class WorkerService:
         self.factory = factory
         self.session_store = session_store
         self.poll_seconds = poll_seconds
+        self.platform_level_concurrency = min(max(int(platform_level_concurrency), 1), 3)
         self.event_publisher = event_publisher
         self.sentiment_service = sentiment_service
         self.screenshot_service = screenshot_service
@@ -272,9 +274,17 @@ class WorkerService:
                     .order_by(PlatformConfig.code)
                 )
             )
-        for code in platform_codes:
-            if self._process_platform_head(code):
-                return True
+        if platform_codes:
+            # 每个平台各自领取本平台 FIFO 队首；平台之间并行，平台内部仍由
+            # _process_platform_head 使用任务快照中的总并发控制。Collector 在
+            # 通道内创建，避免在线程之间共享平台 Session 或浏览器上下文。
+            with ThreadPoolExecutor(
+                max_workers=min(self.platform_level_concurrency, len(platform_codes))
+            ) as pool:
+                futures = [pool.submit(self._process_platform_head, code) for code in platform_codes]
+                results = [future.result() for future in futures]
+                if any(results):
+                    return True
         if self.screenshot_service and self.screenshot_service.process_once():
             return True
         return False
