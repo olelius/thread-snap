@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import threading
 from abc import ABC, abstractmethod
 from pathlib import Path
 from time import monotonic
@@ -43,6 +44,7 @@ class BrowserReputationAdapter(ABC):
         timeout_seconds: int = 90,
         batch_timeout_seconds: int = 45 * 60,
         evidence_policy=None,
+        global_limiter: threading.Semaphore | None = None,
         **_: Any,
     ) -> None:
         self.storage_state = storage_state
@@ -51,6 +53,17 @@ class BrowserReputationAdapter(ABC):
         self.timeout_seconds = max(1, int(timeout_seconds))
         self.batch_timeout_seconds = max(1, int(batch_timeout_seconds))
         self.evidence_policy = evidence_policy
+        self.global_limiter = global_limiter
+
+    async def _acquire_global_slot(self) -> None:
+        """跨平台共享正式巡检页面并发槽位，避免线程事件循环各自放大并发。"""
+
+        if self.global_limiter is not None:
+            await asyncio.to_thread(self.global_limiter.acquire)
+
+    def _release_global_slot(self) -> None:
+        if self.global_limiter is not None:
+            self.global_limiter.release()
 
     def close(self) -> None:
         """浏览器生命周期在单次验证内关闭；保留统一关闭接口。"""
@@ -85,12 +98,15 @@ class BrowserReputationAdapter(ABC):
 
             async def bounded(index: int, target: ReputationMappingTarget):
                 async with semaphore:
+                    await self._acquire_global_slot()
                     try:
                         result: ReputationPageResult | Exception = await self._visit(
                             browser, target, output_dir
                         )
                     except Exception as error:  # 单项错误必须留在本批次结果中
                         result = error
+                    finally:
+                        self._release_global_slot()
                 if on_result:
                     on_result(index, target, result)
                 return result

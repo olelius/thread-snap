@@ -7,6 +7,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 import time
 from dataclasses import replace
 from decimal import ROUND_HALF_UP, Decimal
@@ -133,6 +134,7 @@ class DongchediReputationAdapter:
         include_review_article_count: bool = False,
         include_negative_rate: bool = False,
         execution_scope: ExecutionScopeKey | None = None,
+        global_limiter: threading.Semaphore | None = None,
     ) -> None:
         self.storage_state = storage_state
         self.concurrency = max(1, min(int(concurrency), 8))
@@ -143,6 +145,7 @@ class DongchediReputationAdapter:
         self.prefer_http_first = prefer_http_first
         self.include_review_article_count = include_review_article_count
         self.include_negative_rate = include_negative_rate
+        self.global_limiter = global_limiter
         self.http = ScraplingHttpPool(
             storage_state,
             timeout_seconds=timeout_seconds,
@@ -160,6 +163,14 @@ class DongchediReputationAdapter:
         """关闭巡检线程创建的全部 Scrapling Session。"""
 
         self.http.close()
+
+    async def _acquire_global_slot(self) -> None:
+        if self.global_limiter is not None:
+            await asyncio.to_thread(self.global_limiter.acquire)
+
+    def _release_global_slot(self) -> None:
+        if self.global_limiter is not None:
+            self.global_limiter.release()
 
     @staticmethod
     def _attitude_count(
@@ -940,25 +951,29 @@ class DongchediReputationAdapter:
                 index: int, target: ReputationMappingTarget
             ) -> ReputationPageResult | Exception:
                 async with semaphore:
-                    if auth_failed.is_set():
-                        result: ReputationPageResult | Exception = ReputationAdapterError(
-                            "AUTH_REQUIRED", "懂车帝共享Session需要更新。"
-                        )
-                    else:
-                        try:
-                            result = await self._visit(
-                                browser,
-                                target,
-                                output_dir,
-                                force_capture=force_capture,
+                    await self._acquire_global_slot()
+                    try:
+                        if auth_failed.is_set():
+                            result: ReputationPageResult | Exception = ReputationAdapterError(
+                                "AUTH_REQUIRED", "懂车帝共享Session需要更新。"
                             )
-                        except Exception as error:
-                            if (
-                                isinstance(error, ReputationAdapterError)
-                                and error.code == "AUTH_REQUIRED"
-                            ):
-                                auth_failed.set()
-                            result = error
+                        else:
+                            try:
+                                result = await self._visit(
+                                    browser,
+                                    target,
+                                    output_dir,
+                                    force_capture=force_capture,
+                                )
+                            except Exception as error:
+                                if (
+                                    isinstance(error, ReputationAdapterError)
+                                    and error.code == "AUTH_REQUIRED"
+                                ):
+                                    auth_failed.set()
+                                result = error
+                    finally:
+                        self._release_global_slot()
                 if on_result:
                     on_result(index, target, result)
                 return result
@@ -1006,14 +1021,18 @@ class DongchediReputationAdapter:
 
         async def bounded(target: ReputationMappingTarget) -> ReputationPageResult | Exception:
             async with semaphore:
-                if auth_failed.is_set():
-                    return ReputationAdapterError("AUTH_REQUIRED", "懂车帝共享Session需要更新。")
+                await self._acquire_global_slot()
                 try:
-                    return await asyncio.to_thread(self._visit_http, target)
-                except Exception as error:
-                    if isinstance(error, ReputationAdapterError) and error.code == "AUTH_REQUIRED":
-                        auth_failed.set()
-                    return error
+                    if auth_failed.is_set():
+                        return ReputationAdapterError("AUTH_REQUIRED", "懂车帝共享Session需要更新。")
+                    try:
+                        return await asyncio.to_thread(self._visit_http, target)
+                    except Exception as error:
+                        if isinstance(error, ReputationAdapterError) and error.code == "AUTH_REQUIRED":
+                            auth_failed.set()
+                        return error
+                finally:
+                    self._release_global_slot()
 
         tasks = [asyncio.create_task(bounded(target)) for target in targets]
         done, pending = await asyncio.wait(
