@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { motion, useReducedMotion } from 'motion/react'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { ArrowDown, ArrowLeft, ArrowUp, Check, CircleAlert, Clipboard, Clock3, Download, EllipsisVertical, FileArchive, FileSpreadsheet, FileText, ImageIcon, Minus, RefreshCw, RotateCcw, ShieldCheck, Trash2, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { PageHeader } from '@/components/page-header'
@@ -91,15 +91,83 @@ function Kpi({ label, value, hint, icon: Icon, tone, children }: { label: string
   return <Card className='border-border/70 bg-card/88 py-4 shadow-sm'><CardContent className='px-4'><div className='flex items-start justify-between'><div><div className='text-xs text-muted-foreground'>{label}</div><div className='mt-1 text-xl font-semibold tabular-nums'>{value}</div></div><div className={cn('grid size-8 place-items-center rounded-lg', colors[tone])}><Icon className='size-4' /></div></div><div className='mt-1 text-[11px] text-muted-foreground'>{hint}</div>{children}</CardContent></Card>
 }
 
+function RankingTableColumns({ platforms }: { platforms: Array<[string, string]> }) {
+  return <colgroup>
+    <col style={{ width: 96 }} />
+    <col style={{ width: 160 }} />
+    {platforms.flatMap(([code]) => [
+      <col key={`${code}-score`} style={{ width: 112 }} />,
+      <col key={`${code}-rank`} style={{ width: 112 }} />,
+      <col key={`${code}-volume`} style={{ width: 112 }} />,
+      <col key={`${code}-reviews`} style={{ width: 112 }} />,
+      <col key={`${code}-negative`} style={{ width: 112 }} />,
+      <col key={`${code}-state`} style={{ width: 128 }} />,
+    ])}
+  </colgroup>
+}
+
 function RankingPanel({ results, onViewEvidence }: { results: ReputationResult[]; onViewEvidence: (result: ReputationResult) => void }) {
+  const headerScrollRef = useRef<HTMLDivElement>(null)
   const platforms = Array.from(new Map(results.map((result) => [result.platform_code, result.platform_name])).entries())
   const vehicles = Array.from(new Map(results.map((result) => [result.vehicle_id, result])).values())
   const byTarget = new Map(results.map((result) => [`${result.vehicle_id}|${result.platform_code}`, result]))
-  return <Card className='flex h-full min-h-0 flex-col overflow-hidden border-border/70 bg-card/90 py-0 shadow-sm'><div className='min-h-0 flex-1 overflow-auto'><Table className='min-w-max'><TableHeader className='isolate bg-background [&_th]:bg-background'><TableRow className='bg-background hover:bg-background'><TableHead rowSpan={2} className='reputation-sticky-head sticky top-0 left-0 z-40 w-24 bg-background pl-4'>角色</TableHead><TableHead rowSpan={2} className='reputation-sticky-head sticky top-0 left-24 z-40 min-w-40 bg-background'>车型</TableHead>{platforms.map(([code, name]) => <TableHead key={code} colSpan={6} className='sticky top-0 z-30 border-l bg-background text-center font-semibold'>{name}</TableHead>)}</TableRow><TableRow className='bg-background hover:bg-background'>{platforms.flatMap(([code]) => [<TableHead key={`${code}-score`} className='sticky top-10 z-30 border-l bg-background text-right'>口碑分</TableHead>, <TableHead key={`${code}-rank`} className='sticky top-10 z-30 bg-background text-right'>排名</TableHead>, <TableHead key={`${code}-volume`} className='sticky top-10 z-30 bg-background text-right'>口碑量</TableHead>, <TableHead key={`${code}-reviews`} className='sticky top-10 z-30 bg-background text-right'>评价篇数</TableHead>, <TableHead key={`${code}-negative`} className='sticky top-10 z-30 bg-background text-right'>差评率</TableHead>, <TableHead key={`${code}-state`} className='sticky top-10 z-30 min-w-32 bg-background'>状态/证据</TableHead>])}</TableRow></TableHeader><TableBody>{vehicles.map((vehicle) => <TableRow key={vehicle.vehicle_id} className='group'><TableCell className='sticky left-0 z-20 bg-card pl-4 transition-colors group-hover:bg-muted/50'><ReputationRoleLabel role={vehicle.role} position={vehicle.vehicle_position} /></TableCell><TableCell className='sticky left-24 z-20 bg-card transition-colors group-hover:bg-muted/50'><div className='font-medium'>{vehicle.vehicle_name}</div><div className='mt-1 text-xs text-muted-foreground'>{vehicle.series_name}</div></TableCell>{platforms.flatMap(([code]) => {
-    const result = byTarget.get(`${vehicle.vehicle_id}|${code}`)
-    if (!result) return [<TableCell key={`${code}-missing`} colSpan={6} className='border-l text-center text-xs text-muted-foreground'>未纳入本批次</TableCell>]
-    return [<TableCell key={`${code}-score`} className='border-l text-right'><MetricCell metric={result.metrics.score} /></TableCell>, <TableCell key={`${code}-rank`} className='text-right'><MetricCell metric={result.metrics.rank} inverseLabel /></TableCell>, <TableCell key={`${code}-volume`} className='text-right'><MetricCell metric={result.metrics.volume} /></TableCell>, <TableCell key={`${code}-reviews`} className='text-right'><MetricCell metric={result.metrics.review_article_count ?? historicalMetric()} /></TableCell>, <TableCell key={`${code}-negative`} className='text-right'><MetricCell metric={result.metrics.negative_rate ?? historicalMetric()} /></TableCell>, <TableCell key={`${code}-state`}><div className='flex items-center gap-1'>{result.status === 'success' ? <StatusBadge value='success' label='成功' /> : <StatusBadge value='failed' label='异常' />}{result.evidence ? <Button variant='ghost' size='icon' className='size-8' onClick={() => onViewEvidence(result)} aria-label={`查看${result.platform_name}截图`}><ImageIcon className='size-4' /></Button> : <span className='text-xs text-muted-foreground'>缺图</span>}</div>{result.error_message && <div className='mt-1 max-w-40 text-[11px] text-muted-foreground'>{result.error_message}</div>}</TableCell>]
-  })}</TableRow>)}</TableBody></Table></div><div className='shrink-0 border-t bg-card/95 px-4 py-3 text-xs text-muted-foreground'>每款车型一行，每个平台固定五指标与状态/证据六列组；口碑分、口碑量和评价篇数升高为绿色，排名数字和差评率下降为绿色。</div></Card>
+  const rankingTableWidth = 256 + platforms.length * 688
+
+  return <Card className='flex h-full min-h-0 flex-col overflow-hidden border-border/70 bg-card/90 py-0 shadow-sm'>
+    <div className='flex min-h-0 flex-1 flex-col overflow-hidden'>
+      <div ref={headerScrollRef} className='shrink-0 overflow-hidden border-b border-border bg-background'>
+        <Table className='table-fixed' style={{ width: rankingTableWidth, minWidth: rankingTableWidth }}>
+          <RankingTableColumns platforms={platforms} />
+          <TableHeader className='static bg-background [&_th]:bg-background'>
+            <TableRow className='bg-background hover:bg-background'>
+              <TableHead rowSpan={2} className='reputation-sticky-head sticky left-0 z-30 w-24 bg-background pl-4'>角色</TableHead>
+              <TableHead rowSpan={2} className='reputation-sticky-head sticky left-24 z-30 min-w-40 bg-background'>车型</TableHead>
+              {platforms.map(([code, name]) => <TableHead key={code} colSpan={6} className='border-l bg-background text-center font-semibold'>{name}</TableHead>)}
+            </TableRow>
+            <TableRow className='bg-background hover:bg-background'>
+              {platforms.flatMap(([code]) => [
+                <TableHead key={`${code}-score`} className='w-28 min-w-28 border-l bg-background text-right'>口碑分</TableHead>,
+                <TableHead key={`${code}-rank`} className='w-28 min-w-28 bg-background text-right'>排名</TableHead>,
+                <TableHead key={`${code}-volume`} className='w-28 min-w-28 bg-background text-right'>口碑量</TableHead>,
+                <TableHead key={`${code}-reviews`} className='w-28 min-w-28 bg-background text-right'>评价篇数</TableHead>,
+                <TableHead key={`${code}-negative`} className='w-28 min-w-28 bg-background text-right'>差评率</TableHead>,
+                <TableHead key={`${code}-state`} className='w-32 min-w-32 bg-background'>状态/证据</TableHead>,
+              ])}
+            </TableRow>
+          </TableHeader>
+        </Table>
+      </div>
+      <div
+        className='min-h-0 flex-1 overflow-auto'
+        onScroll={(event) => {
+          if (headerScrollRef.current) headerScrollRef.current.scrollLeft = event.currentTarget.scrollLeft
+        }}
+      >
+        <Table className='table-fixed' style={{ width: rankingTableWidth, minWidth: rankingTableWidth }}>
+          <RankingTableColumns platforms={platforms} />
+          <TableBody>
+            {vehicles.map((vehicle) => <TableRow key={vehicle.vehicle_id} className='group'>
+              <TableCell className='sticky left-0 z-20 w-24 bg-background pl-4 transition-colors group-hover:bg-muted'><ReputationRoleLabel role={vehicle.role} position={vehicle.vehicle_position} /></TableCell>
+              <TableCell className='sticky left-24 z-20 min-w-40 bg-background transition-colors group-hover:bg-muted'><div className='font-medium'>{vehicle.vehicle_name}</div><div className='mt-1 text-xs text-muted-foreground'>{vehicle.series_name}</div></TableCell>
+              {platforms.flatMap(([code]) => {
+                const result = byTarget.get(`${vehicle.vehicle_id}|${code}`)
+                if (!result) return [<TableCell key={`${code}-missing`} colSpan={6} className='border-l text-center text-xs text-muted-foreground'>未纳入本批次</TableCell>]
+                return [
+                  <TableCell key={`${code}-score`} className='w-28 min-w-28 border-l text-right'><MetricCell metric={result.metrics.score} /></TableCell>,
+                  <TableCell key={`${code}-rank`} className='w-28 min-w-28 text-right'><MetricCell metric={result.metrics.rank} inverseLabel /></TableCell>,
+                  <TableCell key={`${code}-volume`} className='w-28 min-w-28 text-right'><MetricCell metric={result.metrics.volume} /></TableCell>,
+                  <TableCell key={`${code}-reviews`} className='w-28 min-w-28 text-right'><MetricCell metric={result.metrics.review_article_count ?? historicalMetric()} /></TableCell>,
+                  <TableCell key={`${code}-negative`} className='w-28 min-w-28 text-right'><MetricCell metric={result.metrics.negative_rate ?? historicalMetric()} /></TableCell>,
+                  <TableCell key={`${code}-state`} className='w-32 min-w-32'><div className='flex items-center gap-1'>{result.status === 'success' ? <StatusBadge value='success' label='成功' /> : <StatusBadge value='failed' label='异常' />}{result.evidence ? <Button variant='ghost' size='icon' className='size-8' onClick={() => onViewEvidence(result)} aria-label={`查看${result.platform_name}截图`}><ImageIcon className='size-4' /></Button> : <span className='text-xs text-muted-foreground'>缺图</span>}</div>{result.error_message && <div className='mt-1 max-w-40 text-[11px] text-muted-foreground'>{result.error_message}</div>}</TableCell>,
+                ]
+              })}
+            </TableRow>)}
+          </TableBody>
+        </Table>
+      </div>
+    </div>
+    <div className='shrink-0 border-t bg-card/95 px-4 py-3 text-xs text-muted-foreground'>每款车型一行，每个平台固定五指标与状态/证据六列组；口碑分、口碑量和评价篇数升高为绿色，排名数字和差评率下降为绿色。</div>
+  </Card>
 }
 
 function historicalMetric(): ReputationMetric {
