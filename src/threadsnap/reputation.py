@@ -1308,9 +1308,9 @@ class ReputationService:
         cls, page: ReputationPageResult, baseline_row: dict[str, Any] | None
     ) -> dict[str, Any]:
         baseline = (baseline_row or {}).get("metrics", {})
-        missing_state: Literal["not_available", "unknown"] = (
-            "not_available" if page.reputation_not_available else "unknown"
-        )
+        # 单个指标在平台页面上不存在是正常业务状态（例如未上市车型或平台未展示排名）。
+        # 只有页面访问、身份校验或证据生成失败才进入批次异常；空指标统一保留为空值。
+        missing_state: Literal["not_available", "unknown"] = "not_available"
         review_article_count = cls._official_metric(
             page.review_article_count_raw,
             baseline.get("review_article_count"),
@@ -1404,15 +1404,6 @@ class ReputationService:
                 row_status = "success"
                 error_code = None
                 error_message = None
-                unknown_names = [
-                    name
-                    for name, metric in metrics.items()
-                    if metric.get("comparison_status") == "unknown"
-                ]
-                if unknown_names:
-                    row_status = "partial_success"
-                    error_code = "REPUTATION_METRIC_UNKNOWN"
-                    error_message = f"指标来源尚未取得可靠值：{','.join(unknown_names)}。"
                 if evidence_required and not has_evidence:
                     row_status = "partial_success"
                     error_code = "REPUTATION_EVIDENCE_MISSING"
@@ -3550,10 +3541,7 @@ class ReputationService:
                 if changes:
                     platform_changed += 1
                     lines.append(f"{platform_changed}. 【{result.vehicle_name}】" + "；".join(changes) + "。")
-                if result.status != "success" or any(
-                    item.get("comparison_status") not in {"comparable"}
-                    for item in result.metrics.values()
-                ):
+                if result.status != "success":
                     states = sorted(
                         {
                             item.get("comparison_status", "unknown")

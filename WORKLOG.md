@@ -16,6 +16,19 @@
 
 ---
 
+## 2026-09-03 — 口碑缺失指标按空值正常展示
+**总目标**：平台未返回单项口碑指标时保留其他数据与页面证据，不把正常空字段显示为异常；懂车帝、汽车之家和易车统一执行。
+**状态**：✅ 代码、回归测试、后端全量测试、前端检查与构建已完成。
+**干到哪里了**：
+- [x] 五指标独立读取，缺少 `score`、`rank` 或差评率标签时按空值保存，执行项保持成功；懂车帝未上市车型差评率标签缺失不再阻断页面结果。
+- [x] 汽车之家与易车测量允许可选指标节点缺失；排名表空指标只显示 `—`，汇报不再把空字段列入异常。
+- [x] 回归覆盖空指标成功、懂车帝差评率标签缺失和既有正常指标路径。
+**验证**：`.vevn\Scripts\python.exe -m unittest tests.test_reputation` 26项通过；`.vevn\Scripts\python.exe -m unittest discover -s tests` 279项通过；Ruff、compileall、前端 `npm run check` 与 `npm run build`、`git diff --check`通过。
+**边界**：访问、身份、结构无法识别、证据生成失败和认证/限流等运行错误仍进入异常与补跑；本次不改写既有历史批次，只影响新执行。
+**关联**：`docs/adr/0068-treat-missing-reputation-metrics-as-normal-empty.md`、`src/threadsnap/reputation.py`、`src/threadsnap/reputation_dongchedi.py`、`src/threadsnap/reputation_autohome.py`、`src/threadsnap/reputation_yiche.py`、`frontend/src/features/reputation/reputation-detail-page.tsx`
+
+---
+
 ## 2026-09-03 — 来源级页面证据异常批次收尾重试
 **总目标**：页面列表响应偶发缺失时，不在首轮立即形成最终失败；等待同批次首轮来源完成后统一复访一次，成功后恢复来源结果。
 **状态**：✅ 代码、定向回归、完整质量门与 Git 收尾均已完成。

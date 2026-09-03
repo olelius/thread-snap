@@ -73,7 +73,6 @@ class YicheReputationAdapter(BrowserReputationAdapter):
                     "REPUTATION_PAGE_UNAVAILABLE", "易车点评页访问异常。", retryable=True
                 )
             await page.wait_for_selector(".middle-nav-box .container")
-            await page.wait_for_selector(".cm-taglist-box")
             list_url = _api_url(
                 "information_api/api/v1/point_comment/query_comment_page_list",
                 {"tagId": "-10", "currentPage": "1", "serialId": target.platform_vehicle_id, "pageSize": 20},
@@ -103,18 +102,18 @@ class YicheReputationAdapter(BrowserReputationAdapter):
               const score = document.querySelector('.cm-list-score-val');
               const volume = document.querySelector('.cm-list-count');
               const rank = document.querySelector('.brand-rank');
-              if (!identity || !metrics || !title || !score || !volume || !rank) return null;
-              const boxes = [identity, metrics].map((node) => node.getBoundingClientRect());
+              if (!identity || !title) return null;
+              const boxes = [identity, metrics].filter(Boolean).map((node) => node.getBoundingClientRect());
               const left = Math.max(0, Math.min(...boxes.map((box) => box.left)) - 20);
               const top = Math.max(0, Math.min(...boxes.map((box) => box.top + scrollY)) - 4);
               const right = Math.max(...boxes.map((box) => box.right)) + 20;
               const bottom = Math.max(...boxes.map((box) => box.bottom + scrollY)) + 36;
               return {
                 actual_name: title.textContent.replace(/点评/g, '').trim(),
-                score: (score.textContent.match(/[0-9.]+/) || [])[0] || null,
-                rank: (rank.textContent.match(/第\s*(\d+)\s*名/) || [])[1] || null,
-                rank_scope: rank.textContent.replace(/第\s*\d+\s*名.*/, '').trim(),
-                volume: (volume.textContent.match(/[0-9,]+/) || [])[0] || null,
+                score: score ? (score.textContent.match(/[0-9.]+/) || [])[0] || null : null,
+                rank: rank ? (rank.textContent.match(/第\s*(\d+)\s*名/) || [])[1] || null : null,
+                rank_scope: rank ? rank.textContent.replace(/第\s*\d+\s*名.*/, '').trim() : '同级车型指数排行',
+                volume: volume ? (volume.textContent.match(/[0-9,]+/) || [])[0] || null : null,
                 rect: {x: left, y: top, width: right-left, height: bottom-top},
                 document_width: document.documentElement.scrollWidth,
                 document_height: document.documentElement.scrollHeight,
@@ -132,12 +131,6 @@ class YicheReputationAdapter(BrowserReputationAdapter):
             score = str(info.get("score") or measurement.get("score") or "").strip() or None
             volume = str(info.get("authorCount") or measurement.get("volume") or "").strip() or None
             review_count = str(listing.get("total") or "").strip() or None
-            if not all((score, measurement.get("rank"), volume, review_count)):
-                raise ReputationAdapterError(
-                    "REPUTATION_METRICS_MISSING",
-                    "易车页面未完整取得口碑分、排名、口碑量或评价篇数。",
-                    retryable=True,
-                )
             path = output_dir / f"{target.vehicle_id}-metric.png"
             width, height, digest = await capture_region(page, path, measurement["rect"])
             return ReputationPageResult(

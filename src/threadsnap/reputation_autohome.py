@@ -64,7 +64,6 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
                     "REPUTATION_PAGE_UNAVAILABLE", "汽车之家口碑页访问异常。", retryable=True
                 )
             await page.wait_for_selector('div[class*="header_toolbar__car__name"]')
-            await page.wait_for_selector('div[class*="score_left"]')
             api_url = (
                 "https://koubeiipv6.app.autohome.com.cn/pc/series/list"
                 f"?pm=3&seriesId={target.platform_vehicle_id}&pageIndex=1&pageSize=20"
@@ -87,16 +86,16 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
               const score = document.querySelector('div[class*="score_left"]');
               const rank = document.querySelector('div[class*="score_hot_series"]');
               const count = document.querySelector('div[class*="list_kb_nums"]');
-              if (!name || !score || !rank || !count) return null;
-              const boxes = [name, score, rank, count].map((node) => node.getBoundingClientRect());
+              if (!name) return null;
+              const boxes = [name, score, rank, count].filter(Boolean).map((node) => node.getBoundingClientRect());
               const left = Math.max(0, Math.min(...boxes.map((box) => box.left)) - 20);
               const top = Math.max(0, Math.min(...boxes.map((box) => box.top + scrollY)) - 4);
               const right = Math.max(...boxes.map((box) => box.right)) + 20;
               const bottom = Math.max(...boxes.map((box) => box.bottom + scrollY)) + 36;
               return {
                 actual_name: name.textContent.trim().split('-').pop().trim(),
-                score: (score.textContent.match(/口碑评分\s*([0-9.]+)/) || [])[1] || null,
-                rank: rank.textContent.trim(),
+                score: score ? (score.textContent.match(/口碑评分\s*([0-9.]+)/) || [])[1] || null : null,
+                rank: rank ? rank.textContent.trim() || null : null,
                 volume: null,
                 rect: {x: left, y: top, width: right-left, height: bottom-top},
                 document_width: document.documentElement.scrollWidth,
@@ -117,12 +116,6 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
             score = str(result.get("average") or "").strip() or measurement.get("score")
             volume = str(result.get("averagenum") or "").strip() or None
             review_count = str(result.get("rowcount") or "").strip() or None
-            if not all((score, rank, volume, review_count)):
-                raise ReputationAdapterError(
-                    "REPUTATION_METRICS_MISSING",
-                    "汽车之家页面未完整取得口碑分、排名、口碑量或评价篇数。",
-                    retryable=True,
-                )
             path = output_dir / f"{target.vehicle_id}-metric.png"
             width, height, digest = await capture_region(page, path, measurement["rect"])
             final_url = normalize_series_url(page.url, target.platform_vehicle_id)

@@ -284,11 +284,9 @@ class DongchediReputationAdapter:
             )
             if total_review == 0:
                 return None, source_url, 0, 0
-            raise ReputationAdapterError(
-                "REPUTATION_NEGATIVE_RATE_TAGS_MISSING",
-                "车型差评率接口缺少优缺点统计标签。",
-                retryable=True,
-            )
+            # 部分车型（尤其未上市或暂无评价车型）接口会返回车型身份但不带标签。
+            # 这只表示差评率暂无可展示值，不应阻断其他指标和页面证据。
+            return None, source_url, None, None
         positive_count = self._attitude_count(items, part_id="3", names={"优点", "好评"})
         negative_count = self._attitude_count(items, part_id="4", names={"缺点", "差评"})
         if positive_count is None or negative_count is None:
@@ -348,10 +346,10 @@ class DongchediReputationAdapter:
             return False
         if not require_negative_rate_confirmation:
             return True
-        return (
-            negative_rate_positive_count == 0
-            and negative_rate_negative_count == 0
-        )
+        return (negative_rate_positive_count, negative_rate_negative_count) in {
+            (0, 0),
+            (None, None),
+        }
 
     @staticmethod
     async def _measure(page: Page) -> dict[str, Any]:
