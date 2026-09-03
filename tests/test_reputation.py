@@ -1199,6 +1199,46 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual((positive_count, negative_count), (0, 0))
         self.assertIn("api.dcarapi.com", source_url)
 
+    def test_dongchedi_negative_rate_missing_tags_is_optional(self) -> None:
+        """接口缺少优缺点标签时只留空差评率，不阻断车型其余指标。"""
+
+        class Response:
+            status_code = 200
+            url = "https://api.dcarapi.com/motor/car_score/api/v1/landing_page/get_detail/"
+
+            @staticmethod
+            def json():
+                return {
+                    "status": 0,
+                    "data": {
+                        "series_info": {"series_name": "风云T7"},
+                        "review_count_info": {"total": 12},
+                        "tag_info": None,
+                        "tag_info_v2": None,
+                    },
+                }
+
+        class Session:
+            @staticmethod
+            def get(_url, **_kwargs):
+                return Response()
+
+        adapter = DongchediReputationAdapter(None, include_negative_rate=True)
+        adapter._http_session = lambda: Session()  # type: ignore[method-assign]
+        target = ReputationMappingTarget(
+            vehicle_id="dcd-26120",
+            platform_vehicle_id="26120",
+            platform_url="https://www.dongchedi.com/auto/series/26120",
+            platform_display_name="风云T7",
+            mapping_hash="fixture",
+        )
+
+        rate, source_url, positive_count, negative_count = adapter._visit_negative_rate(target)
+
+        self.assertIsNone(rate)
+        self.assertEqual((positive_count, negative_count), (None, None))
+        self.assertIn("api.dcarapi.com", source_url)
+
     def test_dongchedi_http_first_opens_browser_only_for_evidence_targets(self) -> None:
         """日常取数不启动浏览器，比较命中的目标才进入截图页面池。"""
 
@@ -1503,8 +1543,8 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         retry = self.service.retry_failed(run_id)
         self.assertEqual(2, retry["concurrency"])
 
-    def test_available_page_with_unknown_metric_stays_partial(self) -> None:
-        """页面有口碑但缺可靠指标来源时应保留截图并显式标记部分成功。"""
+    def test_available_page_with_missing_metric_stays_successful(self) -> None:
+        """页面有口碑但某项指标未提供时保留截图并按空值正常完成。"""
 
         due = self.service.check_schedule(self._at("2030-01-02", "10:00"))
         run_id = due["queued_run_ids"][0]
@@ -1515,13 +1555,13 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
             item for item in finished["results"] if item["vehicle_id"] == "official-01"
         )
 
-        self.assertEqual("partial_success", first["status"])
+        self.assertEqual("success", first["status"])
         self.assertEqual(
-            "unknown", first["metrics"]["negative_rate"]["comparison_status"]
+            "not_available", first["metrics"]["negative_rate"]["comparison_status"]
         )
         self.assertIsNotNone(first["evidence"])
         self.assertEqual(27, finished["complete_evidence_count"])
-        self.assertEqual("partial_success", finished["status"])
+        self.assertEqual("success", finished["status"])
 
     def test_official_run_persists_linear_progress_before_terminal_state(self) -> None:
         """每个车型终态都应先落库并发布进度，批次结束后才冻结汇报。"""
