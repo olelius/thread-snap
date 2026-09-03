@@ -3335,6 +3335,137 @@ class QueueAndRetryTests(AppCase):
         )))
         self.assertEqual(["circle", "circle"], calls)
 
+    def test_page_evidence_missing_retries_after_batch_first_wave(self) -> None:
+        """来源列表响应偶发缺失时，等同批首轮来源结束后统一复访一次。"""
+
+        first = self.save_verified_circle(external_id="batch-first", name="批次首来源")
+        second = self.save_verified_circle(external_id="batch-second", name="批次次来源")
+        run = self.container.runs.create_manual(
+            ManualRunCreate(
+                platform_code="dongchedi", circle_ids=[first.id, second.id], quantity=1
+            ),
+            scope="api",
+            header_key="batch-source-retry-0001",
+        )
+        with self.container.sessions.begin() as db:
+            platform = db.get(PlatformConfig, "dongchedi")
+            assert platform is not None
+            platform.internal_concurrency = 1
+        calls: list[str] = []
+        first_attempt_url: str | None = None
+
+        class BatchRetryCollector(FakeCollector):
+            def collect_circle(
+                self,
+                url: str,
+                target: int,
+                skip_post_ids: set[str] | None = None,
+                on_progress=None,
+            ) -> dict:
+                nonlocal first_attempt_url
+                calls.append(url)
+                if len(calls) == 1:
+                    first_attempt_url = url
+                    raise CollectorFailure(
+                        "PAGE_EVIDENCE_LIST_RESPONSE_MISSING", "来源列表响应暂时缺失。"
+                    )
+                record = sample_record(f"batch-{len(calls)}")
+                if on_progress:
+                    on_progress(record, None)
+                return {
+                    "records": [record][:target],
+                    "failures": [],
+                    "stop_reason": "已经取得配置数量的有效帖子。",
+                }
+
+        collector = BatchRetryCollector()
+        self.container.worker._collector = lambda *_args: collector  # type: ignore[method-assign]
+
+        with self.container.sessions() as db:
+            initial_order = [
+                task.circle_url
+                for task in db.scalars(
+                    select(CircleTask)
+                    .where(CircleTask.run_id == run["id"])
+                    .order_by(CircleTask.queue_sequence)
+                )
+            ]
+
+        self.assertTrue(self.container.worker.process_once())
+        first_wave = self.container.runs.get_run(run["id"])
+        self.assertEqual("running", first_wave["status"])
+        self.assertEqual(initial_order, calls)
+        with self.container.sessions() as db:
+            tasks = list(
+                db.scalars(
+                    select(CircleTask)
+                    .where(CircleTask.run_id == run["id"])
+                    .order_by(CircleTask.queue_sequence)
+                )
+            )
+            failed_task = next(task for task in tasks if task.circle_url == first_attempt_url)
+            other_task = next(task for task in tasks if task.circle_url != first_attempt_url)
+            self.assertEqual("queued", failed_task.status)
+            self.assertTrue(failed_task.checkpoint["batch_retry_wave"])
+            self.assertEqual("success", other_task.status)
+
+        with self.container.sessions.begin() as db:
+            task = db.scalar(
+                select(CircleTask).where(
+                    CircleTask.run_id == run["id"], CircleTask.circle_url == first_attempt_url
+                )
+            )
+            assert task is not None
+            checkpoint = dict(task.checkpoint or {})
+            checkpoint["retry_not_before"] = datetime.now(timezone.utc).isoformat()
+            task.checkpoint = checkpoint
+
+        self.assertTrue(self.container.worker.process_once())
+        self.assertEqual(initial_order + [first_attempt_url], calls)
+        self.assertEqual("success", self.container.runs.get_run(run["id"])["status"])
+
+    def test_page_evidence_missing_after_batch_retry_becomes_source_failure(self) -> None:
+        """统一复访仍缺少列表响应时才形成来源终态失败。"""
+
+        circle = self.save_verified_circle(external_id="batch-always-missing", name="持续缺失来源")
+        run = self.container.runs.create_manual(
+            ManualRunCreate(
+                platform_code="dongchedi", circle_ids=[circle.id], quantity=1
+            ),
+            scope="api",
+            header_key="batch-source-retry-failed-0001",
+        )
+        calls = 0
+
+        class AlwaysMissingCollector(FakeCollector):
+            def collect_circle(
+                self,
+                url: str,
+                _target: int,
+                skip_post_ids: set[str] | None = None,
+                on_progress=None,
+            ) -> dict:
+                nonlocal calls
+                calls += 1
+                raise CollectorFailure("PAGE_EVIDENCE_LIST_RESPONSE_MISSING", "来源列表响应暂时缺失。")
+
+        collector = AlwaysMissingCollector()
+        self.container.worker._collector = lambda *_args: collector  # type: ignore[method-assign]
+
+        self.assertTrue(self.container.worker.process_once())
+        with self.container.sessions.begin() as db:
+            task = db.scalar(select(CircleTask).where(CircleTask.run_id == run["id"]))
+            assert task is not None
+            checkpoint = dict(task.checkpoint or {})
+            checkpoint["retry_not_before"] = datetime.now(timezone.utc).isoformat()
+            task.checkpoint = checkpoint
+
+        self.assertTrue(self.container.worker.process_once())
+        finished = self.container.runs.get_run(run["id"])
+        self.assertEqual(2, calls)
+        self.assertEqual("failed", finished["status"])
+        self.assertEqual("PAGE_EVIDENCE_LIST_RESPONSE_MISSING", finished["tasks"][0]["error_code"])
+
     def test_interactive_platform_control_waits_and_auth_opens_trigger_url(self) -> None:
         """验证码或访问验证应暂停原任务，并把人工入口定位到原始触发 URL。"""
 

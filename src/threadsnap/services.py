@@ -2448,7 +2448,12 @@ def aggregate_run(db: Session, run: ExtractionRun) -> None:
         )
         return
     if statuses & {"running", "queued"}:
-        run.status = "running" if "running" in statuses else "queued"
+        batch_retry_pending = any(
+            item.status == "queued"
+            and bool((item.checkpoint or {}).get("batch_retry_wave"))
+            for item in tasks
+        )
+        run.status = "running" if "running" in statuses or batch_retry_pending else "queued"
         return
     if tasks and all(item.status == "success" for item in tasks):
         run.status = "success"
