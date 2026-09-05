@@ -6,6 +6,7 @@ import { ChevronLeft, ChevronRight, CircleAlert, FilterX, KeyRound, RefreshCw } 
 import { AuthDialog } from '@/features/auth/auth-dialog'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
+import { WorkspaceVisual } from '@/components/workspace-visual'
 import { NewExtractionSheet } from './new-extraction-sheet'
 import { useDebouncedValue } from '@/hooks/use-debounced-value'
 import { api, errorMessage, formatDate, platformName, queryString, shanghaiDayBoundary } from '@/lib/api'
@@ -110,9 +111,14 @@ function RunListPage({ kind }: { kind: RunListKind }) {
   const totalPages = Math.max(1, Math.ceil((query.data?.total ?? 0) / (search.pageSize ?? 50)))
 
   return (
-    <div className='flex h-full min-h-0 flex-col gap-4'>
+    <div className='flex h-full min-h-0 flex-col gap-4 overflow-auto pr-1'>
+      <WorkspaceVisual
+        runs={query.data?.items ?? []}
+        kind={kind}
+        onOpen={(run) => navigate({ to: detailPath, params: { runId: run.id }, search: emptyDetailSearch })}
+      />
       <div className='shrink-0 space-y-4'>
-        <PageHeader title={recurring ? '循环计划列表' : '提取列表'} description={recurring ? '只查看循环计划触发的独立批次，页面能力与定时批次保持一致。' : '查看手动与定时提取批次，状态变化由 SSE 通知并回查权威接口。'} actions={recurring ? undefined : <NewExtractionSheet />} />
+        <PageHeader title={recurring ? '全部循环批次' : '全部提取批次'} description={recurring ? '只查看循环计划触发的独立批次，页面能力与定时批次保持一致。' : '查看手动与定时提取批次，状态变化由 SSE 通知并回查权威接口。'} actions={recurring ? undefined : <NewExtractionSheet />} />
         <Card className='border-border/70 bg-card/88 py-0 shadow-sm backdrop-blur'>
           <CardContent className={`grid gap-3 p-3 md:grid-cols-2 ${recurring ? 'xl:grid-cols-3 2xl:grid-cols-[minmax(220px,1fr)_160px_160px_150px_150px_auto]' : 'xl:grid-cols-4 2xl:grid-cols-[minmax(220px,1fr)_160px_160px_160px_150px_150px_auto]'}`}>
             <Input value={search.number ?? ''} onChange={(event) => patch({ number: event.target.value || undefined, page: 1 })} placeholder='搜索批次编号' aria-label='搜索批次编号' />
@@ -125,7 +131,7 @@ function RunListPage({ kind }: { kind: RunListKind }) {
           </CardContent>
         </Card>
       </div>
-      <div className='flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-border/70 bg-card/90 shadow-sm backdrop-blur'>
+      <div className='flex min-h-[22rem] flex-none flex-col overflow-hidden rounded-xl border border-border/70 bg-card/90 shadow-sm backdrop-blur'>
         <div className='min-h-0 flex-1 overflow-auto' data-list-viewport='runs'>
           <Table className='min-w-[1050px]'>
             <TableHeader>{table.getHeaderGroups().map((group) => <TableRow key={group.id} className='bg-muted/35'>{group.headers.map((header) => <TableHead key={header.id}>{flexRender(header.column.columnDef.header, header.getContext())}</TableHead>)}</TableRow>)}</TableHeader>
