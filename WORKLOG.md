@@ -16,6 +16,20 @@
 
 ---
 
+## 2026-09-05 — 浅色窄屏玻璃与悬停反馈修正（feat/ui-refactor-fidelity）
+**总目标**：针对实际预览中“卡片近乎不透明、3D 透视不明显、划过无反馈”的验收反馈，补齐参考图所需的 OLED 工作台材质、空间深度和可感知 hover 动效。
+**状态**：✅ 修正完成，等待用户在现有预览中复核；PR #275 继续保持 draft。
+**干到哪里了**：
+- [x] 浅色主题改用半透明表面、彩色环境渐变和更清晰的高光边界，使 `backdrop-filter` 在窄屏浅色预览中可见。
+- [x] 工作台视觉层在浅色外壳中固定为黑色 OLED 玻璃基线，保留外层导航的主题切换，同时让参考图的黑底、冷白边缘与绿色强调稳定可见。
+- [x] 中央文件面板加强 `perspective: 900px`、`rotateX/rotateY`、`translateZ` 与阴影层次；预览卡片不再使用 disabled 状态，鼠标可直接触发反馈。
+- [x] hover 实测改变 transform、filter、box-shadow 和扫光宽度；8 张空状态卡片与视差矩阵均由 Playwright 读取确认。
+**验证**：`frontend\npm run check`、`frontend\npm run build`、`git diff --check`通过；`verify_ui_fixture.py` 在完整详情/命令面板流程中输出 `BROWSER_UI_FIXTURE_OK`；Playwright 读取输出 `HOVER_CHANGED True`、8 张卡片、3D `matrix3d`，并生成 `current-critique-v7-darkworkspace.png` 与 `current-critique-v5-fixture-light.png`。
+**边界**：未改变批次 API、路由或生产数据；真实批次进入后仍沿用既有检查器与详情跳转。
+**关联**：`frontend/src/components/workspace-visual.tsx`、`frontend/src/styles/index.css`、`frontend/src/styles/theme.css`
+
+---
+
 ## 2026-09-05 — 首屏工作台结构二次重构（feat/ui-refactor-fidelity）
 **总目标**：针对首轮“新视觉与旧 CRUD 页面纵向拼接、导航层级不足、3D/玻璃动效不明显”的反馈，重构首屏工作台结构。
 **状态**：✅ 已完成首屏结构和视觉反馈修正，待合并当前修正分支。

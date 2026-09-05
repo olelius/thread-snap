@@ -137,10 +137,10 @@ export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
                   <button
                     key={run?.id ?? fallback.label}
                     type='button'
-                    className={`dashboard-file-card dashboard-file-card--${tone} ${run?.id === selectedRun?.id ? 'is-selected' : ''}`}
+                    className={`dashboard-file-card dashboard-file-card--${tone} ${run && run.id === selectedRun?.id ? 'is-selected' : ''}`}
                     style={{ '--card-index': index } as React.CSSProperties}
                     onClick={() => run && selectRun(run)}
-                    disabled={!run}
+                    aria-disabled={!run}
                     aria-label={run ? `查看批次 ${label}` : `${label}，暂无批次`}
                   >
                     <span className='dashboard-file-card__shine' />

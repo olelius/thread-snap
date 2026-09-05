@@ -246,11 +246,23 @@
 
   .workspace-main {
     background:
-      radial-gradient(circle at 76% 6%, color-mix(in oklab, var(--workspace-accent) 6%, transparent), transparent 30rem),
+      radial-gradient(circle at 76% 6%, color-mix(in oklab, #38bdf8 18%, transparent), transparent 30rem),
+      radial-gradient(circle at 18% 72%, color-mix(in oklab, #a78bfa 12%, transparent), transparent 26rem),
       transparent;
   }
 
   .workspace-visual {
+    --workspace-deep: #050708;
+    --workspace-surface: rgba(17, 23, 26, 0.48);
+    --workspace-surface-strong: rgba(25, 32, 34, 0.62);
+    --workspace-surface-muted: rgba(10, 15, 17, 0.42);
+    --workspace-border: rgba(226, 232, 240, 0.16);
+    --workspace-grid: rgba(226, 232, 240, 0.08);
+    --workspace-accent: #22c55e;
+    --workspace-shadow: 0 24px 80px rgba(0, 0, 0, 0.48);
+    --foreground: #f1f5f2;
+    --muted-foreground: #9aa9a0;
+    color: var(--foreground);
     position: relative;
     isolation: isolate;
     overflow: visible;
@@ -258,6 +270,7 @@
     border-radius: var(--workspace-radius);
     background:
       linear-gradient(135deg, color-mix(in oklab, var(--workspace-surface-strong) 74%, transparent), color-mix(in oklab, var(--workspace-surface-muted) 88%, transparent)),
+      radial-gradient(circle at 78% 16%, rgba(255,255,255,0.34), transparent 28%),
       var(--workspace-deep);
     box-shadow: var(--workspace-shadow);
     backdrop-filter: blur(24px) saturate(135%);
@@ -516,6 +529,8 @@
     overflow: hidden;
     min-height: 20rem;
     padding: 1rem;
+    perspective: 900px;
+    transform-style: preserve-3d;
   }
 
   .workspace-stage-heading,
@@ -549,7 +564,7 @@
     margin-top: 0.65rem;
     place-items: center;
     transform-style: preserve-3d;
-    perspective: 1100px;
+    perspective: 900px;
     will-change: transform;
   }
 
@@ -582,7 +597,7 @@
     --fan-step: 4.8rem;
     width: min(92%, 37rem);
     height: 16rem;
-    transform: rotateX(8deg) rotateY(-13deg) translateZ(12px);
+    transform: rotateX(11deg) rotateY(-18deg) translateZ(28px);
     transform-style: preserve-3d;
   }
 
@@ -600,14 +615,14 @@
     overflow: hidden;
     border: 1px solid color-mix(in oklab, var(--file-color, #cbd5e1) 32%, var(--workspace-border));
     border-radius: 0.85rem;
-    background: linear-gradient(125deg, color-mix(in oklab, var(--file-color, #64748b) 22%, var(--workspace-surface-strong)), color-mix(in oklab, var(--workspace-surface-muted) 90%, transparent));
+    background: linear-gradient(125deg, color-mix(in oklab, var(--file-color, #64748b) 18%, rgba(255,255,255,0.52)), rgba(255,255,255,0.18));
     padding: 0.85rem;
     color: var(--foreground);
     text-align: left;
-    box-shadow: 0 18px 34px color-mix(in oklab, var(--workspace-deep) 50%, transparent), inset 0 1px 0 color-mix(in oklab, white 12%, transparent);
+    box-shadow: 0 22px 42px rgba(33, 58, 70, 0.24), 0 0 0 1px rgba(255,255,255,0.34) inset, inset 0 1px 0 rgba(255,255,255,0.8);
     transform: translate(-50%, -50%) translate3d(calc((var(--card-index) - var(--card-center)) * var(--fan-step)), calc((var(--card-index) - var(--card-center)) * -0.45rem), calc(var(--card-index) * 1.2rem)) rotateY(calc((var(--card-index) - var(--card-center)) * -5deg));
     transform-style: preserve-3d;
-    transition: transform 180ms var(--workspace-ease), border-color 180ms var(--workspace-ease), filter 180ms var(--workspace-ease);
+    transition: transform 360ms var(--workspace-ease), border-color 220ms var(--workspace-ease), filter 220ms var(--workspace-ease), box-shadow 360ms var(--workspace-ease), background 360ms var(--workspace-ease);
     z-index: calc(20 - var(--card-index));
     backdrop-filter: blur(16px) saturate(145%);
     -webkit-backdrop-filter: blur(16px) saturate(145%);
@@ -617,17 +632,22 @@
   .dashboard-file-card:focus-visible,
   .dashboard-file-card.is-selected {
     border-color: color-mix(in oklab, var(--file-color, var(--workspace-accent)) 70%, white 10%);
-    filter: brightness(1.12);
+    filter: brightness(1.14) saturate(1.18);
+    box-shadow: 0 30px 60px rgba(33, 58, 70, 0.32), 0 0 34px color-mix(in oklab, var(--file-color, var(--workspace-accent)) 32%, transparent), 0 0 0 1px rgba(255,255,255,0.7) inset;
     outline: none;
+    z-index: 60;
     transform: translate(-50%, -50%) translate3d(calc((var(--card-index) - var(--card-center)) * var(--fan-step) + 0.35rem), calc((var(--card-index) - var(--card-center)) * -0.45rem - 0.25rem), calc(var(--card-index) * 1.2rem + 0.8rem)) rotateY(calc((var(--card-index) - var(--card-center)) * -5deg));
   }
 
   @media (hover: hover) and (pointer: fine) {
     .dashboard-file-card:hover {
       border-color: color-mix(in oklab, var(--file-color, var(--workspace-accent)) 70%, white 10%);
-      filter: brightness(1.12);
+      filter: brightness(1.2) saturate(1.28);
+      animation: none;
+      z-index: 70;
+      box-shadow: 0 34px 76px rgba(33, 58, 70, 0.34), 0 0 42px color-mix(in oklab, var(--file-color, var(--workspace-accent)) 38%, transparent), 0 0 0 1px rgba(255,255,255,0.82) inset;
       outline: none;
-      transform: translate(-50%, -50%) translate3d(calc((var(--card-index) - var(--card-center)) * var(--fan-step) + 0.35rem), calc((var(--card-index) - var(--card-center)) * -0.45rem - 0.25rem), calc(var(--card-index) * 1.2rem + 0.8rem)) rotateY(calc((var(--card-index) - var(--card-center)) * -5deg));
+      transform: translate(-50%, -50%) translate3d(calc((var(--card-index) - var(--card-center)) * var(--fan-step) + 0.35rem), calc((var(--card-index) - var(--card-center)) * -0.45rem - 0.25rem), calc(var(--card-index) * 1.2rem + 1.7rem)) rotateY(calc((var(--card-index) - var(--card-center)) * -5deg)) scale(1.035);
     }
   }
 
@@ -650,6 +670,28 @@
     opacity: 0.7;
     animation: file-card-sheen 6s var(--workspace-ease) calc(var(--card-index) * -0.45s) infinite;
   }
+
+  .dashboard-file-card[aria-disabled='true'] { cursor: crosshair; }
+  .dashboard-file-card:hover .dashboard-file-card__shine,
+  .dashboard-file-card:focus-visible .dashboard-file-card__shine {
+    width: 100%;
+    opacity: 0.95;
+    transition: width 420ms var(--workspace-ease), opacity 220ms var(--workspace-ease);
+  }
+
+  .dashboard-file-card::after {
+    position: absolute;
+    inset: -20% auto -20% -55%;
+    width: 34%;
+    background: linear-gradient(100deg, transparent, rgba(255,255,255,0.75), transparent);
+    content: '';
+    opacity: 0;
+    transform: skewX(-16deg) translateX(-160%);
+    transition: opacity 220ms ease, transform 480ms var(--workspace-ease);
+  }
+
+  .dashboard-file-card:hover::after,
+  .dashboard-file-card:focus-visible::after { opacity: 0.75; transform: skewX(-16deg) translateX(520%); }
 
   .dashboard-file-card__icon {
     position: relative;
