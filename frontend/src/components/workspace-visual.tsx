@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import { motion, useMotionValue, useReducedMotion, useSpring } from 'motion/react'
-import { Activity, ArrowUpRight, Check, CircleAlert, FileStack, FolderOpen, Sparkles, Waves } from 'lucide-react'
+import { Activity, ArrowUpRight, Check, CircleAlert, FileStack, FolderOpen, LayoutList, Sparkles, Waves } from 'lucide-react'
 import type { Run } from '@/lib/types'
 import { formatDate } from '@/lib/api'
 
@@ -10,6 +10,9 @@ const fallbackCards = [
   { label: '口碑巡检', meta: '指标与页面证据', tone: 'green' },
   { label: '循环计划', meta: '持久 FIFO 队列', tone: 'violet' },
   { label: '配置版本', meta: '规则与节点快照', tone: 'amber' },
+  { label: '团队协作', meta: '循环批次队列', tone: 'green' },
+  { label: '数据分析', meta: '排名与页面证据', tone: 'blue' },
+  { label: '知识库', meta: '手动来源历史', tone: 'neutral' },
 ] as const
 
 type WorkspaceVisualProps = {
@@ -35,7 +38,7 @@ export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
     () => runs.find((run) => run.id === selectedId) ?? runs[0],
     [runs, selectedId],
   )
-  const cards = runs.length > 0 ? runs.slice(0, 5) : fallbackCards
+  const cards = runs.length > 0 ? runs.slice(0, 8) : fallbackCards
   const activeCount = runs.filter((run) => ['queued', 'running', 'waiting_for_auth'].includes(run.status)).length
   const completedCount = runs.filter((run) => run.status === 'success').length
   const attentionCount = runs.filter((run) => ['failed', 'partial_success', 'waiting_for_auth'].includes(run.status)).length
@@ -84,6 +87,25 @@ export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
       </div>
 
       <div className='workspace-main-grid'>
+        <aside className='workspace-task-rail' aria-label='当前页任务队列'>
+          <div className='workspace-task-rail__heading'>
+            <div><span className='workspace-section-label'>任务队列</span><span className='workspace-section-note'>当前页批次</span></div>
+            <LayoutList className='size-4 text-emerald-300/80' aria-hidden='true' />
+          </div>
+          <div className='workspace-task-rail__tabs' aria-hidden='true'><span className='is-active'>全部</span><span>进行中</span><span>已完成</span></div>
+          <div className='workspace-task-rail__list'>
+            {runs.length ? runs.slice(0, 7).map((run) => (
+              <button key={run.id} type='button' className={`workspace-task-rail__item ${run.id === selectedRun?.id ? 'is-selected' : ''}`} onClick={() => selectRun(run)}>
+                <span className={`workspace-task-rail__dot workspace-task-rail__dot--${statusTone(run.status)}`} />
+                <span className='min-w-0'><strong>{run.number}</strong><small>{run.source_names?.[0] || run.circle_names?.[0] || statusLabel(run.status)}</small></span>
+                <ArrowUpRight className='size-3.5' />
+              </button>
+            )) : (
+              <div className='workspace-task-rail__empty'><FileStack className='size-5' /><strong>等待批次数据</strong><small>真实批次进入后会显示在这里。</small></div>
+            )}
+          </div>
+          <div className='workspace-task-rail__footer'><span className='workspace-live-dot' /> SSE 状态流</div>
+        </aside>
         <div
           ref={stageRef}
           className='workspace-stage-shell'
@@ -104,7 +126,7 @@ export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
           >
             <div className='workspace-stage__glow' />
             <div className='workspace-stage__grid' />
-            <div className='dashboard-file-stack'>
+            <div className='dashboard-file-stack' style={{ '--card-center': (cards.length - 1) / 2, '--fan-step': cards.length > 5 ? '2.5rem' : '4.8rem' } as React.CSSProperties}>
               {cards.map((item, index) => {
                 const run = 'id' in item ? item : undefined
                 const fallback = 'label' in item ? item : (fallbackCards[index] ?? fallbackCards[0])

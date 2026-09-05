@@ -16,6 +16,19 @@
 
 ---
 
+## 2026-09-05 — 首屏工作台结构二次重构（feat/ui-refactor-fidelity）
+**总目标**：针对首轮“新视觉与旧 CRUD 页面纵向拼接、导航层级不足、3D/玻璃动效不明显”的反馈，重构首屏工作台结构。
+**状态**：✅ 已完成首屏结构和视觉反馈修正，待合并当前修正分支。
+**干到哪里了**：
+- [x] 主体改为任务队列 / 3D 文件区 / 批次检查器三栏；完整筛选、分页和表格降级到可展开的“完整批次档案”。
+- [x] 导航改为工作台、资料与分析、计划与协作、系统四层，映射任务管理、文件归档、数据分析、日程管理、团队协作、知识库和设置中心。
+- [x] 中央视觉扩展为 8 张竖向玻璃文件面板，使用动态 `card-center`/`fan-step`、透视、`translateZ`、rotateY、边缘高光、玻璃模糊和呼吸/扫光动效；移动端单独收窄扇形间距。
+- [x] `frontend\npm run check`、`frontend\npm run build`、`git diff --check`通过；fixture 浏览器验收 `BROWSER_UI_FIXTURE_OK`，确认 8 张空状态面板、7 个导航项、抽屉开合、视差和键盘命令面板。
+**边界**：隔离预览后端仍为空数据库；真实批次进入后左侧队列、检查器和时间线消费既有 `/api/v1` 数据，不构造生产批次。
+**关联**：`frontend/src/components/app-shell.tsx`、`frontend/src/components/workspace-visual.tsx`、`frontend/src/components/global-command-menu.tsx`、`frontend/src/features/runs/runs-page.tsx`、`frontend/src/styles/index.css`
+
+---
+
 ## 2026-09-05 — 工作台 UI 重构（feat/ui-refactor）
 **总目标**：从 `main@e96549f57903a647459980bb850429e68afd0ed1` 的独立工作树重构任务管理与循环批次界面，复现参考图的 OLED 深色玻璃、层叠文件卡片、检查器、时间线和真实鼠标/键盘交互，同时保留既有路由、API 与业务能力。
 **状态**：✅ 工作树内实现、fixture 浏览器验收与隔离真实后端 API 冒烟完成；生产业务数据与采集流程未改动。

@@ -117,6 +117,9 @@ function RunListPage({ kind }: { kind: RunListKind }) {
         kind={kind}
         onOpen={(run) => navigate({ to: detailPath, params: { runId: run.id }, search: emptyDetailSearch })}
       />
+      <details className='workspace-data-drawer'>
+        <summary><span><strong>{recurring ? '循环批次档案' : '完整批次档案'}</strong><small>筛选、分页与原始表格视图</small></span><span className='workspace-data-drawer__hint'>展开数据</span></summary>
+        <div className='workspace-data-drawer__body'>
       <div className='shrink-0 space-y-4'>
         <PageHeader title={recurring ? '全部循环批次' : '全部提取批次'} description={recurring ? '只查看循环计划触发的独立批次，页面能力与定时批次保持一致。' : '查看手动与定时提取批次，状态变化由 SSE 通知并回查权威接口。'} actions={recurring ? undefined : <NewExtractionSheet />} />
         <Card className='border-border/70 bg-card/88 py-0 shadow-sm backdrop-blur'>
@@ -145,6 +148,8 @@ function RunListPage({ kind }: { kind: RunListKind }) {
           <div className='flex items-center gap-2'><Select value={String(search.pageSize)} onValueChange={(value) => patch({ pageSize: Number(value) as 20 | 50 | 100, page: 1 })}><SelectTrigger className='w-28'><SelectValue /></SelectTrigger><SelectContent><SelectItem value='20'>每页 20</SelectItem><SelectItem value='50'>每页 50</SelectItem><SelectItem value='100'>每页 100</SelectItem></SelectContent></Select><Button variant='outline' size='icon' disabled={(search.page ?? 1) <= 1} onClick={() => patch({ page: (search.page ?? 1) - 1 })} aria-label='上一页'><ChevronLeft className='size-4' /></Button><Button variant='outline' size='icon' disabled={(search.page ?? 1) >= totalPages} onClick={() => patch({ page: (search.page ?? 1) + 1 })} aria-label='下一页'><ChevronRight className='size-4' /></Button></div>
         </div>
       </div>
+        </div>
+      </details>
       <AuthDialog open={Boolean(authRun)} onOpenChange={(open) => !open && setAuthRun(undefined)} platformCode={authRun?.waiting_platform_codes?.[0] ?? authRun?.platform_codes?.[0]} runId={authRun?.id} freshOnOpen />
     </div>
   )

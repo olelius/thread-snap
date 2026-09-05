@@ -1,14 +1,17 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Dialog, DialogPanel, DialogTitle, Transition, TransitionChild } from '@headlessui/react'
 import { useNavigate } from '@tanstack/react-router'
-import { Command, FileSearch, LayoutList, Repeat2, Search, Settings2, Sparkles, X } from 'lucide-react'
+import { Archive, BarChart3, CalendarDays, Command, History, LayoutList, Search, Settings2, Sparkles, UsersRound, X } from 'lucide-react'
 import { useReducedMotion } from 'motion/react'
 
 const commands = [
   { id: 'runs', label: '任务管理', description: '打开批次与队列工作台', icon: LayoutList, to: '/runs', search: {} },
-  { id: 'recurring', label: '循环计划', description: '查看周期触发的独立批次', icon: Repeat2, to: '/recurring-runs', search: {} },
-  { id: 'reputation', label: '口碑巡检', description: '查看排名和页面证据', icon: FileSearch, to: '/reputation', search: { tab: 'runs' } },
-  { id: 'config', label: '配置中心', description: '维护规则、计划与来源', icon: Settings2, to: '/config', search: { tab: 'rules' } },
+  { id: 'archive', label: '文件归档', description: '查看导出模板与快照', icon: Archive, to: '/config', search: { tab: 'templates' } },
+  { id: 'analytics', label: '数据分析', description: '查看排名与页面证据', icon: BarChart3, to: '/reputation', search: { tab: 'runs' } },
+  { id: 'schedule', label: '日程管理', description: '维护每周计划节点', icon: CalendarDays, to: '/config', search: { tab: 'schedule' } },
+  { id: 'team', label: '团队协作', description: '查看循环批次队列', icon: UsersRound, to: '/recurring-runs', search: {} },
+  { id: 'knowledge', label: '知识库', description: '查看手动来源历史', icon: History, to: '/config', search: { tab: 'history' } },
+  { id: 'settings', label: '设置中心', description: '维护规则与平台配置', icon: Settings2, to: '/config', search: { tab: 'rules' } },
 ] as const
 
 export function GlobalCommandMenu() {
