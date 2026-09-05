@@ -16,6 +16,15 @@
 
 ---
 
+## 2026-09-06 — Credit Dashboard 对齐修正
+**总目标**：修正参考 Dashboard 设计稿与前端模板中的列、间距、组件内基线和响应式对齐。
+**状态**：✅ Figma 主页面、参考构图和 Templates 页面已统一到 Auto Layout `DashboardTemplate`；前端 CSS 栅格同步为 78px Rail、392px Primary、466px Secondary、19px 栏间距。
+**证据**：Figma 模板根节点 `DashboardTemplate` 为 `1040×744`，包含 14 个 Auto Layout 结构帧、20 个组件实例、0 个图片节点；主页面实例为 `89:584`，参考构图实例为 `89:395`。ScoreCard、MetricCard、CreditCard、RecentChangeRow、SectionHeader、TopBar 内部均已完成对齐修正。
+**验证**：Figma 模板与 1017×600 参考裁切均完成截图复核；前端演示在桌面端 Tab 三项同排且尺寸为 118/122/122×32，移动端无横向溢出、无页面错误；`npm.cmd run check`、`npm.cmd run build` 和 `git diff --check` 通过。
+**边界**：参考构图保留 1017×600 裁切，完整可复用模板为 1040×744；真实信用业务接口仍由业务方提供。
+
+---
+
 ## 2026-09-06 — Credit Dashboard UI 架构模板
 **总目标**：把参考 Dashboard 图片推进为完全组件化的 Figma 设计系统，并提供可替换 API 数据源与 React 页面模板。
 **状态**：✅ Figma Foundations、Components、Templates、Architecture 页面已完成；前端类型、Mock/API 数据源、React Query 页面模板和可复用组件已实现。

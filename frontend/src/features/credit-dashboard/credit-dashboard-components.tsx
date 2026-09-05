@@ -9,7 +9,7 @@ export const creditScoreTabs: Array<{ value: CreditScoreTab; label: string }> = 
 
 export function CreditScoreTabs({ activeTab, onChange }: { activeTab: CreditScoreTab; onChange?: (tab: CreditScoreTab) => void }) {
   return <div className='credit-dashboard__tabs' role='tablist' aria-label='Credit score metrics'>
-    {creditScoreTabs.map((tab) => <button key={tab.value} type='button' role='tab' aria-selected={activeTab === tab.value} className={`credit-dashboard__tab ${activeTab === tab.value ? 'is-active' : ''}`} onClick={() => onChange?.(tab.value)}>{tab.label}</button>)}
+    {creditScoreTabs.map((tab) => <button key={tab.value} type='button' role='tab' aria-selected={activeTab === tab.value} className={`credit-dashboard__tab ${activeTab === tab.value ? 'is-active' : ''}`} onClick={() => onChange?.(tab.value)}><span>{tab.label}</span></button>)}
   </div>
 }
 
