@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Link, Outlet, useRouterState } from '@tanstack/react-router'
 import { motion, useReducedMotion } from 'motion/react'
-import { Cable, ChartNoAxesCombined, LayoutList, Repeat2, Settings2, Sparkles } from 'lucide-react'
+import { Cable, ChartNoAxesCombined, CircleUserRound, LayoutList, Repeat2, Settings2, Sparkles } from 'lucide-react'
 import { ThemeToggle } from './theme-toggle'
+import { GlobalCommandMenu } from './global-command-menu'
 import {
   Sidebar,
   SidebarContent,
@@ -22,11 +23,26 @@ import {
 import { Separator } from '@/components/ui/separator'
 import { TooltipProvider } from '@/components/ui/tooltip'
 
-const navigation = [
-  { to: '/runs' as const, search: { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }, label: '提取列表', description: '批次与结果', icon: LayoutList },
-  { to: '/recurring-runs' as const, search: { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }, label: '循环计划列表', description: '周期批次', icon: Repeat2 },
-  { to: '/reputation' as const, search: { tab: 'runs' as const, page: undefined }, label: '口碑巡检', description: '排名与证据', icon: ChartNoAxesCombined },
-  { to: '/config' as const, search: { tab: 'rules' as const }, label: '配置管理', description: '计划与来源', icon: Settings2 },
+const navigationGroups = [
+  {
+    label: '工作台',
+    items: [
+      { to: '/runs' as const, search: { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }, label: '任务管理', description: '批次与队列', icon: LayoutList },
+    ],
+  },
+  {
+    label: '计划与数据',
+    items: [
+      { to: '/recurring-runs' as const, search: { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }, label: '循环计划', description: '周期批次', icon: Repeat2 },
+      { to: '/reputation' as const, search: { tab: 'runs' as const, page: undefined }, label: '口碑巡检', description: '排名与证据', icon: ChartNoAxesCombined },
+    ],
+  },
+  {
+    label: '系统',
+    items: [
+      { to: '/config' as const, search: { tab: 'rules' as const }, label: '配置中心', description: '规则与来源', icon: Settings2 },
+    ],
+  },
 ]
 
 export function AppShell() {
@@ -40,8 +56,8 @@ export function AppShell() {
   }, [])
   return (
     <TooltipProvider delayDuration={150}>
-      <SidebarProvider defaultOpen className='h-svh min-h-0 overflow-hidden'>
-        <Sidebar collapsible='icon' variant='inset'>
+      <SidebarProvider defaultOpen className='workspace-app-root h-svh min-h-0 overflow-hidden'>
+        <Sidebar collapsible='icon' variant='inset' className='workspace-sidebar'>
           <SidebarHeader className='border-b border-sidebar-border/70 p-3 transition-[padding] duration-200 ease-out motion-reduce:transition-none group-data-[collapsible=icon]:p-2!'>
             <div className='flex h-11 items-center gap-3 overflow-hidden rounded-lg bg-gradient-to-br from-primary/15 to-cyan-400/10 px-2 ring-1 ring-primary/10 transition-[width,height,padding,gap] duration-200 ease-out motion-reduce:transition-none group-data-[collapsible=icon]:size-10! group-data-[collapsible=icon]:self-center group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:gap-0! group-data-[collapsible=icon]:px-0!'>
               <div className='grid size-8 shrink-0 place-items-center rounded-lg bg-primary text-primary-foreground shadow-lg shadow-primary/20 transition-[width,height,border-radius] duration-200 ease-out motion-reduce:transition-none group-data-[collapsible=icon]:size-7! group-data-[collapsible=icon]:rounded-md!'>
@@ -54,33 +70,42 @@ export function AppShell() {
             </div>
           </SidebarHeader>
           <SidebarContent>
-            <SidebarGroup>
-              <SidebarGroupLabel>工作区</SidebarGroupLabel>
-              <SidebarGroupContent>
-                <SidebarMenu>
-                  {navigation.map((item) => (
-                    <SidebarMenuItem key={item.to}>
-                      <SidebarMenuButton
-                        asChild
-                        isActive={pathname === item.to || pathname.startsWith(`${item.to}/`)}
-                        tooltip={item.label}
-                        className='h-11 transition-[background-color,color,transform] duration-200'
-                      >
-                        <Link to={item.to} search={item.search}>
-                          <item.icon />
-                          <span className='flex min-w-0 flex-col'>
-                            <span className='truncate'>{item.label}</span>
-                            <span className='truncate text-[10px] text-muted-foreground'>{item.description}</span>
-                          </span>
-                        </Link>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  ))}
-                </SidebarMenu>
-              </SidebarGroupContent>
-            </SidebarGroup>
+            {navigationGroups.map((group) => (
+              <SidebarGroup key={group.label}>
+                <SidebarGroupLabel>{group.label}</SidebarGroupLabel>
+                <SidebarGroupContent>
+                  <SidebarMenu>
+                    {group.items.map((item) => (
+                      <SidebarMenuItem key={item.to}>
+                        <SidebarMenuButton
+                          asChild
+                          isActive={pathname === item.to || pathname.startsWith(`${item.to}/`)}
+                          tooltip={item.label}
+                          className='workspace-sidebar-nav-item h-11 transition-[background-color,color,transform] duration-200 ease-out'
+                        >
+                          <Link to={item.to} search={item.search}>
+                            <item.icon />
+                            <span className='flex min-w-0 flex-col'>
+                              <span className='truncate'>{item.label}</span>
+                              <span className='truncate text-[10px] text-muted-foreground'>{item.description}</span>
+                            </span>
+                          </Link>
+                        </SidebarMenuButton>
+                      </SidebarMenuItem>
+                    ))}
+                  </SidebarMenu>
+                </SidebarGroupContent>
+              </SidebarGroup>
+            ))}
           </SidebarContent>
-          <SidebarFooter className='p-3'>
+          <SidebarFooter className='workspace-sidebar-footer p-3'>
+            <div className='workspace-sidebar-profile'>
+              <div className='workspace-sidebar-profile__avatar'><CircleUserRound className='size-4' /></div>
+              <div className='min-w-0 flex-1 group-data-[collapsible=icon]:hidden'>
+                <div className='truncate text-xs font-medium'>ThreadSnap 工作空间</div>
+                <div className='truncate text-[10px] text-muted-foreground'>单用户控制台</div>
+              </div>
+            </div>
             <div className='flex items-center gap-2 rounded-lg border border-sidebar-border bg-background/50 p-2 text-xs text-muted-foreground group-data-[collapsible=icon]:justify-center'>
               <Cable className={`size-4 shrink-0 ${connected ? 'text-cyan-500' : 'text-amber-500'}`} />
               <span className='truncate group-data-[collapsible=icon]:hidden'>{connected ? '后端服务已连接' : '正在连接后端服务'}</span>
@@ -88,13 +113,14 @@ export function AppShell() {
           </SidebarFooter>
           <SidebarRail />
         </Sidebar>
-        <SidebarInset className='min-h-0 min-w-0 overflow-hidden bg-transparent'>
-          <header className='z-30 flex h-14 shrink-0 items-center gap-3 border-b border-border/65 bg-background/82 px-4 backdrop-blur-xl sm:px-6'>
-            <SidebarTrigger className='-ml-1 transition-transform duration-200 hover:scale-105' />
+        <SidebarInset className='workspace-sidebar-inset min-h-0 min-w-0 overflow-hidden bg-transparent'>
+          <header className='workspace-topbar z-30 flex h-14 shrink-0 items-center gap-3 border-b border-border/65 px-4 sm:px-6'>
+            <SidebarTrigger className='-ml-1 transition-transform duration-200' />
             <Separator orientation='vertical' className='h-5' />
             <div className='min-w-0 flex-1 truncate text-sm font-medium text-muted-foreground'>
               {pathname.startsWith('/config') ? '配置管理' : pathname.startsWith('/reputation/runs/') ? '口碑巡检详情' : pathname.startsWith('/reputation') ? '口碑巡检' : pathname.startsWith('/recurring-runs/') ? '循环批次详情' : pathname.startsWith('/recurring-runs') ? '循环计划列表' : pathname.startsWith('/runs/') ? '批次链接详情' : '提取列表'}
             </div>
+            <GlobalCommandMenu />
             <div className='hidden items-center gap-2 text-xs text-muted-foreground sm:flex'>
               <span className='relative flex size-2'>
                 {connected && <span className='absolute inline-flex size-full animate-ping rounded-full bg-emerald-400 opacity-60' />}
@@ -109,7 +135,7 @@ export function AppShell() {
             initial={reduceMotion ? false : { opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.2, ease: 'easeOut' }}
-            className='flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-4 sm:p-5 lg:p-6'
+            className='workspace-main flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-4 sm:p-5 lg:p-6'
           >
             <Outlet />
           </motion.main>

@@ -16,6 +16,20 @@
 
 ---
 
+## 2026-09-05 — 工作台 UI 重构（feat/ui-refactor）
+**总目标**：从 `main@e96549f57903a647459980bb850429e68afd0ed1` 的独立工作树重构任务管理与循环批次界面，复现参考图的 OLED 深色玻璃、层叠文件卡片、检查器、时间线和真实鼠标/键盘交互，同时保留既有路由、API 与业务能力。
+**状态**：✅ 工作树内实现、fixture 浏览器验收与隔离真实后端 API 冒烟完成；生产业务数据与采集流程未改动。
+**干到哪里了**：
+- [x] `H:\ThreadSnap-ui-refactor` / `feat/ui-refactor` 从 `main` 建立；安装并锁定 `emil-design-eng`，引入 `@headlessui/react@2.2.10`，Headless UI `Dialog`/`Transition` 用于命令面板。
+- [x] 任务管理与循环批次新增 CSS 3D 竖向扇形卡片、useSpring 鼠标视差、检查器显式打开详情、当前页 KPI、当前页时间线；导航重组为工作台/计划与数据/系统。
+- [x] 命令面板支持 Ctrl/Cmd+K、搜索、方向键、Enter、Escape、焦点语义和 reduced-motion；悬停动效限制到精细指针，深色主题统一为黑/玻璃/绿色基线，浅色主题仍保留。
+- [x] `frontend\npm run check`、`frontend\npm run build`、`git diff --check`通过；`artifacts\runtime\ui-refactor\verify_ui_fixture.py` 使用合成 API fixture 实测卡片选择不跳转、详情按钮导航、命令键盘、视差复位、移动端无横向溢出和 reduced-motion，并生成 `ui-runs-dark-final.png`、`ui-runs-dark-scroll-final.png`、`ui-runs-mobile-final.png` 等截图。
+- [x] 使用 `H:\ThreadSnap\.vevn` 启动后端到隔离 SQLite `artifacts/runtime/ui-refactor/backend-fixture.db`（`THREADSNAP_START_BACKGROUND_SERVICES=false`）并以 Vite 代理 `127.0.0.1:8001` 实测 `/runs` 返回 200、空状态渲染和命令面板导航，未触碰原工作树数据库。
+**边界/下一步**：隔离数据库没有真实批次，fixture 与空状态均不代替生产批次内容验收；代码已提交并推送 PR，合并前仍应在目标环境复核真实数据密度和采集状态展示。
+**关联**：`frontend/src/components/workspace-visual.tsx`、`frontend/src/components/global-command-menu.tsx`、`frontend/src/components/app-shell.tsx`、`frontend/src/styles/index.css`、`frontend/src/styles/theme.css`、`artifacts/runtime/ui-refactor/design-system.md`
+
+---
+
 ## 2026-09-03 — 口碑排名表头拆分滚动修复
 **总目标**：修复排名表纵向滚动后正文覆盖双层表头、横向滚动列错位和左侧冻结列透底的问题，使滚动前后保持同一视觉结构。
 **状态**：✅ 前端结构修复、类型检查、生产构建与真实浏览器滚动截图核验完成。

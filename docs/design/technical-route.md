@@ -72,6 +72,7 @@
 ## 已确认的第一版前端技术基线
 
 - 第一版前端采用 React、TypeScript 和 Vite 单页应用，使用 shadcn/ui、Tailwind CSS、TanStack Router、TanStack Query、TanStack Table 与 Lucide 图标；动态交互使用 CSS/Tailwind 过渡和 Motion for React。前端只消费既有 `/api/v1`，不引入服务端渲染、第二个业务后端或前端自有业务数据库。
+- 工作区全局入口命令面板使用 Headless UI React `Dialog` 与 `Transition`，仅承担无样式焦点管理、遮罩关闭和过渡；业务菜单、Select、Sheet、详情弹层继续沿用既有 Radix/shadcn 原语，避免重复组件行为。
 - UI 外壳以 MIT 许可的 `satnaing/shadcn-admin` 为上游基线，固定提交为 `e16c87f213a5ba5e45964e9b67c792105ec74d26`（上游版本 `2.2.1`）。`frontend/THIRD_PARTY_NOTICES.md` 记录仓库、提交、许可证和裁剪边界，`frontend/LICENSE` 保留许可证正文。采用选择性复用：保留应用外壳、主题 Token、Sidebar、Header、导航项状态、响应式 Sheet、表格、表单、弹层、反馈和可访问性基础；按 ThreadSnap 三个页面和真实 API 重组业务模块。
 - “选择性复用”只裁剪示例登录、Clerk、示例用户、示例图表、假数据页面、RTL 专项和其他无关 SaaS 功能，不重写已选中的上游 UI 原语。Sidebar 的展开/收缩状态、键盘触发、状态持久化、宽度和位置过渡、图标与文字层级、移动窄窗 Sheet 行为作为必须保留的 UI 特性。
 - 导航和基础控件优先沿用上游组件的状态模型与设计 Token；项目定制通过语义 Token、组件组合和业务层样式完成，避免在页面中散落覆盖上游内部选择器。上游组件确需修改时保留最小差异，并以组件测试和视觉证据覆盖展开、收缩、焦点、悬停、选中、禁用和减少动态效果状态。
