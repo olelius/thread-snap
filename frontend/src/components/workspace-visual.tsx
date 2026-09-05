@@ -1,5 +1,4 @@
 import { useMemo, useRef, useState } from 'react'
-import { motion, useMotionValue, useReducedMotion, useSpring } from 'motion/react'
 import { Activity, ArrowUpRight, Check, CircleAlert, FileStack, FolderOpen, LayoutList, Sparkles, Waves } from 'lucide-react'
 import type { Run } from '@/lib/types'
 import { formatDate } from '@/lib/api'
@@ -26,12 +25,8 @@ type WorkspaceVisualProps = {
  * 避免鼠标探索被路由切换打断，同时所有指标都明确标注为当前页口径。
  */
 export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
-  const reduceMotion = useReducedMotion()
   const stageRef = useRef<HTMLDivElement>(null)
-  const pointerX = useMotionValue(0)
-  const pointerY = useMotionValue(0)
-  const rotateX = useSpring(pointerY, { stiffness: 120, damping: 18, mass: 0.8 })
-  const rotateY = useSpring(pointerX, { stiffness: 120, damping: 18, mass: 0.8 })
+  const [pointerTilt, setPointerTilt] = useState({ x: 0, y: 0 })
   const [selectedId, setSelectedId] = useState<string>()
 
   const selectedRun = useMemo(
@@ -45,17 +40,15 @@ export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
   const total = runs.length
 
   function updatePointer(event: React.PointerEvent<HTMLDivElement>) {
-    if (reduceMotion || !stageRef.current || event.pointerType === 'touch') return
+    if (!stageRef.current || event.pointerType === 'touch') return
     const bounds = stageRef.current.getBoundingClientRect()
     const x = (event.clientX - bounds.left) / bounds.width - 0.5
     const y = (event.clientY - bounds.top) / bounds.height - 0.5
-    pointerX.set(x * 3.5)
-    pointerY.set(y * -2.5)
+    setPointerTilt({ x: x * 3.5, y: y * -2.5 })
   }
 
   function resetPointer() {
-    pointerX.set(0)
-    pointerY.set(0)
+    setPointerTilt({ x: 0, y: 0 })
   }
 
   function selectRun(run: Run) {
@@ -119,14 +112,13 @@ export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
             </div>
             <Waves className='size-4 text-emerald-300/80' aria-hidden='true' />
           </div>
-          <motion.div
+          <div
             className='workspace-stage'
-            style={{ rotateX, rotateY, transformPerspective: 1200 }}
-            transition={{ type: 'spring', stiffness: 120, damping: 20 }}
+            style={{ transform: `perspective(1200px) rotateX(${pointerTilt.y}deg) rotateY(${pointerTilt.x}deg)` }}
           >
             <div className='workspace-stage__glow' />
             <div className='workspace-stage__grid' />
-            <div className='dashboard-file-stack' style={{ '--card-center': (cards.length - 1) / 2, '--fan-step': cards.length > 5 ? '2.5rem' : '4.8rem' } as React.CSSProperties}>
+            <div className='dashboard-file-stack' style={{ '--card-center': (cards.length - 1) / 2, '--fan-step': cards.length > 5 ? '3.1rem' : '4.8rem' } as React.CSSProperties}>
               {cards.map((item, index) => {
                 const run = 'id' in item ? item : undefined
                 const fallback = 'label' in item ? item : (fallbackCards[index] ?? fallbackCards[0])
@@ -138,7 +130,11 @@ export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
                     key={run?.id ?? fallback.label}
                     type='button'
                     className={`dashboard-file-card dashboard-file-card--${tone} ${run && run.id === selectedRun?.id ? 'is-selected' : ''} ${!run && index === Math.floor(cards.length / 2) ? 'is-preview-focus' : ''}`}
-                    style={{ '--card-index': index } as React.CSSProperties}
+                    style={{
+                      '--card-index': index,
+                      '--card-scale': `${1 - Math.abs(index - (cards.length - 1) / 2) * 0.055}`,
+                      '--card-depth': `${Math.max(0.55, 1.2 - Math.abs(index - (cards.length - 1) / 2) * 0.15)}rem`,
+                    } as React.CSSProperties}
                     onClick={() => run && selectRun(run)}
                     aria-disabled={!run}
                     aria-label={run ? `查看批次 ${label}` : `${label}，暂无批次`}
@@ -158,7 +154,7 @@ export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
               <span>ThreadSnap / {kind === 'recurring' ? 'RECURRING' : 'RUNS'}</span>
               <span>{selectedRun ? '已绑定真实批次' : '等待首个批次'}</span>
             </div>
-          </motion.div>
+          </div>
         </div>
 
         <aside className='workspace-inspector'>

@@ -275,7 +275,8 @@
     box-shadow: var(--workspace-shadow);
     backdrop-filter: blur(24px) saturate(135%);
     -webkit-backdrop-filter: blur(24px) saturate(135%);
-    animation: workspace-enter 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: none;
+    opacity: 1;
   }
 
   .workspace-visual::before {
@@ -399,7 +400,8 @@
     background: color-mix(in oklab, var(--workspace-surface) 85%, transparent);
     padding: 0.8rem 0.9rem;
     transition: transform 180ms var(--workspace-ease), border-color 180ms var(--workspace-ease), background-color 180ms var(--workspace-ease);
-    animation: workspace-rise 360ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: none;
+    opacity: 1;
   }
 
   .workspace-metric:nth-child(2) { animation-delay: 45ms; }
@@ -565,7 +567,9 @@
     place-items: center;
     transform-style: preserve-3d;
     perspective: 900px;
+    perspective-origin: 50% 52%;
     will-change: transform;
+    transition: transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
   }
 
   .workspace-stage__glow {
@@ -598,7 +602,9 @@
     --fan-step: 4.8rem;
     width: min(92%, 37rem);
     height: 16rem;
-    transform: rotateX(0deg) rotateY(0deg) translateZ(8px);
+    transform: rotateX(0deg) rotateY(0deg) translateZ(20px);
+    perspective: 760px;
+    perspective-origin: 50% 50%;
     transform-style: preserve-3d;
   }
 
@@ -611,23 +617,26 @@
     flex-direction: column;
     justify-content: flex-end;
     gap: 0.7rem;
-    width: clamp(4.6rem, 13%, 5.7rem);
-    height: 10.8rem;
-    overflow: hidden;
+    width: clamp(4.7rem, 12%, 5.25rem);
+    height: 11.3rem;
+    overflow: visible;
     border: 1px solid color-mix(in oklab, var(--file-color, #cbd5e1) 32%, var(--workspace-border));
     border-radius: 0.85rem;
-    background: linear-gradient(112deg, rgba(245, 249, 247, 0.94), rgba(207, 219, 215, 0.9) 56%, rgba(112, 132, 127, 0.76));
+    background:
+      radial-gradient(ellipse at 18% 12%, rgba(255,255,255,0.64), transparent 26%),
+      linear-gradient(128deg, rgba(255,255,255,0.34) 0%, transparent 26%, rgba(255,255,255,0.18) 54%, transparent 72%),
+      linear-gradient(112deg, rgba(245, 249, 247, 0.70), rgba(207, 219, 215, 0.50) 56%, rgba(112, 132, 127, 0.34));
     padding: 0.85rem;
     color: #10201a;
     text-align: left;
-    box-shadow: 0 18px 30px rgba(0, 0, 0, 0.38), 0 0 0 1px rgba(255,255,255,0.76) inset, inset 0 1px 0 rgba(255,255,255,0.95);
-    transform: translate(-50%, -50%) translate3d(calc((var(--card-index) - var(--card-center)) * var(--fan-step)), calc((var(--card-index) - var(--card-center)) * -0.28rem), calc(var(--card-index) * 0.6rem)) rotateY(calc((var(--card-index) - var(--card-center)) * -7deg));
+    box-shadow: 0 18px 30px rgba(0, 0, 0, 0.38), 0 0 0 1px rgba(255,255,255,0.76) inset, inset 8px 0 15px rgba(255,255,255,0.18), inset -7px 0 12px rgba(7, 31, 23, 0.18), inset 0 1px 0 rgba(255,255,255,0.95);
+    transform: translate(-50%, -50%) translate3d(calc((var(--card-index) - var(--card-center)) * var(--fan-step)), calc((var(--card-index) - var(--card-center)) * -0.24rem), var(--card-depth)) rotateY(calc((var(--card-index) - var(--card-center)) * -8.5deg)) rotateZ(calc((var(--card-index) - var(--card-center)) * -0.55deg)) scale(var(--card-scale));
     transform-origin: 50% 82%;
     transform-style: preserve-3d;
     transition: transform 360ms var(--workspace-ease), border-color 220ms var(--workspace-ease), filter 220ms var(--workspace-ease), box-shadow 360ms var(--workspace-ease), background 360ms var(--workspace-ease);
     z-index: calc(20 - var(--card-index));
-    backdrop-filter: blur(7px) saturate(115%);
-    -webkit-backdrop-filter: blur(7px) saturate(115%);
+    backdrop-filter: blur(10px) saturate(165%);
+    -webkit-backdrop-filter: blur(10px) saturate(165%);
     animation: file-card-breathe 7s var(--workspace-ease) calc(var(--card-index) * -0.7s) infinite alternate;
   }
 
@@ -636,12 +645,15 @@
   .dashboard-file-card.is-preview-focus {
     border-color: color-mix(in oklab, var(--file-color, var(--workspace-accent)) 70%, white 10%);
     filter: brightness(1.08) saturate(1.12);
-    background: linear-gradient(112deg, #0b6338, #17c965 56%, #07954b);
+    background:
+      radial-gradient(ellipse at 18% 12%, rgba(204,255,222,0.62), transparent 25%),
+      linear-gradient(128deg, rgba(197,255,219,0.28) 0%, transparent 28%, rgba(170,255,202,0.22) 55%, transparent 73%),
+      linear-gradient(112deg, rgba(11, 99, 56, 0.78), rgba(23, 201, 101, 0.72) 56%, rgba(7, 149, 75, 0.62));
     color: #effff4;
-    box-shadow: 0 20px 38px rgba(0, 0, 0, 0.46), 0 0 30px rgba(30, 225, 111, 0.48), 0 0 0 1px rgba(158,255,194,0.85) inset;
+    box-shadow: 0 20px 38px rgba(0, 0, 0, 0.46), 0 0 30px rgba(30, 225, 111, 0.48), 0 0 0 1px rgba(158,255,194,0.85) inset, inset 8px 0 15px rgba(215,255,228,0.22), inset -7px 0 12px rgba(0, 65, 32, 0.24);
     outline: none;
     z-index: 60;
-    transform: translate(-50%, -50%) translate3d(calc((var(--card-index) - var(--card-center)) * var(--fan-step) + 0.16rem), calc((var(--card-index) - var(--card-center)) * -0.28rem - 0.1rem), calc(var(--card-index) * 0.6rem + 0.55rem)) rotateY(calc((var(--card-index) - var(--card-center)) * -7deg));
+    transform: translate(-50%, -50%) translate3d(calc((var(--card-index) - var(--card-center)) * var(--fan-step) + 0.16rem), calc((var(--card-index) - var(--card-center)) * -0.24rem - 0.1rem), calc(var(--card-depth) + 0.7rem)) rotateY(calc((var(--card-index) - var(--card-center)) * -8.5deg)) rotateZ(calc((var(--card-index) - var(--card-center)) * -0.55deg)) scale(calc(var(--card-scale) + 0.018));
   }
 
   @media (hover: hover) and (pointer: fine) {
@@ -652,7 +664,7 @@
       z-index: 25;
       box-shadow: 0 21px 38px rgba(0, 0, 0, 0.46), 0 0 22px color-mix(in oklab, var(--workspace-accent) 28%, transparent), 0 0 0 1px rgba(255,255,255,0.68) inset;
       outline: none;
-      transform: translate(-50%, -50%) translate3d(calc((var(--card-index) - var(--card-center)) * var(--fan-step) + 0.08rem), calc((var(--card-index) - var(--card-center)) * -0.28rem - 0.06rem), calc(var(--card-index) * 0.6rem + 0.25rem)) rotateY(calc((var(--card-index) - var(--card-center)) * -7deg)) scale(1.005);
+      transform: translate(-50%, -50%) translate3d(calc((var(--card-index) - var(--card-center)) * var(--fan-step) + 0.08rem), calc((var(--card-index) - var(--card-center)) * -0.24rem - 0.06rem), calc(var(--card-depth) + 0.3rem)) rotateY(calc((var(--card-index) - var(--card-center)) * -8.5deg)) rotateZ(calc((var(--card-index) - var(--card-center)) * -0.55deg)) scale(calc(var(--card-scale) + 0.012));
     }
   }
 
@@ -668,28 +680,62 @@
   .dashboard-file-card--neutral { --file-color: #95a7ad; }
   .dashboard-file-card.is-preview-focus,
   .dashboard-file-card.is-selected { --file-color: #22c55e; }
-  .dashboard-file-card:not(.is-selected):not(.is-preview-focus) .dashboard-file-card__body { opacity: 0; }
-  .dashboard-file-card:not(.is-selected):not(.is-preview-focus) .dashboard-file-card__icon { opacity: 0.72; }
+  .dashboard-file-card:not(.is-selected):not(.is-preview-focus) .dashboard-file-card__body { opacity: 0.24; filter: blur(0.18px); }
+  .dashboard-file-card:not(.is-selected):not(.is-preview-focus) .dashboard-file-card__icon { opacity: 0.84; }
+
+  .dashboard-file-card::before {
+    position: absolute;
+    top: 0.12rem;
+    right: -0.22rem;
+    bottom: 0.12rem;
+    width: 0.22rem;
+    border: 1px solid rgba(255, 255, 255, 0.42);
+    border-left: 0;
+    border-radius: 0 0.5rem 0.5rem 0;
+    background: linear-gradient(180deg, rgba(255,255,255,0.68), rgba(126,148,143,0.42));
+    content: '';
+    transform: rotateY(90deg);
+    transform-origin: left center;
+    backface-visibility: hidden;
+    pointer-events: none;
+  }
+
+  .dashboard-file-card.is-selected::before,
+  .dashboard-file-card.is-preview-focus::before {
+    border-color: rgba(145, 255, 190, 0.78);
+    background: linear-gradient(180deg, rgba(191,255,214,0.85), rgba(8,125,63,0.72));
+  }
 
   .dashboard-file-card__shine {
     position: absolute;
-    inset: 0 auto 0 0;
-    width: 2.5rem;
-    background: linear-gradient(90deg, color-mix(in oklab, var(--file-color) 22%, transparent), transparent);
-    opacity: 0.7;
-    animation: file-card-sheen 6s var(--workspace-ease) calc(var(--card-index) * -0.45s) infinite;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    clip-path: inset(0 round 0.85rem);
+    background:
+      radial-gradient(ellipse at 20% 8%, rgba(255,255,255,0.68), transparent 25%),
+      radial-gradient(ellipse at 78% 92%, color-mix(in oklab, var(--file-color) 32%, transparent), transparent 44%),
+      linear-gradient(116deg, transparent 34%, rgba(255,255,255,0.28) 48%, transparent 60%);
+    filter: blur(2px) saturate(135%);
+    mix-blend-mode: screen;
+    opacity: 0.68;
+    animation: liquid-glass-drift 8s var(--workspace-ease) calc(var(--card-index) * -0.45s) infinite alternate;
   }
 
   .dashboard-file-card[aria-disabled='true'] { cursor: crosshair; }
   .dashboard-file-card:hover .dashboard-file-card__shine,
   .dashboard-file-card:focus-visible .dashboard-file-card__shine {
     width: 100%;
-    opacity: 0.95;
-    transition: width 420ms var(--workspace-ease), opacity 220ms var(--workspace-ease);
+    opacity: 0.82;
+    transform: translateX(8%);
+    transition: opacity 220ms var(--workspace-ease), transform 420ms var(--workspace-ease);
   }
 
   .dashboard-file-card:hover .dashboard-file-card__shine {
-    background: linear-gradient(90deg, color-mix(in oklab, var(--workspace-accent) 30%, transparent), transparent);
+    background:
+      radial-gradient(ellipse at 20% 8%, rgba(255,255,255,0.76), transparent 25%),
+      radial-gradient(ellipse at 78% 92%, color-mix(in oklab, var(--workspace-accent) 42%, transparent), transparent 44%),
+      linear-gradient(116deg, transparent 34%, rgba(255,255,255,0.38) 48%, transparent 60%);
   }
 
   .dashboard-file-card::after {
@@ -940,6 +986,12 @@
   0%, 58% { transform: translateX(-2.5rem); opacity: 0; }
   72% { opacity: 0.65; }
   100% { transform: translateX(11rem); opacity: 0; }
+}
+
+@keyframes liquid-glass-drift {
+  0% { transform: translate3d(-7%, -3%, 0) rotate(-2deg) scale(0.98); }
+  48% { transform: translate3d(3%, 2%, 0) rotate(1deg) scale(1.02); }
+  100% { transform: translate3d(9%, -1%, 0) rotate(2deg) scale(1.05); }
 }
 
 @keyframes run-row-highlight {

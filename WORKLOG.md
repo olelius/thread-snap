@@ -16,6 +16,19 @@
 
 ---
 
+## 2026-09-05 — 液态玻璃材质与对称透视稳定化（feat/ui-refactor-fidelity）
+**总目标**：继续收敛参考图的中央文件卡组，补足银白液态玻璃、中心绿色焦点、对称扇形透视与可验证的鼠标交互。
+**状态**：✅ 已完成本轮视觉与交互修正，等待用户刷新 `http://127.0.0.1:5173/runs` 复核；PR #275 继续保持 draft。
+**干到哪里了**：
+- [x] 采用中心对称的 `translate3d + rotateY + rotateZ + translateZ`，让卡片从中心向两侧渐退，避免右侧孤立或整组倾倒。
+- [x] 缩窄卡片比例并降低非焦点 blur，保留银白半透明面、侧面厚度、内沿高光与绿色中心卡；正文以低透明度留在后层，增强液态玻璃深度。
+- [x] 增加内部 caustic 扫光动画 `liquid-glass-drift`，工作台视差改为原生指针状态驱动并带回弹过渡；修复导航重复 key 与动画初始 opacity 在无头浏览器冻结导致的缺失。
+**验证**：Playwright 1680px 暗色截图 `artifacts\runtime\ui-refactor\current-critique-v25-perspective.png`；读取到 8 张卡片、1 张中心预览卡、`matrix3d` 透视变换与 `liquid-glass-drift`；`frontend\npm run check`、`frontend\npm run build`、`git diff --check`通过；完整 fixture 输出 `BROWSER_UI_FIXTURE_OK`。
+**边界**：只调整工作台展示层和导航 key 稳定性，未改变批次 API、排序、路由或检查器业务。
+**关联**：`frontend/src/components/workspace-visual.tsx`、`frontend/src/components/app-shell.tsx`、`frontend/src/styles/index.css`
+
+---
+
 ## 2026-09-05 — 参考图卡片透视与光效重做（feat/ui-refactor-fidelity）
 **总目标**：解决截图中工作台与参考图在卡片透视、比例、材质和光效上的整体差异。
 **状态**：✅ 已按参考图重做卡片视觉基线，等待用户刷新复核；PR #275 继续保持 draft。

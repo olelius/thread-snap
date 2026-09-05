@@ -85,7 +85,7 @@ export function AppShell() {
                 <SidebarGroupContent>
                   <SidebarMenu>
                     {group.items.map((item) => (
-                      <SidebarMenuItem key={item.to}>
+                      <SidebarMenuItem key={`${item.label}-${item.to}-${'tab' in item ? item.tab ?? 'root' : 'root'}`}>
                         <SidebarMenuButton
                           asChild
                           isActive={(pathname === item.to || pathname.startsWith(`${item.to}/`)) && (!('tab' in item) || locationSearch.tab === item.tab)}
