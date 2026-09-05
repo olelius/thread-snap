@@ -16,6 +16,19 @@
 
 ---
 
+## 2026-09-05 — 参考图卡片透视与光效重做（feat/ui-refactor-fidelity）
+**总目标**：解决截图中工作台与参考图在卡片透视、比例、材质和光效上的整体差异。
+**状态**：✅ 已按参考图重做卡片视觉基线，等待用户刷新复核；PR #275 继续保持 draft。
+**干到哪里了**：
+- [x] 移除卡组整体俯仰/偏航，只保留每张文件片的 `rotateY` 横向扇形与小幅 `translateZ`，避免整组向右倾倒。
+- [x] 卡片由宽大的半透明彩色面板改为窄高的银白文件片；仅中心预览卡或当前选中卡使用高亮绿色主体。
+- [x] 降低背景环境光、网格椭圆和状态色饱和度，收窄高光边缘，非焦点卡片隐藏正文，复现参考图的黑底、银片、绿色焦点层次。
+**验证**：Playwright 1680px 空状态截图 `artifacts\runtime\ui-refactor\current-critique-v14-empty.png`；真实 fixture 截图 `current-critique-v14-fixture.png`；空状态 8 张卡片、fixture 5 张卡片均渲染，hover 前后 transform 仍发生变化。
+**边界**：未改变任务数据排序、路由或检查器业务；本次只调整中央视觉卡组的展示层。
+**关联**：`frontend/src/components/workspace-visual.tsx`、`frontend/src/styles/index.css`
+
+---
+
 ## 2026-09-05 — 扇形角度、配色与悬停抬升修正（feat/ui-refactor-fidelity）
 **总目标**：根据最新截图收敛卡片的空间角度、状态色和悬停层级，避免卡片压向检查器或形成突兀的大幅浮动。
 **状态**：✅ 修正完成，等待用户刷新预览复核；PR #275 继续保持 draft。

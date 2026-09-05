@@ -137,7 +137,7 @@ export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
                   <button
                     key={run?.id ?? fallback.label}
                     type='button'
-                    className={`dashboard-file-card dashboard-file-card--${tone} ${run && run.id === selectedRun?.id ? 'is-selected' : ''}`}
+                    className={`dashboard-file-card dashboard-file-card--${tone} ${run && run.id === selectedRun?.id ? 'is-selected' : ''} ${!run && index === Math.floor(cards.length / 2) ? 'is-preview-focus' : ''}`}
                     style={{ '--card-index': index } as React.CSSProperties}
                     onClick={() => run && selectRun(run)}
                     aria-disabled={!run}
