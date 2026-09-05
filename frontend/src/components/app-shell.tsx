@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, Outlet, useRouterState } from '@tanstack/react-router'
 import { motion, useReducedMotion } from 'motion/react'
-import { Cable, ChartNoAxesCombined, CircleUserRound, LayoutList, Repeat2, Settings2, Sparkles } from 'lucide-react'
+import { Archive, BarChart3, Cable, CalendarDays, CircleUserRound, History, LayoutList, Settings2, Sparkles, UsersRound } from 'lucide-react'
 import { ThemeToggle } from './theme-toggle'
 import { GlobalCommandMenu } from './global-command-menu'
 import {
@@ -31,22 +31,31 @@ const navigationGroups = [
     ],
   },
   {
-    label: '计划与数据',
+    label: '资料与分析',
     items: [
-      { to: '/recurring-runs' as const, search: { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }, label: '循环计划', description: '周期批次', icon: Repeat2 },
-      { to: '/reputation' as const, search: { tab: 'runs' as const, page: undefined }, label: '口碑巡检', description: '排名与证据', icon: ChartNoAxesCombined },
+      { to: '/config' as const, search: { tab: 'templates' as const }, tab: 'templates' as const, label: '文件归档', description: '导出模板与快照', icon: Archive },
+      { to: '/reputation' as const, search: { tab: 'runs' as const, page: undefined }, tab: 'runs' as const, label: '数据分析', description: '排名与证据', icon: BarChart3 },
+    ],
+  },
+  {
+    label: '计划与协作',
+    items: [
+      { to: '/config' as const, search: { tab: 'schedule' as const }, tab: 'schedule' as const, label: '日程管理', description: '每周计划节点', icon: CalendarDays },
+      { to: '/recurring-runs' as const, search: { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }, label: '团队协作', description: '循环批次队列', icon: UsersRound },
     ],
   },
   {
     label: '系统',
     items: [
-      { to: '/config' as const, search: { tab: 'rules' as const }, label: '配置中心', description: '规则与来源', icon: Settings2 },
+      { to: '/config' as const, search: { tab: 'history' as const }, tab: 'history' as const, label: '知识库', description: '手动来源历史', icon: History },
+      { to: '/config' as const, search: { tab: 'rules' as const }, tab: 'rules' as const, label: '设置中心', description: '规则与平台', icon: Settings2 },
     ],
   },
 ]
 
 export function AppShell() {
   const pathname = useRouterState({ select: (state) => state.location.pathname })
+  const locationSearch = useRouterState({ select: (state) => state.location.search as Record<string, unknown> })
   const reduceMotion = useReducedMotion()
   const [connected, setConnected] = useState(document.documentElement.dataset.backendConnected === 'true')
   useEffect(() => {
@@ -76,10 +85,10 @@ export function AppShell() {
                 <SidebarGroupContent>
                   <SidebarMenu>
                     {group.items.map((item) => (
-                      <SidebarMenuItem key={item.to}>
+                      <SidebarMenuItem key={`${item.label}-${item.to}-${'tab' in item ? item.tab ?? 'root' : 'root'}`}>
                         <SidebarMenuButton
                           asChild
-                          isActive={pathname === item.to || pathname.startsWith(`${item.to}/`)}
+                          isActive={(pathname === item.to || pathname.startsWith(`${item.to}/`)) && (!('tab' in item) || locationSearch.tab === item.tab)}
                           tooltip={item.label}
                           className='workspace-sidebar-nav-item h-11 transition-[background-color,color,transform] duration-200 ease-out'
                         >
@@ -118,7 +127,7 @@ export function AppShell() {
             <SidebarTrigger className='-ml-1 transition-transform duration-200' />
             <Separator orientation='vertical' className='h-5' />
             <div className='min-w-0 flex-1 truncate text-sm font-medium text-muted-foreground'>
-              {pathname.startsWith('/config') ? '配置管理' : pathname.startsWith('/reputation/runs/') ? '口碑巡检详情' : pathname.startsWith('/reputation') ? '口碑巡检' : pathname.startsWith('/recurring-runs/') ? '循环批次详情' : pathname.startsWith('/recurring-runs') ? '循环计划列表' : pathname.startsWith('/runs/') ? '批次链接详情' : '提取列表'}
+              {pathname.startsWith('/config') ? '设置中心' : pathname.startsWith('/reputation/runs/') ? '数据分析详情' : pathname.startsWith('/reputation') ? '数据分析' : pathname.startsWith('/recurring-runs/') ? '团队协作详情' : pathname.startsWith('/recurring-runs') ? '团队协作队列' : pathname.startsWith('/runs/') ? '批次链接详情' : '任务管理'}
             </div>
             <GlobalCommandMenu />
             <div className='hidden items-center gap-2 text-xs text-muted-foreground sm:flex'>

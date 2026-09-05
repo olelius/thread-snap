@@ -16,6 +16,72 @@
 
 ---
 
+## 2026-09-05 — 液态玻璃材质与对称透视稳定化（feat/ui-refactor-fidelity）
+**总目标**：继续收敛参考图的中央文件卡组，补足银白液态玻璃、中心绿色焦点、对称扇形透视与可验证的鼠标交互。
+**状态**：✅ 已完成本轮视觉与交互修正，等待用户刷新 `http://127.0.0.1:5173/runs` 复核；PR #275 继续保持 draft。
+**干到哪里了**：
+- [x] 采用中心对称的 `translate3d + rotateY + rotateZ + translateZ`，让卡片从中心向两侧渐退，避免右侧孤立或整组倾倒。
+- [x] 缩窄卡片比例并降低非焦点 blur，保留银白半透明面、侧面厚度、内沿高光与绿色中心卡；正文以低透明度留在后层，增强液态玻璃深度。
+- [x] 增加内部 caustic 扫光动画 `liquid-glass-drift`，工作台视差改为原生指针状态驱动并带回弹过渡；修复导航重复 key 与动画初始 opacity 在无头浏览器冻结导致的缺失。
+**验证**：Playwright 1680px 暗色截图 `artifacts\runtime\ui-refactor\current-critique-v25-perspective.png`；读取到 8 张卡片、1 张中心预览卡、`matrix3d` 透视变换与 `liquid-glass-drift`；`frontend\npm run check`、`frontend\npm run build`、`git diff --check`通过；完整 fixture 输出 `BROWSER_UI_FIXTURE_OK`。
+**边界**：只调整工作台展示层和导航 key 稳定性，未改变批次 API、排序、路由或检查器业务。
+**关联**：`frontend/src/components/workspace-visual.tsx`、`frontend/src/components/app-shell.tsx`、`frontend/src/styles/index.css`
+
+---
+
+## 2026-09-05 — 参考图卡片透视与光效重做（feat/ui-refactor-fidelity）
+**总目标**：解决截图中工作台与参考图在卡片透视、比例、材质和光效上的整体差异。
+**状态**：✅ 已按参考图重做卡片视觉基线，等待用户刷新复核；PR #275 继续保持 draft。
+**干到哪里了**：
+- [x] 移除卡组整体俯仰/偏航，只保留每张文件片的 `rotateY` 横向扇形与小幅 `translateZ`，避免整组向右倾倒。
+- [x] 卡片由宽大的半透明彩色面板改为窄高的银白文件片；仅中心预览卡或当前选中卡使用高亮绿色主体。
+- [x] 降低背景环境光、网格椭圆和状态色饱和度，收窄高光边缘，非焦点卡片隐藏正文，复现参考图的黑底、银片、绿色焦点层次。
+**验证**：Playwright 1680px 空状态截图 `artifacts\runtime\ui-refactor\current-critique-v14-empty.png`；真实 fixture 截图 `current-critique-v14-fixture.png`；空状态 8 张卡片、fixture 5 张卡片均渲染，hover 前后 transform 仍发生变化。
+**边界**：未改变任务数据排序、路由或检查器业务；本次只调整中央视觉卡组的展示层。
+**关联**：`frontend/src/components/workspace-visual.tsx`、`frontend/src/styles/index.css`
+
+---
+
+## 2026-09-05 — 扇形角度、配色与悬停抬升修正（feat/ui-refactor-fidelity）
+**总目标**：根据最新截图收敛卡片的空间角度、状态色和悬停层级，避免卡片压向检查器或形成突兀的大幅浮动。
+**状态**：✅ 修正完成，等待用户刷新预览复核；PR #275 继续保持 draft。
+**干到哪里了**：
+- [x] 工作台扇形从 `rotateX(11deg) rotateY(-18deg)` 收敛为 `rotateX(3deg) rotateY(-8deg)`，鼠标视差从 ±7/±5° 收敛到 ±3.5/±2.5°。
+- [x] 卡片状态色降饱和并降低填充透明度，黑灰玻璃作为底色；hover 统一使用 ThreadSnap 绿色边缘和扫光，不再出现黄色/紫色荧光抢主体。
+- [x] 悬停从大幅 `translateZ + scale + z-index 70` 改为原位轻抬、轻微缩放和局部阴影，保持卡片在中央舞台边界内。
+**验证**：`frontend\npm run check`、`frontend\npm run build`、`git diff --check`通过；暗色 1680px fixture 截图 `artifacts\runtime\ui-refactor\current-critique-v10-fixture.png`，5 张真实 fixture 卡片、7 项导航、5 项时间线，hover 前后 transform 仍有变化。
+**边界**：未引入新的浮层路由或业务弹窗；右侧检查器继续作为稳定三栏详情区，卡片 hover 只改变视觉层，不触发导航。
+**关联**：`frontend/src/components/workspace-visual.tsx`、`frontend/src/styles/index.css`
+
+---
+
+## 2026-09-05 — 浅色窄屏玻璃与悬停反馈修正（feat/ui-refactor-fidelity）
+**总目标**：针对实际预览中“卡片近乎不透明、3D 透视不明显、划过无反馈”的验收反馈，补齐参考图所需的 OLED 工作台材质、空间深度和可感知 hover 动效。
+**状态**：✅ 修正完成，等待用户在现有预览中复核；PR #275 继续保持 draft。
+**干到哪里了**：
+- [x] 浅色主题改用半透明表面、彩色环境渐变和更清晰的高光边界，使 `backdrop-filter` 在窄屏浅色预览中可见。
+- [x] 工作台视觉层在浅色外壳中固定为黑色 OLED 玻璃基线，保留外层导航的主题切换，同时让参考图的黑底、冷白边缘与绿色强调稳定可见。
+- [x] 中央文件面板加强 `perspective: 900px`、`rotateX/rotateY`、`translateZ` 与阴影层次；预览卡片不再使用 disabled 状态，鼠标可直接触发反馈。
+- [x] hover 实测改变 transform、filter、box-shadow 和扫光宽度；8 张空状态卡片与视差矩阵均由 Playwright 读取确认。
+**验证**：`frontend\npm run check`、`frontend\npm run build`、`git diff --check`通过；`verify_ui_fixture.py` 在完整详情/命令面板流程中输出 `BROWSER_UI_FIXTURE_OK`；Playwright 读取输出 `HOVER_CHANGED True`、8 张卡片、3D `matrix3d`，并生成 `current-critique-v7-darkworkspace.png` 与 `current-critique-v5-fixture-light.png`。
+**边界**：未改变批次 API、路由或生产数据；真实批次进入后仍沿用既有检查器与详情跳转。
+**关联**：`frontend/src/components/workspace-visual.tsx`、`frontend/src/styles/index.css`、`frontend/src/styles/theme.css`
+
+---
+
+## 2026-09-05 — 首屏工作台结构二次重构（feat/ui-refactor-fidelity）
+**总目标**：针对首轮“新视觉与旧 CRUD 页面纵向拼接、导航层级不足、3D/玻璃动效不明显”的反馈，重构首屏工作台结构。
+**状态**：✅ 已完成首屏结构和视觉反馈修正，待合并当前修正分支。
+**干到哪里了**：
+- [x] 主体改为任务队列 / 3D 文件区 / 批次检查器三栏；完整筛选、分页和表格降级到可展开的“完整批次档案”。
+- [x] 导航改为工作台、资料与分析、计划与协作、系统四层，映射任务管理、文件归档、数据分析、日程管理、团队协作、知识库和设置中心。
+- [x] 中央视觉扩展为 8 张竖向玻璃文件面板，使用动态 `card-center`/`fan-step`、透视、`translateZ`、rotateY、边缘高光、玻璃模糊和呼吸/扫光动效；移动端单独收窄扇形间距。
+- [x] `frontend\npm run check`、`frontend\npm run build`、`git diff --check`通过；fixture 浏览器验收 `BROWSER_UI_FIXTURE_OK`，确认 8 张空状态面板、7 个导航项、抽屉开合、视差和键盘命令面板。
+**边界**：隔离预览后端仍为空数据库；真实批次进入后左侧队列、检查器和时间线消费既有 `/api/v1` 数据，不构造生产批次。
+**关联**：`frontend/src/components/app-shell.tsx`、`frontend/src/components/workspace-visual.tsx`、`frontend/src/components/global-command-menu.tsx`、`frontend/src/features/runs/runs-page.tsx`、`frontend/src/styles/index.css`
+
+---
+
 ## 2026-09-05 — 工作台 UI 重构（feat/ui-refactor）
 **总目标**：从 `main@e96549f57903a647459980bb850429e68afd0ed1` 的独立工作树重构任务管理与循环批次界面，复现参考图的 OLED 深色玻璃、层叠文件卡片、检查器、时间线和真实鼠标/键盘交互，同时保留既有路由、API 与业务能力。
 **状态**：✅ 工作树内实现、fixture 浏览器验收与隔离真实后端 API 冒烟完成；生产业务数据与采集流程未改动。

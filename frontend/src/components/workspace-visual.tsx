@@ -1,6 +1,5 @@
 import { useMemo, useRef, useState } from 'react'
-import { motion, useMotionValue, useReducedMotion, useSpring } from 'motion/react'
-import { Activity, ArrowUpRight, Check, CircleAlert, FileStack, FolderOpen, Sparkles, Waves } from 'lucide-react'
+import { Activity, ArrowUpRight, Check, CircleAlert, FileStack, FolderOpen, LayoutList, Sparkles, Waves } from 'lucide-react'
 import type { Run } from '@/lib/types'
 import { formatDate } from '@/lib/api'
 
@@ -10,6 +9,9 @@ const fallbackCards = [
   { label: '口碑巡检', meta: '指标与页面证据', tone: 'green' },
   { label: '循环计划', meta: '持久 FIFO 队列', tone: 'violet' },
   { label: '配置版本', meta: '规则与节点快照', tone: 'amber' },
+  { label: '团队协作', meta: '循环批次队列', tone: 'green' },
+  { label: '数据分析', meta: '排名与页面证据', tone: 'blue' },
+  { label: '知识库', meta: '手动来源历史', tone: 'neutral' },
 ] as const
 
 type WorkspaceVisualProps = {
@@ -23,36 +25,30 @@ type WorkspaceVisualProps = {
  * 避免鼠标探索被路由切换打断，同时所有指标都明确标注为当前页口径。
  */
 export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
-  const reduceMotion = useReducedMotion()
   const stageRef = useRef<HTMLDivElement>(null)
-  const pointerX = useMotionValue(0)
-  const pointerY = useMotionValue(0)
-  const rotateX = useSpring(pointerY, { stiffness: 120, damping: 18, mass: 0.8 })
-  const rotateY = useSpring(pointerX, { stiffness: 120, damping: 18, mass: 0.8 })
+  const [pointerTilt, setPointerTilt] = useState({ x: 0, y: 0 })
   const [selectedId, setSelectedId] = useState<string>()
 
   const selectedRun = useMemo(
     () => runs.find((run) => run.id === selectedId) ?? runs[0],
     [runs, selectedId],
   )
-  const cards = runs.length > 0 ? runs.slice(0, 5) : fallbackCards
+  const cards = runs.length > 0 ? runs.slice(0, 8) : fallbackCards
   const activeCount = runs.filter((run) => ['queued', 'running', 'waiting_for_auth'].includes(run.status)).length
   const completedCount = runs.filter((run) => run.status === 'success').length
   const attentionCount = runs.filter((run) => ['failed', 'partial_success', 'waiting_for_auth'].includes(run.status)).length
   const total = runs.length
 
   function updatePointer(event: React.PointerEvent<HTMLDivElement>) {
-    if (reduceMotion || !stageRef.current || event.pointerType === 'touch') return
+    if (!stageRef.current || event.pointerType === 'touch') return
     const bounds = stageRef.current.getBoundingClientRect()
     const x = (event.clientX - bounds.left) / bounds.width - 0.5
     const y = (event.clientY - bounds.top) / bounds.height - 0.5
-    pointerX.set(x * 7)
-    pointerY.set(y * -5)
+    setPointerTilt({ x: x * 3.5, y: y * -2.5 })
   }
 
   function resetPointer() {
-    pointerX.set(0)
-    pointerY.set(0)
+    setPointerTilt({ x: 0, y: 0 })
   }
 
   function selectRun(run: Run) {
@@ -84,6 +80,25 @@ export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
       </div>
 
       <div className='workspace-main-grid'>
+        <aside className='workspace-task-rail' aria-label='当前页任务队列'>
+          <div className='workspace-task-rail__heading'>
+            <div><span className='workspace-section-label'>任务队列</span><span className='workspace-section-note'>当前页批次</span></div>
+            <LayoutList className='size-4 text-emerald-300/80' aria-hidden='true' />
+          </div>
+          <div className='workspace-task-rail__tabs' aria-hidden='true'><span className='is-active'>全部</span><span>进行中</span><span>已完成</span></div>
+          <div className='workspace-task-rail__list'>
+            {runs.length ? runs.slice(0, 7).map((run) => (
+              <button key={run.id} type='button' className={`workspace-task-rail__item ${run.id === selectedRun?.id ? 'is-selected' : ''}`} onClick={() => selectRun(run)}>
+                <span className={`workspace-task-rail__dot workspace-task-rail__dot--${statusTone(run.status)}`} />
+                <span className='min-w-0'><strong>{run.number}</strong><small>{run.source_names?.[0] || run.circle_names?.[0] || statusLabel(run.status)}</small></span>
+                <ArrowUpRight className='size-3.5' />
+              </button>
+            )) : (
+              <div className='workspace-task-rail__empty'><FileStack className='size-5' /><strong>等待批次数据</strong><small>真实批次进入后会显示在这里。</small></div>
+            )}
+          </div>
+          <div className='workspace-task-rail__footer'><span className='workspace-live-dot' /> SSE 状态流</div>
+        </aside>
         <div
           ref={stageRef}
           className='workspace-stage-shell'
@@ -97,14 +112,13 @@ export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
             </div>
             <Waves className='size-4 text-emerald-300/80' aria-hidden='true' />
           </div>
-          <motion.div
+          <div
             className='workspace-stage'
-            style={{ rotateX, rotateY, transformPerspective: 1200 }}
-            transition={{ type: 'spring', stiffness: 120, damping: 20 }}
+            style={{ transform: `perspective(1200px) rotateX(${pointerTilt.y}deg) rotateY(${pointerTilt.x}deg)` }}
           >
             <div className='workspace-stage__glow' />
             <div className='workspace-stage__grid' />
-            <div className='dashboard-file-stack'>
+            <div className='dashboard-file-stack' style={{ '--card-center': (cards.length - 1) / 2, '--fan-step': cards.length > 5 ? '3.1rem' : '4.8rem' } as React.CSSProperties}>
               {cards.map((item, index) => {
                 const run = 'id' in item ? item : undefined
                 const fallback = 'label' in item ? item : (fallbackCards[index] ?? fallbackCards[0])
@@ -115,10 +129,14 @@ export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
                   <button
                     key={run?.id ?? fallback.label}
                     type='button'
-                    className={`dashboard-file-card dashboard-file-card--${tone} ${run?.id === selectedRun?.id ? 'is-selected' : ''}`}
-                    style={{ '--card-index': index } as React.CSSProperties}
+                    className={`dashboard-file-card dashboard-file-card--${tone} ${run && run.id === selectedRun?.id ? 'is-selected' : ''} ${!run && index === Math.floor(cards.length / 2) ? 'is-preview-focus' : ''}`}
+                    style={{
+                      '--card-index': index,
+                      '--card-scale': `${1 - Math.abs(index - (cards.length - 1) / 2) * 0.055}`,
+                      '--card-depth': `${Math.max(0.55, 1.2 - Math.abs(index - (cards.length - 1) / 2) * 0.15)}rem`,
+                    } as React.CSSProperties}
                     onClick={() => run && selectRun(run)}
-                    disabled={!run}
+                    aria-disabled={!run}
                     aria-label={run ? `查看批次 ${label}` : `${label}，暂无批次`}
                   >
                     <span className='dashboard-file-card__shine' />
@@ -136,7 +154,7 @@ export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
               <span>ThreadSnap / {kind === 'recurring' ? 'RECURRING' : 'RUNS'}</span>
               <span>{selectedRun ? '已绑定真实批次' : '等待首个批次'}</span>
             </div>
-          </motion.div>
+          </div>
         </div>
 
         <aside className='workspace-inspector'>
