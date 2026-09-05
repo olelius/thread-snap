@@ -49,8 +49,8 @@ export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
     const bounds = stageRef.current.getBoundingClientRect()
     const x = (event.clientX - bounds.left) / bounds.width - 0.5
     const y = (event.clientY - bounds.top) / bounds.height - 0.5
-    pointerX.set(x * 7)
-    pointerY.set(y * -5)
+    pointerX.set(x * 3.5)
+    pointerY.set(y * -2.5)
   }
 
   function resetPointer() {

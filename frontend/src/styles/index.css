@@ -597,7 +597,7 @@
     --fan-step: 4.8rem;
     width: min(92%, 37rem);
     height: 16rem;
-    transform: rotateX(11deg) rotateY(-18deg) translateZ(28px);
+    transform: rotateX(3deg) rotateY(-8deg) translateZ(14px);
     transform-style: preserve-3d;
   }
 
@@ -615,12 +615,13 @@
     overflow: hidden;
     border: 1px solid color-mix(in oklab, var(--file-color, #cbd5e1) 32%, var(--workspace-border));
     border-radius: 0.85rem;
-    background: linear-gradient(125deg, color-mix(in oklab, var(--file-color, #64748b) 18%, rgba(255,255,255,0.52)), rgba(255,255,255,0.18));
+    background: linear-gradient(125deg, color-mix(in oklab, var(--file-color, #64748b) 11%, rgba(226, 237, 239, 0.34)), rgba(166, 185, 187, 0.12));
     padding: 0.85rem;
     color: var(--foreground);
     text-align: left;
     box-shadow: 0 22px 42px rgba(33, 58, 70, 0.24), 0 0 0 1px rgba(255,255,255,0.34) inset, inset 0 1px 0 rgba(255,255,255,0.8);
     transform: translate(-50%, -50%) translate3d(calc((var(--card-index) - var(--card-center)) * var(--fan-step)), calc((var(--card-index) - var(--card-center)) * -0.45rem), calc(var(--card-index) * 1.2rem)) rotateY(calc((var(--card-index) - var(--card-center)) * -5deg));
+    transform-origin: 50% 82%;
     transform-style: preserve-3d;
     transition: transform 360ms var(--workspace-ease), border-color 220ms var(--workspace-ease), filter 220ms var(--workspace-ease), box-shadow 360ms var(--workspace-ease), background 360ms var(--workspace-ease);
     z-index: calc(20 - var(--card-index));
@@ -641,13 +642,13 @@
 
   @media (hover: hover) and (pointer: fine) {
     .dashboard-file-card:hover {
-      border-color: color-mix(in oklab, var(--file-color, var(--workspace-accent)) 70%, white 10%);
+      border-color: color-mix(in oklab, var(--workspace-accent) 62%, white 10%);
       filter: brightness(1.2) saturate(1.28);
       animation: none;
-      z-index: 70;
-      box-shadow: 0 34px 76px rgba(33, 58, 70, 0.34), 0 0 42px color-mix(in oklab, var(--file-color, var(--workspace-accent)) 38%, transparent), 0 0 0 1px rgba(255,255,255,0.82) inset;
+      z-index: 25;
+      box-shadow: 0 26px 52px rgba(0, 0, 0, 0.42), 0 0 26px color-mix(in oklab, var(--workspace-accent) 24%, transparent), 0 0 0 1px rgba(255,255,255,0.62) inset;
       outline: none;
-      transform: translate(-50%, -50%) translate3d(calc((var(--card-index) - var(--card-center)) * var(--fan-step) + 0.35rem), calc((var(--card-index) - var(--card-center)) * -0.45rem - 0.25rem), calc(var(--card-index) * 1.2rem + 1.7rem)) rotateY(calc((var(--card-index) - var(--card-center)) * -5deg)) scale(1.035);
+      transform: translate(-50%, -50%) translate3d(calc((var(--card-index) - var(--card-center)) * var(--fan-step) + 0.08rem), calc((var(--card-index) - var(--card-center)) * -0.45rem - 0.06rem), calc(var(--card-index) * 1.2rem + 0.25rem)) rotateY(calc((var(--card-index) - var(--card-center)) * -5deg)) scale(1.005);
     }
   }
 
@@ -655,12 +656,12 @@
     cursor: default;
   }
 
-  .dashboard-file-card--green { --file-color: #22c55e; }
-  .dashboard-file-card--blue { --file-color: #38bdf8; }
-  .dashboard-file-card--violet { --file-color: #a78bfa; }
-  .dashboard-file-card--amber { --file-color: #f59e0b; }
-  .dashboard-file-card--red { --file-color: #fb7185; }
-  .dashboard-file-card--neutral { --file-color: #94a3b8; }
+  .dashboard-file-card--green { --file-color: #38d889; }
+  .dashboard-file-card--blue { --file-color: #7ec9d1; }
+  .dashboard-file-card--violet { --file-color: #8e98b3; }
+  .dashboard-file-card--amber { --file-color: #c7a866; }
+  .dashboard-file-card--red { --file-color: #cf7580; }
+  .dashboard-file-card--neutral { --file-color: #95a7ad; }
 
   .dashboard-file-card__shine {
     position: absolute;
@@ -677,6 +678,10 @@
     width: 100%;
     opacity: 0.95;
     transition: width 420ms var(--workspace-ease), opacity 220ms var(--workspace-ease);
+  }
+
+  .dashboard-file-card:hover .dashboard-file-card__shine {
+    background: linear-gradient(90deg, color-mix(in oklab, var(--workspace-accent) 30%, transparent), transparent);
   }
 
   .dashboard-file-card::after {

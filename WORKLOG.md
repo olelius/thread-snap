@@ -16,6 +16,19 @@
 
 ---
 
+## 2026-09-05 — 扇形角度、配色与悬停抬升修正（feat/ui-refactor-fidelity）
+**总目标**：根据最新截图收敛卡片的空间角度、状态色和悬停层级，避免卡片压向检查器或形成突兀的大幅浮动。
+**状态**：✅ 修正完成，等待用户刷新预览复核；PR #275 继续保持 draft。
+**干到哪里了**：
+- [x] 工作台扇形从 `rotateX(11deg) rotateY(-18deg)` 收敛为 `rotateX(3deg) rotateY(-8deg)`，鼠标视差从 ±7/±5° 收敛到 ±3.5/±2.5°。
+- [x] 卡片状态色降饱和并降低填充透明度，黑灰玻璃作为底色；hover 统一使用 ThreadSnap 绿色边缘和扫光，不再出现黄色/紫色荧光抢主体。
+- [x] 悬停从大幅 `translateZ + scale + z-index 70` 改为原位轻抬、轻微缩放和局部阴影，保持卡片在中央舞台边界内。
+**验证**：`frontend\npm run check`、`frontend\npm run build`、`git diff --check`通过；暗色 1680px fixture 截图 `artifacts\runtime\ui-refactor\current-critique-v10-fixture.png`，5 张真实 fixture 卡片、7 项导航、5 项时间线，hover 前后 transform 仍有变化。
+**边界**：未引入新的浮层路由或业务弹窗；右侧检查器继续作为稳定三栏详情区，卡片 hover 只改变视觉层，不触发导航。
+**关联**：`frontend/src/components/workspace-visual.tsx`、`frontend/src/styles/index.css`
+
+---
+
 ## 2026-09-05 — 浅色窄屏玻璃与悬停反馈修正（feat/ui-refactor-fidelity）
 **总目标**：针对实际预览中“卡片近乎不透明、3D 透视不明显、划过无反馈”的验收反馈，补齐参考图所需的 OLED 工作台材质、空间深度和可感知 hover 动效。
 **状态**：✅ 修正完成，等待用户在现有预览中复核；PR #275 继续保持 draft。
