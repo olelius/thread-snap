@@ -16,6 +16,16 @@
 
 ---
 
+## 2026-09-06 — Credit Dashboard UI 架构模板
+**总目标**：把参考 Dashboard 图片推进为完全组件化的 Figma 设计系统，并提供可替换 API 数据源与 React 页面模板。
+**状态**：✅ Figma Foundations、Components、Templates、Architecture 页面已完成；前端类型、Mock/API 数据源、React Query 页面模板和可复用组件已实现。
+**证据**：Figma 文件 `https://www.figma.com/design/rucryRxzxcU0w8XJgSeNAD`；组件包含 `TabPill`、`FilterPill`、`SearchField`、`MetricCard`、`ScoreCard`、`SectionHeader`、`CreditCard`、`RecentChangeRow`、`SideRail`、`TopBar`，模板页由这些实例组合而成；设计 Token 集合包含 20 个变量、6 个文本样式和 2 个效果样式。
+**前端产物**：`frontend/src/features/credit-dashboard/credit-dashboard.types.ts`、`credit-dashboard.api.ts`、`credit-dashboard.mock.ts`、`use-credit-dashboard.ts`、`credit-dashboard-page.tsx`、`credit-dashboard-template.tsx`、`credit-dashboard-components.tsx`、`credit-dashboard.css`；架构说明为 `docs/design/credit-dashboard-ui-architecture.md`。
+**验证**：在 `H:\ThreadSnap-credit-dashboard\frontend` 执行 `npm.cmd run check`、`npm.cmd run build` 和 `git diff --check` 均通过；Figma 模板、组件库和 Architecture 页面均已截图核验。真实业务端点仍由业务方提供，默认使用 Mock 数据源，替换 `dataSource` 即可接入。
+**下一步**：如确认纳入产品路由，新增对应路由并把 `createCreditDashboardDataSource('/credit-dashboard')` 指向真实后端响应；保持现有 ThreadSnap 业务路由和数据契约不变。
+
+---
+
 ## 2026-09-05 — 工作台 UI 重构（feat/ui-refactor）
 **总目标**：从 `main@e96549f57903a647459980bb850429e68afd0ed1` 的独立工作树重构任务管理与循环批次界面，复现参考图的 OLED 深色玻璃、层叠文件卡片、检查器、时间线和真实鼠标/键盘交互，同时保留既有路由、API 与业务能力。
 **状态**：✅ 工作树内实现、fixture 浏览器验收与隔离真实后端 API 冒烟完成；生产业务数据与采集流程未改动。
