@@ -16,6 +16,16 @@
 
 ---
 
+## 2026-09-06 — Tactile Digital / Deformable UI 独立预览
+**总目标**：在不替换当前前端入口的前提下，为 ThreadSnap 增加一套独立的触感/可变形 UI 外壳预览。
+**状态**：🟡 已完成实现与浏览器渲染检查；真实后端接口在本次检查环境返回 502，业务数据密度仍需连接运行中的后端复核。
+**干到哪里了**：新增 `frontend/tactile.html`、独立 `src/tactile/` 外壳与语义换肤；预览使用 `5176` 端口和 Hash 路由，复用现有 `/runs`、`/recurring-runs`、`/reputation`、`/config` 页面、Query、SSE、表格、弹层和真实 API，不改默认 `index.html`、默认路由或现有主题文件。触感层提供柔性导航活动面、层叠品牌形体、按压缩放反馈、浅/深色语义变量、减少动态效果处理、跳至主要内容和移动端收敛；侧栏保留“打开原版界面”入口。
+**验证证据**：`frontend/npm run check` 通过；Playwright 实际打开 `http://127.0.0.1:5176/tactile.html#/runs` 并生成 `artifacts/runtime/tactile-ui/tactile-runs-desktop.png`、`tactile-runs-mobile.png`，桌面与移动检查均无横向溢出，循环计划导航实际切换到 `#/recurring-runs`，无页面级 JS 异常。检查时 API/SSE 资源返回 502，因此只确认空状态和外壳渲染，未把接口可用性误报为通过。
+**边界/下一步**：这是独立外观预览，不自动合并、替换或删除当前 UI；运行 `cd H:\ThreadSnap-tactile-ui\frontend; npm run dev:tactile` 后打开 `http://127.0.0.1:5176/tactile.html`。连接后端后需继续检查真实批次、认证 Dialog、详情 Sheet 和配置表格的高密度状态。
+**关联**：`frontend/tactile.html`、`frontend/src/tactile/tactile-shell.tsx`、`frontend/src/tactile/tactile.css`、`frontend/vite.tactile.config.ts`
+
+---
+
 ## 2026-09-05 — 工作台 UI 重构（feat/ui-refactor）
 **总目标**：从 `main@e96549f57903a647459980bb850429e68afd0ed1` 的独立工作树重构任务管理与循环批次界面，复现参考图的 OLED 深色玻璃、层叠文件卡片、检查器、时间线和真实鼠标/键盘交互，同时保留既有路由、API 与业务能力。
 **状态**：✅ 工作树内实现、fixture 浏览器验收与隔离真实后端 API 冒烟完成；生产业务数据与采集流程未改动。
