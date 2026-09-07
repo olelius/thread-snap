@@ -106,8 +106,7 @@ html[data-ui='tactile'] body { background: var(--background); background-image: 
 .tactile-edition-caption { position: relative; display: block; font-size: 15px; line-height: 1.6; }
 .tactile-edition-tag { position: absolute; right: 14px; bottom: 15px; display: inline-flex; align-items: center; gap: 6px; color: var(--muted-foreground); font: 10px ui-monospace, monospace; }
 .tactile-sidebar-footer { gap: 8px; padding: 13px 14px; }
-.tactile-original-link, .tactile-connection { display: flex; align-items: center; gap: 9px; min-height: 40px; border-radius: 12px; color: var(--muted-foreground); font-size: 12px; padding: 0 9px; }
-.tactile-original-link:hover { background: var(--accent); color: var(--accent-foreground); }
+.tactile-connection { display: flex; align-items: center; gap: 9px; min-height: 40px; border-radius: 12px; color: var(--muted-foreground); font-size: 12px; padding: 0 9px; }
 .tactile-connection { border: 1px solid var(--border); background: var(--card); }
 .tactile-connection > span:first-child { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--tactile-warning); box-shadow: 0 0 0 4px color-mix(in srgb, var(--tactile-warning) 12%, transparent); }
 .tactile-connection > span.is-connected { background: var(--tactile-success); box-shadow: 0 0 0 4px color-mix(in srgb, var(--tactile-success) 12%, transparent); }
@@ -119,7 +118,7 @@ html[data-ui='tactile'] body { background: var(--background); background-image: 
 [data-collapsible='icon'] .tactile-sidebar .tactile-nav-item { padding: 0 !important; height: 36px !important; width: 36px !important; }
 [data-collapsible='icon'] .tactile-sidebar .tactile-nav-icon { width: 34px; height: 34px; }
 [data-collapsible='icon'] .tactile-sidebar .tactile-sidebar-footer { padding: 8px; }
-[data-collapsible='icon'] .tactile-sidebar .tactile-original-link, [data-collapsible='icon'] .tactile-sidebar .tactile-connection { justify-content: center; padding: 0; }
+[data-collapsible='icon'] .tactile-sidebar .tactile-connection { justify-content: center; padding: 0; }
 .tactile-inset { background: transparent; }
 .tactile-topbar { display: flex; height: 68px; flex-shrink: 0; align-items: center; gap: 11px; border-bottom: 1px solid var(--border); background: var(--sidebar); padding: 0 24px; }
 .tactile-topbar [data-sidebar='trigger'] { width: 36px; height: 36px; border-radius: 12px; color: var(--muted-foreground); }
@@ -240,8 +239,6 @@ html[data-ui='tactile'] [data-slot='button']:not(:disabled):active, .tactile-roo
 .tactile-sculpture-control .tactile-sculpture { position: relative; display: block; top: auto; right: auto; width: 90px; height: 76px; }
 .tactile-sculpture-footer { position: absolute; left: 16px; right: 10px; bottom: 10px; display: flex; align-items: center; justify-content: space-between; gap: 5px; }
 .tactile-sculpture-footer > span { display: flex; align-items: center; gap: 5px; color: var(--muted-foreground); font: 9px ui-monospace, monospace; }
-.tactile-sculpture-footer button { display: grid; place-items: center; width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 10px; color: var(--muted-foreground); background: var(--card); }
-.tactile-sculpture-footer button:disabled { opacity: .5; cursor: default; }
 .tactile-root .tactile-list-table { box-shadow: 3px 4px 0 var(--tactile-edge); border-radius: 19px 16px 21px 17px; }
 @keyframes tactile-panel-enter { from { opacity: .4; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 html[data-ui='tactile'] [data-slot='tabs-content'][data-state='active'] { animation: tactile-panel-enter .24s ease-out both; }
@@ -250,5 +247,5 @@ html[data-ui='tactile'] [data-slot='switch-thumb'] { transition: transform .24s 
 html[data-ui='tactile'] [data-slot='progress-indicator'] { transition: transform .32s ease-out; }
 html[data-ui='tactile'] :is([data-slot='input'], [data-slot='textarea'], [data-slot='select-trigger']) { transition: background-color .2s, border-color .2s, box-shadow .2s; }
 @media (hover: hover) and (pointer: fine) { .home-batch:hover, .home-attention-group button:hover { background: var(--accent); }.tactile-sculpture-control:hover { background: color-mix(in srgb, var(--card) 30%, transparent); } }
-@media (max-height: 640px), (max-width: 640px) { .tactile-run-list { overflow: auto; }.tactile-list-table { min-height: 380px; flex: none; }.tactile-sculpture-footer button { width: 36px; height: 36px; } }
+@media (max-height: 640px), (max-width: 640px) { .tactile-run-list { overflow: auto; }.tactile-list-table { min-height: 380px; flex: none; }}
 @media (pointer: coarse) { html[data-ui='tactile'] :is([data-slot='button'], [data-slot='input'], [data-slot='select-trigger']) { min-height: 44px; }.home-segment { min-height: 44px; } }

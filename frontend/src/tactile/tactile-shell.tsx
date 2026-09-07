@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, Outlet, useRouterState } from '@tanstack/react-router'
 import { motion, useReducedMotion } from 'motion/react'
-import { ArrowUpRight, ChartNoAxesCombined, ChevronRight, House, Layers3, LayoutList, Repeat2, Settings2, Waves } from 'lucide-react'
+import { ChartNoAxesCombined, ChevronRight, House, Layers3, LayoutList, Repeat2, Settings2, Waves } from 'lucide-react'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { GlobalCommandMenu } from '@/components/global-command-menu'
 import {
@@ -85,7 +85,6 @@ function TactileNavigation() {
           <TactileSculpture />
         </SidebarContent>
         <SidebarFooter className='tactile-sidebar-footer'>
-          <a className='tactile-original-link' href='/classic.html' title='打开原版控制台界面'><ArrowUpRight size={16} /><span className='group-data-[collapsible=icon]:hidden'>打开原版界面</span></a>
           <div className='tactile-connection' role='status'><span className={connected ? 'is-connected' : ''} /><span className='group-data-[collapsible=icon]:hidden'>{connected ? '业务服务已连接' : '业务服务连接中'}</span></div>
         </SidebarFooter>
         <SidebarRail />
