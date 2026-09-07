@@ -18,7 +18,7 @@
 
 ## 2026-09-07 — React Bits 首页与品牌局部增强
 **总目标**：落实视频评估后的首页局部增强方案，保持触感外观与稳定业务页面，不把特效扩展到排名表、提取列表或配置表单。
-**状态**：✅ 本机与生产构建专项、完整回归及视觉验收通过，进入Git收尾。
+**状态**：✅ 本机与生产构建专项、完整回归及视觉验收通过；实现提交 `eb2d154`，关联 [PR #281](https://github.com/olelius/thread-snap/pull/281)。
 **当前进度**：在独立UI工作树分支 `codex/home-react-bits` 基于 `main@1d319cb` 按需改编SpotlightCard/CountUp；首页三个概览卡片和侧栏品牌增加受限光晕，首次真实累计值使用650ms数值过渡。辅助技术读真实末值，未知仍为“—”、零直接显示，刷新和错误恢复不重播。未新增依赖、WebGL、后端接口或业务写入，表格代码保持不变。
 **来源/许可**：上游固定版本 `0e69e737242df1d257b4e5e399b01ae1d7901375`，两组件与许可哈希保存在 `artifacts/runtime/react-bits-home/upstream/source-manifest.json`；MIT + Commons Clause 原文保存于 `frontend/public/third-party/react-bits.txt`，已核对两种dist均包含相同1488字节声明。
 **已验证**：TypeScript、默认/独立双构建、Ruff检查/格式和 `git diff --check` 通过。`python scripts/verify-react-bits-home.py` 在5173真实页面及 `--base-url http://127.0.0.1:5176` 生产构建均为18项通过：实际指针坐标/不变的卡片尺寸、键盘品牌反馈、数值中间帧与固定宽度、零/未知/刷新/错误恢复、离屏/后台/卸载后停止、深浅色和390px触屏。按四块表面×两端背景与光晕最亮组合计算，小字最小对比度浅色6.65:1、深色5.09:1。报告位于 `artifacts/runtime/react-bits-home/{live,production}/verification.json`；同目录PNG已目视核验。`verify-tactile-ui.py --isolated-writes` 全站25项生产回归及 `verify-reputation-ranking.py --run-id 01a07aac-9296-7883-a718-da5bc481fce5` 21项排名回归通过，报告分别在 `regression/`、`ranking/`，页面JS异常均为0，原排名卡片136px/间距24px、无错误脚注及历史API哈希不变。
