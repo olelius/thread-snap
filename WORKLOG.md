@@ -24,6 +24,7 @@
 **前端证据**：`npm run check`、`npm run build`、`npm run build:tactile`、Ruff和`git diff --check`通过；`python scripts/verify-tactile-ui.py --isolated-writes` 的25项生产构建浏览器检查全部通过、页面JS异常为0，结果 `artifacts/runtime/tactile-home/verification.json`。覆盖首页三分类/全量计数、实际API提交与配置恢复、列表/详情/巡检/八个配置标签、经典入口、五种视口、暂停持久化、键盘回弹、后台事件fixture与减少动态；三时刻真实形体矩阵不同，暂停后矩阵稳定。
 **视觉与本机证据**：同目录 `default-light.png`、`theme-dark.png`、`home-390.png`、`responsive-1280.png`、`sculpture-frame-0.png`～`sculpture-frame-2.png` 已直接核验。`http://127.0.0.1:5173/` 本机真实数据联调结果为提取80、循环0、口碑14（当次快照），`live-verification.json` 记录 `sculpture_playing=true`、零页面JS异常；`live-home.png`、`live-list.png` 为真实数据画面。
 **边界/运行**：原 `H:\ThreadSnap` 的20项采集开发修改继续保留。为避免回退其未提交原生采集实现，本机8000通过 Git 忽略的 `H:\ThreadSnap\artifacts\runtime\tactile-live\serve-home.py` 启动原后端并挂载新版本的同一个只读首页路由；正式主线通过 `app.py` 正常注册路由。隔离浏览器测试仍用8016副本，写入不进入真实数据库；未部署远程服务器。回退使用前一版本代码/静态资源，原版外观继续通过 `/classic.html` 比较。
+**关联**：实现提交 `85de8b7`；[PR #277](https://github.com/olelius/thread-snap/pull/277)。
 
 ---
 
