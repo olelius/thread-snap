@@ -7,6 +7,8 @@ import { NewExtractionSheet } from '@/features/runs/new-extraction-sheet'
 import { StatusBadge } from '@/components/status-badge'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
+import { SpotlightCard } from '@/components/react-bits/spotlight-card'
+import { CountUp } from '@/components/react-bits/count-up'
 import { api, errorMessage, formatDate } from '@/lib/api'
 import './home-page.css'
 
@@ -61,10 +63,12 @@ export function HomePage() {
       <section className='home-metrics' aria-label='全局批次统计'>
         {kinds.map(({ key, label, description, icon: Icon }, index) => {
           const value = query.data?.categories.find((item) => item.key === key)
-          return <motion.article key={key} className={`home-metric home-metric--${key}`} initial={reduceMotion ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .24, delay: index * .04 }}>
+          return <motion.article key={key} className='home-metric-entry' initial={reduceMotion ? false : { opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: .24, delay: index * .04 }}>
+            <SpotlightCard className={`home-metric home-metric--${key}`}>
             <div className='home-metric-heading'><span className='home-module-icon'><Icon size={21} /></span><div><h2>{label}</h2><p>{description}</p></div><span className='home-metric-index'>0{index + 1}</span></div>
-            <div className='home-total'><strong data-home-total={key}>{unavailable ? '—' : value?.total ?? '—'}</strong><span>累计现存批次</span></div>
+            <div className='home-total'><strong data-home-total={key}><CountUp value={unavailable ? undefined : value?.total} /></strong><span>累计现存批次</span></div>
             <dl className='home-counts'><div><dt>{key === 'reputation' ? '今日巡检 / 基线' : '今日创建'}</dt><dd>{unavailable ? '—' : value?.today ?? '—'}</dd></div><div><dt>当前处理中</dt><dd>{unavailable ? '—' : value?.active ?? '—'}</dd></div><div><dt>原批次需关注</dt><dd>{unavailable ? '—' : value?.attention ?? '—'}</dd></div></dl>
+            </SpotlightCard>
           </motion.article>
         })}
       </section>

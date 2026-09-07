@@ -77,9 +77,9 @@ def main() -> None:
             page.goto(base + "/")
             expect(page.locator("html")).to_have_attribute("data-ui", "tactile")
             for category in dashboard["categories"]:
-                expect(page.locator(f'[data-home-total="{category["key"]}"]')).to_have_text(
-                    str(category["total"])
-                )
+                expect(
+                    page.locator(f'[data-home-total="{category["key"]}"] [data-count-value]')
+                ).to_have_text(str(category["total"]))
             assert page.url.rstrip("/") == base
             no_overflow(page)
             shot(page, "default-light")
@@ -144,9 +144,9 @@ def main() -> None:
                 assert saved.value.ok, saved.value.text()
                 result = saved.value.json()
                 assert result["status"] == "queued"
-                expect(page.locator('[data-home-total="extraction"]')).to_have_text(
-                    str(before_submit + 1), timeout=8000
-                )
+                expect(
+                    page.locator('[data-home-total="extraction"] [data-count-value]')
+                ).to_have_text(str(before_submit + 1), timeout=8000)
                 passed(
                     "manual-submit-isolated-api", created_id=result["id"], state=result["status"]
                 )
@@ -434,9 +434,9 @@ def main() -> None:
                     ),
                 )
                 edge.goto(base + "/")
-                expect(edge.locator('[data-home-total="extraction"]')).to_have_text(
-                    "0" if state == "empty" else "—"
-                )
+                expect(
+                    edge.locator('[data-home-total="extraction"] [data-count-value]')
+                ).to_have_text("0" if state == "empty" else "—")
                 assert edge.locator('.home-batch[aria-pressed="true"]').count() == 0
                 shot(edge, f"fixture-{state}")
                 c.close()

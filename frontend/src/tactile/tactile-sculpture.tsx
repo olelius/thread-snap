@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { motion, useInView, useReducedMotion } from 'motion/react'
 import { Waves } from 'lucide-react'
 import { useSidebar } from '@/components/ui/sidebar'
+import { SpotlightCard } from '@/components/react-bits/spotlight-card'
 
 /** 低幅触感品牌形体；系统减弱、离屏、后台和折叠时不消耗连续动画。 */
 export function TactileSculpture() {
@@ -17,7 +18,7 @@ export function TactileSculpture() {
     document.addEventListener('visibilitychange', update)
     return () => document.removeEventListener('visibilitychange', update)
   }, [])
-  return <div ref={ref} className='tactile-edition group-data-[collapsible=icon]:hidden' data-playing={play}>
+  return <SpotlightCard ref={ref} className='tactile-edition group-data-[collapsible=icon]:hidden' data-playing={play} disabled={!play}>
     <span className='tactile-edition-caption'>有形的反馈。<br />轻盈的工作流。</span>
     <motion.button type='button' className='tactile-sculpture-control' aria-label='轻触形体，感受回弹' onClick={() => setPulse((value) => value + 1)} whileHover={reduceMotion ? undefined : { rotate: -4 }} whileTap={reduceMotion ? undefined : { scale: .92 }}>
       <motion.span key={pulse} className='tactile-sculpture' initial={reduceMotion || pulse === 0 ? false : { scale: .85, rotate: -12 }} animate={{ scale: 1, rotate: 0 }} transition={{ type: 'spring', stiffness: 210, damping: 12 }} aria-hidden='true'>
@@ -25,5 +26,5 @@ export function TactileSculpture() {
       </motion.span>
     </motion.button>
     <div className='tactile-sculpture-footer'><span><Waves size={13} /> TACTILE EDITION</span></div>
-  </div>
+  </SpotlightCard>
 }
