@@ -1,4 +1,4 @@
-"""口碑排名表真实浏览器验收：列对齐、冻结层、不溢出及历史错误按需展示。
+"""口碑排名表真实浏览器验收：固定卡片间距、无异常脚注、列对齐与冻结层。
 
 只读既有终态批次；默认使用本机项目，也可指向隔离实例。
 """
@@ -13,6 +13,46 @@ from pathlib import Path
 from playwright.sync_api import expect, sync_playwright
 
 
+def assert_metric_layout(page, scale=1):
+    """测量全部实际卡片而非仅检查溢出；缩放时换算回 CSS 像素。"""
+    geometry = page.locator(".ranking-metric").evaluate_all("""items => {
+      const boxes=items.map(e => {
+        const a=e.getBoundingClientRect(), td=e.closest('td'), b=td.getBoundingClientRect();
+        const next=td.nextElementSibling?.querySelector('.ranking-metric');
+        return {width:a.width, cellWidth:b.width, height:a.height,
+          left:a.left-b.left, right:b.right-a.right,
+          gap:next ? next.getBoundingClientRect().left-a.right : null};
+      });
+      const overflow=items.flatMap(e => [e, ...e.querySelectorAll('span')])
+        .filter(e => e.scrollWidth > e.clientWidth+1 || e.scrollHeight > e.clientHeight+1)
+        .map(e => e.textContent);
+      return {boxes, overflow};
+    }""")
+    boxes = geometry["boxes"]
+    assert boxes, "实际指标卡片分母为0"
+    assert not geometry["overflow"], geometry["overflow"]
+    assert all(abs(box["width"] / scale - 136) <= 1 for box in boxes), boxes
+    assert all(abs(box["cellWidth"] / scale - 160) <= 1 for box in boxes), boxes
+    assert all(box["height"] / scale >= 55 for box in boxes), boxes
+    assert all(min(box["left"], box["right"]) / scale >= 11 for box in boxes), boxes
+    gaps = [box["gap"] / scale for box in boxes if box["gap"] is not None]
+    assert gaps and min(gaps) >= 23.5, gaps
+    # 所有状态单元格仅有状态行，防止把旧说明替换成另一段小字。
+    assert page.locator(".ranking-error-summary").count() == 0
+    extras = page.locator('[data-ranking-cell$="-state"]').evaluate_all("""items =>
+      items.filter(e => e.children.length !== 1 || !e.firstElementChild.matches('.ranking-state-line'))
+        .map(e => e.textContent)
+    """)
+    assert not extras, extras
+    return {
+        "tiles": len(boxes),
+        "adjacent_pairs": len(gaps),
+        "min_gap": min(gaps),
+        "widths": sorted({round(box["width"] / scale, 2) for box in boxes}),
+        "status_cells": page.locator('[data-ranking-cell$="-state"]').count(),
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:5173")
@@ -20,7 +60,7 @@ def main():
     parser.add_argument("--output", type=Path, default=Path("artifacts/runtime/reputation-url-fix"))
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
-    report = {"checks": [], "page_errors": []}
+    report = {"checks": [], "page_errors": [], "base_url": args.base_url}
     base = args.base_url.rstrip("/")
 
     def record(name, **details):
@@ -71,15 +111,8 @@ def main():
                 page.wait_for_timeout(500)
                 assert viewport.locator("table").count() == 1
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-                overflow = page.locator(".ranking-metric, .ranking-error-summary").evaluate_all(
-                    "items => items.filter(e => e.scrollWidth > e.clientWidth + 1).map(e => e.textContent)"
-                )
-                assert not overflow, overflow
-                metric_boxes = page.locator(".ranking-metric").evaluate_all(
-                    'items => items.map(e => {const a=e.getBoundingClientRect(), b=e.closest("td").getBoundingClientRect(); return {l:a.left-b.left,r:a.right-b.right}})'
-                )
-                assert all(item["l"] >= -1 and item["r"] <= 1 for item in metric_boxes), (
-                    metric_boxes
+                record(
+                    f"fixed-tiles-no-error-caption-{width}-{theme}", **assert_metric_layout(page)
                 )
 
                 snapshots = []
@@ -129,6 +162,30 @@ def main():
                     page.keyboard.press("Escape")
                     expect(page.get_by_role("dialog")).to_have_count(0)
                     record(f"historical-native-error-on-demand-{width}-{theme}")
+                # 图中另一处为懂车帝普通异常，同样没有小字且原文仍可按需查看。
+                ordinary = next(
+                    row
+                    for row in original["results"]
+                    if row.get("error_message")
+                    and not (row.get("error_code") or "").startswith("REPUTATION_NATIVE_")
+                )
+                assert ordinary["error_message"] not in page.locator("body").inner_text()
+                page.get_by_role(
+                    "button",
+                    name=f"查看{ordinary['vehicle_name']}{ordinary['platform_name']}失败原因",
+                    exact=True,
+                ).click()
+                expect(page.get_by_role("dialog")).to_contain_text(ordinary["error_message"])
+                page.keyboard.press("Escape")
+                expect(page.get_by_role("dialog")).to_have_count(0)
+                record(f"ordinary-error-on-demand-{width}-{theme}")
+                if width == 2560:
+                    # 放大布局/文字后仍有真实卡片间隔，不以裁切文字通过断言。
+                    for zoom in (1.25, 2):
+                        page.evaluate("z => document.documentElement.style.zoom=String(z)", zoom)
+                        page.wait_for_timeout(300)
+                        record(f"zoomed-tiles-{zoom}", **assert_metric_layout(page, zoom))
+                    page.evaluate("document.documentElement.style.zoom=''")
                 page.close()
             # 单平台URL模式不应在汇报卡中被误标为“缺图”或“证据已生成”。
             import copy
