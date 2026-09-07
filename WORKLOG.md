@@ -23,6 +23,7 @@
 **验证证据**：`frontend/npm run check`、`npm run build`、`npm run build:tactile`、Ruff 和 `git diff --check` 通过。`PYTHONPATH=H:\ThreadSnap-tactile-ui\src` 下 `python -m unittest tests.test_backend -q` 为104项通过；首次回归暴露既有串行顺序测试在创建批次后才设置并发，现把测试配置前移到快照创建前，保留全部顺序断言，生产 Worker 原样。
 **浏览器证据**：`H:\ThreadSnap\.vevn\Scripts\python.exe scripts/verify-tactile-ui.py --isolated-writes` 的23项检查全部通过，报告为 `artifacts/runtime/tactile-production/verification.json`；生产构建实际请求隔离后端8016，读取脱敏数据库副本（原始80批次，验收新增排队记录仅在副本），后台 Worker/调度关闭。覆盖当前页统计、卡片按压/选择、详情/帖子抽屉关闭、手动提交、搜索刷新、键盘命令、巡检三视图、八个配置标签、配置保存刷新恢复、导航持久化、主题、原版/历史入口、1280/1024/768/390/844宽度与横屏、减少动态、空/错误态和零页面JS异常。认证错误响应仅浏览器fixture，不调用外部平台。
 **可复核产物**：同目录 `default-light.png`、`theme-dark.png`、`post-detail-sheet.png`、`reputation-ranking.png`、`config-platforms.png`、`auth-dialog-error-fixture.png`、`classic-production.png`、`responsive-390.png`、`form-390.png`；已直接检查真实PNG。构建与后端日志为 `build.log`、`build-tactile.log`、`backend-tests.log`。
+**关联**：实现提交 `6e31635`；[PR #276](https://github.com/olelius/thread-snap/pull/276)；独立工作树 `H:\ThreadSnap-tactile-ui`。
 **边界/下一步**：按最新要求将默认UI合入主线，旧预览“不合并”边界已由本次替换要求取代；原 `H:\ThreadSnap` 的20项采集相关修改保持原状。上线部署未包含在本次修改中；需要旧外观时打开 `/classic.html`，整版回退使用前一发布目录。
 
 ---
