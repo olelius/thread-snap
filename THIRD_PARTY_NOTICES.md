@@ -1,5 +1,17 @@
 # Third-party notices
 
+## React Bits
+
+首页统计卡片与侧栏品牌的局部光晕、首页首次数字过渡参考并改编 React Bits 的
+`SpotlightCard`、`CountUp` TypeScript 版本；保留项目主题和统计语义，不引入整站背景引擎。
+
+- Project: <https://github.com/DavidHDev/react-bits>
+- Pinned revision: `0e69e737242df1d257b4e5e399b01ae1d7901375`
+- Copyright (c) 2026 David Haz
+- License: MIT + Commons Clause License Condition v1.0（非纯 MIT）
+- 完整许可与来源：[react-bits.txt](frontend/public/third-party/react-bits.txt)，随两种前端构建一并发布。
+- 本地适配：主题语义色、无重渲染的指针坐标、键盘焦点和减少动态效果；计数只用于已取得的真实值，后续刷新不重播。
+
 ## forged-in-prod
 
 ThreadSnap 的项目流控制规则和模板结构参考：

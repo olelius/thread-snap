@@ -104,6 +104,7 @@ html[data-ui='tactile'] body { background: var(--background); background-image: 
 .tactile-sculpture i:nth-child(2) { top: 26px; left: 5px; transform: rotate(-18deg); }
 .tactile-sculpture i:nth-child(3) { top: 38px; right: 0; transform: rotate(26deg); }
 .tactile-edition-caption { position: relative; display: block; font-size: 15px; line-height: 1.6; }
+.tactile-edition.bits-spotlight .tactile-sculpture-footer > span { color: color-mix(in srgb, var(--foreground) 80%, var(--muted-foreground)); }
 .tactile-edition-tag { position: absolute; right: 14px; bottom: 15px; display: inline-flex; align-items: center; gap: 6px; color: var(--muted-foreground); font: 10px ui-monospace, monospace; }
 .tactile-sidebar-footer { gap: 8px; padding: 13px 14px; }
 .tactile-connection { display: flex; align-items: center; gap: 9px; min-height: 40px; border-radius: 12px; color: var(--muted-foreground); font-size: 12px; padding: 0 9px; }

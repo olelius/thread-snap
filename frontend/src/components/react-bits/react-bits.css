@@ -1,0 +1,7 @@
+.bits-spotlight { position: relative; isolation: isolate; overflow: hidden; --spotlight-x: 50%; --spotlight-y: 50%; --spotlight-color: color-mix(in srgb, var(--primary) 19%, transparent); }
+.bits-spotlight-layer { position: absolute; inset: 0; z-index: -1; border-radius: inherit; pointer-events: none; opacity: 0; background: radial-gradient(340px circle at var(--spotlight-x) var(--spotlight-y), var(--spotlight-color), transparent 80%); transition: opacity 220ms ease; }
+.bits-spotlight[data-spotlight-enabled='true'][data-spotlight-active='true'] > .bits-spotlight-layer { opacity: 1; }
+.bits-count { display: inline-block; font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) {
+  .bits-spotlight-layer { display: none; transition: none; }
+}
