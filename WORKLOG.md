@@ -20,12 +20,14 @@
 
 ## 2026-09-07 — 导入两平台口碑配置并修复离线无头浏览器选择
 **总目标**：把本机汽车之家/易车口碑配置导入服务器，说明易车URL来源，保持服务器已有草稿和历史；修复导入实测发现的离线浏览器兼容问题。
-**状态**：✅ 两平台54映射和共享会话已导入；⏳ 新范围发布等待额外6款处理裁决，无头浏览器补丁待服务器离线验证。
+**状态**：✅ 两平台54映射、原验证链和共享会话已导入；离线浏览器补丁已上线，两平台各1个真实URL验证通过；⏳ 新范围发布等待额外6款处理裁决。
 **配置证据**：本机 `data/threadsnap.db` 草稿revision27与已发布v3相同；27车型内部ID、懂车帝ID/URL/展示名和业务身份与服务器一一相同。离线配置包SHA-256 `18c91863e8fd12eee06974d17ca246127b56c0bfab275eca1a4a2bbfff739d41`，包含54映射、5次原验证操作全部68次attempt（含5失败）、63个PNG引用按SHA去重为54个实体文件；不含Session、密钥或正式巡检历史。服务器导入revision10→11，再执行为already_imported、0新增；14张既有业务/发布历史表前后哈希一致，6款额外草稿和懂车帝未改。两平台Session通过SSH回环隧道只在内存中解密传递，目标以现有密钥重新加密。
 **验证/发现**：隔离导入审查13项通过；两平台原验证图片API均200且SHA与本地一致。汽车之家艾瑞泽8通过真实映射验证1/1；易车首轮因查找未打包的 `chromium_headless_shell-1228` 返回503。相同服务器、服务账号实测默认无头失败，`channel="chromium"`使用已有完整Chromium成功。修复只为无头模式显式选完整浏览器，有头及Wayland参数保持不变，不额外下载浏览器、不改车型URL或采集合同。
 **证据入口**：`H:/ThreadSnap/artifacts/runtime/reputation-platform-import-20260907/` 的 `local-agent-receipt.md`、`import-review-tests.json`、`imported-evidence-api-checks.json`、`headless-launch-finding.json`；补丁专项见 `artifacts/runtime/agents/yiche-offline-headless/`。
 **回退/边界**：服务器配置变更前SQLite备份为 `/var/lib/threadsnap/backups/platform-config-import/20260907-2115/threadsnap.db`。配置导入单事务且冲突不覆盖；完整DB备份不用于覆盖后续新写入。服务器已发布v1仍为原27项，未生成新正式批次；6款额外草稿待用户决定，未擅自停用。易车具体 `platform_url`/ID来自配置，示例风云A9为 `https://dianping.yiche.com/fengyune05/koubei/`，固定的是域名与解析规则。
-**下一步**：以离线增量包部署浏览器修复并重验易车实际URL；收到6款处理决定后按当前revision核对发布影响，只让未来批次使用新范围。
+**补丁验收**：实现提交 `63843d0`；34项口碑/URL/启动回归及12项离线包测试、Ruff/compileall通过；Windows与Linux均在仅有完整Chromium、缺Headless Shell的环境通过无头静态页。离线修复包SHA-256 `84df2e2dc59c93bed58723f2882c3fa913717a798043ac7bdae4ae624092e450`，复用前端60文件、部署14文件与22条依赖声明；服务器current为`0.1.0-63843d026f24`、previous为`0.1.0-ebc4ef792ff6`，完整部署验证/无头专项通过，四服务正常；维护窗口38.953秒，配置API完整响应在切换前后相同。易车新验证 `01a07c12-bf56-7f48-83a4-9b4dd6c7aeb6` 成功1/1、3223ms、无PNG，旧失败验证记录保留；汽车之家实测1/1、2824ms、有PNG。这是每平台1项运行时冒烟，不冒充服务器54项重新采集通过。
+**页面核验**：公网“车型与映射”切换汽车之家、易车后，各有27条真实配置URL链接；无JS错误、无业务写请求，截图已目视核验，报告 `scope-browser-verification.json`。
+**下一步**：收到6款处理决定后，按服务器当前revision核对发布影响，只让未来批次使用新范围；本轮不重建或重跑历史批次。
 
 ---
 
