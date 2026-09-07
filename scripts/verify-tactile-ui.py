@@ -307,16 +307,13 @@ def main() -> None:
                 page.wait_for_timeout(650)
             assert frames[0] != frames[1] and frames[1] != frames[2]
             report["sculpture_frames"] = frames
-            page.get_by_role("button", name="暂停装饰动效", exact=True).click()
-            expect(sculpture).to_have_attribute("data-playing", "false")
-            page.wait_for_timeout(100)
-            stopped = pieces.evaluate_all("items => items.map(e => getComputedStyle(e).transform)")
-            page.wait_for_timeout(650)
-            assert stopped == pieces.evaluate_all(
-                "items => items.map(e => getComputedStyle(e).transform)"
+            expect(page.locator(".tactile-sculpture-footer button")).to_have_count(0)
+            expect(page.locator('.tactile-root a[href="/classic.html"]')).to_have_count(0)
+            context.add_cookies(
+                [{"name": "threadsnap-sculpture-paused", "value": "true", "url": base}]
             )
             page.reload()
-            expect(sculpture).to_have_attribute("data-playing", "false")
+            expect(sculpture).to_have_attribute("data-playing", "true")
             bounce = page.get_by_role("button", name="轻触形体，感受回弹")
             bounce.press("Enter")
             page.wait_for_timeout(50)
@@ -324,7 +321,6 @@ def main() -> None:
                 page.locator(".tactile-sculpture").evaluate("e => getComputedStyle(e).transform")
                 != "none"
             )
-            page.get_by_role("button", name="播放装饰动效", exact=True).click()
             expect(sculpture).to_have_attribute("data-playing", "true")
             page.evaluate(
                 "Object.defineProperty(document, 'visibilityState', {configurable:true, value:'hidden'}); document.dispatchEvent(new Event('visibilitychange'))"
@@ -335,11 +331,11 @@ def main() -> None:
             )
             expect(sculpture).to_have_attribute("data-playing", "true")
             passed(
-                "sculpture-live-motion-pause-persistence-keyboard-and-background",
+                "removed-controls-legacy-cookie-motion-keyboard-and-background",
                 background_evidence="visibility event fixture",
             )
 
-            page.get_by_role("link", name="打开原版界面", exact=True).click()
+            page.goto(base + "/classic.html")
             page.wait_for_url("**/classic.html*")
             expect(page.locator(".workspace-app-root")).to_be_visible()
             assert page.locator(".tactile-root").count() == 0
@@ -401,7 +397,7 @@ def main() -> None:
             assert snapshot == pieces.evaluate_all(
                 "items => items.map(e => getComputedStyle(e).transform)"
             )
-            expect(reduced.get_by_role("button", name="系统已减少动态效果")).to_be_disabled()
+            expect(reduced.locator(".tactile-sculpture-footer button")).to_have_count(0)
             c.close()
             passed("reduced-motion-static-sculpture")
 

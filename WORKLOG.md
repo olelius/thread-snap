@@ -16,6 +16,15 @@
 
 ---
 
+## 2026-09-07 — 移除侧栏两处多余入口
+**总目标**：移除用户红框标出的动效暂停按钮和“打开原版界面”链接，保留其余视觉与业务功能。
+**状态**：✅ 两个控件已从DOM删除，相关死样式和暂停Cookie读取已清理，形体自动运动/键盘回弹、系统减少动态、离屏/后台/折叠停止及连接状态保留；经典页面仅保留直接URL，未删除回退产物。
+**证据**：`npm run check`、默认及独立构建、Ruff、`git diff --check`通过；`python scripts/verify-tactile-ui.py --isolated-writes --output artifacts/runtime/tactile-sidebar-cleanup` 的25项浏览器回归全部通过。新增断言验证两个控件不存在、旧暂停Cookie不阻止动画、经典页面可直接打开及系统减少动态等价静态表现。
+**本机核验**：`http://127.0.0.1:5173/` 实测 `removed_controls=2`、`motion=true`、连接状态可见；已检查 `artifacts/runtime/tactile-sidebar-cleanup/sidebar-after.png`，完整画面为同目录 `live-page.png`。后端与原工作树采集开发修改未改动。
+**下一步**：按项目授权提交并合并本次小范围UI精简。
+
+---
+
 ## 2026-09-07 — 独立首页与触感动效完善
 **总目标**：把大面积概览移到默认首页，所有业务页维持触感风格，补充用户指定的侧栏形体动效和适度过渡。
 **状态**：✅ 首页、全量聚合API、紧凑列表、触感动效和本机真实数据联调均完成；按项目授权完成Git收尾。
