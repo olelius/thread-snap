@@ -1,4 +1,3 @@
-import path from 'node:path'
 import { defineConfig, mergeConfig } from 'vite'
 import baseConfig from './vite.config.ts'
 
@@ -8,6 +7,5 @@ export default mergeConfig(baseConfig, defineConfig({
   preview: { port: 4176, strictPort: true },
   build: {
     outDir: 'dist-tactile',
-    rollupOptions: { input: path.resolve(import.meta.dirname, 'tactile.html') },
   },
 }))

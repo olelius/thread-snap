@@ -3340,6 +3340,11 @@ class QueueAndRetryTests(AppCase):
 
         first = self.save_verified_circle(external_id="batch-first", name="批次首来源")
         second = self.save_verified_circle(external_id="batch-second", name="批次次来源")
+        # 并发随批次创建冻结；串行顺序测试必须在生成快照前设置，而非修改运行中平台配置。
+        with self.container.sessions.begin() as db:
+            platform = db.get(PlatformConfig, "dongchedi")
+            assert platform is not None
+            platform.internal_concurrency = 1
         run = self.container.runs.create_manual(
             ManualRunCreate(
                 platform_code="dongchedi", circle_ids=[first.id, second.id], quantity=1
@@ -3347,10 +3352,6 @@ class QueueAndRetryTests(AppCase):
             scope="api",
             header_key="batch-source-retry-0001",
         )
-        with self.container.sessions.begin() as db:
-            platform = db.get(PlatformConfig, "dongchedi")
-            assert platform is not None
-            platform.internal_concurrency = 1
         calls: list[str] = []
         first_attempt_url: str | None = None
 

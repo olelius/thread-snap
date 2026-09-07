@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, Expand, Loader2, LogIn, LogOut, RefreshCw, ShieldCheck, Wifi, WifiOff } from 'lucide-react'
 import { toast } from 'sonner'
-import { api, errorMessage } from '@/lib/api'
+import { ApiError, api, errorMessage } from '@/lib/api'
 import type { AuthTask, Platform } from '@/lib/types'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -159,7 +159,8 @@ export function AuthDialog({
     createTask(fresh).then(connect).catch((error) => {
       setConnection('offline')
       setPageStatus('failed')
-      setPageError({ title: '会话窗口启动失败', message: errorMessage(error) })
+      // 任务创建失败与画面加载失败同样保留后端错误身份，避免把所有响应都标成浏览器故障。
+      setPageError({ title: '会话窗口启动失败', message: errorMessage(error), code: error instanceof ApiError ? error.payload.code : undefined, httpStatus: error instanceof ApiError ? error.status : undefined })
       toast.error('会话窗口启动失败', { description: errorMessage(error) })
     })
   }, [connect, createTask, freshOnOpen])

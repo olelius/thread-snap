@@ -72,7 +72,7 @@ function SheetContent({
       >
         {children}
         {showClose && (
-          <SheetPrimitive.Close className='absolute inset-e-4 top-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-secondary'>
+          <SheetPrimitive.Close data-slot='sheet-close' className='absolute inset-e-4 top-4 z-20 grid size-8 place-items-center rounded-md bg-background/90 opacity-80 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-secondary'>
             <XIcon className='size-4' />
             <span className='sr-only'>关闭</span>
           </SheetPrimitive.Close>

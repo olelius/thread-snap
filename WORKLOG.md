@@ -16,6 +16,17 @@
 
 ---
 
+## 2026-09-07 — Tactile UI 接入默认前端入口
+**总目标**：将已验收的 Tactile Digital / Deformable UI 从独立预览提升为项目默认前端外壳，同时保留既有业务页面、路由和 API 行为。
+**状态**：✅ 默认入口改造及功能回归完成；进入项目授权的 Git 收尾。
+**干到哪里了**：`router.tsx` 默认使用 `TactileShell`，`index.html` 正确声明主题标记；共享语义 Token 覆盖浅深主题、导航、表格、配置与 Portal 弹层。修正导航缩起后内容遮挡、移动导航选择不收起、详情抽屉关闭按钮被固定标题栏挡住、认证创建失败丢失服务端错误码；加载/错误态统计显示“—”。默认保留系统主题偏好、原路径/查询参数及现有 Router/Query/SSE/API；无需新增接口。`classic.html` 与历史 `tactile.html` 使用 Hash 历史，默认 `dist` 和独立 `dist-tactile` 都包含三个入口，避免生产原版链接失效。
+**验证证据**：`frontend/npm run check`、`npm run build`、`npm run build:tactile`、Ruff 和 `git diff --check` 通过。`PYTHONPATH=H:\ThreadSnap-tactile-ui\src` 下 `python -m unittest tests.test_backend -q` 为104项通过；首次回归暴露既有串行顺序测试在创建批次后才设置并发，现把测试配置前移到快照创建前，保留全部顺序断言，生产 Worker 原样。
+**浏览器证据**：`H:\ThreadSnap\.vevn\Scripts\python.exe scripts/verify-tactile-ui.py --isolated-writes` 的23项检查全部通过，报告为 `artifacts/runtime/tactile-production/verification.json`；生产构建实际请求隔离后端8016，读取脱敏数据库副本（原始80批次，验收新增排队记录仅在副本），后台 Worker/调度关闭。覆盖当前页统计、卡片按压/选择、详情/帖子抽屉关闭、手动提交、搜索刷新、键盘命令、巡检三视图、八个配置标签、配置保存刷新恢复、导航持久化、主题、原版/历史入口、1280/1024/768/390/844宽度与横屏、减少动态、空/错误态和零页面JS异常。认证错误响应仅浏览器fixture，不调用外部平台。
+**可复核产物**：同目录 `default-light.png`、`theme-dark.png`、`post-detail-sheet.png`、`reputation-ranking.png`、`config-platforms.png`、`auth-dialog-error-fixture.png`、`classic-production.png`、`responsive-390.png`、`form-390.png`；已直接检查真实PNG。构建与后端日志为 `build.log`、`build-tactile.log`、`backend-tests.log`。
+**边界/下一步**：按最新要求将默认UI合入主线，旧预览“不合并”边界已由本次替换要求取代；原 `H:\ThreadSnap` 的20项采集相关修改保持原状。上线部署未包含在本次修改中；需要旧外观时打开 `/classic.html`，整版回退使用前一发布目录。
+
+---
+
 ## 2026-09-06 — Tactile Digital / Deformable UI 独立预览
 **总目标**：在不替换当前前端入口的前提下，为 ThreadSnap 增加一套独立的触感/可变形 UI 外壳预览。
 **状态**：🟡 已完成实现与浏览器渲染检查；真实后端接口在本次检查环境返回 502，业务数据密度仍需连接运行中的后端复核。

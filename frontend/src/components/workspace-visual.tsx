@@ -16,13 +16,15 @@ type WorkspaceVisualProps = {
   runs: Run[]
   kind: 'extraction' | 'recurring'
   onOpen: (run: Run) => void
+  loading?: boolean
+  loadError?: boolean
 }
 
 /**
  * 工作台的可交互视觉层。卡片选择只更新右侧检查器，只有明确点击“打开批次”才进入详情，
  * 避免鼠标探索被路由切换打断，同时所有指标都明确标注为当前页口径。
  */
-export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
+export function WorkspaceVisual({ runs, kind, onOpen, loading = false, loadError = false }: WorkspaceVisualProps) {
   const reduceMotion = useReducedMotion()
   const stageRef = useRef<HTMLDivElement>(null)
   const pointerX = useMotionValue(0)
@@ -73,14 +75,14 @@ export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
           <h1>{kind === 'recurring' ? '循环计划控制台' : '任务管理'}</h1>
           <p>{kind === 'recurring' ? '按持久计划查看独立触发批次。' : '把批次、证据和队列状态收拢到一个可操作的空间。'}</p>
         </div>
-        <div className='workspace-live-pill'><span className='workspace-live-dot' />数据来自当前批次</div>
+        <div className='workspace-live-pill'><span className='workspace-live-dot' />{loading ? '正在加载批次' : loadError ? '批次数据加载失败' : '数据来自当前列表页'}</div>
       </div>
 
       <div className='workspace-kpi-grid'>
-        <MetricCard icon={FileStack} label='当前页批次' value={total} detail={total ? '已加载列表页' : '等待批次数据'} tone='blue' />
-        <MetricCard icon={Activity} label='当前页进行中' value={activeCount} detail='队列与处理中' tone='violet' />
-        <MetricCard icon={Check} label='当前页已完成' value={completedCount} detail='成功终态批次' tone='green' />
-        <MetricCard icon={CircleAlert} label='当前页需关注' value={attentionCount} detail='失败或等待会话' tone='amber' />
+        <MetricCard icon={FileStack} label='当前页批次' value={loading || loadError ? '—' : total} detail={loading ? '正在读取列表' : loadError ? '请在列表重试' : total ? '已加载列表页' : '尚无批次数据'} tone='blue' />
+        <MetricCard icon={Activity} label='当前页进行中' value={loading || loadError ? '—' : activeCount} detail='队列与处理中' tone='violet' />
+        <MetricCard icon={Check} label='当前页已完成' value={loading || loadError ? '—' : completedCount} detail='成功终态批次' tone='green' />
+        <MetricCard icon={CircleAlert} label='当前页需关注' value={loading || loadError ? '—' : attentionCount} detail='失败或等待会话' tone='amber' />
       </div>
 
       <div className='workspace-main-grid'>
@@ -92,7 +94,7 @@ export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
         >
           <div className='workspace-stage-heading'>
             <div>
-              <span className='workspace-section-label'>项目文档</span>
+              <span className='workspace-section-label'>批次快选</span>
               <span className='workspace-section-note'>悬停查看层次 · 点击选择批次</span>
             </div>
             <Waves className='size-4 text-emerald-300/80' aria-hidden='true' />
@@ -115,10 +117,11 @@ export function WorkspaceVisual({ runs, kind, onOpen }: WorkspaceVisualProps) {
                   <button
                     key={run?.id ?? fallback.label}
                     type='button'
-                    className={`dashboard-file-card dashboard-file-card--${tone} ${run?.id === selectedRun?.id ? 'is-selected' : ''}`}
+                    className={`dashboard-file-card dashboard-file-card--${tone} ${run && run.id === selectedRun?.id ? 'is-selected' : ''}`}
                     style={{ '--card-index': index } as React.CSSProperties}
                     onClick={() => run && selectRun(run)}
                     disabled={!run}
+                    aria-pressed={run ? run.id === selectedRun?.id : undefined}
                     aria-label={run ? `查看批次 ${label}` : `${label}，暂无批次`}
                   >
                     <span className='dashboard-file-card__shine' />
@@ -203,7 +206,7 @@ function WorkspaceTimeline({ runs, selectedId, onSelect }: { runs: Run[]; select
   )
 }
 
-function MetricCard({ icon: Icon, label, value, detail, tone }: { icon: typeof FileStack; label: string; value: number; detail: string; tone: string }) {
+function MetricCard({ icon: Icon, label, value, detail, tone }: { icon: typeof FileStack; label: string; value: number | string; detail: string; tone: string }) {
   return (
     <div className={`workspace-metric workspace-metric--${tone}`}>
       <div className='workspace-metric__top'><span>{label}</span><Icon className='size-4' /></div>

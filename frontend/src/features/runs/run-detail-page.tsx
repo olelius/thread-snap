@@ -318,7 +318,7 @@ function RunDetail({ kind }: { kind: RunDetailKind }) {
       <TaskDialog open={tasksOpen} onOpenChange={setTasksOpen} tasks={run.data?.tasks ?? []} />
       <Sheet open={Boolean(search.post)} onOpenChange={(open) => { if (!open) closePostDetail() }}>
         <SheetContent className='w-full overflow-y-auto p-0 sm:max-w-[58vw]' onOpenAutoFocus={handleDetailOpenAutoFocus} onCloseAutoFocus={handleDetailCloseAutoFocus}>
-          <SheetHeader className='sticky top-0 z-10 border-b bg-background/90 p-6 backdrop-blur'>
+              <SheetHeader className='sticky top-0 z-10 border-b bg-background/90 p-6 pr-16 backdrop-blur'>
             <div className='flex items-start justify-between gap-4 pr-8'>
               <div>
                 <SheetTitle>{detail.data?.title || '帖子快照详情'}</SheetTitle>

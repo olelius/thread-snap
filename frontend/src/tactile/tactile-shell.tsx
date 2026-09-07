@@ -7,9 +7,10 @@ import { GlobalCommandMenu } from '@/components/global-command-menu'
 import {
   Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent,
   SidebarGroupLabel, SidebarHeader, SidebarInset, SidebarMenu, SidebarMenuButton,
-  SidebarMenuItem, SidebarProvider, SidebarRail, SidebarTrigger,
+  SidebarMenuItem, SidebarProvider, SidebarRail, SidebarTrigger, useSidebar,
 } from '@/components/ui/sidebar'
 import { TooltipProvider } from '@/components/ui/tooltip'
+import { getCookie, setCookie } from '@/lib/cookies'
 
 const emptyRunsSearch = { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }
 const navigation = [
@@ -19,11 +20,16 @@ const navigation = [
   { to: '/config' as const, search: { tab: 'rules' as const }, label: '配置管理', subtitle: '规则、计划与来源', icon: Settings2, number: '04' },
 ]
 
-/** 独立触感外壳，业务页面、缓存刷新和提交路径均复用现有实现。 */
+/** 默认触感外壳；导航记忆独立保存，业务页面和提交路径沿用现有实现。 */
 export function TactileShell() {
+  const [open, setOpen] = useState(() => getCookie('threadsnap-tactile-sidebar') !== 'false')
+  const saveOpen = (next: boolean) => {
+    setOpen(next)
+    setCookie('threadsnap-tactile-sidebar', String(next), 60 * 60 * 24 * 365)
+  }
   return (
     <TooltipProvider delayDuration={150}>
-      <SidebarProvider defaultOpen className='tactile-root h-svh min-h-0 overflow-hidden'>
+      <SidebarProvider open={open} onOpenChange={saveOpen} className='tactile-root h-svh min-h-0 overflow-hidden'>
         <TactileNavigation />
       </SidebarProvider>
     </TooltipProvider>
@@ -32,6 +38,7 @@ export function TactileShell() {
 
 /** 导航沿用 Sidebar 原语，窄屏点击后收起 Sheet；不重写焦点和键盘机制。 */
 function TactileNavigation() {
+  const { isMobile, setOpenMobile } = useSidebar()
   const pathname = useRouterState({ select: (state) => state.location.pathname })
   const reduceMotion = useReducedMotion()
   const current = navigation.find((item) => pathname === item.to || pathname.startsWith(`${item.to}/`)) ?? navigation[0]
@@ -48,7 +55,7 @@ function TactileNavigation() {
       <Sidebar collapsible='icon' variant='inset' className='tactile-sidebar'>
         <SidebarHeader className='tactile-brand'>
           <div className='tactile-brand-mark' aria-hidden='true'><Layers3 size={23} strokeWidth={1.65} /></div>
-          <div className='tactile-brand-copy group-data-[collapsible=icon]:hidden'><strong>ThreadSnap<span>®</span></strong><small>让每次讨论，有迹可循。</small></div>
+          <div className='tactile-brand-copy group-data-[collapsible=icon]:hidden'><strong>ThreadSnap</strong><small>让每次讨论，有迹可循。</small></div>
         </SidebarHeader>
         <SidebarContent>
           <SidebarGroup>
@@ -60,11 +67,11 @@ function TactileNavigation() {
                   return (
                     <SidebarMenuItem key={item.to}>
                       <SidebarMenuButton asChild isActive={active} tooltip={item.label} className='tactile-nav-item'>
-                        <Link to={item.to} search={item.search} aria-current={active ? 'page' : undefined}>
+                        <Link to={item.to} search={item.search} aria-label={item.label} onClick={() => { if (isMobile) setOpenMobile(false) }} aria-current={active ? 'page' : undefined}>
                           {active && <motion.span layoutId='tactile-navigation' className='tactile-nav-surface' transition={reduceMotion ? { duration: 0 } : { type: 'spring', stiffness: 380, damping: 29 }} aria-hidden='true' />}
                           <span className='tactile-nav-icon'><item.icon size={20} strokeWidth={1.7} /></span>
-                          <span className='tactile-nav-copy'><strong>{item.label}</strong><small>{item.subtitle}</small></span>
-                          <span className='tactile-nav-number'>{item.number}</span>
+                          <span className='tactile-nav-copy group-data-[collapsible=icon]:hidden'><strong>{item.label}</strong><small>{item.subtitle}</small></span>
+                          <span className='tactile-nav-number group-data-[collapsible=icon]:hidden'>{item.number}</span>
                         </Link>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
@@ -80,7 +87,7 @@ function TactileNavigation() {
           </div>
         </SidebarContent>
         <SidebarFooter className='tactile-sidebar-footer'>
-          <a className='tactile-original-link' href='/' target='_blank' rel='noreferrer' title='在新标签打开原版界面'><ArrowUpRight size={16} /><span className='group-data-[collapsible=icon]:hidden'>打开原版界面</span></a>
+          <a className='tactile-original-link' href='/classic.html' title='打开原版控制台界面'><ArrowUpRight size={16} /><span className='group-data-[collapsible=icon]:hidden'>打开原版界面</span></a>
           <div className='tactile-connection' role='status'><span className={connected ? 'is-connected' : ''} /><span className='group-data-[collapsible=icon]:hidden'>{connected ? '业务服务已连接' : '业务服务连接中'}</span></div>
         </SidebarFooter>
         <SidebarRail />
@@ -89,8 +96,8 @@ function TactileNavigation() {
         <header className='tactile-topbar'>
           <SidebarTrigger aria-label='展开或收起导航' />
           <span className='tactile-breadcrumb-parent'>工作空间</span><ChevronRight size={13} className='tactile-breadcrumb-parent' />
-          <span className='tactile-breadcrumb'>{current.label}{pathname.includes('/runs/') ? ' / 批次详情' : ''}</span>
-          <span className='tactile-preview-label'><span />独立外观预览</span>
+          <span className='tactile-breadcrumb'>{current.label}{/\/(?:runs|recurring-runs)\//.test(pathname) ? ' / 批次详情' : ''}</span>
+          <span className='tactile-preview-label'><Waves size={13} />触感工作台</span>
           <GlobalCommandMenu />
           <ThemeToggle />
           <span className='tactile-avatar' title='ThreadSnap 单用户工作空间'>TS</span>
@@ -98,7 +105,7 @@ function TactileNavigation() {
         <motion.main id='tactile-content' tabIndex={-1} key={pathname} initial={reduceMotion ? false : { opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.2 }} className='tactile-content'>
           <Outlet />
         </motion.main>
-        <footer className='tactile-shell-footer'><span><Waves size={13} /> Tactile Digital / Deformable UI</span><span>外观独立 · 原有业务流程</span></footer>
+        <footer className='tactile-shell-footer'><span><Waves size={13} /> Tactile Digital / Deformable UI</span><span>独立批次 · 冻结快照</span></footer>
       </SidebarInset>
     </>
   )

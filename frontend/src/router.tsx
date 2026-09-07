@@ -1,7 +1,7 @@
 import { createRootRoute, createRoute, createRouter, lazyRouteComponent, redirect } from '@tanstack/react-router'
-import { AppShell } from '@/components/app-shell'
+import { TactileShell } from '@/tactile/tactile-shell'
 
-const rootRoute = createRootRoute({ component: AppShell })
+const rootRoute = createRootRoute({ component: TactileShell })
 const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: '/', beforeLoad: () => { throw redirect({ to: '/runs', search: emptyRunsSearch }) } })
 const runsRoute = createRoute({
   getParentRoute: () => rootRoute,

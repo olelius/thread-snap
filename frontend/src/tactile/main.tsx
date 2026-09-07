@@ -6,13 +6,10 @@ import { ThemeProvider } from '@/context/theme-provider'
 import { Toaster } from '@/components/ui/sonner'
 import { EventBridge } from '@/components/event-bridge'
 import { router } from '@/router'
-import { TactileShell } from './tactile-shell'
 import '@/styles/index.css'
 import './tactile.css'
 
-// 此入口独占一个 HTML 文档；只更新本页路由实例的外壳，不修改原入口和路由源码。
-// Hash 路由使刷新、深链和前进后退始终留在 tactile.html，而不是落回默认 UI。
-router.routeTree.update({ component: TactileShell })
+// 保留历史预览链接；Hash 路由使刷新、深链和前进后退始终留在此入口。
 router.update({ history: createHashHistory() })
 
 const queryClient = new QueryClient({
@@ -24,7 +21,7 @@ const queryClient = new QueryClient({
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <ThemeProvider defaultTheme='light' storageKey='threadsnap-tactile-theme'>
+    <ThemeProvider defaultTheme='system'>
       <QueryClientProvider client={queryClient}>
         <EventBridge />
         <RouterProvider router={router} />

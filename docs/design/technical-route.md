@@ -71,6 +71,10 @@
 
 ## 已确认的第一版前端技术基线
 
+- 默认路由外壳为 `src/tactile/tactile-shell.tsx`；`index.html` 标记 `data-ui="tactile"`，`src/tactile/tactile.css` 在 HTML 根节点统一映射浅深主题语义 Token，Radix/Headless UI Portal 继承同一变量。应用继续复用现有业务页面与 API；只需当前页统计，因此没有新增概览接口。
+- 默认构建同时包含 `index.html`、`classic.html` 和历史 `tactile.html`。默认入口使用浏览器路径；两个辅助入口使用 Hash 历史，刷新和内部跳转不落回默认入口。`classic.html` 只加载既有样式与 `AppShell`，不加载触感 CSS；主入口保持 `/runs`、`/recurring-runs`、`/reputation`、`/config` 及详情的原链接合同。`dist-tactile` 仍为独立构建目录。回退比较可直接打开 `/classic.html`，发布回退继续使用前一版本完整静态目录。
+- 触感导航复用 Sidebar/Sheet，保存独立折叠偏好，移动导航选择后自动收起；选中面使用 Motion 弹簧，按压形变只作用于选择卡/按钮，数据表不形变。系统减少动态效果时禁用装饰性动画、连续运动与形变。`scripts/verify-tactile-ui.py` 对实际构建产物执行浅深主题、响应式、深链、抽屉、配置、经典入口及故障态回归，写路径只在显式隔离模式下运行。
+
 - 第一版前端采用 React、TypeScript 和 Vite 单页应用，使用 shadcn/ui、Tailwind CSS、TanStack Router、TanStack Query、TanStack Table 与 Lucide 图标；动态交互使用 CSS/Tailwind 过渡和 Motion for React。前端只消费既有 `/api/v1`，不引入服务端渲染、第二个业务后端或前端自有业务数据库。
 - 工作区全局入口命令面板使用 Headless UI React `Dialog` 与 `Transition`，仅承担无样式焦点管理、遮罩关闭和过渡；业务菜单、Select、Sheet、详情弹层继续沿用既有 Radix/shadcn 原语，避免重复组件行为。
 - UI 外壳以 MIT 许可的 `satnaing/shadcn-admin` 为上游基线，固定提交为 `e16c87f213a5ba5e45964e9b67c792105ec74d26`（上游版本 `2.2.1`）。`frontend/THIRD_PARTY_NOTICES.md` 记录仓库、提交、许可证和裁剪边界，`frontend/LICENSE` 保留许可证正文。采用选择性复用：保留应用外壳、主题 Token、Sidebar、Header、导航项状态、响应式 Sheet、表格、表单、弹层、反馈和可访问性基础；按 ThreadSnap 三个页面和真实 API 重组业务模块。
