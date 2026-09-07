@@ -257,6 +257,8 @@
 
 ## 已确认的第一版 Linux 部署基线
 
+- 口碑共用浏览器在无头模式显式选择 `channel="chromium"`，复用离线包已有完整 Chromium；有头模式保持默认选择及 Wayland 参数，不依赖未打包的独立 Headless Shell。易车URL模式使用该无头路径，具体车型ID和URL仍来自范围映射。
+
 - Windows 开发机生成只含 ThreadSnap wheel、前端生产构建、固定配置和部署工具的制包输入包；完整离线包必须在与目标机相同的 CentOS Stream 主版本、x86_64 和 Python 次版本上组装。
 - 完整离线包内置全部 Python wheels、锁定 Patchright 对应的 Linux Chromium，以及 Python、Nginx、Weston 和浏览器共享库 RPM。RPM 目录带本地仓库元数据和顶层组件清单；目标机安装固定使用 `pip --no-index` 与 `dnf --disablerepo='*'`，只由包内仓库解析缺失依赖，不把全部递归 RPM 强制升级到制包日版本。
 - 程序 release 位于 `/opt/threadsnap/releases/`，配置位于 `/etc/threadsnap`，持久数据默认位于 `/var/lib/threadsnap`。安装前用 `lsblk`、`findmnt`、`df -hT` 与 `df -Pi` 核对挂载点；存在独立数据盘时把 `--data-dir` 指向其挂载点，不把 SQLite、模板、导出或加密 Profile 放入程序 release。

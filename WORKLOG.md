@@ -11,8 +11,21 @@
 
 ## ⏳ 待你裁决
 
+- 2026-09-07：两平台54项映射已导入服务器；草稿额外6款（捷途旅行者、坦克300、捷途X70PLUS、长安CS75PLUS、捷途自由者、哈弗大狗）缺少完整三平台映射。是否将它们保留为停用草稿，仅发布原27款三平台范围？owner：`docs/chains/reputation-inspection.md`。
+
 - 2026-08-17：最终服务器存在一块无文件系统、未挂载的 3.6 TiB `/dev/sdb`；格式化并挂载到 `/data` 会清除该设备现有内容，须由用户明确决定后执行。
 - 2026-08-17：服务器 `80/443` 已由 `wenmai-nginx-1` 占用；ThreadSnap 首次安装使用独立 `8088` 可避免影响现有服务，是否接入既有 Docker Nginx 和正式域名仍待用户决定。
+
+---
+
+## 2026-09-07 — 导入两平台口碑配置并修复离线无头浏览器选择
+**总目标**：把本机汽车之家/易车口碑配置导入服务器，说明易车URL来源，保持服务器已有草稿和历史；修复导入实测发现的离线浏览器兼容问题。
+**状态**：✅ 两平台54映射和共享会话已导入；⏳ 新范围发布等待额外6款处理裁决，无头浏览器补丁待服务器离线验证。
+**配置证据**：本机 `data/threadsnap.db` 草稿revision27与已发布v3相同；27车型内部ID、懂车帝ID/URL/展示名和业务身份与服务器一一相同。离线配置包SHA-256 `18c91863e8fd12eee06974d17ca246127b56c0bfab275eca1a4a2bbfff739d41`，包含54映射、5次原验证操作全部68次attempt（含5失败）、63个PNG引用按SHA去重为54个实体文件；不含Session、密钥或正式巡检历史。服务器导入revision10→11，再执行为already_imported、0新增；14张既有业务/发布历史表前后哈希一致，6款额外草稿和懂车帝未改。两平台Session通过SSH回环隧道只在内存中解密传递，目标以现有密钥重新加密。
+**验证/发现**：隔离导入审查13项通过；两平台原验证图片API均200且SHA与本地一致。汽车之家艾瑞泽8通过真实映射验证1/1；易车首轮因查找未打包的 `chromium_headless_shell-1228` 返回503。相同服务器、服务账号实测默认无头失败，`channel="chromium"`使用已有完整Chromium成功。修复只为无头模式显式选完整浏览器，有头及Wayland参数保持不变，不额外下载浏览器、不改车型URL或采集合同。
+**证据入口**：`H:/ThreadSnap/artifacts/runtime/reputation-platform-import-20260907/` 的 `local-agent-receipt.md`、`import-review-tests.json`、`imported-evidence-api-checks.json`、`headless-launch-finding.json`；补丁专项见 `artifacts/runtime/agents/yiche-offline-headless/`。
+**回退/边界**：服务器配置变更前SQLite备份为 `/var/lib/threadsnap/backups/platform-config-import/20260907-2115/threadsnap.db`。配置导入单事务且冲突不覆盖；完整DB备份不用于覆盖后续新写入。服务器已发布v1仍为原27项，未生成新正式批次；6款额外草稿待用户决定，未擅自停用。易车具体 `platform_url`/ID来自配置，示例风云A9为 `https://dianping.yiche.com/fengyune05/koubei/`，固定的是域名与解析规则。
+**下一步**：以离线增量包部署浏览器修复并重验易车实际URL；收到6款处理决定后按当前revision核对发布影响，只让未来批次使用新范围。
 
 ---
 
