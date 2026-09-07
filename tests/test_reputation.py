@@ -281,7 +281,9 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual(["dongchedi", "autohome", "yiche"], finished["platform_codes"])
         self.assertEqual(81, finished["planned_count"])
         self.assertEqual(81, finished["completed_count"])
-        self.assertEqual(81, finished["complete_evidence_count"])
+        self.assertEqual(54, finished["required_evidence_count"])
+        self.assertEqual(54, finished["complete_evidence_count"])
+        self.assertTrue(all(not item["evidence_required"] and not item.get("evidence") for item in finished["results"] if item["platform_code"] == "yiche"))
         self.assertEqual(2, finished["concurrency"])
         self.assertEqual(2, OfficialFakeAdapter.last_concurrency)
         self.assertEqual(
@@ -317,6 +319,10 @@ class ReputationInspectionTest(unittest.TestCase):
             27,
             len(json.loads(preview_manifest.read_text(encoding="utf-8"))["items"]),
         )
+        manifest_items = json.loads(preview_manifest.read_text(encoding="utf-8"))["items"]
+        self.assertTrue(all(not next(source for source in item["sources"] if source["platform_code"] == "yiche")["evidence_required"] for item in manifest_items))
+        self.assertIn("页面证据：未要求截图。", generated["report_text"])
+
 
     def test_later_platform_url_contracts(self) -> None:
         """两个后续平台都规范到已验证的车型口碑入口。"""

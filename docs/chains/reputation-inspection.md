@@ -2,6 +2,8 @@
 
 ## 当前口径
 
+- 2026-09-07阶段调整：依据用户要求及ADR 0070，易车口碑改用URL模式、停用截图和原生Runtime前置条件；懂车帝/汽车之家仍要求证据。81项执行分母保持独立，正常证据分母为54；已冻结的旧81份证据要求及原生失败记录保留，后续执行项按实际策略冻结。此条覆盖本链旧的“所有平台每项均截图”描述，不追溯改写旧批次。
+
 - 功能范围 owner：`docs/design/product-design.md` 的“垂媒口碑巡检扩展”。
 - 领域词汇 owner：`CONTEXT.md` 的“垂媒口碑巡检”“口碑巡检批次”“口碑巡检范围版本”和“口碑巡检平台范围”。
 - 架构决策：`docs/adr/0032-separate-reputation-inspection-from-post-extraction.md`、`docs/adr/0064-register-autohome-and-yiche-reputation-adapters.md`。

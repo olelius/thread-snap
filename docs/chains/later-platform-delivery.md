@@ -2,6 +2,8 @@
 
 ## 当前口径
 
+- 2026-09-07口碑阶段例外：易车口碑按ADR 0070临时走点评URL、不截图，原生Runtime暂停作为运行前提；该调整只作用于口碑，不改变本链普通帖子及圈子页面证据采集能力。终态历史记录保持不变。
+
 - 功能范围 owner：`docs/design/product-design.md` 的“后续正式版”和“后续两个平台接入验收边界”。
 - 技术合同 owner：`docs/design/technical-route.md` 的“后续平台接入验证合同”。
 - 验收计划 owner：`docs/research/later-platform-onboarding-plan.md`。

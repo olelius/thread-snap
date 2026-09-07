@@ -335,6 +335,7 @@ export type ReputationCapabilities = {
     display_name: string
     adapter_version: string
     validation_contract_version: string
+    evidence_mode?: 'screenshot' | 'url_only'
   }>
 }
 
