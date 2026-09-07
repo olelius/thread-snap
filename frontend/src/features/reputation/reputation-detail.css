@@ -1,0 +1,20 @@
+.reputation-mode-note { flex-shrink: 0; border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; background: var(--muted); color: var(--muted-foreground); font-size: 12px; line-height: 1.7; }
+.reputation-ranking-viewport { min-height: 0; flex: 1; overflow: auto; scrollbar-gutter: stable; }
+.reputation-ranking table { table-layout: fixed; border-collapse: separate; border-spacing: 0; }
+.reputation-ranking thead { position: sticky; top: 0; z-index: 30; background: var(--muted); }
+.reputation-ranking th { height: 40px; background: var(--muted); border-bottom: 1px solid var(--border); }
+.reputation-ranking td { white-space: normal; overflow-wrap: anywhere; border-bottom: 1px solid var(--border); }
+.reputation-ranking .ranking-identity { position: sticky; z-index: 10; background: var(--card); }
+.reputation-ranking th.ranking-identity { z-index: 40; background: var(--muted); }
+.reputation-ranking .ranking-role { left: 0; padding-left: 16px; }
+.reputation-ranking .ranking-vehicle { left: 96px; border-right: 1px solid var(--border); }
+.reputation-ranking tbody tr:hover td { background-color: var(--muted); }
+.reputation-ranking .ranking-platform { text-align: center; font-weight: 600; border-left: 1px solid var(--border); }
+.ranking-metric { display: flex; flex-direction: column; width: 100%; min-width: 0; padding: 6px; border-width: 1px; border-style: solid; border-radius: 8px; }
+.ranking-metric-value { font-weight: 600; font-variant-numeric: tabular-nums; white-space: normal; overflow-wrap: anywhere; }
+.ranking-metric-change { display: flex; align-items: flex-start; justify-content: flex-end; gap: 3px; margin-top: 3px; font-size: 11px; line-height: 1.45; white-space: normal; }
+.ranking-metric-change > svg { width: 12px; height: 12px; flex-shrink: 0; margin-top: 2px; }
+.ranking-metric-change > span { min-width: 0; overflow-wrap: anywhere; }
+.ranking-state-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.ranking-error-trigger { color: var(--primary); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; min-height: 30px; }
+.ranking-error-summary { margin-top: 5px; font-size: 11px; line-height: 1.5; color: var(--muted-foreground); white-space: normal; overflow-wrap: anywhere; }

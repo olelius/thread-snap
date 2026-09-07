@@ -19,6 +19,8 @@ class ReputationPlatformSpec:
     adapter_version: str
     validation_contract_version: str
     viewport: dict[str, int]
+    requires_session: bool = True
+    requires_evidence: bool = True
 
 
 REPUTATION_PLATFORMS: dict[str, ReputationPlatformSpec] = {
@@ -48,6 +50,8 @@ REPUTATION_PLATFORMS: dict[str, ReputationPlatformSpec] = {
         reputation_yiche.ADAPTER_VERSION,
         reputation_yiche.VALIDATION_CONTRACT_VERSION,
         reputation_yiche.VIEWPORT,
+        requires_session=False,
+        requires_evidence=False,
     ),
 }
 

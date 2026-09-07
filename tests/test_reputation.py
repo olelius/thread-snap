@@ -281,7 +281,9 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual(["dongchedi", "autohome", "yiche"], finished["platform_codes"])
         self.assertEqual(81, finished["planned_count"])
         self.assertEqual(81, finished["completed_count"])
-        self.assertEqual(81, finished["complete_evidence_count"])
+        self.assertEqual(54, finished["required_evidence_count"])
+        self.assertEqual(54, finished["complete_evidence_count"])
+        self.assertTrue(all(not item["evidence_required"] and not item.get("evidence") for item in finished["results"] if item["platform_code"] == "yiche"))
         self.assertEqual(2, finished["concurrency"])
         self.assertEqual(2, OfficialFakeAdapter.last_concurrency)
         self.assertEqual(

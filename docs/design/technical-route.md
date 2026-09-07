@@ -155,6 +155,9 @@
 
 ## 已确认的垂媒口碑巡检技术边界
 
+- 2026-09-07起易车按ADR 0070临时采用 `YicheReputationAdapter` 的 URL-only 实现；平台注册表分别声明 `requires_session` 与 `requires_evidence`，易车两者为false。URL实际访问仍校验车系ID和名称，截图字段为空；执行/补跑和映射转基线按平台策略计算截图要求，不修改终态历史。前端通过 capabilities 的 `evidence_mode=url_only` 显示当前阶段说明，旧Runtime错误保留在详情弹窗。
+- 排名表改为单表单滚动参照，移除两张表之间的scrollLeft同步。角色/车型列宽96/160px，五指标各128px、状态列192px；表头整体sticky且不透明，身份列sticky left，指标与错误说明允许换行，防止长内容扩大正文滚动宽度或覆盖邻列。
+
 - 当前懂车帝真实口碑适配器版本为 `dongchedi-reputation-v9-scrapling`，映射验证合同仍为 `dongchedi-reputation-mapping-v1`；v9只把差评率等普通HTTP请求执行切换到ADR 0054统一Scrapling传输层，页面身份、Patchright截图和指标读取合同不变。输入只接受 `https://www.dongchedi.com/auto/series/<id>` 或 `/auto/series/score/<id>-x-x-x-x-x` 且URL稳定车型ID必须等于映射平台ID；导航后的落地URL再次核对同一ID。页面车型名取可见车型标题或同级车评分卡当前行并与映射展示名规范化精确匹配；口碑分、业务排名、口碑量和评价篇数按页面实际可见字段独立读取，缺失字段保留为空，不阻断其他指标和证据。正式巡检从同一评分页 `__NEXT_DATA__.props.pageProps.reviewListData.total_count` 读取口碑评价篇数，并以同一平台车型ID作为 `series_id` 请求 `api.dcarapi.com/motor/car_score/api/v1/landing_page/get_detail/`；优缺点标签存在时按半入规则形成整数差评率，标签缺失时差评率留空。接口调用只使用固定客户端版本标识，不要求用户配置第二套ID、登录凭证或动态设备指纹。页面顶部 `No.N` 全站榜不进入业务排名合同。
 - 映射验证通过平台注册表解析平台代码、规范URL、适配器工厂、版本、合同与视口，使用对应共享加密Session启动Patchright Chromium并按平台当前内部并发运行；同一页面上下文冻结动画后连续三次比较车型身份、核心指标文字和指标DOM矩形，整页懒加载导致的文档总高度变化不作为指标合同漂移。通过后按稳定矩形直接截取单张不可变口碑指标区域PNG并记录SHA-256，不捕获或保存完整长截图；每次操作只对暂时性不稳定项自动追加一次完整页面尝试，后续人工重试只提交该平台失败车型ID。
 

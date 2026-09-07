@@ -393,8 +393,8 @@ class ReputationService:
             "reputation_synthetic_runs": self.synthetic_enabled,
             "real_adapter_status": "available",
             "real_adapter_message": (
-                "懂车帝、汽车之家和易车真实页面适配器已接入；"
-                "各平台映射验证均读取实时页面并只保存车型口碑指标区域截图。"
+                "懂车帝、汽车之家保留指标区域截图；"
+                "易车临时使用URL模式读取页面指标，不采集截图。"
             ),
             "reputation_platforms": [
                 {
@@ -402,6 +402,7 @@ class ReputationService:
                     "display_name": spec.display_name,
                     "adapter_version": spec.adapter_version,
                     "validation_contract_version": spec.validation_contract_version,
+                    "evidence_mode": "screenshot" if spec.requires_evidence else "url_only",
                 }
                 for spec in REPUTATION_PLATFORMS.values()
             ],
@@ -817,7 +818,9 @@ class ReputationService:
                     )
                 raw = attempt.metric_region_path
                 digest = attempt.metric_region_sha256
-                if not raw or not digest or not Path(raw).is_file() or _sha256(Path(raw)) != digest:
+                if self._platform_spec(code).requires_evidence and (
+                    not raw or not digest or not Path(raw).is_file() or _sha256(Path(raw)) != digest
+                ):
                     raise DomainError(
                         "REPUTATION_ACCEPTANCE_EVIDENCE_INVALID",
                         f"车型{vehicle['id']}的真实页面证据缺失或校验失败。",
@@ -859,8 +862,8 @@ class ReputationService:
             planned_count=len(targets),
             completed_count=len(targets),
             failed_count=0,
-            required_evidence_count=len(targets),
-            complete_evidence_count=len(targets),
+            required_evidence_count=sum(self._platform_spec(code).requires_evidence for _, code in targets),
+            complete_evidence_count=sum(self._platform_spec(code).requires_evidence for _, code in targets),
             report_status="success",
             created_at=now,
             started_at=started_at,
@@ -903,11 +906,13 @@ class ReputationService:
                                 attempt.metrics.get("negative_rate"), inverse=True
                             ),
                         },
-                        evidence_required=True,
+                        evidence_required=spec.requires_evidence,
                         collected_at=attempt.finished_at,
                     )
                     db.add(result)
                     db.flush()
+                    if not spec.requires_evidence:
+                        continue
                     evidence_dir = run_dir / "evidence" / platform_code / vehicle["id"]
                     evidence_dir.mkdir(parents=True, exist_ok=True)
                     metric_path = evidence_dir / "region.png"
@@ -1392,7 +1397,7 @@ class ReputationService:
 
             if isinstance(result, ReputationPageResult):
                 metrics = self._official_metrics(result, baseline)
-                evidence_required = self._needs_evidence(
+                evidence_required = REPUTATION_PLATFORMS[platform_code].requires_evidence and self._needs_evidence(
                     run.run_type, run.schedule_type, vehicle["role"], metrics
                 )
                 has_evidence = bool(
@@ -1422,7 +1427,7 @@ class ReputationService:
                         "negative_rate",
                     )
                 }
-                evidence_required = True
+                evidence_required = REPUTATION_PLATFORMS[platform_code].requires_evidence
                 has_evidence = False
                 row_status = "failed"
                 parsed = self._validation_error(result)
@@ -1584,7 +1589,7 @@ class ReputationService:
                 )
                 target_platform_codes.append(platform_code)
 
-        required_count = len(targets)
+        required_count = sum(REPUTATION_PLATFORMS[code].requires_evidence for code in target_platform_codes)
         with self.sessions.begin() as db:
             run = db.get(ReputationRun, run_id)
             if not run:
@@ -1654,7 +1659,7 @@ class ReputationService:
             storage_state = (
                 self.session_store.get_state(platform_code) if self.session_store else None
             )
-            if not storage_state:
+            if spec.requires_session and not storage_state:
                 for index in indexes:
                     final_results[index] = ReputationAdapterError(
                         "AUTH_REQUIRED", f"{spec.display_name}共享Session需要更新。"
@@ -1683,7 +1688,7 @@ class ReputationService:
                         scope=str(measurement.get("rank_scope") or "同级车评分"),
                     ),
                 }
-                return self._needs_evidence(run_type, schedule_type, vehicle["role"], metrics)
+                return spec.requires_evidence and self._needs_evidence(run_type, schedule_type, vehicle["role"], metrics)
 
             factory = (
                 self.adapter_factory
@@ -2963,7 +2968,7 @@ class ReputationService:
                 "REPUTATION_SESSION_STORE_MISSING", "真实口碑适配器未连接共享Session。"
             )
         storage_state = self.session_store.get_state(spec.code)
-        if not storage_state:
+        if spec.requires_session and not storage_state:
             raise DomainError(
                 "AUTH_REQUIRED", f"请先在平台配置完成{spec.display_name}认证。", status_code=409
             )
@@ -3017,6 +3022,7 @@ class ReputationService:
             concurrency=concurrency,
             headless=self.settings.auth_browser_headless,
             timeout_seconds=90,
+            evidence_policy=lambda *_args: spec.requires_evidence,
         )
         root = self.settings.reputation_dir / "mapping-validations" / run_id
         try:
@@ -3167,7 +3173,7 @@ class ReputationService:
                 gate_results={
                     "identity": "passed",
                     "metrics": "passed",
-                    "evidence": "passed",
+                    "evidence": "passed" if spec.requires_evidence else "not_required",
                     "measurements": result.measurements,
                     "metric_rect": result.metric_rect,
                     "viewport": spec.viewport,
@@ -3177,8 +3183,8 @@ class ReputationService:
                     },
                     "region": {"width": result.width, "height": result.height},
                 },
-                full_page_path=str(result.full_page_path),
-                metric_region_path=str(result.metric_region_path),
+                full_page_path=str(result.full_page_path) if result.full_page_path else None,
+                metric_region_path=str(result.metric_region_path) if result.metric_region_path else None,
                 full_page_sha256=result.full_page_sha256,
                 metric_region_sha256=result.metric_region_sha256,
                 duration_ms=result.duration_ms,
@@ -3374,7 +3380,10 @@ class ReputationService:
         mapping = vehicle.get("mappings", {}).get(platform_code, {})
         return (
             mapping.get("validation_status") == "verified"
-            and mapping.get("validation_contract_version") == spec.validation_contract_version
+            and mapping.get("validation_contract_version") in (
+                {spec.validation_contract_version, "yiche-native-app-mapping-v1"}
+                if platform_code == "yiche" else {spec.validation_contract_version}
+            )
             and mapping.get("validated_mapping_hash")
             == _mapping_hash(str(vehicle.get("id") or ""), mapping, platform_code)
         )
