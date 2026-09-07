@@ -81,9 +81,7 @@ class BrowserReputationAdapter(ABC):
         self,
         targets: list[ReputationMappingTarget],
         output_dir: Path,
-        on_result: Callable[
-            [int, ReputationMappingTarget, ReputationPageResult | Exception], None
-        ]
+        on_result: Callable[[int, ReputationMappingTarget, ReputationPageResult | Exception], None]
         | None = None,
     ) -> list[ReputationPageResult | Exception]:
         """按输入顺序返回；单项完成时立即通过回调持久化。"""
@@ -93,6 +91,8 @@ class BrowserReputationAdapter(ABC):
         async with async_playwright() as playwright:
             browser = await playwright.chromium.launch(
                 headless=self.headless,
+                # 离线包仅含完整 Chromium；无头模式也复用它，不查找 headless shell。
+                channel="chromium" if self.headless else None,
                 args=browser_launch_args(),
             )
 
@@ -112,8 +112,7 @@ class BrowserReputationAdapter(ABC):
                 return result
 
             tasks = [
-                asyncio.create_task(bounded(index, target))
-                for index, target in enumerate(targets)
+                asyncio.create_task(bounded(index, target)) for index, target in enumerate(targets)
             ]
             done, pending = await asyncio.wait(
                 tasks,
@@ -182,9 +181,7 @@ async def capture_region(page, path: Path, rect: dict[str, Any]) -> tuple[int, i
 
     clip = {name: float(rect[name]) for name in ("x", "y", "width", "height")}
     if clip["width"] <= 0 or clip["height"] <= 0:
-        raise ReputationAdapterError(
-            "REPUTATION_EVIDENCE_REGION_MISSING", "指标区域边界无效。"
-        )
+        raise ReputationAdapterError("REPUTATION_EVIDENCE_REGION_MISSING", "指标区域边界无效。")
     await page.screenshot(path=str(path), clip=clip, animations="disabled")
     from PIL import Image
 
