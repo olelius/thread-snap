@@ -101,6 +101,7 @@
 | 2026-08-14 | 平台人工认证采用后端封装的 CDP Screencast | 复用现有 Chromium、Patchright、FastAPI WebSocket 与早期 CDP 证据，去除定时截图固定等待并补齐 hover/拖动；noVNC 会增加桌面服务，WebRTC 会增加媒体与信令栈 |
 | 2026-08-17 | 第一版使用完整离线包、systemd、Weston 与专用 Nginx | 目标服务器部署时不临时下载 Python 包、Chromium 或 RPM；依赖在同版 CentOS 制包机一次收集并由 SHA-256 冻结，程序与持久数据分离，单进程与内部接口边界保持不变 |
 | 2026-08-27 | 依赖与部署清单未变时使用应用最小包升级既有服务器 | 只传输应用 wheel、前端构建和校验元数据，以 reflink 复用已安装 venv；切换前备份数据库并保留旧 release，避免反复组装和安装 1.2 GiB 完整依赖载荷 |
+| 2026-09-07 | 最小升级将服务器运行依赖与前端构建清单分开验收 | 服务器依赖和部署输入必须不变；前端 package/lock 变化须独立证明仅影响浏览器侧模块与构建，干净提交 `npm ci/check/build`、许可证入包、无 `node_modules`，并显式记录 `frontend_manifests_unchanged=false`；七类任务空闲、完整离线包保留、停机数据库备份及旧 release/数据库联动回滚仍按 `docs/deployment/linux-v1.md` §7.1 执行，本行不代表部署验收完成 |
 | 2026-08-17 | CentOS Stream 10 显示后端从 Xvfb 修正为 Weston 无头 Wayland | 目标机仓库与官方发行说明共同确认 Xorg/Xvfb 已移除；完整 Chromium 保持有头模式，通过私有 `wayland-99` socket 运行，不引入 Docker 或外部显示端口 |
 | 2026-08-18 | XLSX 模板使用跨平台统一的 10 位来源键 | 22 位可逆键仍然偏长；来源新增独立、全局唯一的持久化短键，标签不编码平台信息，所有现在及未来平台保持同一字段后缀规则；正式数据会清理，因此不保留旧标签兼容分支 |
 

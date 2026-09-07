@@ -155,11 +155,12 @@ sudo bash /opt/threadsnap/current/deploy/restore-backup.sh \
 既有服务器已经完成完整离线安装后，可以在以下条件全部成立时使用应用最小包，而不重新组装完整离线包：
 
 1. 当前 release、作为基线的完整离线包及其整体 SHA-256 均已核对；
-2. 从基线提交到目标提交的 `pyproject.toml`、前端 `package.json`/lock、`deploy/linux/` 和 Windows 制包脚本均无变化；
-3. 最小包来自干净目标提交，只包含 ThreadSnap 自身 wheel、Vite 生产文件、兼容元数据和逐文件 SHA-256，不含 wheelhouse、Chromium、RPM、模型、凭证或 `node_modules`；
-4. 目标机文件系统支持 reflink，能够从当前不可变 release 建立独立的写时复制新 release；
-5. 提取、圈子任务、配置验证、舆情、口碑及删除 Worker 均无排队或运行任务，SQLite 完整性和当前 Alembic 版本通过预检。
+2. 从基线提交到目标提交的服务器运行依赖和部署输入均无变化：逐项比较 `pyproject.toml`、服务器运行组件的依赖清单及锁文件、`deploy/linux/` 和 Windows 制包脚本，并核对目标代码没有新增这些清单之外的服务器运行依赖。Python、Node.js、Chromium、RPM、模型和系统库的既有版本仍满足目标版本要求；任一服务器运行依赖新增或变更、部署输入变化或证据缺失时，该路径门禁保持关闭；
+3. 前端 `package.json`/lock 独立审计，不等同于服务器依赖清单。两者均未变化时据实记录；任一变化时，必须逐项核对直接依赖、传递依赖和 npm 脚本，证明变更仅用于浏览器侧模块及其构建，目标服务器仍只发布静态资源，不新增 SSR、Node 服务、运行时 npm 安装或其他服务器依赖。兼容元数据显式记录 `frontend_manifests_unchanged=false`，绑定基线/目标提交、变更清单和审计证据；仅设置此字段不构成门禁通过；
+4. 最小包来自干净目标提交，在该提交的前端目录完成 `npm ci`、`npm run check` 和 `npm run build` 并保留成功日志；只包含 ThreadSnap 自身 wheel、Vite 生产文件、随资源发布的第三方许可证、一次性安装/验证脚本与说明、兼容元数据和逐文件 SHA-256，不含 wheelhouse、Chromium、RPM、模型、凭证或 `node_modules`。检查压缩包内实际文件与构建产物一致、许可证完整入包，不以本机旧 dist 或既有 `node_modules` 代替本次构建证据；
+5. 目标机文件系统支持 reflink，能够从当前不可变 release 建立独立的写时复制新 release；
+6. 七类任务 `extraction_runs`、`circle_tasks`、`validation_jobs`、`sentiment_analyses`、`reputation_mapping_validation_runs`、`reputation_runs`、`reputation_delete_jobs` 均无活动。提取批次和圈子任务的 `queued`、`running`、`waiting_for_auth` 均阻止切换，其他类按各自状态枚举核对，未知或未识别的非终态同样阻止切换；逐类保留计数、状态和查询证据，不以单一 Worker 空闲代替七类检查。SQLite 完整性和当前/目标 Alembic 版本通过预检。
 
-该路径只允许对 reflink 新 release 执行 `pip --no-index --no-deps --force-reinstall` 以替换 ThreadSnap 自身 wheel，前端直接替换为包内生产文件；不得运行 DNF、解析 wheelhouse、复制浏览器或模型。最终切换按以下顺序完成：先停止 Nginx，再停止后端并生成带完整性、Alembic 和 SHA-256 的 SQLite 备份；设置旧 release 为 `previous`、原子切换 `current`；依次启动并等待后端 `8000`、Nginx `8088`，最后验证公网入口。任一阶段失败时同时恢复旧 release 和停机窗口数据库备份，不能只回滚程序软链接。
+该路径只允许对 reflink 新 release 执行 `pip --no-index --no-deps --force-reinstall` 以替换 ThreadSnap 自身 wheel，前端直接替换为包内生产文件；不得运行 DNF、解析 wheelhouse、复制浏览器或模型。最终切换按以下顺序完成：停机前重查七类任务空闲，先停止 Nginx，再停止后端；停机后再次检查七类状态，确认没有预检后新入队或运行任务，再生成带完整性、Alembic 和 SHA-256 的 SQLite 备份；设置旧 release 为 `previous`、原子切换 `current`；依次启动并等待后端 `8000`、Nginx `8088`，完整验证窗口使用临时运行配置暂停调度与 Worker，并隔离外部请求和写入；执行完整 `deploy/verify.sh`、维护请求拦截探测及历史表校验后，恢复原运行配置与 Nginx，开放正常调度和入口，再单独验证公网。停机后空闲门未通过时保持旧 release 并恢复原服务；写入尚未开放时，备份后的迁移、切换、启动或验收失败同时恢复旧 release 和停机数据库。写入开放后，禁止用停机时的旧数据库备份覆盖当前数据库；无迁移的兼容更新可回退程序但保留新写入，其他情况停止自动回退并保留现场。
 
-最小包不是新的安装基线：服务器仍须保留最近一次已校验的完整离线包，用于新机安装、依赖变化、部署脚本变化和运行时修复。每次最小升级脚本是绑定明确基线提交、目标提交、数据库版本和包哈希的一次性受审产物；项目尚未提供可跳过这些门禁的通用“快速升级”命令。
+最小包不是新的安装基线：服务器仍须保留最近一次已校验的完整离线包、既有补充运行时离线包、当前/上一 release 和数据库备份，用于新机安装、服务器依赖变化、部署脚本变化和运行时修复。每次最小升级脚本是绑定明确基线提交、目标提交、数据库版本和包哈希的一次性受审产物；前端清单变化须通过上述独立审计，不得静默跳过原兼容性门禁，项目尚未提供可跳过这些门禁的通用“快速升级”命令。
