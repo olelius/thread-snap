@@ -114,6 +114,8 @@ function RunListPage({ kind }: { kind: RunListKind }) {
     <div className='flex h-full min-h-0 flex-col gap-4 overflow-auto pr-1'>
       <WorkspaceVisual
         runs={query.data?.items ?? []}
+        loading={query.isLoading}
+        loadError={query.isError}
         kind={kind}
         onOpen={(run) => navigate({ to: detailPath, params: { runId: run.id }, search: emptyDetailSearch })}
       />

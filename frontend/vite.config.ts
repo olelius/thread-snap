@@ -6,6 +6,15 @@ import { defineConfig } from 'vite'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: { alias: { '@': path.resolve(import.meta.dirname, './src') } },
+  build: {
+    rollupOptions: {
+      input: {
+        main: path.resolve(import.meta.dirname, 'index.html'),
+        classic: path.resolve(import.meta.dirname, 'classic.html'),
+        tactile: path.resolve(import.meta.dirname, 'tactile.html'),
+      },
+    },
+  },
   server: {
     host: '127.0.0.1',
     port: 5173,

@@ -194,7 +194,7 @@ function Sidebar({
         >
           <SheetHeader className='sr-only'>
             <SheetTitle>导航栏</SheetTitle>
-            <SheetDescription>Displays the mobile sidebar.</SheetDescription>
+            <SheetDescription>选择业务页面，或按 Escape 关闭导航。</SheetDescription>
           </SheetHeader>
           <div className='flex h-full w-full flex-col'>{children}</div>
         </SheetContent>
