@@ -23,7 +23,7 @@
 **服务/数据证据**：安装临时单元退出0、总耗时43.542秒，维护窗口26.502秒。七类任务在停机前后空闲，SQLite完整性ok、Alembic `c3f7a1d9e402`未迁移；13张冻结业务表逐行哈希一致。`deploy/verify.sh --listen-port 8088 --server-name _`完整通过，包含真实Wayland Chromium与离线文字模型；四服务active、8000回环、CDP关闭。临时关闭后台/隔离外部写入后执行验证，POST及CF入口503探测2/2，结束后恢复原Nginx配置和正常调度。
 **本地/公网验证**：153项相关unittest、干净提交npm ci/check/build、Ruff与diff检查通过；离线包两层逐文件校验通过。公网6项正常入口200、内部API404；首页18项真实浏览器验收通过，业务写入0、JS错误0，桌面/390px截图已目视核验。服务器真实批次 `RP-S-20260907-D927` 的27项排名专项17项通过：116张136px卡片、90对相邻间距最小24px，三宽度/深浅色/滚动/缩放/真实失败原因弹窗通过，业务写入0、JS错误0、完整批次API前后哈希相同；未用本机81项替代线上分母。证据在 `H:/ThreadSnap/artifacts/runtime/deploy-20260907/`，其中 `server-evidence/activation-result.json`、`public-home/verification.json`和`deployment-summary.md`为入口。
 **回退/边界**：previous保留 `e96549f-node`；数据库备份 `/var/lib/threadsnap/backups/minimal-release-upgrade/20260907-ebc4ef7/threadsnap.db`，SHA-256 `6d535154eae9a8266b8305f300c0f91559a359039c91e932ba14f43d5f56099c`；既有完整离线包及Node补充RPM保留。验证窗口失败恢复release与DB；开放写入后仅兼容代码回退，不覆盖新业务写入。当前服务器只有懂车帝27项范围，本次不扩成81项、不同步业务数据库、不重跑历史；13表校验不冒充全量历史图片验收。原工作树20项未提交研发改动、其他80/443服务和数据盘保持原状。
-**下一步**：按项目授权收尾文档PR；业务数据与原工作树保持原状，后续仅按用户新增需求更新。
+**下一步/边界**：服务保持正常运行；后续仅按用户新增需求更新，不同步本机业务数据或重跑历史。本轮文档关联 [PR #282](https://github.com/olelius/thread-snap/pull/282)，原工作树保持原状。
 
 ---
 
