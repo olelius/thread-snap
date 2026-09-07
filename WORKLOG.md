@@ -16,6 +16,17 @@
 
 ---
 
+## 2026-09-07 — 独立首页与触感动效完善
+**总目标**：把大面积概览移到默认首页，所有业务页维持触感风格，补充用户指定的侧栏形体动效和适度过渡。
+**状态**：✅ 首页、全量聚合API、紧凑列表、触感动效和本机真实数据联调均完成；按项目授权完成Git收尾。
+**当前进度**：分支 `feat/tactile-home-motion` 基于 `main@a135393`。默认 `/` 为首页，概览从两类提取列表移除；首页三模块各自全量聚合，近期最多8条/需关注最多3条，正式巡检与真实验收基线保留来源身份。列表首屏显示新建、筛选与真实表格，固定表头和分页。侧栏形体使用低幅循环、悬停、按压/键盘回弹，支持暂停记忆、折叠/离屏/后台停止和系统减少动态；页面/类别/摘要、标签、开关和进度采用统一短过渡，浅深表面与Portal复用触感Token。
+**后端证据**：新增6项首页测试覆盖全量而非分页、上海自然日半开边界、模块隔离、巡检排除补跑/合成、固定9条只读查询和字段白名单；`PYTHONPATH=H:\ThreadSnap-tactile-ui\src` 下 `python -m unittest tests.test_dashboard tests.test_backend -q` 共110项通过，日志 `artifacts/runtime/tactile-home/backend-tests.log`。
+**前端证据**：`npm run check`、`npm run build`、`npm run build:tactile`、Ruff和`git diff --check`通过；`python scripts/verify-tactile-ui.py --isolated-writes` 的25项生产构建浏览器检查全部通过、页面JS异常为0，结果 `artifacts/runtime/tactile-home/verification.json`。覆盖首页三分类/全量计数、实际API提交与配置恢复、列表/详情/巡检/八个配置标签、经典入口、五种视口、暂停持久化、键盘回弹、后台事件fixture与减少动态；三时刻真实形体矩阵不同，暂停后矩阵稳定。
+**视觉与本机证据**：同目录 `default-light.png`、`theme-dark.png`、`home-390.png`、`responsive-1280.png`、`sculpture-frame-0.png`～`sculpture-frame-2.png` 已直接核验。`http://127.0.0.1:5173/` 本机真实数据联调结果为提取80、循环0、口碑14（当次快照），`live-verification.json` 记录 `sculpture_playing=true`、零页面JS异常；`live-home.png`、`live-list.png` 为真实数据画面。
+**边界/运行**：原 `H:\ThreadSnap` 的20项采集开发修改继续保留。为避免回退其未提交原生采集实现，本机8000通过 Git 忽略的 `H:\ThreadSnap\artifacts\runtime\tactile-live\serve-home.py` 启动原后端并挂载新版本的同一个只读首页路由；正式主线通过 `app.py` 正常注册路由。隔离浏览器测试仍用8016副本，写入不进入真实数据库；未部署远程服务器。回退使用前一版本代码/静态资源，原版外观继续通过 `/classic.html` 比较。
+
+---
+
 ## 2026-09-07 — Tactile UI 接入默认前端入口
 **总目标**：将已验收的 Tactile Digital / Deformable UI 从独立预览提升为项目默认前端外壳，同时保留既有业务页面、路由和 API 行为。
 **状态**：✅ 默认入口改造及功能回归完成；进入项目授权的 Git 收尾。

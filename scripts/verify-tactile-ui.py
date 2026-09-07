@@ -18,7 +18,7 @@ from playwright.sync_api import expect, sync_playwright
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:5176")
-    parser.add_argument("--output", type=Path, default=Path("artifacts/runtime/tactile-production"))
+    parser.add_argument("--output", type=Path, default=Path("artifacts/runtime/tactile-home"))
     parser.add_argument("--isolated-writes", action="store_true")
     args = parser.parse_args()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -35,6 +35,7 @@ def main() -> None:
         print(f"PASS {name}", flush=True)
 
     def shot(page, name: str) -> None:
+        page.wait_for_timeout(400)
         page.screenshot(path=str(args.output / f"{name}.png"), animations="disabled")
 
     def no_overflow(page) -> None:
@@ -68,25 +69,43 @@ def main() -> None:
             )["items"]
             second = completed[1]
             report["data"] = {"list_count": len(runs["items"]), "total": runs["total"]}
+            dashboard = api("/dashboard")
+            report["dashboard"] = {
+                c["key"]: {k: c[k] for k in ("total", "today", "active", "attention")}
+                for c in dashboard["categories"]
+            }
             page.goto(base + "/")
-            page.wait_for_url("**/runs*")
             expect(page.locator("html")).to_have_attribute("data-ui", "tactile")
-            expect(page.locator(".dashboard-file-card:enabled")).to_have_count(
-                min(len(runs["items"]), 5)
-            )
-            expect(page.locator(".workspace-metric strong").first).to_have_text(
-                str(len(runs["items"]))
-            )
+            for category in dashboard["categories"]:
+                expect(page.locator(f'[data-home-total="{category["key"]}"]')).to_have_text(
+                    str(category["total"])
+                )
+            assert page.url.rstrip("/") == base
             no_overflow(page)
             shot(page, "default-light")
-            passed("default-route-and-real-api", current_page_count=len(runs["items"]))
+            passed(
+                "default-home-global-aggregation",
+                global_count=dashboard["categories"][0]["total"],
+                list_page_count=len(runs["items"]),
+            )
 
-            page.goto(base + "/runs?status=success")
-            expect(page.locator(".workspace-metric strong").first).to_have_text(str(len(completed)))
-            page.locator(".dashboard-file-card:enabled").nth(1).click()
-            expect(page.locator(".workspace-inspector__id")).to_have_text(second["number"])
-            assert "/runs/" not in page.url
-            card = page.locator(".dashboard-file-card:enabled").nth(1)
+            for group in dashboard["categories"]:
+                page.get_by_role("button", name=group["label"], exact=True).click()
+                expect(page.locator(".home-batch")).to_have_count(len(group["recent"]))
+                if group["recent"]:
+                    expect(page.locator(".home-selected-number")).to_have_text(
+                        group["recent"][0]["number"]
+                    )
+                else:
+                    expect(page.get_by_text("暂无该类批次", exact=True)).to_be_visible()
+            page.get_by_role("button", name="提取批次", exact=True).click()
+            passed("home-three-categories-and-empty-state")
+
+            choice = dashboard["categories"][0]["recent"][1]
+            page.locator(".home-batch").nth(1).click()
+            expect(page.locator(".home-selected-number")).to_have_text(choice["number"])
+            assert page.url.rstrip("/") == base
+            card = page.locator(".home-batch").nth(1)
             box = card.bounding_box()
             page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
             before = card.evaluate("e => getComputedStyle(e).transform")
@@ -95,10 +114,10 @@ def main() -> None:
             pressed = card.evaluate("e => getComputedStyle(e).transform")
             page.mouse.up()
             assert before != pressed, (before, pressed)
-            passed("card-selection-and-press-feedback")
-
-            page.locator(".workspace-inspector__open").click()
-            page.wait_for_url(f"**/runs/{second['id']}*")
+            page.locator(".home-open-detail").click()
+            page.wait_for_url(f"**/runs/{choice['id']}*")
+            passed("home-selection-press-and-detail-link")
+            page.goto(base + f"/runs/{second['id']}")
             page.locator("[data-post-detail-trigger=true]").first.wait_for()
             page.locator("[data-post-detail-trigger=true]").first.click()
             expect(page.get_by_role("dialog")).to_be_visible()
@@ -108,7 +127,8 @@ def main() -> None:
             assert "/runs/" in page.url
             passed("batch-detail-post-sheet-and-close")
 
-            page.goto(base + "/runs")
+            page.goto(base + "/")
+            before_submit = api("/dashboard")["categories"][0]["total"]
             page.get_by_role("button", name="新建提取", exact=True).click()
             expect(page.get_by_role("dialog")).to_be_visible()
             expect(page.get_by_role("button", name="提交提取", exact=True)).to_be_disabled()
@@ -124,6 +144,9 @@ def main() -> None:
                 assert saved.value.ok, saved.value.text()
                 result = saved.value.json()
                 assert result["status"] == "queued"
+                expect(page.locator('[data-home-total="extraction"]')).to_have_text(
+                    str(before_submit + 1), timeout=8000
+                )
                 passed(
                     "manual-submit-isolated-api", created_id=result["id"], state=result["status"]
                 )
@@ -135,14 +158,14 @@ def main() -> None:
             field = page.get_by_role("textbox", name="搜索批次编号")
             field.fill(first["number"])
             page.wait_for_url(re.compile("number="))
-            expect(page.locator(".workspace-metric strong").first).to_have_text("1")
+            expect(page.locator('[data-list-footer="runs"]')).to_contain_text("共 1 个批次")
             page.reload()
             expect(field).to_have_value(first["number"])
-            expect(page.locator(".workspace-metric strong").first).to_have_text("1")
+            expect(page.locator('[data-list-footer="runs"]')).to_contain_text("共 1 个批次")
             passed("search-url-reload-and-api-filter")
 
             page.goto(base + "/runs")
-            page.locator(".dashboard-file-card:enabled").first.wait_for()
+            page.locator('[data-list-viewport="runs"] tbody tr').first.wait_for()
             page.keyboard.press("Control+k")
             command = page.locator("input[role=combobox]")
             expect(command).to_be_focused()
@@ -252,14 +275,17 @@ def main() -> None:
             toggle = page.get_by_role("button", name="展开或收起导航")
             toggle.click()
             expect(page.locator("[data-collapsible=icon]")).to_have_count(1)
+            expect(page.locator(".tactile-edition")).to_have_attribute("data-playing", "false")
             page.reload()
             expect(page.locator("[data-collapsible=icon]")).to_have_count(1)
-            page.locator(".dashboard-file-card:enabled").first.wait_for()
+            page.locator('[data-list-viewport="runs"] tbody tr').first.wait_for()
             shot(page, "sidebar-collapsed")
             no_overflow(page)
             toggle.click()
             passed("sidebar-collapse-persistence-and-expand")
 
+            page.goto(base + "/")
+            page.locator(".home-batch").first.wait_for()
             for theme in ("dark", "light"):
                 page.get_by_role("button", name="切换显示主题").click()
                 page.get_by_role(
@@ -268,6 +294,50 @@ def main() -> None:
                 expect(page.locator("html")).to_have_class(theme)
                 shot(page, f"theme-{theme}")
             passed("theme-switch-and-portal")
+
+            sculpture = page.locator(".tactile-edition")
+            expect(sculpture).to_have_attribute("data-playing", "true")
+            pieces = page.locator("[data-sculpture-piece]")
+            frames = []
+            for index in range(3):
+                frames.append(
+                    pieces.evaluate_all("items => items.map(e => getComputedStyle(e).transform)")
+                )
+                sculpture.screenshot(path=str(args.output / f"sculpture-frame-{index}.png"))
+                page.wait_for_timeout(650)
+            assert frames[0] != frames[1] and frames[1] != frames[2]
+            report["sculpture_frames"] = frames
+            page.get_by_role("button", name="暂停装饰动效", exact=True).click()
+            expect(sculpture).to_have_attribute("data-playing", "false")
+            page.wait_for_timeout(100)
+            stopped = pieces.evaluate_all("items => items.map(e => getComputedStyle(e).transform)")
+            page.wait_for_timeout(650)
+            assert stopped == pieces.evaluate_all(
+                "items => items.map(e => getComputedStyle(e).transform)"
+            )
+            page.reload()
+            expect(sculpture).to_have_attribute("data-playing", "false")
+            bounce = page.get_by_role("button", name="轻触形体，感受回弹")
+            bounce.press("Enter")
+            page.wait_for_timeout(50)
+            assert (
+                page.locator(".tactile-sculpture").evaluate("e => getComputedStyle(e).transform")
+                != "none"
+            )
+            page.get_by_role("button", name="播放装饰动效", exact=True).click()
+            expect(sculpture).to_have_attribute("data-playing", "true")
+            page.evaluate(
+                "Object.defineProperty(document, 'visibilityState', {configurable:true, value:'hidden'}); document.dispatchEvent(new Event('visibilitychange'))"
+            )
+            expect(sculpture).to_have_attribute("data-playing", "false")
+            page.evaluate(
+                "delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange'))"
+            )
+            expect(sculpture).to_have_attribute("data-playing", "true")
+            passed(
+                "sculpture-live-motion-pause-persistence-keyboard-and-background",
+                background_evidence="visibility event fixture",
+            )
 
             page.get_by_role("link", name="打开原版界面", exact=True).click()
             page.wait_for_url("**/classic.html*")
@@ -289,9 +359,17 @@ def main() -> None:
                     viewport={"width": width, "height": height}, color_scheme="light"
                 )
                 m = c.new_page()
-                m.goto(base + "/runs")
-                m.locator(".dashboard-file-card:enabled").first.wait_for()
+                m.on("pageerror", lambda e: report["page_errors"].append(str(e)))
+                m.goto(base + "/")
+                m.locator(".home-batch").first.wait_for()
                 no_overflow(m)
+                shot(m, f"home-{width}")
+                m.goto(base + "/runs")
+                m.locator('[data-list-viewport="runs"] tbody tr').first.wait_for()
+                no_overflow(m)
+                assert m.locator(".workspace-visual").count() == 0
+                rect = m.get_by_role("button", name="新建提取", exact=True).bounding_box()
+                assert rect and rect["y"] + rect["height"] <= height
                 if width < 768:
                     m.get_by_role("button", name="展开或收起导航").click()
                     expect(m.get_by_role("dialog")).to_be_visible()
@@ -314,41 +392,56 @@ def main() -> None:
                 color_scheme="dark",
             )
             reduced = c.new_page()
-            reduced.goto(base + "/runs")
-            reduced.locator(".dashboard-file-card:enabled").first.wait_for()
-            assert (
-                reduced.locator(".workspace-visual").evaluate(
-                    "e => getComputedStyle(e).animationName"
-                )
-                == "none"
+            reduced.goto(base + "/")
+            reduced.locator(".home-batch").first.wait_for()
+            expect(reduced.locator(".tactile-edition")).to_have_attribute("data-playing", "false")
+            pieces = reduced.locator("[data-sculpture-piece]")
+            snapshot = pieces.evaluate_all("items => items.map(e => getComputedStyle(e).transform)")
+            reduced.wait_for_timeout(650)
+            assert snapshot == pieces.evaluate_all(
+                "items => items.map(e => getComputedStyle(e).transform)"
             )
-            assert (
-                reduced.locator(".workspace-stage").evaluate("e => getComputedStyle(e).transform")
-                == "none"
-            )
+            expect(reduced.get_by_role("button", name="系统已减少动态效果")).to_be_disabled()
             c.close()
-            passed("reduced-motion")
+            passed("reduced-motion-static-sculpture")
 
             for state in ("empty", "error"):
                 c = browser.new_context()
                 edge = c.new_page()
                 edge.route(
-                    "**/api/v1/runs?*",
+                    "**/api/v1/dashboard",
                     lambda route: route.fulfill(
                         status=200 if state == "empty" else 503,
                         content_type="application/json",
                         body=json.dumps(
-                            {"items": [], "total": 0}
+                            {
+                                "date": "2026-09-07",
+                                "timezone": "Asia/Shanghai",
+                                "generated_at": "2026-09-07T02:00:00Z",
+                                "categories": [
+                                    {
+                                        "key": k,
+                                        "label": k,
+                                        "total": 0,
+                                        "today": 0,
+                                        "active": 0,
+                                        "attention": 0,
+                                        "recent": [],
+                                        "attention_items": [],
+                                    }
+                                    for k in ["extraction", "recurring", "reputation"]
+                                ],
+                            }
                             if state == "empty"
                             else {"code": "UI_TEST_OFFLINE", "message": "隔离错误状态测试"}
                         ),
                     ),
                 )
-                edge.goto(base + "/runs")
-                expect(edge.locator(".workspace-metric strong").first).to_have_text(
+                edge.goto(base + "/")
+                expect(edge.locator('[data-home-total="extraction"]')).to_have_text(
                     "0" if state == "empty" else "—"
                 )
-                assert edge.locator(".dashboard-file-card.is-selected").count() == 0
+                assert edge.locator('.home-batch[aria-pressed="true"]').count() == 0
                 shot(edge, f"fixture-{state}")
                 c.close()
                 passed(f"{state}-not-confused-with-real-data", data_source="browser fixture")

@@ -1,8 +1,8 @@
-import { createRootRoute, createRoute, createRouter, lazyRouteComponent, redirect } from '@tanstack/react-router'
+import { createRootRoute, createRoute, createRouter, lazyRouteComponent } from '@tanstack/react-router'
 import { TactileShell } from '@/tactile/tactile-shell'
 
 const rootRoute = createRootRoute({ component: TactileShell })
-const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: '/', beforeLoad: () => { throw redirect({ to: '/runs', search: emptyRunsSearch }) } })
+const indexRoute = createRoute({ getParentRoute: () => rootRoute, path: '/', component: lazyRouteComponent(() => import('@/features/home/home-page'), 'HomePage') })
 const runsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/runs',
@@ -89,5 +89,3 @@ function validateRunDetailSearch(search: Record<string, unknown>) {
     post: text(search.post),
   }
 }
-
-const emptyRunsSearch = { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }

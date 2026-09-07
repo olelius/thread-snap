@@ -9,7 +9,7 @@ export function EventBridge() {
       document.documentElement.dataset.backendConnected = String(connected)
       window.dispatchEvent(new CustomEvent('threadsnap:connection', { detail: connected }))
     }
-    source.onopen = () => setConnection(true)
+    source.onopen = () => { setConnection(true); client.invalidateQueries({ queryKey: ['dashboard'] }) }
     source.onerror = () => setConnection(false)
     const refreshRuns = () => client.invalidateQueries({ queryKey: ['runs'] })
     source.addEventListener('run.changed', (event) => {
@@ -45,6 +45,11 @@ export function EventBridge() {
     source.addEventListener('reputation.scope.changed', () => {
       client.invalidateQueries({ queryKey: ['reputation-scope'] })
     })
+    // 首页统计不依赖列表分页键，只有相关事务提交/重连才使其失效。
+    const refreshDashboard = () => client.invalidateQueries({ queryKey: ['dashboard'] })
+    for (const type of ['run.changed', 'run.deleted', 'reputation.run.changed']) {
+      source.addEventListener(type, refreshDashboard)
+    }
     const refreshAll = () => client.invalidateQueries()
     window.addEventListener('online', refreshAll)
     window.addEventListener('focus', refreshAll)

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, Outlet, useRouterState } from '@tanstack/react-router'
 import { motion, useReducedMotion } from 'motion/react'
-import { ArrowUpRight, ChartNoAxesCombined, ChevronRight, Layers3, LayoutList, Repeat2, Settings2, Waves } from 'lucide-react'
+import { ArrowUpRight, ChartNoAxesCombined, ChevronRight, House, Layers3, LayoutList, Repeat2, Settings2, Waves } from 'lucide-react'
 import { ThemeToggle } from '@/components/theme-toggle'
 import { GlobalCommandMenu } from '@/components/global-command-menu'
 import {
@@ -11,9 +11,11 @@ import {
 } from '@/components/ui/sidebar'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { getCookie, setCookie } from '@/lib/cookies'
+import { TactileSculpture } from './tactile-sculpture'
 
 const emptyRunsSearch = { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }
 const navigation = [
+  { to: '/' as const, search: undefined, label: '首页', subtitle: '概览与近期工作', icon: House, number: '00' },
   { to: '/runs' as const, search: emptyRunsSearch, label: '提取列表', subtitle: '批次与快照', icon: LayoutList, number: '01' },
   { to: '/recurring-runs' as const, search: emptyRunsSearch, label: '循环计划', subtitle: '独立周期批次', icon: Repeat2, number: '02' },
   { to: '/reputation' as const, search: { tab: 'runs' as const, page: undefined }, label: '口碑巡检', subtitle: '排名与页面证据', icon: ChartNoAxesCombined, number: '03' },
@@ -80,11 +82,7 @@ function TactileNavigation() {
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
-          <div className='tactile-edition group-data-[collapsible=icon]:hidden'>
-            <div className='tactile-sculpture' aria-hidden='true'><i /><i /><i /></div>
-            <span className='tactile-edition-caption'>有形的反馈。<br />轻盈的工作流。</span>
-            <span className='tactile-edition-tag'><Waves size={13} /> TACTILE EDITION</span>
-          </div>
+          <TactileSculpture />
         </SidebarContent>
         <SidebarFooter className='tactile-sidebar-footer'>
           <a className='tactile-original-link' href='/classic.html' title='打开原版控制台界面'><ArrowUpRight size={16} /><span className='group-data-[collapsible=icon]:hidden'>打开原版界面</span></a>

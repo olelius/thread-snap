@@ -1,10 +1,11 @@
 import { Fragment, useEffect, useMemo, useState } from 'react'
 import { Dialog, DialogPanel, DialogTitle, Transition, TransitionChild } from '@headlessui/react'
 import { useNavigate } from '@tanstack/react-router'
-import { Command, FileSearch, LayoutList, Repeat2, Search, Settings2, Sparkles, X } from 'lucide-react'
+import { Command, FileSearch, House, LayoutList, Repeat2, Search, Settings2, Sparkles, X } from 'lucide-react'
 import { useReducedMotion } from 'motion/react'
 
 const commands = [
+  { id: 'home', label: '首页', description: '查看全局概览与近期批次', icon: House, to: '/', search: {} },
   { id: 'runs', label: '任务管理', description: '打开批次与队列工作台', icon: LayoutList, to: '/runs', search: {} },
   { id: 'recurring', label: '循环计划', description: '查看周期触发的独立批次', icon: Repeat2, to: '/recurring-runs', search: {} },
   { id: 'reputation', label: '口碑巡检', description: '查看排名和页面证据', icon: FileSearch, to: '/reputation', search: { tab: 'runs' } },
