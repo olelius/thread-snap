@@ -28,6 +28,7 @@ from sqlalchemy.exc import OperationalError
 
 from .auth import BrowserAuthManager
 from .config import Settings, get_settings
+from .dashboard import router as dashboard_router
 from .db import build_engine, build_session_factory, migrate_database
 from .errors import DomainError, domain_error_handler
 from .events import EventBus
@@ -901,6 +902,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         return {"status": "ok", "version": "0.1.0"}
 
     app.include_router(build_router("/api/v1", internal=False))
+    app.include_router(dashboard_router)
     app.include_router(build_router("/internal/v1", internal=True))
 
     @app.get("/api/v1/events")

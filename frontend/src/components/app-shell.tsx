@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, Outlet, useRouterState } from '@tanstack/react-router'
 import { motion, useReducedMotion } from 'motion/react'
-import { Cable, ChartNoAxesCombined, CircleUserRound, LayoutList, Repeat2, Settings2, Sparkles } from 'lucide-react'
+import { Cable, ChartNoAxesCombined, CircleUserRound, House, LayoutList, Repeat2, Settings2, Sparkles } from 'lucide-react'
 import { ThemeToggle } from './theme-toggle'
 import { GlobalCommandMenu } from './global-command-menu'
 import {
@@ -27,6 +27,7 @@ const navigationGroups = [
   {
     label: '工作台',
     items: [
+      { to: '/' as const, search: undefined, label: '首页', description: '全局工作概览', icon: House },
       { to: '/runs' as const, search: { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }, label: '任务管理', description: '批次与队列', icon: LayoutList },
     ],
   },
@@ -118,7 +119,7 @@ export function AppShell() {
             <SidebarTrigger className='-ml-1 transition-transform duration-200' />
             <Separator orientation='vertical' className='h-5' />
             <div className='min-w-0 flex-1 truncate text-sm font-medium text-muted-foreground'>
-              {pathname.startsWith('/config') ? '配置管理' : pathname.startsWith('/reputation/runs/') ? '口碑巡检详情' : pathname.startsWith('/reputation') ? '口碑巡检' : pathname.startsWith('/recurring-runs/') ? '循环批次详情' : pathname.startsWith('/recurring-runs') ? '循环计划列表' : pathname.startsWith('/runs/') ? '批次链接详情' : '提取列表'}
+              {pathname === '/' ? '首页' : pathname.startsWith('/config') ? '配置管理' : pathname.startsWith('/reputation/runs/') ? '口碑巡检详情' : pathname.startsWith('/reputation') ? '口碑巡检' : pathname.startsWith('/recurring-runs/') ? '循环批次详情' : pathname.startsWith('/recurring-runs') ? '循环计划列表' : pathname.startsWith('/runs/') ? '批次链接详情' : '提取列表'}
             </div>
             <GlobalCommandMenu />
             <div className='hidden items-center gap-2 text-xs text-muted-foreground sm:flex'>
