@@ -134,6 +134,26 @@ class YicheUrlTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("REPUTATION_IDENTITY_MISMATCH", error.exception.code)
         self.assertTrue(browser.closed)
 
+    async def test_valid_score_is_kept_when_author_count_is_missing(self):
+        class PartialPage(Page):
+            async def goto(self, _url, **_kwargs):
+                self.handler(
+                    Response(
+                        "tags", {"data": {"pointCommontInfo": {"serialId": "100", "score": "4.2"}}}
+                    )
+                )
+                self.handler(Response("query_comment_page_list", {"data": {"total": 0}}))
+                await asyncio.sleep(0)
+                return Response("document", {})
+
+        with tempfile.TemporaryDirectory() as temp:
+            result = await YicheReputationAdapter(None)._visit(
+                Browser(PartialPage(empty=True)), self.target, Path(temp)
+            )
+        self.assertEqual("4.2", result.score_raw)
+        self.assertIsNone(result.volume_raw)
+        self.assertEqual("0", result.review_article_count_raw)
+
     async def test_platform_policy_is_scoped_to_yiche(self):
         self.assertFalse(REPUTATION_PLATFORMS["yiche"].requires_evidence)
         self.assertFalse(REPUTATION_PLATFORMS["yiche"].requires_session)

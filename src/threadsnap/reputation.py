@@ -3512,9 +3512,13 @@ class ReputationService:
                         "",
                         f"【{REPUTATION_PLATFORMS[platform_code].display_name}】",
                         "首次基线初始化，无前日变化可比较。",
-                        "页面证据："
-                        f"{sum(item.id in evidence_result_ids for item in platform_results) if evidence_result_ids is not None else sum(bool(item.evidence_required and item.status == 'success') for item in platform_results)}"
-                        f"/{len(platform_results)}",
+                        (
+                            "页面证据：未要求截图。"
+                            if not any(item.evidence_required for item in platform_results)
+                            else "页面证据："
+                            f"{sum(item.id in evidence_result_ids for item in platform_results if item.evidence_required) if evidence_result_ids is not None else sum(bool(item.evidence_required and item.status == 'success') for item in platform_results)}"
+                            f"/{sum(item.evidence_required for item in platform_results)}"
+                        ),
                     ]
                 )
             if run.schedule_type == "month_end":
@@ -3698,6 +3702,7 @@ class ReputationService:
                     "evidence_id": evidence.id if evidence else None,
                     "source_sha256": evidence.metric_region_sha256 if evidence else None,
                     "source_path": evidence.metric_region_path if evidence else None,
+                    "evidence_required": result.evidence_required if result else True,
                 }
             )
         available = [source for source in sources if source["source_path"]]
@@ -3711,6 +3716,7 @@ class ReputationService:
                 {
                     "platform_code": source["platform_code"],
                     "source_sha256": source["source_sha256"],
+                    "evidence_required": source["evidence_required"],
                 }
                 for source in sources
             ]
@@ -3749,8 +3755,9 @@ class ReputationService:
                 else:
                     draw.text(
                         (left + 94, label_height + 78),
-                        "EVIDENCE MISSING",
-                        fill="#B91C1C",
+                        "未取得页面证据" if source["evidence_required"] else "本项未要求截图",
+                        fill="#B91C1C" if source["evidence_required"] else "#475569",
+                        font=font,
                     )
             canvas.save(preview_path, format="PNG", optimize=False)
         record = {

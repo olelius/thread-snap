@@ -151,7 +151,9 @@ class YicheReputationAdapter(BrowserReputationAdapter):
             volume = str(info.get("authorCount") or measurement.get("volume") or "").strip() or None
             # 暂无评分时的0.00是页面占位，不作为真实口碑分；点评总数0则是合法数量。
             if not info.get("authorCount") and measurement.get("volume") in (None, "", "0"):
-                score, volume = None, None
+                volume = None
+                if score in (None, "0", "0.0", "0.00"):
+                    score = None
             review_count = str(listing["total"]).strip() if listing.get("total") is not None else None
             # 该阶段只读取URL，截图门禁与文件写入都停用，不能用空白PNG占位。
             return ReputationPageResult(

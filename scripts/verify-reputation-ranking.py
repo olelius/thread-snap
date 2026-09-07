@@ -130,6 +130,56 @@ def main():
                     expect(page.get_by_role("dialog")).to_have_count(0)
                     record(f"historical-native-error-on-demand-{width}-{theme}")
                 page.close()
+            # 单平台URL模式不应在汇报卡中被误标为“缺图”或“证据已生成”。
+            import copy
+
+            fixture = copy.deepcopy(original)
+            fixture.update(
+                id="url-only-fixture",
+                number="URL模式验收",
+                source_type="synthetic",
+                platform_codes=["yiche"],
+                planned_count=27,
+                completed_count=27,
+                failed_count=0,
+                required_evidence_count=0,
+                complete_evidence_count=0,
+                linked_complete_evidence_count=0,
+                resolved_count=27,
+                unresolved_count=0,
+                linked_status="success",
+                status="success",
+                report_status="success",
+                report_text="URL模式：本批次未要求截图。",
+                downloads={},
+                retry_runs=[],
+            )
+            fixture["results"] = [
+                dict(
+                    item,
+                    status="success",
+                    evidence_required=False,
+                    evidence=None,
+                    error_code=None,
+                    error_message=None,
+                )
+                for item in original["results"]
+                if item["platform_code"] == "yiche"
+            ]
+            page = context.new_page()
+            page.route(
+                "**/api/v1/reputation/runs/url-only-fixture*",
+                lambda route: route.fulfill(
+                    status=200, content_type="application/json", body=json.dumps(fixture)
+                ),
+            )
+            page.goto(base + "/reputation/runs/url-only-fixture?view=report")
+            row = page.get_by_text("页面证据 ZIP", exact=True).locator("..")
+            expect(row).to_contain_text("未要求截图")
+            page.screenshot(path=str(args.output / "url-only-report-fixture.png"))
+            page.close()
+            record("url-only-report-not-marked-as-missing", source="browser fixture")
+
             current = request.get(endpoint).json()
             assert digest(current) == original_hash, "历史批次响应发生变化"
             record("historical-snapshot-unchanged", sha256=original_hash)

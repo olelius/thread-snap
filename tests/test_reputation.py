@@ -319,6 +319,10 @@ class ReputationInspectionTest(unittest.TestCase):
             27,
             len(json.loads(preview_manifest.read_text(encoding="utf-8"))["items"]),
         )
+        manifest_items = json.loads(preview_manifest.read_text(encoding="utf-8"))["items"]
+        self.assertTrue(all(not next(source for source in item["sources"] if source["platform_code"] == "yiche")["evidence_required"] for item in manifest_items))
+        self.assertIn("页面证据：未要求截图。", generated["report_text"])
+
 
     def test_later_platform_url_contracts(self) -> None:
         """两个后续平台都规范到已验证的车型口碑入口。"""
