@@ -96,7 +96,8 @@ function Kpi({ label, value, hint, icon: Icon, tone, children }: { label: string
 }
 
 const RANKING_IDENTITY_WIDTH = 256
-const RANKING_METRIC_WIDTH = 128
+// 136px 指标卡片 + 两侧各 12px 留白，相邻卡片始终保持 24px 间距。
+const RANKING_METRIC_WIDTH = 160
 const RANKING_STATE_WIDTH = 192
 const metricColumns = [
   ['score', '口碑分'], ['rank', '排名'], ['volume', '口碑量'],
@@ -138,13 +139,12 @@ function RankingPanel({ results, onViewEvidence, yicheUrlOnly }: { results: Repu
               if (!result) return [<TableCell key={`${code}-missing`} colSpan={6} className='text-center text-xs text-muted-foreground'>未纳入本批次</TableCell>]
               const oldNativeFailure = yicheUrlOnly && code === 'yiche' && result.error_code?.startsWith('REPUTATION_NATIVE_')
               return [
-                ...metricColumns.map(([key]) => <TableCell key={`${code}-${key}`} data-ranking-cell={`${code}-${key}`} className='text-right'><MetricCell metric={result.metrics[key] ?? historicalMetric()} inverseLabel={key === 'rank'} /></TableCell>),
+                ...metricColumns.map(([key]) => <TableCell key={`${code}-${key}`} data-ranking-cell={`${code}-${key}`} className='ranking-metric-cell text-right'><MetricCell metric={result.metrics[key] ?? historicalMetric()} inverseLabel={key === 'rank'} /></TableCell>),
                 <TableCell key={`${code}-state`} data-ranking-cell={`${code}-state`}>
                   <div className='ranking-state-line'><StatusBadge value={result.status} label={oldNativeFailure ? '历史失败' : statusName(result.status)} />
                     {result.evidence ? <Button variant='ghost' size='icon' className='size-8' onClick={() => onViewEvidence(result)} aria-label={`查看${result.platform_name}截图`}><ImageIcon className='size-4' /></Button> : <span className='text-xs text-muted-foreground'>{!result.evidence_required ? '不要求截图' : oldNativeFailure ? '旧流程' : '缺图'}</span>}
                     {result.error_message && <button className='ranking-error-trigger' type='button' onClick={() => setIssue(result)} aria-label={`查看${result.vehicle_name}${result.platform_name}失败原因`}>原因</button>}
                   </div>
-                  {result.error_message && <div className='ranking-error-summary'>{oldNativeFailure ? '原生流程已停用；当前使用 URL。' : '访问、解析或证据处理未完成。'}</div>}
                 </TableCell>,
               ]
             })}

@@ -10,11 +10,11 @@
 .reputation-ranking .ranking-vehicle { left: 96px; border-right: 1px solid var(--border); }
 .reputation-ranking tbody tr:hover td { background-color: var(--muted); }
 .reputation-ranking .ranking-platform { text-align: center; font-weight: 600; border-left: 1px solid var(--border); }
-.ranking-metric { display: flex; flex-direction: column; width: 100%; min-width: 0; padding: 6px; border-width: 1px; border-style: solid; border-radius: 8px; }
+.reputation-ranking .ranking-metric-cell { padding: 8px 12px; }
+.ranking-metric { box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; width: 136px; min-height: 56px; padding: 8px; border-width: 1px; border-style: solid; border-radius: 8px; }
 .ranking-metric-value { font-weight: 600; font-variant-numeric: tabular-nums; white-space: normal; overflow-wrap: anywhere; }
 .ranking-metric-change { display: flex; align-items: flex-start; justify-content: flex-end; gap: 3px; margin-top: 3px; font-size: 11px; line-height: 1.45; white-space: normal; }
 .ranking-metric-change > svg { width: 12px; height: 12px; flex-shrink: 0; margin-top: 2px; }
 .ranking-metric-change > span { min-width: 0; overflow-wrap: anywhere; }
 .ranking-state-line { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .ranking-error-trigger { color: var(--primary); font-size: 12px; text-decoration: underline; text-underline-offset: 3px; min-height: 30px; }
-.ranking-error-summary { margin-top: 5px; font-size: 11px; line-height: 1.5; color: var(--muted-foreground); white-space: normal; overflow-wrap: anywhere; }

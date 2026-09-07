@@ -16,6 +16,17 @@
 
 ---
 
+## 2026-09-07 — 删除排名异常脚注并固定指标卡片间距
+**总目标**：删除用户截图中异常状态下方的小字，解决相邻评分/排名卡片贴合；沿用当前触感界面及单表滚动。
+**状态**：✅ 两项展示要求和本机真实页面验收完成；实现已提交 `10c3ed0`，关联 [PR #280](https://github.com/olelius/thread-snap/pull/280)。
+**当前进度**：移除异常脚注DOM与样式，原始失败信息仅由同行“原因”按钮打开；指标列固定160px，卡片136px宽、最小56px高，两侧各12px留白，相邻卡片间隔24px。指标、原始状态、证据入口及URL模式保持不变；未新增API或改写数据库。
+**证据**：`python scripts/verify-reputation-ranking.py --run-id 01a07aac-9296-7883-a718-da5bc481fce5 --output artifacts/runtime/ranking-tile-spacing/live` 共21项通过，直接覆盖用户批次 `RP-S-20260907-FCE5`：216张卡片宽度136px、158对相邻卡片最小间距24px、81个状态单元格无脚注；2560/1440/1024宽度、深浅色、1.25/2倍布局缩放、横滚起点/中段/最右及纵滚通过，列头与正文x误差为0，普通/原生历史错误均可按需查看，完整历史API响应哈希前后一致，页面JS异常0。报告及已目视核验PNG位于上述目录；红框对应区域为 `artifacts/runtime/ranking-tile-spacing/requested-area-after.png`。
+**交付验证**：TypeScript、默认/独立双构建、Ruff检查/格式检查通过；`python scripts/verify-tactile-ui.py --isolated-writes --output artifacts/runtime/ranking-tile-spacing/regression` 的25项生产构建全站回归通过，写入仅进入8016隔离副本。5173已广播整页刷新，真实浏览器接收 `full-reload` 后重新加载并复核136px/24px；`full-reload-verification.json` 记录文档重新创建与index.html内容哈希不变。隔离副本不含用户指定批次，目标验收明确使用5173真实批次只读数据，不用副本替代。
+**边界/回退**：仅修改排名展示、对应规范与验收脚本；原工作树20项研发修改和历史结果保留。回退时恢复本次提交前的两个排名前端文件并重建资源，不涉及数据库回退。
+**下一步**：保持本机服务供用户查看；后续只按新增界面反馈调整，不重跑或重写历史批次。
+
+---
+
 ## 2026-09-07 — 口碑排名排版/滚动修复与易车URL临时模式
 **总目标**：处理用户三张截图中的指标/说明重叠、易车原生Runtime报错与表头横滚不同步。
 **状态**：✅ 实现、真实URL样本、同一历史批次浏览器验收及回归通过，待Git收尾。
