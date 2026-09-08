@@ -11,10 +11,21 @@
 
 ## ⏳ 待你裁决
 
-- 2026-09-07：两平台54项映射已导入服务器；草稿额外6款（捷途旅行者、坦克300、捷途X70PLUS、长安CS75PLUS、捷途自由者、哈弗大狗）缺少完整三平台映射。是否将它们保留为停用草稿，仅发布原27款三平台范围？owner：`docs/chains/reputation-inspection.md`。
+- ~~2026-09-07：两平台54项映射已导入服务器，额外6款是否保留停用草稿后发布原27款三平台范围？~~ 2026-09-08用户确认；v2已发布，27款启用、6款停用保留。owner：`docs/chains/reputation-inspection.md`。
 
 - 2026-08-17：最终服务器存在一块无文件系统、未挂载的 3.6 TiB `/dev/sdb`；格式化并挂载到 `/data` 会清除该设备现有内容，须由用户明确决定后执行。
 - 2026-08-17：服务器 `80/443` 已由 `wenmai-nginx-1` 占用；ThreadSnap 首次安装使用独立 `8088` 可避免影响现有服务，是否接入既有 Docker Nginx 和正式域名仍待用户决定。
+
+---
+
+## 2026-09-08 — 发布远端三平台范围并执行实时验收
+**总目标**：落实用户确认，额外6款保留为停用草稿，发布原27款三平台范围并立即重新采集核验实际平台。
+**状态**：✅ 服务器v2已发布（11:37），27款启用/6款停用；本轮三平台新采集81/81通过，并生成可见真实验收批次 `RP-A-20260908-034216-2FA9`。
+**当前证据**：发布前SQLite在线备份完整性ok；BEGIN IMMEDIATE及revision校验后只修改6个已确认内部ID的enabled，穷尽比对其余字段不变，再通过原发布预览与POST；revision14→15，v2=`01a07f17-63f4-77ab-85ff-2e93e98d927b`，预览81/81验证通过。今日 `RP-S-20260908-0699` 完整API前后相同。
+**运行/边界**：复用现有新映射验证→真实验收入口，各平台27项顺序执行，只使用本轮新validation ID；全部81成功才转可见RP-A批次（54份所需证据），失败原始attempt保留，不用旧指标补凑。不删除今日正式批次、不改时间和调度幂等键；它仍为27项，v2供下一次10:00使用。映射验证按平台配置并发，区别于正式巡检固定2并发。
+**证据入口**：`artifacts/runtime/reputation-three-platform-publish-20260908/`；远端 `/var/tmp/threadsnap-three-platform-20260908/{publish-result.json,fresh-execution.json}`，执行单元 `threadsnap-fresh-three-platform-20260908-r2`（首个临时单元在STDOUT权限阶段退出，未产生采集任务；r2使用journal）。备份 `/var/lib/threadsnap/backups/reputation-scope-publish/20260908-three-platform/threadsnap.db`，SHA-256 `70f865e10e3b486bffe6236ac1651aef6a05e493328f1a6c8503436043bdd30fa`。
+**终态/验收**：本轮新验证为懂车帝 `01a07f18-f6bf-782f-86a0-701ee2e2b54a`（27/27）、汽车之家 `01a07f19-d456-701b-8ea6-b86fea3b8cd7`（27/27）、易车 `01a07f1a-b661-71a7-9929-935f946a8796`（27/27）；11:38:57～11:42:14真实访问，未使用旧成功项。既有真实验收转换生成 `01a07f1b-fff4-78ef-a1ee-27bf2c6b2fa9`，81结果按平台各27、唯一车型27、54/54证据文件SHA校验通过、TXT/XLSX已生成、四服务active。公网列表/详情已目视确认三平台及真实验收标识；API/浏览器验证JS异常0、业务写请求0，旧今日批次仍26成功1失败且完整API未变。证据 `server-evidence/final-verification.json`、`acceptance-browser-verification.json`、`three-platform-list.png`；独立发布核验13/13见 `final-readonly-check.json`。
+**下一步/已知显示边界**：后续10:00正式巡检使用v2；本次为真实验收，不声称即时重跑了正式协调器。列表旧小字把81个车型平台项写成“81款车型”，详情与API实际为27款×3平台；本轮仅记录该显示问题，未修改前端或重新部署。
 
 ---
 
