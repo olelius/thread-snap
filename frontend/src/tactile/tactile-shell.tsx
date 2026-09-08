@@ -11,7 +11,6 @@ import {
 } from '@/components/ui/sidebar'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { getCookie, setCookie } from '@/lib/cookies'
-import { TactileSculpture } from './tactile-sculpture'
 
 const emptyRunsSearch = { page: undefined, pageSize: undefined, number: undefined, status: undefined, trigger: undefined, listOrder: undefined, from: undefined, to: undefined }
 const navigation = [
@@ -82,7 +81,6 @@ function TactileNavigation() {
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
-          <TactileSculpture />
         </SidebarContent>
         <SidebarFooter className='tactile-sidebar-footer'>
           <div className='tactile-connection' role='status'><span className={connected ? 'is-connected' : ''} /><span className='group-data-[collapsible=icon]:hidden'>{connected ? '业务服务已连接' : '业务服务连接中'}</span></div>

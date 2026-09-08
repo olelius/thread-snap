@@ -18,6 +18,16 @@
 
 ---
 
+## 2026-09-08 — 移除侧栏触感装饰卡
+**总目标**：删除用户截图中的“有形的反馈。轻盈的工作流。 / TACTILE EDITION”小组件，保持业务导航与页面功能。
+**状态**：✅ 已删除唯一挂载、专用组件与样式，并完成生产构建浏览器验收。
+**当前进度**：在 `H:/ThreadSnap-tactile-ui` 的 `fix/remove-sidebar-promo` 基于 `main@eb205bd` 实施；顶部品牌、五项导航、服务连接状态、首页三张概览卡及公共 React Bits 保持原样，无占位卡。产品/技术 owner 文档与两验收脚本同步；全站脚本认证选择器补充已有会话时的“更新 Session / 更新会话”，避免测试因数据状态变化漏选入口。
+**验证证据**：`npm --prefix frontend run check`、`build`、`build:tactile`，两脚本 Ruff 检查/格式检查及 `git diff --check` 通过。`verify-react-bits-home.py --base-url http://127.0.0.1:5176` 为18/18；`verify-tactile-ui.py --base-url http://127.0.0.1:5176` 默认只读回归23/23，页面JS异常0；详细JSON位于 `artifacts/runtime/sidebar-promo-removal/{home,regression}/verification.json`。同目录 `verify-target.py` 对导出模板页浅色/深色/390px抽屉3/3验证：五项导航、卡片DOM为0、无横溢出、业务写请求0；`config-light.png`、`config-dark.png`、`config-mobile.png`已目视核验。独立审查回执：`artifacts/runtime/agents/sidebar-promo-removal/review.md`。
+**边界/回退**：浏览器使用当前生产构建及本机数据库一致性副本，后台服务关闭；未访问平台、未修改原数据库或服务器。原 `H:/ThreadSnap` 的20项未提交研发修改保持原状。回退恢复本次前端提交并重建即可，不涉及数据回退。
+**下一步**：完成本分支提交/合并；后续仅按新增反馈调整，服务器发布另行执行。
+
+---
+
 ## 2026-09-07 — 导入两平台口碑配置并修复离线无头浏览器选择
 **总目标**：把本机汽车之家/易车口碑配置导入服务器，说明易车URL来源，保持服务器已有草稿和历史；修复导入实测发现的离线浏览器兼容问题。
 **状态**：✅ 两平台54映射、原验证链和共享会话已导入；离线浏览器补丁已上线，两平台各1个真实URL验证通过；⏳ 新范围发布等待额外6款处理裁决。

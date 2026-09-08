@@ -71,10 +71,10 @@
 
 ## 已确认的第一版前端技术基线
 
-- 首页与品牌局部增强按需改编 React Bits 的 TypeScript `SpotlightCard` / `CountUp`，来源固定至 `0e69e737242df1d257b4e5e399b01ae1d7901375`。组件位于 `src/components/react-bits/`，光晕仅由交互事件更新 CSS 坐标，使用现有主题变量，不维护永久 RAF、WebGL 或新增依赖；统计计数复用已安装的 Motion，仅在首次数值就绪且可见时播放650ms并清理 RAF/订阅，之后更新直接显示真实值。完整 MIT + Commons Clause 许可存于 `public/third-party/react-bits.txt` 并随默认/独立构建发布；`THIRD_PARTY_NOTICES.md` 为来源索引。
+- 首页概览局部增强按需改编 React Bits 的 TypeScript `SpotlightCard` / `CountUp`，来源固定至 `0e69e737242df1d257b4e5e399b01ae1d7901375`。组件位于 `src/components/react-bits/`，光晕仅由交互事件更新 CSS 坐标，使用现有主题变量，不维护永久 RAF、WebGL 或新增依赖；统计计数复用已安装的 Motion，仅在首次数值就绪且可见时播放650ms并清理 RAF/订阅，之后更新直接显示真实值。完整 MIT + Commons Clause 许可存于 `public/third-party/react-bits.txt` 并随默认/独立构建发布；`THIRD_PARTY_NOTICES.md` 为来源索引。
 
 - 默认路由外壳为 `src/tactile/tactile-shell.tsx`；`index.html` 标记 `data-ui="tactile"`，`src/tactile/tactile.css` 在 HTML 根节点统一映射浅深主题语义 Token，Radix/Headless UI Portal 继承同一变量。默认 `/` 渲染 `features/home/home-page.tsx`，原列表、详情和配置路径保留。
-- 首页新增只读 `GET /api/v1/dashboard`，复用应用容器的数据库会话，执行固定9条查询返回3类全量统计及有界摘要；只选公开字段，不暴露配置快照、文件路径或凭证。前端用独立 `dashboard` Query Key；批次/巡检变更、SSE重连、聚焦与网络恢复刷新，活动批次时3秒、其余60秒兜底，错误不伪装为零统计。品牌形体由 `tactile-sculpture.tsx` 使用 Motion、可视性检测和系统减少动态偏好驱动（已移除手动暂停按钮及旧暂停Cookie读取）；布局/表单/切换维持短过渡、减少动态模式等价静态表现。
+- 首页新增只读 `GET /api/v1/dashboard`，复用应用容器的数据库会话，执行固定9条查询返回3类全量统计及有界摘要；只选公开字段，不暴露配置快照、文件路径或凭证。前端用独立 `dashboard` Query Key；批次/巡检变更、SSE重连、聚焦与网络恢复刷新，活动批次时3秒、其余60秒兜底，错误不伪装为零统计。侧栏装饰卡及其专用组件、样式已移除，保留品牌标题、五项导航与服务连接状态；布局/表单/切换维持短过渡、减少动态模式等价静态表现。
 - 默认构建同时包含 `index.html`、`classic.html` 和历史 `tactile.html`。默认入口使用浏览器路径；两个辅助入口使用 Hash 历史，刷新和内部跳转不落回默认入口。`classic.html` 只加载既有样式与 `AppShell`，不加载触感 CSS；主入口保持 `/runs`、`/recurring-runs`、`/reputation`、`/config` 及详情的原链接合同。`dist-tactile` 仍为独立构建目录。侧栏不再展示原版切换链接；回退比较仍可直接打开 `/classic.html`，发布回退继续使用前一版本完整静态目录。
 - 触感导航复用 Sidebar/Sheet，保存独立折叠偏好，移动导航选择后自动收起；选中面使用 Motion 弹簧，按压形变只作用于选择卡/按钮，数据表不形变。系统减少动态效果时禁用装饰性动画、连续运动与形变。`scripts/verify-tactile-ui.py` 对实际构建产物执行浅深主题、响应式、深链、抽屉、配置、经典入口及故障态回归，写路径只在显式隔离模式下运行。
 

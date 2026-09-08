@@ -258,7 +258,9 @@ def main() -> None:
                     ),
                 ),
             )
-            auth = page.get_by_role("button", name=re.compile("获取 Session|初始化")).first
+            auth = page.get_by_role(
+                "button", name=re.compile("获取 Session|更新 Session|初始化|更新会话")
+            ).first
             auth.click()
             expect(page.get_by_role("dialog")).to_be_visible()
             expect(page.get_by_text("UI_TEST_AUTH_OFFLINE", exact=False)).to_be_visible()
@@ -275,7 +277,7 @@ def main() -> None:
             toggle = page.get_by_role("button", name="展开或收起导航")
             toggle.click()
             expect(page.locator("[data-collapsible=icon]")).to_have_count(1)
-            expect(page.locator(".tactile-edition")).to_have_attribute("data-playing", "false")
+            expect(page.locator(".tactile-edition")).to_have_count(0)
             page.reload()
             expect(page.locator("[data-collapsible=icon]")).to_have_count(1)
             page.locator('[data-list-viewport="runs"] tbody tr').first.wait_for()
@@ -295,45 +297,14 @@ def main() -> None:
                 shot(page, f"theme-{theme}")
             passed("theme-switch-and-portal")
 
-            sculpture = page.locator(".tactile-edition")
-            expect(sculpture).to_have_attribute("data-playing", "true")
-            pieces = page.locator("[data-sculpture-piece]")
-            frames = []
-            for index in range(3):
-                frames.append(
-                    pieces.evaluate_all("items => items.map(e => getComputedStyle(e).transform)")
-                )
-                sculpture.screenshot(path=str(args.output / f"sculpture-frame-{index}.png"))
-                page.wait_for_timeout(650)
-            assert frames[0] != frames[1] and frames[1] != frames[2]
-            report["sculpture_frames"] = frames
-            expect(page.locator(".tactile-sculpture-footer button")).to_have_count(0)
+            expect(page.locator(".tactile-edition, .tactile-sculpture-control")).to_have_count(0)
+            expect(page.get_by_text("有形的反馈。", exact=False)).to_have_count(0)
+            expect(page.get_by_text("TACTILE EDITION", exact=False)).to_have_count(0)
+            expect(page.locator(".tactile-nav-item")).to_have_count(5)
+            expect(page.locator(".tactile-brand-copy")).to_be_visible()
+            expect(page.locator(".tactile-connection")).to_be_visible()
             expect(page.locator('.tactile-root a[href="/classic.html"]')).to_have_count(0)
-            context.add_cookies(
-                [{"name": "threadsnap-sculpture-paused", "value": "true", "url": base}]
-            )
-            page.reload()
-            expect(sculpture).to_have_attribute("data-playing", "true")
-            bounce = page.get_by_role("button", name="轻触形体，感受回弹")
-            bounce.press("Enter")
-            page.wait_for_timeout(50)
-            assert (
-                page.locator(".tactile-sculpture").evaluate("e => getComputedStyle(e).transform")
-                != "none"
-            )
-            expect(sculpture).to_have_attribute("data-playing", "true")
-            page.evaluate(
-                "Object.defineProperty(document, 'visibilityState', {configurable:true, value:'hidden'}); document.dispatchEvent(new Event('visibilitychange'))"
-            )
-            expect(sculpture).to_have_attribute("data-playing", "false")
-            page.evaluate(
-                "delete document.visibilityState; document.dispatchEvent(new Event('visibilitychange'))"
-            )
-            expect(sculpture).to_have_attribute("data-playing", "true")
-            passed(
-                "removed-controls-legacy-cookie-motion-keyboard-and-background",
-                background_evidence="visibility event fixture",
-            )
+            passed("sidebar-promo-removed-brand-navigation-and-connection-preserved")
 
             page.goto(base + "/classic.html")
             page.wait_for_url("**/classic.html*")
@@ -390,16 +361,11 @@ def main() -> None:
             reduced = c.new_page()
             reduced.goto(base + "/")
             reduced.locator(".home-batch").first.wait_for()
-            expect(reduced.locator(".tactile-edition")).to_have_attribute("data-playing", "false")
-            pieces = reduced.locator("[data-sculpture-piece]")
-            snapshot = pieces.evaluate_all("items => items.map(e => getComputedStyle(e).transform)")
-            reduced.wait_for_timeout(650)
-            assert snapshot == pieces.evaluate_all(
-                "items => items.map(e => getComputedStyle(e).transform)"
-            )
-            expect(reduced.locator(".tactile-sculpture-footer button")).to_have_count(0)
+            expect(reduced.locator(".tactile-edition, [data-sculpture-piece]")).to_have_count(0)
+            expect(reduced.locator(".home-metric")).to_have_count(3)
+            expect(reduced.locator(".tactile-nav-item")).to_have_count(5)
             c.close()
-            passed("reduced-motion-static-sculpture")
+            passed("reduced-motion-sidebar-and-home-preserved")
 
             for state in ("empty", "error"):
                 c = browser.new_context()

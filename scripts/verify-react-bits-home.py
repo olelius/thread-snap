@@ -64,14 +64,13 @@ def main():
                 page.wait_for_timeout(750)
                 assert page.locator("canvas").count() == 0
                 # 按表面渐变两端、静态光斑与指针光晕同时最亮的保守组合核验小字。
-                colors = page.locator(".home-metric, .tactile-edition").evaluate_all("""items => items.map(e => {
+                colors = page.locator(".home-metric").evaluate_all("""items => items.map(e => {
                   const c=document.createElement('canvas').getContext('2d'), s=getComputedStyle(e);
                   const rgba=color=>{c.clearRect(0,0,1,1); c.fillStyle=color; c.fillRect(0,0,1,1); return [...c.getImageData(0,0,1,1).data]};
                   const resolve=key=>rgba(s.getPropertyValue(key));
-                  const brand=e.classList.contains('tactile-edition');
-                  return {text:rgba(getComputedStyle(e.querySelector(brand ? '.tactile-sculpture-footer > span' : 'dt')).color),
-                    backgrounds:brand ? [resolve('--accent'),resolve('--tactile-inset')] : [resolve('--card'),resolve('--home-raised')],
-                    ambient:brand ? 0 : .09, primary:resolve('--primary'),spot:resolve('--spotlight-color')};
+                  return {text:rgba(getComputedStyle(e.querySelector('dt')).color),
+                    backgrounds:[resolve('--card'),resolve('--home-raised')],
+                    ambient:.09, primary:resolve('--primary'),spot:resolve('--spotlight-color')};
                 })""")
 
                 def luminance(rgb):
@@ -125,19 +124,12 @@ def main():
                     positions=[first, second],
                 )
 
-                button = page.get_by_role("button", name="轻触形体，感受回弹")
-                button.focus()
-                page.keyboard.press("Tab")
-                page.keyboard.press("Shift+Tab")
-                expect(button).to_be_focused()
-                brand = page.locator(".tactile-edition")
-                expect(brand.locator("[data-spotlight-layer]")).to_have_css("opacity", "1")
-                page.keyboard.press("Enter")
-                expect(button).to_be_focused()
-                shot(page, f"brand-{theme}-keyboard")
-                page.keyboard.press("Tab")
-                expect(brand.locator("[data-spotlight-layer]")).to_have_css("opacity", "0")
-                passed(f"brand-keyboard-feedback-{theme}")
+                expect(page.locator(".tactile-edition, .tactile-sculpture-control")).to_have_count(
+                    0
+                )
+                expect(page.locator(".bits-spotlight")).to_have_count(3)
+                expect(page.locator(".tactile-brand-copy")).to_be_visible()
+                passed(f"sidebar-promo-removed-home-effects-preserved-{theme}")
                 page.get_by_role("link", name="提取列表", exact=True).click()
                 expect(page.locator(".home-page")).to_have_count(0)
                 assert page.locator(".tactile-content .bits-spotlight").count() == 0
@@ -285,9 +277,7 @@ def main():
                         "display", "none"
                     )
                     assert page.locator('[data-count-animating="true"]').count() == 0
-                    expect(page.locator(".tactile-edition")).to_have_attribute(
-                        "data-playing", "false"
-                    )
+                    expect(page.locator(".tactile-edition")).to_have_count(0)
                 else:
                     page.locator(".home-metric").first.tap()
                     assert page.locator('.home-metric[data-spotlight-active="true"]').count() == 0
