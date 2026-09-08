@@ -19,12 +19,15 @@ from urllib.parse import urlsplit
 import httpx
 from json_repair import repair_json
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from .errors import DomainError
+from .ids import uuid7
 from .local_sentiment import LOCAL_MODEL_CODE, LOCAL_MODEL_NAME, LocalSentimentAnalyzer
 from .models import (
+    CircleTask,
+    ExtractionRuleVersion,
     ExtractionRun,
     ManualSentimentRevision,
     PostSnapshot,
@@ -1223,14 +1226,14 @@ class SentimentService:
     def require_account(cls, db: Session, account_id: int = 1) -> SentimentConfig:
         """按稳定账户ID取配置；只有兼容默认ID可自动初始化，不回退其他账户。"""
         account = cls.ensure_default(db) if account_id == 1 else db.get(SentimentConfig, account_id)
-        if account is None:
+        if account is None or account.validation_status == "deleted":
             raise DomainError("AI_ACCOUNT_NOT_FOUND", "所选AI账户不存在，请重新选择。", status_code=404)
         return account
 
     def get_accounts(self) -> list[dict[str, Any]]:
         with self.factory.begin() as db:
             self.ensure_default(db)
-            return [self.config_dict(item) for item in db.scalars(select(SentimentConfig).order_by(SentimentConfig.id))]
+            return [self.config_dict(item) for item in db.scalars(select(SentimentConfig).where(SentimentConfig.validation_status != "deleted").order_by(SentimentConfig.id))]
 
     @staticmethod
     def _account_name(db: Session, name: str, account_id: int | None = None) -> str:
@@ -1257,6 +1260,41 @@ class SentimentService:
             db.add(account)
             db.flush()
             return self.config_dict(account)
+
+    def delete_account(self, account_id: int) -> dict[str, Any]:
+        """移除未使用账户并清除密钥，保留内部ID占位以防旧客户端指向新账户。"""
+        if account_id == 1:
+            raise DomainError("AI_DEFAULT_ACCOUNT_PROTECTED", "默认账户用于历史兼容，请保留该账户。", status_code=409)
+        with self.factory.begin() as db:
+            # 检查引用与删除在同一写事务内，避免并发创建规则/任务时出现悬空账户。
+            if db.get_bind().dialect.name == "sqlite":
+                db.execute(text("BEGIN IMMEDIATE"))
+            account = db.get(SentimentConfig, account_id)
+            if account is None:
+                raise DomainError("AI_ACCOUNT_NOT_FOUND", "所选AI账户不存在。", status_code=404)
+            if account.validation_status == "deleted":
+                return {"id": account_id, "status": "deleted"}
+            references = (
+                select(ExtractionRuleVersion.id).where(ExtractionRuleVersion.ai_account_id == account_id),
+                select(SentimentAnalysis.id).where(SentimentAnalysis.account_id == account_id),
+                select(CircleTask.id).where(CircleTask.config_snapshot["ai_account_id"].as_integer() == account_id),
+                select(ExtractionRun.id).where(ExtractionRun.config_snapshot["ai_account_id"].as_integer() == account_id),
+            )
+            if any(db.scalar(statement.limit(1)) is not None for statement in references):
+                raise DomainError("AI_ACCOUNT_IN_USE", "该账户已被提取规则、任务或分析历史引用，请保留该账户。", status_code=409)
+            account.enabled = False
+            account.validation_status = "deleted"
+            account.validation_error = None
+            account.revision += 1
+            account.encrypted_api_key = None
+            account.deepseek_encrypted_api_key = None
+            account.base_url = ""
+            account.deepseek_base_url = ""
+            account.name = f"__deleted_{account.id}_{uuid7()}"
+            account.brand = ""
+            account.products = []
+            account.supplement = None
+            return {"id": account_id, "status": "deleted"}
 
     def worker_config(self) -> dict[str, Any]:
         """账户并发合计受进程64上限约束，本地模型共用一个推理槽。"""
