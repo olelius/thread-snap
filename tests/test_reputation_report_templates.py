@@ -56,7 +56,7 @@ class ReportTemplatesTest(unittest.TestCase):
             row("竞品乙", role="competitor", score=metric("5", "1")),
         ]
         text = render_report_templates(self.run, records)[0]["text"]
-        self.assertIn("懂车帝车友圈露出数(较上日)：0\n-减少(-10)", text)
+        self.assertIn("懂车帝车友圈露出数：0\n-减少(-10)", text)
         self.assertIn("汽车之家论坛数：7083\n-增加(+12)", text)
         self.assertIn("懂车帝口碑帖数量：121\n-增加(+2)", text)
         self.assertIn("汽车之家口碑分：4.60\n-增加(+0.02)", text)

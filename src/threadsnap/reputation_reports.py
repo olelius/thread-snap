@@ -64,7 +64,7 @@ def render_report_templates(run: Any, results: Sequence[Any]) -> list[dict[str, 
     )
     details = list(warning)
     fields = (
-        ("懂车帝车友圈露出数(较上日)", "dongchedi", "circle_content_count"),
+        ("懂车帝车友圈露出数", "dongchedi", "circle_content_count"),
         ("汽车之家论坛数", "autohome", "circle_content_count"),
         ("懂车帝口碑分", "dongchedi", "score"),
         ("汽车之家口碑分", "autohome", "score"),
