@@ -18,6 +18,16 @@
 
 ---
 
+## 2026-09-08 — 最小离线包更新远端至659ddb8
+**状态**：✅ 远端应用659ddb8已上线，current=0.1.0-659ddb8cca8a、previous=0.1.0-11c4171e59bd；维护24.931秒，四项服务active，公网health200且首页字节与新构建一致。
+**包与复用**：threadsnap-659ddb8-minimal-update.tar.gz为1,174,509字节，SHA256 7e5b3c9fecc4f70201e426414f58ec8417775947d4162792db1aafb19b2cd049。相对11c4171，Python22项依赖、前端package/lock及部署输入不变；仅构建新应用wheel与59项前端，部署14/许可17等36文件原样复用，服务器138已装包版本未变，不重装运行依赖。构建工具缺bdist_wheel后仅恢复隔离构建工具安装，未重复前端构建。
+**部署/数据**：复用既有XFS reflink、双空闲门、Nginx先停/后端先起、维护期关闭后台与外部写入流程；数据库c3f7a1d9e402→e7a4c8d2b601，17表原有列/行哈希不变，新账户字段按默认账户1初始化。未同步本机预览库/测试账户或批次，未调用平台采集/模型/余额接口。备份/var/lib/threadsnap/backups/minimal-release-upgrade/20260908-main-659ddb8，SHA256 216b0f6398c4bdaa16860763ac522c34eba67e5c56b6f93294ee23092965582fe。
+**检查边界**：按用户不重复功能验收的要求，仅执行生产构建、包哈希与依赖预检、目标模块导入、deploy/verify.sh --quick、维护拦截、健康与迁移保全确认；复用未变运行时的既有证据，未重跑功能测试/浏览器模型冒烟/三平台验收。公网入口仍为https://shirt-neither-fundamentals-part.trycloudflare.com。
+**证据与回退**：artifacts/runtime/deploy-main-20260908/deployment-summary.json、build/receipt.md、server-evidence/及public-health.json；远端/var/tmp/threadsnap-main-659ddb8-20260908/。写入开放前失败可恢复旧release与匹配数据库；现在已经开放写入，禁止直接用停机备份覆盖新数据，保留旧release/离线包/备份供人工回退。
+**下一步**：用户刷新远端查看；保持服务运行，旧fix/yiche-empty-metrics及H:/ThreadSnap研发改动未动。本条为部署记录，不改变已发布应用源码。
+
+---
+
 ## 2026-09-08 — 补充AI账户删除入口
 **状态**：📝 删除入口与接口代码已补充；ece823c经PR #289合入main（合并提交53d75bd），当前开发目录已切回main，修复分支本地/远程已删除。按用户既有要求未测试、构建、审查或结果验收。
 **实现**：模型连接的账户选择旁增加删除与确认；非默认且无规则/任务/分析引用时清除密钥与配置、从列表移除，内部保留ID占位防止复用；默认账户和已引用账户返回明确保护提示。删除成功切回默认账户并清理该账户前端缓存，保留滚动位置。
