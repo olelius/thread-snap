@@ -808,6 +808,34 @@ class ReputationService:
                     "真实验证结果尚未覆盖全部已发布车型。",
                     details=[{**item, "reason": "缺少成功结果"} for item in missing],
                 )
+            input_hash = _text_hash(
+                {
+                    "scope_version_id": version.id,
+                    "validation_run_ids": run_ids,
+                    "attempt_ids": [
+                        by_target[(code, vehicle["id"])].id for vehicle, code in targets
+                    ],
+                }
+            )
+            existing = db.scalar(
+                select(ReputationRun).where(
+                    ReputationRun.source_type == "real_acceptance",
+                    ReputationRun.input_hash == input_hash,
+                )
+            )
+            if existing:
+                # 新采集门禁只限制新建；已冻结的历史结果按原身份返回，不回填或重算。
+                return self.get_run(existing.id)
+            if any(
+                item.status not in {"success", "partial_success", "failed"}
+                or item.finished_at is None
+                for item in validation_runs
+                if item is not None
+            ):
+                raise DomainError(
+                    "REPUTATION_ACCEPTANCE_VALIDATION_UNFINISHED",
+                    "真实映射验证尚未结束，请等待本轮采集完成。",
+                )
             for vehicle, code in targets:
                 mapping = vehicle.get("mappings", {}).get(code) or {}
                 attempt = by_target[(code, vehicle["id"])]
@@ -815,6 +843,29 @@ class ReputationService:
                     raise DomainError(
                         "REPUTATION_ACCEPTANCE_MAPPING_CHANGED",
                         f"车型{vehicle['id']}的成功结果不属于当前已发布映射。",
+                    )
+                frozen_metrics = attempt.metrics.get("frozen_metrics")
+                if not isinstance(frozen_metrics, dict) or any(
+                    not isinstance(frozen_metrics.get(name), dict)
+                    or not {"raw", "value", "comparison_status"} <= frozen_metrics[name].keys()
+                    for name in ("score", "rank", "volume", "review_article_count", "negative_rate")
+                ):
+                    raise DomainError(
+                        "REPUTATION_ACCEPTANCE_COLLECTION_INCOMPLETE",
+                        f"车型{vehicle['id']}的验证缺少完整指标采集记录，请重新验证。",
+                    )
+                options = attempt.gate_results.get("collection_options") or {}
+                if code == PLATFORM_CODE and (
+                    options.get("include_review_article_count") is not True
+                    or options.get("include_negative_rate") is not True
+                    or not frozen_metrics["review_article_count"].get("source_url")
+                    or not frozen_metrics["negative_rate"].get("source_url")
+                    or not {"positive_count", "negative_count"}
+                    <= frozen_metrics["negative_rate"].keys()
+                ):
+                    raise DomainError(
+                        "REPUTATION_ACCEPTANCE_COLLECTION_INCOMPLETE",
+                        f"车型{vehicle['id']}的验证缺少评价篇数或差评率采集来源，请重新验证。",
                     )
                 raw = attempt.metric_region_path
                 digest = attempt.metric_region_sha256
@@ -825,21 +876,6 @@ class ReputationService:
                         "REPUTATION_ACCEPTANCE_EVIDENCE_INVALID",
                         f"车型{vehicle['id']}的真实页面证据缺失或校验失败。",
                     )
-            input_hash = _text_hash(
-                {
-                    "scope_version_id": version.id,
-                    "validation_run_ids": run_ids,
-                    "attempt_ids": [by_target[(code, vehicle["id"])].id for vehicle, code in targets],
-                }
-            )
-            existing = db.scalar(
-                select(ReputationRun).where(
-                    ReputationRun.source_type == "real_acceptance",
-                    ReputationRun.input_hash == input_hash,
-                )
-            )
-            if existing:
-                return self.get_run(existing.id)
             started_at = min(item.started_at for item in validation_runs if item is not None)
             finished_at = max(item.finished_at for item in validation_runs if item and item.finished_at)
 
@@ -870,13 +906,6 @@ class ReputationService:
             finished_at=finished_at,
         )
 
-        def metric(raw: str | None, *, inverse: bool = False) -> dict[str, Any]:
-            return (
-                _metric(Decimal(raw), None, inverse=inverse, raw=raw)
-                if raw is not None
-                else _metric(None, None, inverse=inverse, state="not_available")
-            )
-
         try:
             with self.sessions.begin() as db:
                 db.add(run)
@@ -895,18 +924,11 @@ class ReputationService:
                         platform_code=platform_code,
                         platform_name=spec.display_name,
                         status="success",
-                        metrics={
-                            "score": metric(attempt.metrics.get("score")),
-                            "rank": metric(attempt.metrics.get("rank"), inverse=True),
-                            "volume": metric(attempt.metrics.get("volume")),
-                            "review_article_count": metric(
-                                attempt.metrics.get("review_article_count")
-                            ),
-                            "negative_rate": metric(
-                                attempt.metrics.get("negative_rate"), inverse=True
-                            ),
-                        },
+                        metrics=json.loads(json.dumps(attempt.metrics["frozen_metrics"])),
                         evidence_required=spec.requires_evidence,
+                        mapping_snapshot=vehicle.get("mappings", {}).get(platform_code) or {},
+                        attempt_count=attempt.attempt_number,
+                        duration_ms=attempt.duration_ms,
                         collected_at=attempt.finished_at,
                     )
                     db.add(result)
@@ -3023,6 +3045,8 @@ class ReputationService:
             headless=self.settings.auth_browser_headless,
             timeout_seconds=90,
             evidence_policy=lambda *_args: spec.requires_evidence,
+            include_review_article_count=True,
+            include_negative_rate=True,
         )
         root = self.settings.reputation_dir / "mapping-validations" / run_id
         try:
@@ -3169,6 +3193,9 @@ class ReputationService:
                     "review_article_count": result.review_article_count_raw,
                     "negative_rate": result.negative_rate_raw,
                     "rank_scope": result.rank_scope,
+                    # 保留旧的原始值键供映射页使用，巡检转换读取同次冻结的完整投影。
+                    "frozen_metrics": self._official_metrics(result, None),
+                    "reputation_not_available": result.reputation_not_available,
                 },
                 gate_results={
                     "identity": "passed",
@@ -3182,9 +3209,15 @@ class ReputationService:
                         "height": result.measurements[-1].get("document_height"),
                     },
                     "region": {"width": result.width, "height": result.height},
+                    "collection_options": {
+                        "include_review_article_count": True,
+                        "include_negative_rate": True,
+                    },
                 },
                 full_page_path=str(result.full_page_path) if result.full_page_path else None,
-                metric_region_path=str(result.metric_region_path) if result.metric_region_path else None,
+                metric_region_path=str(result.metric_region_path)
+                if result.metric_region_path
+                else None,
                 full_page_sha256=result.full_page_sha256,
                 metric_region_sha256=result.metric_region_sha256,
                 duration_ms=result.duration_ms,

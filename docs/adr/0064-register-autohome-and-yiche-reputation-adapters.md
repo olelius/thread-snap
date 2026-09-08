@@ -1,6 +1,7 @@
 # ADR 0064：以平台注册表接入汽车之家与易车口碑巡检
 
 - 状态：已接受
+- amended_by：ADR 0068（缺失指标及差评率异常状态部分）；ADR 0070（易车URL与证据模式）
 - 日期：2026-09-03
 - 关联：`docs/chains/reputation-inspection.md`、`docs/chains/later-platform-delivery.md`、`docs/design/product-design.md`、`docs/design/technical-route.md`
 
