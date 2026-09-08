@@ -23,7 +23,13 @@ from fastapi import (
     WebSocket,
 )
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from sqlalchemy.exc import OperationalError
 
 from .auth import BrowserAuthManager
@@ -56,6 +62,7 @@ from .schemas import (
     ManualSentimentRevisionCreate,
     PlatformConfigUpdate,
     SentimentConfigUpdate,
+    SentimentAccountCreate,
     SessionImport,
 )
 from .screenshots import ScreenshotService
@@ -249,7 +256,21 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
         return _container(request).reputation.delete_synthetic(run_id)
 
     @router.get("/reputation/runs/{run_id}/report.txt")
-    def download_reputation_report(run_id: str, request: Request) -> FileResponse:
+    def download_reputation_report(
+        run_id: str,
+        request: Request,
+        template: Literal["vehicle_detail", "daily_changes"] | None = None,
+    ) -> Response:
+        if template is not None:
+            run = _container(request).reputation.get_run(run_id, prefix)
+            selected = next((item for item in run["report_templates"] if item["id"] == template), None)
+            if selected is None:
+                raise DomainError("REPUTATION_REPORT_NOT_READY", "巡检尚未终态，汇报暂未生成。", status_code=409)
+            return Response(
+                content=selected["text"],
+                media_type="text/plain; charset=utf-8",
+                headers={"Content-Disposition": f'attachment; filename="{run["number"]}-{template}.txt"'},
+            )
         path = _container(request).reputation.get_file(run_id, "txt")
         return FileResponse(path, filename=path.name, media_type="text/plain; charset=utf-8")
 
@@ -360,12 +381,26 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
     ) -> dict[str, Any]:
         return _container(request).reputation.publish_scope(value)
 
+    @router.get("/sentiment/accounts")
+    def list_sentiment_accounts(request: Request) -> list[dict[str, Any]]:
+        return _container(request).sentiment.get_accounts()
+
+    @router.post("/sentiment/accounts", status_code=201)
+    def create_sentiment_account(value: SentimentAccountCreate, request: Request) -> dict[str, Any]:
+        result = _container(request).sentiment.create_account(value.name)
+        _container(request).events.publish("sentiment.config.changed", "sentiment-config")
+        return result
+
+    @router.get("/sentiment/accounts/{account_id}/balance")
+    def get_sentiment_account_balance(account_id: int, request: Request) -> dict[str, Any]:
+        return _container(request).sentiment.account_balance(account_id)
+
     @router.get("/sentiment/config")
-    def get_sentiment_config(request: Request) -> dict[str, Any]:
-        return _container(request).sentiment.get_config()
+    def get_sentiment_config(request: Request, account_id: int = Query(1, ge=1)) -> dict[str, Any]:
+        return _container(request).sentiment.get_config(account_id)
 
     @router.put("/sentiment/config")
-    def update_sentiment_config(value: SentimentConfigUpdate, request: Request) -> dict[str, Any]:
+    def update_sentiment_config(value: SentimentConfigUpdate, request: Request, account_id: int = Query(1, ge=1)) -> dict[str, Any]:
         if value.api_key is not None:
             host = request.client.host if request.client else ""
             loopback = host == "testclient"
@@ -381,17 +416,16 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
                     status_code=403,
                 )
         container = _container(request)
-        result = container.sentiment.update_config(value)
-        container.sentiment_worker.apply_runtime_config(
-            result["model_code"], result["cloud_concurrency"]
-        )
+        result = container.sentiment.update_config(value, account_id)
+        container.sentiment_worker.refresh_runtime_config()
         container.events.publish("sentiment.config.changed", "sentiment-config")
         return result
 
     @router.post("/sentiment/config/test")
-    def test_sentiment_config(request: Request) -> dict[str, Any]:
+    def test_sentiment_config(request: Request, account_id: int = Query(1, ge=1)) -> dict[str, Any]:
         container = _container(request)
-        result = container.sentiment.test_connection()
+        result = container.sentiment.test_connection(account_id)
+        container.sentiment_worker.refresh_runtime_config()
         container.events.publish("sentiment.config.changed", "sentiment-config")
         return result
 

@@ -10,6 +10,7 @@ import socket
 import threading
 from copy import deepcopy
 from difflib import SequenceMatcher
+from decimal import Decimal, InvalidOperation
 from ipaddress import ip_address, ip_network
 from time import monotonic
 from typing import Any, Callable, Literal
@@ -18,7 +19,7 @@ from urllib.parse import urlsplit
 import httpx
 from json_repair import repair_json
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from .errors import DomainError
@@ -1218,9 +1219,99 @@ class SentimentService:
             db.flush()
         return config
 
-    def get_config(self) -> dict[str, Any]:
+    @classmethod
+    def require_account(cls, db: Session, account_id: int = 1) -> SentimentConfig:
+        """按稳定账户ID取配置；只有兼容默认ID可自动初始化，不回退其他账户。"""
+        account = cls.ensure_default(db) if account_id == 1 else db.get(SentimentConfig, account_id)
+        if account is None:
+            raise DomainError("AI_ACCOUNT_NOT_FOUND", "所选AI账户不存在，请重新选择。", status_code=404)
+        return account
+
+    def get_accounts(self) -> list[dict[str, Any]]:
         with self.factory.begin() as db:
-            return self.config_dict(self.ensure_default(db))
+            self.ensure_default(db)
+            return [self.config_dict(item) for item in db.scalars(select(SentimentConfig).order_by(SentimentConfig.id))]
+
+    @staticmethod
+    def _account_name(db: Session, name: str, account_id: int | None = None) -> str:
+        name = name.strip()
+        if not name:
+            raise DomainError("AI_ACCOUNT_NAME_REQUIRED", "请输入AI账户名称。")
+        duplicate = select(SentimentConfig.id).where(func.lower(SentimentConfig.name) == name.lower())
+        if account_id is not None:
+            duplicate = duplicate.where(SentimentConfig.id != account_id)
+        if db.scalar(duplicate) is not None:
+            raise DomainError("AI_ACCOUNT_NAME_DUPLICATE", "AI账户名称已存在，请使用不同名称。", status_code=409)
+        return name
+
+    def create_account(self, name: str) -> dict[str, Any]:
+        """复制默认模型与业务主体作为初始值，不复制任何账户密钥。"""
+        with self.factory.begin() as db:
+            default = self.ensure_default(db)
+            account = SentimentConfig(
+                name=self._account_name(db, name), model_code=default.model_code,
+                base_url=default.base_url, deepseek_base_url=default.deepseek_base_url,
+                cloud_concurrency=default.cloud_concurrency, brand=default.brand,
+                products=list(default.products), supplement=default.supplement,
+            )
+            db.add(account)
+            db.flush()
+            return self.config_dict(account)
+
+    def worker_config(self) -> dict[str, Any]:
+        """账户并发合计受进程64上限约束，本地模型共用一个推理槽。"""
+        with self.factory.begin() as db:
+            default = self.ensure_default(db)
+            accounts = list(db.scalars(select(SentimentConfig).where(
+                SentimentConfig.enabled.is_(True), SentimentConfig.validation_status == "valid",
+            )))
+            hosted = [item for item in accounts if model_profile(item.model_code)["provider"] == "hosted"]
+            local = any(model_profile(item.model_code)["provider"] == "local" for item in accounts)
+            return {
+                "model_code": hosted[0].model_code if hosted else (accounts[0].model_code if accounts else default.model_code),
+                "cloud_concurrency": min(64, max(1, sum(item.cloud_concurrency for item in hosted) + int(local))),
+            }
+
+    def get_config(self, account_id: int = 1) -> dict[str, Any]:
+        with self.factory.begin() as db:
+            return self.config_dict(self.require_account(db, account_id))
+
+    def account_balance(self, account_id: int) -> dict[str, Any]:
+        """只读所选官方DeepSeek账户余额，不猜测代理协议，不改变连接就绪状态。"""
+        with self.factory.begin() as db:
+            account = self.require_account(db, account_id)
+            base_url, encrypted_key = model_connection(account, account.model_code)
+            result = {"account_id": account.id, "balance_infos": [], "checked_at": utc_now().isoformat()}
+            if urlsplit(base_url).hostname != "api.deepseek.com" or urlsplit(base_url).port not in (None, 443):
+                return {**result, "status": "unsupported", "message": "当前服务未配置支持的余额查询接口。"}
+            if not encrypted_key:
+                return {**result, "status": "unconfigured", "message": "请先保存该账户的API Key。"}
+            try:
+                validate_public_https_base_url(base_url, resolve=True)
+                key = self.secrets.decrypt_secret(encrypted_key)
+            except Exception:
+                return {**result, "status": "unavailable", "message": "账户连接配置暂不可用。"}
+        try:
+            # 官方接口不依赖 /v1 路径；拒绝重定向，避免Bearer密钥离开配置主机。
+            endpoint = "https://api.deepseek.com/user/balance"
+            with httpx.Client(timeout=10, follow_redirects=False, trust_env=False) as client:
+                response = client.get(endpoint, headers={"Authorization": f"Bearer {key}"})
+                response.raise_for_status()
+                payload = response.json()
+            balances = payload.get("balance_infos")
+            if not isinstance(balances, list) or not isinstance(payload.get("is_available"), bool):
+                raise ValueError("余额响应格式异常")
+            cleaned = []
+            for item in balances:
+                if not isinstance(item, dict) or item.get("currency") not in {"CNY", "USD"}:
+                    raise ValueError("余额币种格式异常")
+                values = {name: item[name] for name in ("total_balance", "granted_balance", "topped_up_balance")}
+                if any(not isinstance(value, str) or not Decimal(value).is_finite() for value in values.values()):
+                    raise ValueError("余额数值格式异常")
+                cleaned.append({"currency": item["currency"], **values})
+            return {**result, "status": "available", "is_available": payload["is_available"], "balance_infos": cleaned}
+        except (httpx.HTTPError, ValueError, KeyError, TypeError, InvalidOperation):
+            return {**result, "status": "unavailable", "message": "余额查询暂时失败，请稍后刷新。"}
 
     @staticmethod
     def config_dict(config: SentimentConfig) -> dict[str, Any]:
@@ -1233,6 +1324,8 @@ class SentimentService:
                 "api_key_configured": bool(encrypted_key),
             }
         return {
+            "id": config.id,
+            "name": config.name,
             "revision": config.revision,
             "api_base_url": active_base_url,
             "api_key_configured": bool(active_key),
@@ -1258,13 +1351,13 @@ class SentimentService:
             },
         }
 
-    def update_config(self, value: SentimentConfigUpdate) -> dict[str, Any]:
+    def update_config(self, value: SentimentConfigUpdate, account_id: int = 1) -> dict[str, Any]:
         profile = model_profile(value.model_code)
         base_url = value.api_base_url.strip().rstrip("/") if profile["provider"] == "hosted" else ""
         if profile["provider"] == "hosted" and base_url:
             base_url = validate_public_https_base_url(base_url, resolve=False)
         with self.factory.begin() as db:
-            config = self.ensure_default(db)
+            config = self.require_account(db, account_id)
             if value.revision != config.revision:
                 raise DomainError(
                     "SENTIMENT_CONFIG_REVISION_CONFLICT",
@@ -1272,6 +1365,8 @@ class SentimentService:
                     status_code=409,
                 )
             current_base_url, current_encrypted_key = model_connection(config, value.model_code)
+            if value.name is not None:
+                config.name = self._account_name(db, value.name, config.id)
             encrypted_key = current_encrypted_key
             key_changed = value.api_key is not None and profile["provider"] == "hosted"
             if key_changed:
@@ -1318,7 +1413,7 @@ class SentimentService:
             if connection_changed:
                 db.execute(
                     update(SentimentAnalysis)
-                    .where(SentimentAnalysis.status == "analysis_queued")
+                    .where(SentimentAnalysis.status == "analysis_queued", SentimentAnalysis.account_id == account_id)
                     .values(
                         status="analysis_paused",
                         error_code="MODEL_CONFIG_ERROR",
@@ -1327,14 +1422,14 @@ class SentimentService:
                 )
                 db.execute(
                     update(PostSnapshot)
-                    .where(PostSnapshot.analysis_status == "analysis_queued")
+                    .where(PostSnapshot.analysis_status == "analysis_queued", PostSnapshot.id.in_(select(SentimentAnalysis.post_id).where(SentimentAnalysis.account_id == account_id)))
                     .values(analysis_status="analysis_paused", sentiment_updated_at=utc_now())
                 )
             return self.config_dict(config)
 
-    def test_connection(self) -> dict[str, Any]:
+    def test_connection(self, account_id: int = 1) -> dict[str, Any]:
         with self.factory() as db:
-            config = self.ensure_default(db)
+            config = self.require_account(db, account_id)
             profile = model_profile(config.model_code)
             configured_base_url, configured_key = model_connection(config, config.model_code)
             if profile["provider"] == "hosted" and (
@@ -1390,7 +1485,7 @@ class SentimentService:
                     config.validated_at = utc_now()
                     db.execute(
                         update(SentimentAnalysis)
-                        .where(SentimentAnalysis.status == "analysis_queued")
+                        .where(SentimentAnalysis.status == "analysis_queued", SentimentAnalysis.account_id == account_id)
                         .values(
                             status="analysis_paused",
                             error_code="MODEL_CONFIG_ERROR",
@@ -1399,7 +1494,7 @@ class SentimentService:
                     )
                     db.execute(
                         update(PostSnapshot)
-                        .where(PostSnapshot.analysis_status == "analysis_queued")
+                        .where(PostSnapshot.analysis_status == "analysis_queued", PostSnapshot.id.in_(select(SentimentAnalysis.post_id).where(SentimentAnalysis.account_id == account_id)))
                         .values(
                             analysis_status="analysis_paused",
                             sentiment_updated_at=utc_now(),
@@ -1418,12 +1513,12 @@ class SentimentService:
             config.enabled = True
             db.execute(
                 update(SentimentAnalysis)
-                .where(SentimentAnalysis.status == "analysis_paused")
+                .where(SentimentAnalysis.status == "analysis_paused", SentimentAnalysis.account_id == account_id)
                 .values(status="analysis_queued", error_code=None, error_message=None)
             )
             db.execute(
                 update(PostSnapshot)
-                .where(PostSnapshot.analysis_status == "analysis_paused")
+                .where(PostSnapshot.analysis_status == "analysis_paused", PostSnapshot.id.in_(select(SentimentAnalysis.post_id).where(SentimentAnalysis.account_id == account_id)))
                 .values(analysis_status="analysis_queued", sentiment_updated_at=utc_now())
             )
         return {"status": "valid", "request_id": request_id, "duration_ms": duration_ms}
@@ -1435,10 +1530,12 @@ class SentimentService:
         platform_code: str,
         *,
         analysis_enabled: bool = True,
+        account_id: int = 1,
+        account_name: str | None = None,
     ) -> None:
         """新帖子入库时决定禁用、继承、精确复用或排队。"""
 
-        config = self.ensure_default(db)
+        config = self.require_account(db, account_id)
         input_hash = sentiment_input_hash(post, config.model_code)
         if not analysis_enabled:
             status = "analysis_disabled"
@@ -1455,6 +1552,8 @@ class SentimentService:
             input_hash=input_hash,
             status=status,
             config_revision=config.revision,
+            account_id=config.id,
+            account_name=account_name or config.name,
             subject_version=config.subject_version,
             subject_snapshot={
                 "brand": config.brand,
@@ -1482,6 +1581,7 @@ class SentimentService:
                 SentimentAnalysis.platform_code == platform_code,
                 PostSnapshot.platform_post_id == post.platform_post_id,
                 SentimentAnalysis.input_hash == input_hash,
+                SentimentAnalysis.account_id == config.id,
                 PostSnapshot.id != post.id,
             )
             .order_by(ManualSentimentRevision.created_at.desc())
@@ -1513,6 +1613,7 @@ class SentimentService:
                     SentimentAnalysis.platform_code == platform_code,
                     SentimentAnalysis.platform_post_id == post.platform_post_id,
                     SentimentAnalysis.input_hash == input_hash,
+                    SentimentAnalysis.account_id == config.id,
                     SentimentAnalysis.subject_version == config.subject_version,
                     SentimentAnalysis.prompt_version == analysis_version(config.model_code),
                     SentimentAnalysis.model_code == config.model_code,
@@ -1629,6 +1730,8 @@ class SentimentService:
             ),
             "modalities": analysis.modalities if analysis else None,
             "model_code": analysis.model_code if analysis else None,
+            "account_id": analysis.account_id if analysis else None,
+            "account_name": analysis.account_name if analysis else None,
             "provider_request_id": analysis.provider_request_id if analysis else None,
             "duration_ms": analysis.duration_ms if analysis else None,
             "error_code": analysis.error_code if analysis else None,
@@ -1680,7 +1783,7 @@ class SentimentWorker:
         self.active_claims_lock = threading.Lock()
         self.active_claims: dict[int, tuple[str, str]] = {}
         self.rate_limit_lock = threading.Lock()
-        self.rate_limit_until = 0.0
+        self.rate_limit_until: dict[int, float] = {}
         self.next_watchdog_at = 0.0
 
     def start(self) -> None:
@@ -1688,7 +1791,7 @@ class SentimentWorker:
             if self.started:
                 return
         self.recover_interrupted()
-        config = self.service.get_config()
+        config = self.service.worker_config()
         with self.state_condition:
             if self.started:
                 return
@@ -1716,6 +1819,11 @@ class SentimentWorker:
             SENTIMENT_CLOUD_CONCURRENCY_MIN,
             min(value, SENTIMENT_CLOUD_CONCURRENCY_MAX),
         )
+
+    def refresh_runtime_config(self) -> None:
+        """账户新增或状态变化后刷新总槽位，保留各账户独立领取限制。"""
+        config = self.service.worker_config()
+        self.apply_runtime_config(config["model_code"], config["cloud_concurrency"])
 
     def apply_runtime_config(self, model_code: str, cloud_concurrency: int) -> None:
         """保存配置后立即调整后续任务槽位，不中断已经发出的请求。"""
@@ -1821,21 +1929,21 @@ class SentimentWorker:
                     recovered += 1
             return recovered
 
-    def _wait_for_rate_limit(self) -> bool:
-        """让两个消费者共享提供方 429 冷却窗口。"""
+    def _wait_for_rate_limit(self, account_id: int = 1) -> bool:
+        """同一账户的消费者共享429冷却，其它账户独立执行。"""
 
         while not self.stop_event.is_set():
             with self.rate_limit_lock:
-                delay = max(0.0, self.rate_limit_until - monotonic())
+                delay = max(0.0, self.rate_limit_until.get(account_id, 0.0) - monotonic())
             if delay <= 0:
                 return True
             if self.stop_event.wait(delay):
                 return False
         return False
 
-    def _extend_rate_limit(self, delay: float) -> None:
+    def _extend_rate_limit(self, delay: float, account_id: int = 1) -> None:
         with self.rate_limit_lock:
-            self.rate_limit_until = max(self.rate_limit_until, monotonic() + delay)
+            self.rate_limit_until[account_id] = max(self.rate_limit_until.get(account_id, 0.0), monotonic() + delay)
 
     def process_once(self, slot: int | None = None) -> bool:
         """处理一条任务；未预期异常也必须结束当前运行态并留下诊断。"""
@@ -1875,17 +1983,32 @@ class SentimentWorker:
                     if slot >= self.concurrency:
                         return False
             with self.service.factory.begin() as db:
-                config = self.service.ensure_default(db)
-                if not config.enabled or config.validation_status != "valid":
+                accounts = {item.id: item for item in db.scalars(select(SentimentConfig).where(
+                    SentimentConfig.enabled.is_(True), SentimentConfig.validation_status == "valid",
+                ))}
+                running = dict(db.execute(select(SentimentAnalysis.account_id, func.count())
+                    .where(SentimentAnalysis.status == "analysis_running")
+                    .group_by(SentimentAnalysis.account_id)).all())
+                with self.rate_limit_lock:
+                    eligible = [account_id for account_id, account in accounts.items()
+                        if running.get(account_id, 0) < (1 if model_profile(account.model_code)["provider"] == "local" else account.cloud_concurrency)
+                        and self.rate_limit_until.get(account_id, 0.0) <= monotonic()]
+                if not eligible:
                     return False
-                analysis = db.scalar(
-                    select(SentimentAnalysis)
-                    .where(SentimentAnalysis.status == "analysis_queued")
-                    .order_by(SentimentAnalysis.created_at)
-                    .limit(1)
+                query = select(SentimentAnalysis).where(
+                    SentimentAnalysis.status == "analysis_queued", SentimentAnalysis.account_id.in_(eligible),
                 )
+                # 多个本地账户共用同一Predictor，全进程仍只领取一个本地任务。
+                local_running = db.scalar(select(SentimentAnalysis.id).where(
+                    SentimentAnalysis.status == "analysis_running", SentimentAnalysis.model_code == LOCAL_MODEL_CODE,
+                ).limit(1))
+                if local_running:
+                    query = query.where(SentimentAnalysis.model_code != LOCAL_MODEL_CODE)
+                analysis = db.scalar(query.order_by(SentimentAnalysis.created_at).limit(1))
                 if not analysis:
                     return False
+                config = accounts[analysis.account_id]
+                analysis.config_revision = config.revision
                 post = db.get(PostSnapshot, analysis.post_id)
                 if not post:
                     db.delete(analysis)
@@ -1951,7 +2074,7 @@ class SentimentWorker:
         incomplete_retries = 0
         output_correction_retries = 0
         while True:
-            if not self._wait_for_rate_limit():
+            if not self._wait_for_rate_limit(analysis.account_id):
                 return False
             try:
                 raw, usage, request_id, duration_ms = self.service.client.request(
@@ -1998,7 +2121,7 @@ class SentimentWorker:
                         else float(2**transport_retries)
                     )
                     if rate_limited:
-                        self._extend_rate_limit(delay)
+                        self._extend_rate_limit(delay, analysis.account_id)
                     elif self.stop_event.wait(delay):
                         return False
                     transport_retries += 1
@@ -2318,16 +2441,19 @@ class SentimentWorker:
             if post:
                 post.analysis_status = status
                 post.sentiment_updated_at = utc_now()
-            if config_error:
-                config = db.get(SentimentConfig, 1)
-                if config:
+            if config_error and analysis:
+                account_id = analysis.account_id
+                config = db.get(SentimentConfig, account_id)
+                if config and config.revision == analysis.config_revision:
                     config.enabled = False
                     config.validation_status = "invalid"
                     config.validation_error = str(exc)[:1000]
                     config.validated_at = utc_now()
+                if not config or config.revision != analysis.config_revision:
+                    return
                 db.execute(
                     update(SentimentAnalysis)
-                    .where(SentimentAnalysis.status == "analysis_queued")
+                    .where(SentimentAnalysis.status == "analysis_queued", SentimentAnalysis.account_id == account_id)
                     .values(
                         status="analysis_paused",
                         error_code="MODEL_CONFIG_ERROR",
@@ -2336,7 +2462,7 @@ class SentimentWorker:
                 )
                 db.execute(
                     update(PostSnapshot)
-                    .where(PostSnapshot.analysis_status == "analysis_queued")
+                    .where(PostSnapshot.analysis_status == "analysis_queued", PostSnapshot.id.in_(select(SentimentAnalysis.post_id).where(SentimentAnalysis.account_id == account_id)))
                     .values(analysis_status="analysis_paused", sentiment_updated_at=utc_now())
                 )
 

@@ -221,6 +221,8 @@
 | `docs/adr/0063-probe-yiche-rate-limit-every-ten-seconds.md` | 易车持久429恢复固定每10秒执行一次单来源单并发原URL探针，间隔不随次数上涨 |
 | `docs/adr/0064-register-autohome-and-yiche-reputation-adapters.md` | 以平台注册表接入汽车之家与易车口碑巡检，复用完整业务流程并保留平台指标语义和缺失状态 |
 | `docs/adr/0070-use-yiche-url-only-reputation-mode.md` | 易车口碑临时使用URL处理、停用截图与原生Runtime前置条件，历史记录保持不变 |
+| `docs/adr/0071-add-independent-circle-content-count.md` | 懂车帝独立圈内内容数、同ID取数与历史/截图边界 |
+| `docs/adr/0072-support-named-ai-accounts.md` | 命名AI账户、提取账户选择、任务隔离与余额展示 |
 
 ADR 状态为 `accepted` 时对当前项目生效。后续改变决策时应新增 ADR 或明确记录替代关系，不直接删除历史决策依据。
 

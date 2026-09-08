@@ -1298,6 +1298,8 @@ class WorkerService:
                     analysis_enabled=bool(
                         (task.config_snapshot or {}).get("ai_analysis_enabled", True)
                     ),
+                    account_id=int((task.config_snapshot or {}).get("ai_account_id", 1)),
+                    account_name=(task.config_snapshot or {}).get("ai_account_name"),
                 )
             next_order = max(next_order + 1, int(record.get("order_index", next_order)) + 1)
             for index, comment in enumerate(record.get("comments") or []):

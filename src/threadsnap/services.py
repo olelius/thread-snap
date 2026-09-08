@@ -42,7 +42,7 @@ from .schemas import (
     ManualRunCreate,
     PlatformConfigUpdate,
 )
-from .sentiment import deduplicate_media_urls, sentiment_summary
+from .sentiment import SentimentService, deduplicate_media_urls, sentiment_summary
 
 TERMINAL_STATUSES = frozenset({"success", "partial_success", "failed"})
 RUN_STATUS_ZH = {
@@ -54,6 +54,22 @@ RUN_STATUS_ZH = {
     "failed": "失败",
 }
 TRIGGER_ZH = {"manual": "手动触发", "scheduled": "定时提取", "recurring": "循环计划"}
+
+
+def ai_account_snapshot(db: Session, account_id: int) -> dict[str, Any]:
+    """只冻结账户公开身份，不把连接或密钥放入提取快照。"""
+    account = SentimentService.require_account(db, account_id)
+    return {"ai_account_id": account.id, "ai_account_name": account.name}
+
+
+def source_ai_account(source_rules: list[dict[str, Any]]) -> dict[str, Any]:
+    """同来源仍只采集一次；不同启用AI账户的合并必须由用户先解决。"""
+    enabled = [item for item in source_rules if item["ai_analysis_enabled"]]
+    if len({item["ai_account_id"] for item in enabled}) > 1:
+        names = "、".join(dict.fromkeys(item["ai_account_name"] for item in enabled))
+        raise DomainError("AI_ACCOUNT_SOURCE_CONFLICT", f"同一圈子选用了不同AI账户（{names}），请统一账户或分开计划节点。")
+    selected = (enabled or source_rules)[0]
+    return {"ai_account_id": selected["ai_account_id"], "ai_account_name": selected["ai_account_name"]}
 
 
 def related_run_ids(db: Session, run_id: str) -> list[str]:
@@ -261,6 +277,7 @@ class ConfigService:
                     "platform_quantities": version.platform_quantities,
                     "circle_ids": version.selected_circle_ids,
                     "ai_analysis_enabled": version.ai_analysis_enabled,
+                    "ai_account_id": version.ai_account_id,
                     "screenshot_enabled": version.screenshot_enabled,
                     "archived": rule.archived,
                     "updated_at": rule.updated_at,
@@ -464,6 +481,22 @@ class ConfigService:
                 )
 
             existing_rules = {item.id: item for item in db.scalars(select(ExtractionRule))}
+            # 只验证引用身份与同来源合并语义，不发起AI请求。
+            drafts_by_id = {item.id: item for item in value.rules}
+            account_snapshots = {item.id: ai_account_snapshot(db, item.ai_account_id) for item in value.rules}
+            for node in all_nodes:
+                if not node.enabled:
+                    continue
+                by_circle: dict[str, list[dict[str, Any]]] = {}
+                for rule_id in node.rule_ids:
+                    draft = drafts_by_id[rule_id]
+                    for circle_id in rule_circle_ids[rule_id]:
+                        by_circle.setdefault(circle_id, []).append({
+                            "ai_analysis_enabled": draft.ai_analysis_enabled,
+                            **account_snapshots[rule_id],
+                        })
+                for sources in by_circle.values():
+                    source_ai_account(sources)
             for draft in value.rules:
                 rule = existing_rules.get(draft.id)
                 quantities = rule_quantities[draft.id]
@@ -485,6 +518,7 @@ class ConfigService:
                             platform_quantities=quantities,
                             selected_circle_ids=circle_ids,
                             ai_analysis_enabled=draft.ai_analysis_enabled,
+                            ai_account_id=draft.ai_account_id,
                             screenshot_enabled=draft.screenshot_enabled,
                         )
                     )
@@ -500,6 +534,7 @@ class ConfigService:
                         or current.platform_quantities != quantities
                         or current.selected_circle_ids != circle_ids
                         or current.ai_analysis_enabled != draft.ai_analysis_enabled
+                        or current.ai_account_id != draft.ai_account_id
                         or current.screenshot_enabled != draft.screenshot_enabled
                     )
                     rule.name = draft.name.strip()
@@ -512,6 +547,7 @@ class ConfigService:
                                 platform_quantities=quantities,
                                 selected_circle_ids=circle_ids,
                                 ai_analysis_enabled=draft.ai_analysis_enabled,
+                                ai_account_id=draft.ai_account_id,
                                 screenshot_enabled=draft.screenshot_enabled,
                             )
                         )
@@ -1181,6 +1217,7 @@ class RunService:
                     "quantity": quantity,
                     "requested_quantity": value.quantity,
                     "ai_analysis_enabled": value.ai_analysis_enabled,
+                    **ai_account_snapshot(db, value.ai_account_id),
                     "screenshot_enabled": (
                         value.screenshot_enabled and bool(circles) and spec.supports_page_evidence
                     ),
@@ -1211,6 +1248,7 @@ class RunService:
                         "source_name": vehicle_name,
                         "transient": item["transient"],
                         "ai_analysis_enabled": value.ai_analysis_enabled,
+                        **ai_account_snapshot(db, value.ai_account_id),
                         "screenshot_enabled": (
                             value.screenshot_enabled and spec.supports_page_evidence
                         ),
@@ -1233,6 +1271,7 @@ class RunService:
                             "known_post_urls": normalized_posts,
                             "internal_concurrency": platform.internal_concurrency,
                             "ai_analysis_enabled": value.ai_analysis_enabled,
+                            **ai_account_snapshot(db, value.ai_account_id),
                             "screenshot_enabled": False,
                         },
                     )
@@ -1315,6 +1354,7 @@ class RunService:
                     "ai_analysis_enabled": current_versions[
                         (rule.id, rule.current_version)
                     ].ai_analysis_enabled,
+                    **ai_account_snapshot(db, current_versions[(rule.id, rule.current_version)].ai_account_id),
                     "screenshot_enabled": current_versions[
                         (rule.id, rule.current_version)
                     ].screenshot_enabled,
@@ -1387,9 +1427,20 @@ class RunService:
                             "rule_version": snapshot["version"],
                             "quantity": int(quantities[circle.platform_code]),
                             "ai_analysis_enabled": bool(snapshot["ai_analysis_enabled"]),
+                            "ai_account_id": snapshot["ai_account_id"],
+                            "ai_account_name": snapshot["ai_account_name"],
                             "screenshot_enabled": bool(snapshot["screenshot_enabled"]),
                         }
                     )
+            try:
+                source_accounts = {circle_id: source_ai_account(items) for circle_id, items in contributions.items()}
+            except DomainError as error:
+                db.add(ScheduleEvent(
+                    planned_at=planned_at, schedule_node_id=schedule_node_id,
+                    schedule_revision=schedule_revision, rule_snapshots=rule_snapshots,
+                    status="blocked", message=error.message,
+                ))
+                return None
             if missing:
                 db.add(
                     ScheduleEvent(
@@ -1503,6 +1554,7 @@ class RunService:
                             "vehicle_name": circle.vehicle.name if circle.vehicle else None,
                             "source_name": circle.vehicle.name if circle.vehicle else None,
                             "source_rules": source_rules,
+                            **source_accounts[circle.id],
                             "ai_analysis_enabled": any(
                                 item["ai_analysis_enabled"] for item in source_rules
                             ),

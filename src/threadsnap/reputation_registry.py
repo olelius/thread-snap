@@ -7,6 +7,23 @@ from typing import Any, Callable
 
 from . import reputation_autohome, reputation_dongchedi, reputation_yiche
 
+CORE_METRIC_KEYS = ("score", "rank", "volume", "review_article_count", "negative_rate")
+METRIC_LABELS = {
+    "score": "口碑分",
+    "rank": "排名",
+    "volume": "口碑量",
+    "review_article_count": "口碑评价篇数",
+    "negative_rate": "差评率",
+    "circle_content_count": "圈内内容数",
+}
+
+
+def metric_label(platform_code: str, key: str) -> str:
+    """共用计数字段在不同平台保留各自业务名称。"""
+    if platform_code == "autohome" and key == "circle_content_count":
+        return "论坛帖子总数"
+    return METRIC_LABELS[key]
+
 
 @dataclass(frozen=True)
 class ReputationPlatformSpec:
@@ -21,6 +38,7 @@ class ReputationPlatformSpec:
     viewport: dict[str, int]
     requires_session: bool = True
     requires_evidence: bool = True
+    metric_keys: tuple[str, ...] = CORE_METRIC_KEYS
 
 
 REPUTATION_PLATFORMS: dict[str, ReputationPlatformSpec] = {
@@ -32,6 +50,7 @@ REPUTATION_PLATFORMS: dict[str, ReputationPlatformSpec] = {
         reputation_dongchedi.ADAPTER_VERSION,
         reputation_dongchedi.VALIDATION_CONTRACT_VERSION,
         reputation_dongchedi.VIEWPORT,
+        metric_keys=(*CORE_METRIC_KEYS, "circle_content_count"),
     ),
     "autohome": ReputationPlatformSpec(
         "autohome",
@@ -41,6 +60,7 @@ REPUTATION_PLATFORMS: dict[str, ReputationPlatformSpec] = {
         reputation_autohome.ADAPTER_VERSION,
         reputation_autohome.VALIDATION_CONTRACT_VERSION,
         reputation_autohome.VIEWPORT,
+        metric_keys=tuple(key for key in CORE_METRIC_KEYS if key != "negative_rate") + ("circle_content_count",),
     ),
     "yiche": ReputationPlatformSpec(
         "yiche",
@@ -52,6 +72,7 @@ REPUTATION_PLATFORMS: dict[str, ReputationPlatformSpec] = {
         reputation_yiche.VIEWPORT,
         requires_session=False,
         requires_evidence=False,
+        metric_keys=tuple(key for key in CORE_METRIC_KEYS if key != "negative_rate"),
     ),
 }
 

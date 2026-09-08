@@ -20,6 +20,7 @@ from patchright.sync_api import sync_playwright
 from ..browser_runtime import browser_launch_args
 from ..scrapling_transport import ExecutionScopeKey, ScraplingHttpPool
 from .base import AuthenticationRequired, CircleSource, CollectorFailure
+from .dongchedi_count import circle_count_visible_text, parse_circle_content_count
 
 ADAPTER_VERSION = "dongchedi-dynamic-v7-scrapling"
 BASE_URL = "https://www.dongchedi.com"
@@ -400,7 +401,6 @@ class DongchediCollector:
             )
         document = html.fromstring(response.content)
         title = document.xpath("string(//title)")
-        body = document.text_content()
         raw_rows = []
         for index, card in enumerate(document.cssselect("section.community-card")):
             raw_rows.append(
@@ -412,10 +412,12 @@ class DongchediCollector:
                     "hrefs": card.xpath(".//a/@href"),
                 }
             )
-        total_match = re.search(r"共\s*(\d+)\s*条内容", body)
         page_match = re.search(r"_(\d+)/(\d+)页_", title)
         name_match = re.search(r"^(.*?)车友圈", title)
-        total_count = int(total_match.group(1)) if total_match else None
+        try:
+            total_count, _ = parse_circle_content_count(circle_count_visible_text(document))
+        except ValueError as error:
+            raise CollectorFailure("CIRCLE_CONTENT_COUNT_INVALID", str(error)) from error
         page_count = int(page_match.group(2)) if page_match else None
         rows = self._normalize_card_rows(raw_rows)
         # 首页请求时尚不知总数，解析后再推导该页应有数量，避免 SSR 残缺被误当成完整列表。

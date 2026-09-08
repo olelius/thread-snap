@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useBlocker, useNavigate, useSearch } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArchiveRestore, BrainCircuit, CalendarClock, CarFront, Check, ChevronDown, ChevronsUpDown, CirclePlus, Copy, Download, KeyRound, Loader2, Plus, RefreshCw, Repeat2, RotateCcw, Save, Settings2, Trash2, Upload } from 'lucide-react'
@@ -7,7 +7,7 @@ import { AuthDialog } from '@/features/auth/auth-dialog'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
 import { ApiError, api, errorMessage, formatDate, queryString } from '@/lib/api'
-import type { Circle, ExtractionPlan, Platform, SentimentConfig, SessionStatus, Template, Vehicle } from '@/lib/types'
+import type { Circle, ExtractionPlan, Platform, SentimentAccountBalance, SentimentConfig, SessionStatus, Template, Vehicle } from '@/lib/types'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
@@ -57,7 +57,7 @@ function ConfigTabLabel({ children, dirty }: { children: ReactNode; dirty?: bool
 }
 
 function editableRulesSignature(rules?: ExtractionPlan['rules']) {
-  return JSON.stringify((rules ?? []).map(({ id, name, platform_quantities, circle_ids, ai_analysis_enabled, screenshot_enabled }) => ({ id, name, platform_quantities, circle_ids: [...circle_ids].sort(), ai_analysis_enabled, screenshot_enabled })))
+  return JSON.stringify((rules ?? []).map(({ id, name, platform_quantities, circle_ids, ai_analysis_enabled, ai_account_id, screenshot_enabled }) => ({ id, name, platform_quantities, circle_ids: [...circle_ids].sort(), ai_analysis_enabled, ai_account_id: ai_account_id ?? 1, screenshot_enabled })))
 }
 
 function editableNodesSignature(nodes?: ExtractionPlan['nodes']) {
@@ -70,7 +70,7 @@ function editableRecurringNodesSignature(nodes?: ExtractionPlan['recurring_nodes
 
 function editableRuleSignature(rule?: ExtractionPlan['rules'][number]) {
   if (!rule) return ''
-  return JSON.stringify({ name: rule.name, platform_quantities: rule.platform_quantities, circle_ids: [...rule.circle_ids].sort(), ai_analysis_enabled: rule.ai_analysis_enabled, screenshot_enabled: rule.screenshot_enabled })
+  return JSON.stringify({ name: rule.name, platform_quantities: rule.platform_quantities, circle_ids: [...rule.circle_ids].sort(), ai_analysis_enabled: rule.ai_analysis_enabled, ai_account_id: rule.ai_account_id ?? 1, screenshot_enabled: rule.screenshot_enabled })
 }
 
 function editableNodeSignature(node?: ExtractionPlan['nodes'][number]) {
@@ -175,7 +175,7 @@ function usePlanWorkspace(onReveal: (tab: PlanSection, targetId?: string) => voi
       const rules = section === 'rules' ? current.rules : query.data.rules
       const nodes = section === 'schedule' ? current.nodes : query.data.nodes
       const recurringNodes = section === 'recurring' ? current.recurring_nodes : query.data.recurring_nodes
-      return api<ExtractionPlan>('/extraction-plan', { method: 'PUT', body: JSON.stringify({ revision: current.revision, rules: rules.map(({ id, name, platform_quantities, circle_ids, ai_analysis_enabled, screenshot_enabled }) => ({ id, name, platform_quantities, circle_ids, ai_analysis_enabled, screenshot_enabled })), nodes: nodes.map(({ id, weekdays: days, time, enabled, rule_ids }) => ({ id, weekdays: days, time, enabled, rule_ids })), recurring_nodes: recurringNodes.map(({ id, weekdays: days, start_time, end_time, interval_minutes, enabled, rule_ids }) => ({ id, weekdays: days, start_time, end_time, interval_minutes, enabled, rule_ids })) }) })
+      return api<ExtractionPlan>('/extraction-plan', { method: 'PUT', body: JSON.stringify({ revision: current.revision, rules: rules.map(({ id, name, platform_quantities, circle_ids, ai_analysis_enabled, ai_account_id, screenshot_enabled }) => ({ id, name, platform_quantities, circle_ids, ai_analysis_enabled, ai_account_id: ai_account_id ?? 1, screenshot_enabled })), nodes: nodes.map(({ id, weekdays: days, time, enabled, rule_ids }) => ({ id, weekdays: days, time, enabled, rule_ids })), recurring_nodes: recurringNodes.map(({ id, weekdays: days, start_time, end_time, interval_minutes, enabled, rule_ids }) => ({ id, weekdays: days, start_time, end_time, interval_minutes, enabled, rule_ids })) }) })
     },
     onSuccess: (value, { section }) => {
       setDraft((current) => ({ ...structuredClone(value), rules: section !== 'rules' && rulesDirty && current ? current.rules : structuredClone(value.rules), nodes: section !== 'schedule' && scheduleDirty && current ? current.nodes : structuredClone(value.nodes), recurring_nodes: section !== 'recurring' && recurringDirty && current ? current.recurring_nodes : structuredClone(value.recurring_nodes) }))
@@ -255,7 +255,7 @@ export function ConfigPage() {
         <TabsContent forceMount value='circles' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden xl:overflow-hidden'><CirclePanel onDirtyChange={setCircleDirty} /></TabsContent>
         <TabsContent forceMount value='history' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><HistoryPanel /></TabsContent>
         <TabsContent forceMount value='templates' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><TemplatePanel /></TabsContent>
-        <TabsContent forceMount value='sentiment' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><SentimentPanel onDirtyChange={setSentimentDirty} /></TabsContent>
+        <TabsContent forceMount value='sentiment' className='mt-3 min-h-0 flex-1 overflow-y-auto pr-1 data-[state=inactive]:hidden'><SentimentPanel active={tab === 'sentiment'} onDirtyChange={setSentimentDirty} /></TabsContent>
       </Tabs>
       <AlertDialog open={plan.revisionConflict} onOpenChange={plan.setRevisionConflict}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>服务器提取配置已有更新</AlertDialogTitle><AlertDialogDescription>当前标签的草稿仍保留。可以继续留在页面核对，或放弃规则和两类计划草稿并加载服务器最新版本。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel onClick={() => plan.setRevisionConflict(false)}>保留当前草稿</AlertDialogCancel><AlertDialogAction onClick={plan.reloadServerPlan}>放弃草稿并重新加载</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
       <AlertDialog open={blocker.status === 'blocked'}>
@@ -278,6 +278,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
   const { query, draft, setDraft, rulesDirty, dirty, save, discardSection, replacePlan } = workspace
   const platforms = useQuery({ queryKey: ['platforms'], queryFn: () => api<Platform[]>('/platforms') })
   const vehicles = useQuery({ queryKey: ['vehicles'], queryFn: () => api<Vehicle[]>('/vehicles') })
+  const aiAccounts = useQuery({ queryKey: ['sentiment-accounts'], queryFn: () => api<SentimentConfig[]>('/sentiment/accounts'), staleTime: 30_000 })
   const [selectedRuleId, setSelectedRuleId] = useState<string>()
   const [ruleSearch, setRuleSearch] = useState('')
 
@@ -328,6 +329,9 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
   const changeCount = changedRuleIds.size + removedRules
   const savedNodes = [...(query.data?.nodes ?? []), ...(query.data?.recurring_nodes ?? [])]
   const selectedRule = draft.rules.find((rule) => rule.id === selectedRuleId)
+  const selectedRuleAccountId = selectedRule?.ai_account_id ?? 1
+  const selectedRuleAccount = aiAccounts.data?.find((account) => account.id === selectedRuleAccountId)
+  const unavailableAiAccount = draft.rules.some((rule) => rule.ai_analysis_enabled && !aiAccounts.data?.some((account) => account.id === (rule.ai_account_id ?? 1)))
   const baselineSelectedRule = selectedRule ? baselineRules.get(selectedRule.id) : undefined
   const selectedRuleEvidenceUnavailable = Boolean(selectedRule?.circle_ids.length) && !supportsRulePageEvidence(selectedRule?.circle_ids ?? [])
   const selectedRuleEvidencePartial = Boolean(selectedRule?.circle_ids.some((id) => {
@@ -340,7 +344,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
   const filteredRules = draft.rules.filter((rule) => !search || `${rule.name} ${rule.id} ${rule.circle_ids.map((id) => { const circle = allCircles.find((item) => item.id === id); return circle ? sourceName(circle) : '' }).join(' ')}`.toLocaleLowerCase('zh-CN').includes(search))
 
   function createRule() {
-    const rule: ExtractionPlan['rules'][number] = { id: crypto.randomUUID(), name: `新规则 ${draft!.rules.length + 1}`, version: 1, platform_quantities: {}, circle_ids: [], ai_analysis_enabled: true, screenshot_enabled: true, archived: false, updated_at: new Date().toISOString() }
+    const rule: ExtractionPlan['rules'][number] = { id: crypto.randomUUID(), name: `新规则 ${draft!.rules.length + 1}`, version: 1, platform_quantities: {}, circle_ids: [], ai_analysis_enabled: true, ai_account_id: 1, screenshot_enabled: true, archived: false, updated_at: new Date().toISOString() }
     setSelectedRuleId(rule.id)
     setRuleSearch('')
     updateRules([...draft!.rules, rule])
@@ -359,7 +363,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
       <ConfigSectionToolbar icon={<CalendarClock className='size-4.5' />} title='自动提取规则' summary={`${draft.rules.length} 条规则${rulesDirty ? ` · ${changeCount} 项未保存` : ''}`} description='定义提取范围和每个来源的目标数；保存时与服务器现有每周计划和循环计划统一校验。'>
         <Button variant='outline' onClick={createRule}><Plus className='size-4' />新建规则</Button>
         <Button variant='outline' disabled={!rulesDirty || save.isPending} onClick={() => discardSection('rules')}><RotateCcw className='size-4' />放弃修改</Button>
-        <Button disabled={!rulesDirty || save.isPending} onClick={() => save.mutate({ section: 'rules', current: draft })}>{save.isPending ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}{save.isPending ? '正在保存' : `保存当前标签${rulesDirty ? ` (${changeCount})` : ''}`}</Button>
+        <Button disabled={!rulesDirty || save.isPending || unavailableAiAccount || (draft.rules.some((rule) => rule.ai_analysis_enabled) && aiAccounts.isError)} onClick={() => save.mutate({ section: 'rules', current: draft })}>{save.isPending ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}{save.isPending ? '正在保存' : `保存当前标签${rulesDirty ? ` (${changeCount})` : ''}`}</Button>
       </ConfigSectionToolbar>
 
       <div className='grid gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-[320px_minmax(0,1fr)]'>
@@ -390,6 +394,17 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
                   <Switch checked={!selectedRuleEvidenceUnavailable && selectedRule.screenshot_enabled} disabled={selectedRuleEvidenceUnavailable} data-dirty={selectedRule.screenshot_enabled !== (baselineSelectedRule?.screenshot_enabled ?? true) || undefined} className={cn(selectedRule.screenshot_enabled !== (baselineSelectedRule?.screenshot_enabled ?? true) && dirtyControlClass)} onCheckedChange={(screenshot_enabled) => updateRule(selectedRule.id, (item) => ({ ...item, screenshot_enabled }))} />
                 </label>
               </div>
+              {selectedRule.ai_analysis_enabled && <div className='space-y-2 rounded-xl border bg-background/55 p-3'>
+                <Label htmlFor={`rule-ai-account-${selectedRule.id}`}>AI 账户</Label>
+                <Select value={String(selectedRuleAccountId)} onValueChange={(value) => updateRule(selectedRule.id, (item) => ({ ...item, ai_account_id: Number(value) }))} disabled={aiAccounts.isLoading || aiAccounts.isError}>
+                  <SelectTrigger id={`rule-ai-account-${selectedRule.id}`} data-dirty={selectedRuleAccountId !== (baselineSelectedRule?.ai_account_id ?? 1) || undefined} className={cn('w-full', selectedRuleAccountId !== (baselineSelectedRule?.ai_account_id ?? 1) && dirtyFieldClass)}><SelectValue placeholder='选择 AI 账户' /></SelectTrigger>
+                  <SelectContent>
+                    {!selectedRuleAccount && <SelectItem value={String(selectedRuleAccountId)} disabled>{aiAccounts.isLoading ? '正在加载账户…' : '请选择可用账户'}</SelectItem>}
+                    {aiAccounts.data?.map((account) => <SelectItem key={account.id} value={String(account.id)}>{account.name}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+                {aiAccounts.isError ? <p className='text-xs text-destructive'>账户加载失败，请刷新页面后再试。</p> : selectedRuleAccount ? <p className='text-xs text-muted-foreground'>使用“{selectedRuleAccount.name}”的模型与判定对象；配置内容在 AI 舆情中维护。</p> : !aiAccounts.isLoading && <p className='text-xs text-destructive'>原账户已不可用，请明确选择账户；系统不会自动切换。</p>}
+              </div>}
               {allPlatforms.map((platform) => {
               const platformCircles = enabledCircles.filter((circle) => circle.platform_code === platform.code)
               const selectedCount = platformCircles.filter((circle) => selectedRule.circle_ids.includes(circle.id)).length
@@ -772,7 +787,7 @@ type TemplateField = { tag: string; field: string; type: string; description: st
 
 function sentimentSignature(value?: SentimentConfig) {
   if (!value) return ''
-  return JSON.stringify({ api_base_url: value.api_base_url, model_code: value.model_code, cloud_concurrency: value.cloud_concurrency, subject: { brand: value.subject.brand, products: value.subject.products, supplement: value.subject.supplement ?? '' } })
+  return JSON.stringify({ name: value.name.trim(), api_base_url: value.api_base_url, model_code: value.model_code, cloud_concurrency: value.cloud_concurrency, subject: { brand: value.subject.brand, products: value.subject.products, supplement: value.subject.supplement ?? '' } })
 }
 
 function normalizeSentimentProducts(value: string) {
@@ -785,49 +800,148 @@ const sentimentModelNames: Record<string, string> = {
   'paddlenlp-local-text-nano-v1': 'PaddleNLP 本地轻量文字分析（Nano）',
 }
 
-function SentimentPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void }) {
+/** 账户选择只改变编辑对象，既有草稿需先保存或显式放弃。 */
+function SentimentPanel({ active, onDirtyChange }: { active: boolean; onDirtyChange: (dirty: boolean) => void }) {
   const client = useQueryClient()
-  const query = useQuery({ queryKey: ['sentiment-config'], queryFn: () => api<SentimentConfig>('/sentiment/config') })
-  const [draft, setDraft] = useState<SentimentConfig>()
-  const [productsText, setProductsText] = useState<string>()
+  const accounts = useQuery({ queryKey: ['sentiment-accounts'], queryFn: () => api<SentimentConfig[]>('/sentiment/accounts'), staleTime: 30_000 })
+  const [accountId, setAccountId] = useState(1)
+  const [dirty, setDirty] = useState(false)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [newName, setNewName] = useState('')
+  const panelRef = useRef<HTMLDivElement>(null)
+  const pendingScrollTop = useRef<number | null>(null)
+  const rememberScroll = () => {
+    pendingScrollTop.current = panelRef.current?.closest<HTMLElement>('[role="tabpanel"]')?.scrollTop ?? null
+  }
+  const restoreScroll = () => {
+    const viewport = panelRef.current?.closest<HTMLElement>('[role="tabpanel"]')
+    if (viewport && pendingScrollTop.current !== null) viewport.scrollTop = pendingScrollTop.current
+    pendingScrollTop.current = null
+  }
+  const selectedAccount = accounts.data?.find((account) => account.id === accountId)
+  useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange])
+  const create = useMutation({
+    mutationFn: () => api<SentimentConfig>('/sentiment/accounts', { method: 'POST', body: JSON.stringify({ name: newName.trim() }) }),
+    onSuccess: (value) => {
+      client.setQueryData<SentimentConfig[]>(['sentiment-accounts'], (current) => [...(current ?? []).filter((account) => account.id !== value.id), value])
+      client.setQueryData(['sentiment-config', value.id], value)
+      rememberScroll()
+      setAccountId(value.id)
+      setCreateOpen(false)
+      setNewName('')
+      toast.success('AI 账户已创建', { description: '请配置该账户的连接；新账户未复制其他账户的 API Key。' })
+    },
+    onError: (error) => toast.error('创建账户失败', { description: errorMessage(error) }),
+  })
+  const requireSavedDraft = () => {
+    if (!dirty) return true
+    toast.info('请先保存或放弃当前账户修改，再切换或新增账户。')
+    return false
+  }
+  const accountControls = <div className='space-y-2'>
+    <Label htmlFor='sentiment-account'>AI 账户</Label>
+    <div className='flex flex-wrap items-center gap-2'>
+      <Select value={String(accountId)} onValueChange={(value) => { if (Number(value) !== accountId && requireSavedDraft()) { rememberScroll(); setAccountId(Number(value)) } }} disabled={accounts.isLoading || accounts.isError || create.isPending}>
+        <SelectTrigger id='sentiment-account' aria-label='切换 AI 账户' className='h-9 w-60 max-w-full'><SelectValue placeholder='选择并切换账户' /></SelectTrigger>
+        <SelectContent onCloseAutoFocus={(event) => { event.preventDefault(); document.getElementById('sentiment-account')?.focus({ preventScroll: true }) }}>
+          {!selectedAccount && <SelectItem value={String(accountId)} disabled>{accounts.isLoading ? '正在加载账户…' : '请选择可用账户'}</SelectItem>}
+          {accounts.data?.map((account) => <SelectItem key={account.id} value={String(account.id)}>{account.name}</SelectItem>)}
+        </SelectContent>
+      </Select>
+      <Button type='button' variant='outline' size='sm' disabled={create.isPending || accounts.isLoading || accounts.isError} onClick={() => { if (requireSavedDraft()) setCreateOpen(true) }}><Plus className='size-4' />新增</Button>
+    </div>
+    {accounts.isError && <p className='text-xs text-destructive'>账户加载失败：{errorMessage(accounts.error)} <Button variant='link' size='sm' onClick={() => void accounts.refetch()}>重新加载</Button></p>}
+  </div>
+  return <div ref={panelRef} className='space-y-5'>
+    {selectedAccount ? <SentimentAccountEditor accountId={accountId} initialConfig={selectedAccount} onAccountReady={restoreScroll} active={active} onDirtyChange={setDirty} accountControls={accountControls} />
+      : <Card className='max-w-2xl'><CardHeader><CardTitle>模型连接</CardTitle></CardHeader><CardContent className='space-y-3'>{accountControls}{!accounts.isLoading && !accounts.isError && <p className='text-sm text-muted-foreground'>请选择可用账户或新增账户。</p>}</CardContent></Card>}
+    <Dialog open={createOpen} onOpenChange={(open) => { if (!create.isPending) { setCreateOpen(open); if (!open) setNewName('') } }}>
+      <DialogContent><DialogHeader><DialogTitle>新增 AI 账户</DialogTitle><DialogDescription>先填写便于识别的名称，再配置模型连接与判定对象。</DialogDescription></DialogHeader>
+        <form className='space-y-4' onSubmit={(event) => { event.preventDefault(); if (newName.trim() && !create.isPending) create.mutate() }}>
+          <div className='space-y-2'><Label htmlFor='new-ai-account-name'>账户名称</Label><Input id='new-ai-account-name' autoFocus maxLength={100} value={newName} disabled={create.isPending} onChange={(event) => setNewName(event.target.value)} placeholder='例如：品牌日常巡检' /></div>
+          <div className='flex justify-end gap-2'><Button type='button' variant='outline' disabled={create.isPending} onClick={() => { setCreateOpen(false); setNewName('') }}>取消</Button><Button type='submit' disabled={!newName.trim() || create.isPending}>{create.isPending && <Loader2 className='size-4 animate-spin' />}创建账户</Button></div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  </div>
+}
+
+/** 复用原编辑器，查询、保存和连接测试均绑定所选账户。 */
+function SentimentAccountEditor({ accountId, initialConfig, active, onDirtyChange, accountControls, onAccountReady }: { accountId: number; initialConfig: SentimentConfig; active: boolean; onDirtyChange: (dirty: boolean) => void; accountControls: ReactNode; onAccountReady: () => void }) {
+  const client = useQueryClient()
+  const query = useQuery({ queryKey: ['sentiment-config', accountId], queryFn: () => api<SentimentConfig>(`/sentiment/config?account_id=${accountId}`), enabled: active, initialData: initialConfig })
+  // 账户列表已包含完整的已保存配置，切换时保留表单节点与高度，不替换成短占位卡。
+  const currentConfig = query.data ?? initialConfig
+  const [draft, setDraft] = useState<SentimentConfig>(() => structuredClone(currentConfig))
+  const [productsText, setProductsText] = useState<string>(() => currentConfig.subject.products.join('\n'))
   const [apiKey, setApiKey] = useState('')
+  const serverBaseline = useRef<SentimentConfig | undefined>(undefined)
   const localModel = draft?.model_code === 'paddlenlp-local-text-nano-v1'
   const deepSeekModel = draft?.model_code === 'deepseek-v4-flash'
   const textOnlyModel = localModel || deepSeekModel
-  useEffect(() => {
-    if (query.data && !draft) {
-      setDraft(structuredClone(query.data))
-      setProductsText(query.data.subject.products.join('\n'))
-    }
-  }, [query.data, draft])
   const normalizedProducts = productsText === undefined ? draft?.subject.products ?? [] : normalizeSentimentProducts(productsText)
   const normalizedDraft = draft ? { ...draft, subject: { ...draft.subject, products: normalizedProducts } } : undefined
-  const dirty = Boolean(draft && query.data) && (sentimentSignature(normalizedDraft) !== sentimentSignature(query.data) || Boolean(apiKey.trim()))
+  useLayoutEffect(() => {
+    if (currentConfig.id !== accountId) return
+    const switchedAccount = serverBaseline.current?.id !== accountId
+    const hadLocalEdits = !switchedAccount && Boolean(serverBaseline.current && normalizedDraft) && (sentimentSignature(normalizedDraft) !== sentimentSignature(serverBaseline.current) || Boolean(apiKey.trim()))
+    if (!hadLocalEdits) {
+      setDraft(structuredClone(currentConfig))
+      setProductsText(currentConfig.subject.products.join('\n'))
+      if (switchedAccount) setApiKey('')
+    }
+    serverBaseline.current = structuredClone(currentConfig)
+  }, [accountId, currentConfig])
+  useLayoutEffect(() => {
+    if (draft.id === accountId) onAccountReady()
+  }, [draft, accountId, onAccountReady])
+  const switchingAccount = draft.id !== accountId
+  const dirty = !switchingAccount && (sentimentSignature(normalizedDraft) !== sentimentSignature(currentConfig) || Boolean(apiKey.trim()))
   useEffect(() => onDirtyChange(dirty), [dirty, onDirtyChange])
   const save = useMutation({
-    mutationFn: () => api<SentimentConfig>('/sentiment/config', { method: 'PUT', body: JSON.stringify({ revision: draft?.revision, api_base_url: draft?.api_base_url, api_key: apiKey.trim() || undefined, model_code: draft?.model_code, cloud_concurrency: draft?.cloud_concurrency, subject: { brand: draft?.subject.brand, products: normalizedProducts, supplement: draft?.subject.supplement || undefined } }) }),
-    onSuccess: (value) => { setDraft(structuredClone(value)); setProductsText(value.subject.products.join('\n')); setApiKey(''); client.setQueryData(['sentiment-config'], value); toast.success('AI 舆情配置已保存') },
+    mutationFn: () => {
+      if (draft.id !== accountId) throw new Error('账户正在切换，请稍候。')
+      return api<SentimentConfig>(`/sentiment/config?account_id=${accountId}`, { method: 'PUT', body: JSON.stringify({ revision: draft?.revision, name: draft?.name.trim(), api_base_url: draft?.api_base_url, api_key: apiKey.trim() || undefined, model_code: draft?.model_code, cloud_concurrency: draft?.cloud_concurrency, subject: { brand: draft?.subject.brand, products: normalizedProducts, supplement: draft?.subject.supplement || undefined } }) })
+    },
+    onSuccess: (value) => {
+      setDraft(structuredClone(value)); setProductsText(value.subject.products.join('\n')); setApiKey('')
+      client.setQueryData(['sentiment-config', accountId], value)
+      client.setQueryData<SentimentConfig[]>(['sentiment-accounts'], (current) => current?.map((account) => account.id === value.id ? value : account))
+      toast.success(`“${value.name}”配置已保存`)
+    },
     onError: (error) => toast.error('保存失败', { description: errorMessage(error) }),
   })
   const test = useMutation({
-    mutationFn: () => api<{ status: string; duration_ms: number }>('/sentiment/config/test', { method: 'POST' }),
+    mutationFn: () => {
+      if (draft.id !== accountId) throw new Error('账户正在切换，请稍候。')
+      return api<{ status: string; duration_ms: number }>(`/sentiment/config/test?account_id=${accountId}`, { method: 'POST' })
+    },
     onSuccess: async (value) => { const result = await query.refetch(); if (result.data) setDraft(structuredClone(result.data)); toast.success(localModel ? '本地模型测试通过' : '连接测试通过', { description: localModel ? `${value.duration_ms} ms；模型已在本机完成最小文字推理。` : `${value.duration_ms} ms；本次只发送最小文字请求。` }) },
     onError: async (error) => { await query.refetch(); toast.error(localModel ? '本地模型测试失败' : '连接测试失败', { description: errorMessage(error) }) },
   })
-  if (!draft || !query.data) return <Card><CardContent className='p-8 text-sm text-muted-foreground'>正在加载 AI 舆情配置…</CardContent></Card>
-  const discard = () => { setDraft(structuredClone(query.data)); setProductsText(query.data.subject.products.join('\n')); setApiKey(''); onDirtyChange(false) }
+  const balance = useQuery({
+    queryKey: ['sentiment-balance', accountId, query.data?.revision],
+    queryFn: () => api<SentimentAccountBalance>(`/sentiment/accounts/${accountId}/balance`),
+    enabled: active && Boolean(query.data),
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+    staleTime: Infinity,
+    retry: false,
+  })
+  const discard = () => { setDraft(structuredClone(currentConfig)); setProductsText(currentConfig.subject.products.join('\n')); setApiKey(''); onDirtyChange(false) }
   const validationLabel = draft.validation_status === 'valid' ? '已通过' : draft.validation_status === 'invalid' ? '未通过' : '待测试'
   const validationTarget = localModel ? '本地模型' : '连接'
-  const modelDirty = draft.model_code !== query.data.model_code
-  const concurrencyDirty = draft.cloud_concurrency !== query.data.cloud_concurrency
-  const baseUrlDirty = draft.api_base_url !== query.data.api_base_url
+  const nameDirty = draft.name.trim() !== currentConfig.name.trim()
+  const modelDirty = draft.model_code !== currentConfig.model_code
+  const concurrencyDirty = draft.cloud_concurrency !== currentConfig.cloud_concurrency
+  const baseUrlDirty = draft.api_base_url !== currentConfig.api_base_url
   const apiKeyDirty = Boolean(apiKey.trim())
-  const brandDirty = draft.subject.brand !== query.data.subject.brand
-  const productsDirty = JSON.stringify(normalizedProducts) !== JSON.stringify(query.data.subject.products)
-  const supplementDirty = (draft.subject.supplement ?? '') !== (query.data.subject.supplement ?? '')
+  const brandDirty = draft.subject.brand !== currentConfig.subject.brand
+  const productsDirty = JSON.stringify(normalizedProducts) !== JSON.stringify(currentConfig.subject.products)
+  const supplementDirty = (draft.subject.supplement ?? '') !== (currentConfig.subject.supplement ?? '')
   const connectionChangeCount = [modelDirty, concurrencyDirty, baseUrlDirty, apiKeyDirty].filter(Boolean).length
   const subjectChangeCount = [brandDirty, productsDirty, supplementDirty].filter(Boolean).length
-  const changeCount = connectionChangeCount + subjectChangeCount
+  const changeCount = connectionChangeCount + subjectChangeCount + Number(nameDirty)
   const selectModel = (model_code: string) => {
     const connection = draft.model_connections[model_code] ?? { api_base_url: '', api_key_configured: false }
     setApiKey('')
@@ -853,13 +967,28 @@ function SentimentPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => 
     },
     validation_status: 'unverified',
   })
-  return <div className='space-y-5'>
+  return <fieldset disabled={save.isPending || test.isPending || switchingAccount} className='m-0 min-w-0 space-y-5 border-0 p-0'>
     <ConfigSectionToolbar icon={<BrainCircuit className='size-4.5' />} title='AI 舆情' summary={`${validationTarget}${validationLabel}${dirty ? ` · ${changeCount} 项未保存` : ''}`} description={localModel ? '在提取规则或手动批次开启 AI 分析后，只在本机分析标题和正文。' : deepSeekModel ? '在提取规则或手动批次开启 AI 分析后，使用 DeepSeek 分析标题和正文。' : '在提取规则或手动批次开启 AI 分析后，使用千问完成多模态分析。'}>
       <Button variant='outline' disabled={!dirty || save.isPending} onClick={discard}><RotateCcw className='size-4' />放弃修改</Button>
-      <Button disabled={!dirty || save.isPending} onClick={() => save.mutate()}>{save.isPending ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}保存 AI 配置{dirty ? ` (${changeCount})` : ''}</Button>
+      <Button disabled={!dirty || !draft.name.trim() || save.isPending} onClick={() => save.mutate()}>{save.isPending ? <Loader2 className='size-4 animate-spin' /> : <Save className='size-4' />}保存 AI 配置{dirty ? ` (${changeCount})` : ''}</Button>
     </ConfigSectionToolbar>
+    {query.isError && <p className='text-xs text-destructive'>账户配置刷新失败，当前保留已加载内容。<Button type='button' variant='link' size='sm' onClick={() => void query.refetch()}>重新加载</Button></p>}
     <div className='grid gap-5 xl:grid-cols-2'>
-      <Card data-dirty={connectionChangeCount > 0 || undefined}><CardHeader><div className='flex items-start justify-between gap-3'><div><CardTitle>模型连接</CardTitle><CardDescription>{localModel ? '本地轻量模型随 ThreadSnap 运行，不使用 API Key，也不产生 Token 费用。' : '云端模型使用受控连接；API Key 只写入加密存储，页面不会再次读取明文。'}</CardDescription></div>{connectionChangeCount > 0 && <Badge variant='outline' className='shrink-0 border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-300'>已修改 {connectionChangeCount} 项</Badge>}</div></CardHeader><CardContent className='space-y-5'>
+      <Card data-dirty={connectionChangeCount > 0 || nameDirty || undefined}><CardHeader><div className='flex items-start justify-between gap-3'><div><CardTitle>模型连接</CardTitle><CardDescription>{localModel ? '本地轻量模型随 ThreadSnap 运行，不使用 API Key，也不产生 Token 费用。' : '云端模型使用受控连接；API Key 只写入加密存储，页面不会再次读取明文。'}</CardDescription></div>{(connectionChangeCount > 0 || nameDirty) && <Badge variant='outline' className='shrink-0 border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-300'>已修改 {connectionChangeCount + Number(nameDirty)} 项</Badge>}</div></CardHeader><CardContent className='space-y-5'>
+        <div className='space-y-3 border-b border-border/70 pb-4'>
+          {accountControls}
+          <div className='grid gap-3 sm:grid-cols-2'>
+            <div className='space-y-1.5'><Label htmlFor='sentiment-account-name'>账户名称</Label><Input id='sentiment-account-name' maxLength={100} value={draft.name} data-dirty={nameDirty || undefined} className={cn('h-9', nameDirty && dirtyFieldClass)} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder='填写便于选择的名称' /></div>
+            <div className='min-w-0 space-y-1' title={balance.data?.checked_at ? `查询时间：${formatDate(balance.data.checked_at)}` : undefined}>
+              <div className='flex items-center justify-between gap-2'><span className='text-sm font-medium'>余额</span><Button type='button' variant='ghost' size='icon' className='size-7' aria-label='刷新账户余额' title='刷新余额' disabled={balance.isFetching} onClick={() => void balance.refetch()}>{balance.isFetching ? <Loader2 className='size-3.5 animate-spin' /> : <RefreshCw className='size-3.5' />}</Button></div>
+              {balance.isError ? <p className='text-xs text-destructive'>余额查询失败，请刷新重试。</p> : balance.data?.status === 'available' && balance.data.balance_infos.length > 0 ? <div className='flex flex-wrap gap-x-3 gap-y-1'>
+                {balance.data.balance_infos.map((item, index) => <span key={`${item.currency}-${index}`} className='text-sm font-semibold tabular-nums' title={`赠金 ${item.granted_balance} · 充值 ${item.topped_up_balance}`}>{item.total_balance} <span className='text-xs font-normal text-muted-foreground'>{item.currency}</span></span>)}
+                {balance.data.is_available === false && <span className='text-xs text-amber-700 dark:text-amber-300'>余额不足</span>}
+              </div> : <p className='text-xs leading-5 text-muted-foreground'>{balance.isFetching ? '查询中…' : balance.data?.message || (balance.data?.status === 'unsupported' ? '暂不支持余额查询' : balance.data?.status === 'unconfigured' ? '请先保存 API Key' : '暂无余额信息，请刷新')}</p>}
+              {dirty && <p className='text-[11px] text-muted-foreground'>余额来自已保存连接</p>}
+            </div>
+          </div>
+        </div>
         <div><Label>模型</Label><Select value={draft.model_code} onValueChange={selectModel}><SelectTrigger data-dirty={modelDirty || undefined} className={cn('mt-2', modelDirty && dirtyFieldClass)}><SelectValue /></SelectTrigger><SelectContent>{draft.available_models.map((model) => <SelectItem key={model} value={model}>{sentimentModelNames[model] ?? model}</SelectItem>)}</SelectContent></Select></div>
         {textOnlyModel && <Alert><BrainCircuit className='size-4' /><AlertTitle>仅文字分析</AlertTitle><AlertDescription>{localModel ? '只在本机读取标题和正文；不会刷新或提交图片、视频 URL。' : '只向 DeepSeek 提交标题、正文和判定对象；不会刷新或提交图片、视频 URL。'}媒体仍保留在帖子详情中供人工查看。</AlertDescription></Alert>}
         <div><Label htmlFor='sentiment-cloud-concurrency'>同时分析任务数</Label><div className='mt-2 flex flex-wrap items-center gap-2'><Input id='sentiment-cloud-concurrency' data-dirty={concurrencyDirty || undefined} className={cn('w-28', concurrencyDirty && dirtyFieldClass)} type='number' disabled={localModel} min={draft.cloud_concurrency_range.min} max={draft.cloud_concurrency_range.max} value={localModel ? 1 : draft.cloud_concurrency} onChange={(event) => setDraft({ ...draft, cloud_concurrency: Math.min(draft.cloud_concurrency_range.max, Math.max(draft.cloud_concurrency_range.min, Number(event.target.value))) })} />{!localModel && [4, 8, 16, 32].map((value) => <Button key={value} type='button' size='sm' variant={draft.cloud_concurrency === value ? 'default' : 'outline'} onClick={() => setDraft({ ...draft, cloud_concurrency: value })}>{value}</Button>)}</div><p className='mt-1.5 text-xs text-muted-foreground'>{localModel ? '本地模型固定单路推理；切回云端后恢复已保存的云端并发。' : `最多同时发起 ${draft.cloud_concurrency} 个云端 AI 请求；允许范围 ${draft.cloud_concurrency_range.min}～${draft.cloud_concurrency_range.max}，保存后对后续任务立即生效。`}</p></div>
@@ -873,5 +1002,5 @@ function SentimentPanel({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => 
         <Alert><BrainCircuit className='size-4' /><AlertTitle>判定口径</AlertTitle><AlertDescription>{localModel ? '本地任务模型输出负面、非负面或不相关，提取文字依据并由系统生成中文模板总结；媒体明确标记为未参与分析。' : deepSeekModel ? 'DeepSeek 输出负面、非负面或不相关，并提供中文总结和文字依据；媒体明确标记为未参与分析。' : '千问输出负面、非负面或不相关，并提供中文总结及各模态事实依据；ThreadSnap 只校验结构与覆盖，不二次改写结论。'}</AlertDescription></Alert>
       </CardContent></Card>
     </div>
-  </div>
+  </fieldset>
 }

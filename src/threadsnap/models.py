@@ -81,6 +81,7 @@ class ExtractionRuleVersion(Base):
     platform_quantities: Mapped[dict[str, int]] = mapped_column(JSON, nullable=False, default=dict)
     selected_circle_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
     ai_analysis_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    ai_account_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     screenshot_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utc_now)
 
@@ -503,11 +504,12 @@ class ScreenshotArtifactItem(Base):
 
 
 class SentimentConfig(Base):
-    """舆情模型的单例运行配置；密钥只保存密文。"""
+    """可命名AI账户的独立运行配置；账户1承接旧配置，密钥只保存密文。"""
 
     __tablename__ = "sentiment_configs"
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False, default="默认账户", unique=True)
     revision: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     base_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -541,6 +543,7 @@ class SentimentAnalysis(Base):
         UniqueConstraint("post_id", name="uq_sentiment_analysis_post"),
         Index("ix_sentiment_analysis_queue", "status", "created_at"),
         Index("ix_sentiment_analysis_identity", "platform_code", "platform_post_id", "input_hash"),
+        Index("ix_sentiment_analysis_account_queue", "account_id", "status", "created_at"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
@@ -552,6 +555,8 @@ class SentimentAnalysis(Base):
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     config_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    account_id: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    account_name: Mapped[str] = mapped_column(String(120), nullable=False, default="默认账户")
     subject_version: Mapped[int] = mapped_column(Integer, nullable=False)
     subject_snapshot: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     model_code: Mapped[str] = mapped_column(String(120), nullable=False)

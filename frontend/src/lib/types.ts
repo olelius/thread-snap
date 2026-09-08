@@ -25,6 +25,7 @@ export type ExtractionRule = {
   platform_quantities: Record<string, number>
   circle_ids: string[]
   ai_analysis_enabled: boolean
+  ai_account_id: number
   screenshot_enabled: boolean
   archived: boolean
   updated_at: string
@@ -180,6 +181,8 @@ export type SentimentSource = 'ai' | 'manual' | 'inherited_manual'
 export type AnalysisStatus = 'analysis_queued' | 'analysis_running' | 'analysis_completed' | 'analysis_partial' | 'analysis_failed' | 'analysis_paused' | 'analysis_disabled'
 
 export type SentimentConfig = {
+  id: number
+  name: string
   revision: number
   api_base_url: string
   api_key_configured: boolean
@@ -195,6 +198,15 @@ export type SentimentConfig = {
   validation_error?: string
   validated_at?: string
   subject: { brand: string; products: string[]; supplement?: string; version: number }
+}
+
+export type SentimentAccountBalance = {
+  account_id: number
+  status: 'available' | 'unsupported' | 'unconfigured' | 'unavailable'
+  balance_infos: Array<{ currency: string; total_balance: string; granted_balance: string; topped_up_balance: string }>
+  is_available?: boolean
+  message?: string
+  checked_at?: string
 }
 
 export type SentimentDetail = {
@@ -234,8 +246,10 @@ export type ReputationMetric = {
   tone: 'positive' | 'negative' | 'neutral'
   comparison_status: string
   source_url?: string
+  source_measurement?: { collection_method: string; captured_at: string; source_url: string; json_count: number | null; visible_count: number | null; visible_raw: string | null }
   positive_count?: number
   negative_count?: number
+  quantity_kind?: 'exact' | 'rounded'
 }
 
 export type ReputationEvidence = {
@@ -260,6 +274,7 @@ export type ReputationResult = {
   metrics: Record<'score' | 'rank' | 'volume', ReputationMetric> & {
     review_article_count?: ReputationMetric
     negative_rate?: ReputationMetric
+    circle_content_count?: ReputationMetric
   }
   evidence_required: boolean
   attempt_count?: number
@@ -268,6 +283,12 @@ export type ReputationResult = {
   error_message?: string
   collected_at: string
   evidence?: ReputationEvidence
+}
+
+export type ReputationReportTemplate = {
+  id: 'vehicle_detail' | 'daily_changes'
+  label: string
+  text: string
 }
 
 export type ReputationRun = {
@@ -299,6 +320,7 @@ export type ReputationRun = {
   report_status: string
   report_attempt_count?: number
   report_text?: string
+  report_templates?: ReputationReportTemplate[]
   created_at: string
   started_at?: string
   finished_at?: string
@@ -336,6 +358,7 @@ export type ReputationCapabilities = {
     adapter_version: string
     validation_contract_version: string
     evidence_mode?: 'screenshot' | 'url_only'
+    supported_metrics?: string[]
   }>
 }
 
@@ -348,7 +371,7 @@ export type ReputationScopeMapping = {
   validation_attempt_id?: string
   validated_at?: string
   actual_name?: string
-  latest_metrics?: { score?: string; rank?: string; volume?: string; review_article_count?: string; negative_rate?: string; rank_scope?: string }
+  latest_metrics?: { score?: string; rank?: string; volume?: string; review_article_count?: string; negative_rate?: string; circle_content_count?: string | null; rank_scope?: string }
   validation_error?: string
 }
 
@@ -368,7 +391,7 @@ export type ReputationMappingValidation = {
     attempt_number: number
     status: string
     actual_name?: string
-    metrics: { score?: string; rank?: string; volume?: string; review_article_count?: string; negative_rate?: string; rank_scope?: string }
+    metrics: { score?: string; rank?: string; volume?: string; review_article_count?: string; negative_rate?: string; circle_content_count?: string | null; rank_scope?: string }
     error_code?: string
     error_message?: string
     duration_ms?: number

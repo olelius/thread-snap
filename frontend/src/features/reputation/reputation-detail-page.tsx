@@ -7,8 +7,9 @@ import { toast } from 'sonner'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
 import { ReputationRoleLabel } from '@/features/reputation/reputation-role-label'
+import { reputationMetricColumns } from '@/features/reputation/reputation-metrics'
 import { api, errorMessage, formatDate } from '@/lib/api'
-import type { ReputationCapabilities, ReputationMetric, ReputationResult, ReputationRun } from '@/lib/types'
+import type { ReputationCapabilities, ReputationMetric, ReputationResult, ReputationRun, ReputationReportTemplate } from '@/lib/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -16,6 +17,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, Di
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
@@ -31,6 +33,15 @@ export function ReputationDetailPage() {
   const queryClient = useQueryClient()
   const reduceMotion = useReducedMotion()
   const [evidenceViewer, setEvidenceViewer] = useState<ReputationResult>()
+  const [reportTemplate, setReportTemplate] = useState<ReputationReportTemplate['id']>(() => {
+    try { return localStorage.getItem('threadsnap-report-template') === 'daily_changes' ? 'daily_changes' : 'vehicle_detail' }
+    catch { return 'vehicle_detail' }
+  })
+  const selectReportTemplate = (value: ReputationReportTemplate['id']) => {
+    setReportTemplate(value)
+    try { localStorage.setItem('threadsnap-report-template', value) } catch { /* 存储受限不影响当前选择。 */ }
+  }
+
   const capabilities = useQuery({ queryKey: ['reputation-capabilities'], queryFn: () => api<ReputationCapabilities>('/reputation/capabilities') })
   const yicheUrlOnly = capabilities.data?.reputation_platforms.some((item) => item.code === 'yiche' && item.evidence_mode === 'url_only') ?? false
   const query = useQuery({
@@ -52,6 +63,9 @@ export function ReputationDetailPage() {
   if (query.isLoading) return <div className='space-y-4'><Skeleton className='h-20 w-full' /><div className='grid gap-3 md:grid-cols-4'>{Array.from({ length: 4 }).map((_, index) => <Skeleton key={index} className='h-28 w-full' />)}</div><Skeleton className='h-[420px] w-full' /></div>
   if (query.isError || !query.data) return <Card className='grid h-full place-items-center'><CardContent className='text-center'><CircleAlert className='mx-auto mb-2 size-7 text-destructive' /><div className='font-medium'>巡检详情加载失败</div><div className='mt-1 text-sm text-muted-foreground'>{errorMessage(query.error)}</div><Button className='mt-4' variant='outline' onClick={() => query.refetch()}><RefreshCw className='size-4' />重新加载</Button></CardContent></Card>
   const run = query.data
+  const selectedReport = run.report_templates?.find((item) => item.id === reportTemplate)
+  const reportDownload = view === 'report' && selectedReport
+    ? `/api/v1/reputation/runs/${run.id}/report.txt?template=${selectedReport.id}` : run.downloads?.txt
   const done = run.completed_count + run.failed_count
   const completion = run.planned_count ? Math.round(done / run.planned_count * 100) : 0
   const currentStatus = run.linked_status ?? run.status
@@ -78,13 +92,13 @@ export function ReputationDetailPage() {
         <TabsList><TabsTrigger value='ranking'>排名数据</TabsTrigger><TabsTrigger value='evidence'>页面证据</TabsTrigger><TabsTrigger value='report'>汇报结果</TabsTrigger></TabsList>
       </Tabs>
       <div className='flex flex-wrap gap-2'>
-        <DownloadButton href={run.downloads?.txt} icon={FileText}>TXT</DownloadButton>
+        <DownloadButton href={reportDownload} icon={FileText}>TXT</DownloadButton>
         <DownloadButton href={run.downloads?.xlsx} icon={FileSpreadsheet}>XLSX</DownloadButton>
         <DownloadButton href={run.downloads?.evidence_zip} icon={FileArchive}>证据 ZIP</DownloadButton>
       </div>
     </div>
     <motion.div key={view} initial={reduceMotion ? false : { opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18, ease: 'easeOut' }} className='min-h-0 flex-1 overflow-hidden'>
-      {view === 'ranking' ? <RankingPanel results={run.results ?? []} onViewEvidence={setEvidenceViewer} yicheUrlOnly={yicheUrlOnly} /> : view === 'evidence' ? <EvidencePanel results={run.results ?? []} onViewEvidence={setEvidenceViewer} /> : <ReportPanel run={run} />}
+      {view === 'ranking' ? <RankingPanel results={run.results ?? []} onViewEvidence={setEvidenceViewer} yicheUrlOnly={yicheUrlOnly} capabilities={capabilities.data} /> : view === 'evidence' ? <EvidencePanel results={run.results ?? []} onViewEvidence={setEvidenceViewer} /> : <ReportPanel run={run} selected={selectedReport} templateId={reportTemplate} onTemplateChange={selectReportTemplate} />}
     </motion.div>
     <ReputationEvidenceDialog result={evidenceViewer} onOpenChange={(open) => !open && setEvidenceViewer(undefined)} />
   </div>
@@ -99,34 +113,32 @@ const RANKING_IDENTITY_WIDTH = 256
 // 136px 指标卡片 + 两侧各 12px 留白，相邻卡片始终保持 24px 间距。
 const RANKING_METRIC_WIDTH = 160
 const RANKING_STATE_WIDTH = 192
-const metricColumns = [
-  ['score', '口碑分'], ['rank', '排名'], ['volume', '口碑量'],
-  ['review_article_count', '评价篇数'], ['negative_rate', '差评率'],
-] as const
 
 /** 单表单滚动参照，表头和正文共用列宽；不再用两张表互相同步 scrollLeft。 */
-function RankingPanel({ results, onViewEvidence, yicheUrlOnly }: { results: ReputationResult[]; onViewEvidence: (result: ReputationResult) => void; yicheUrlOnly: boolean }) {
+function RankingPanel({ results, onViewEvidence, yicheUrlOnly, capabilities }: { results: ReputationResult[]; onViewEvidence: (result: ReputationResult) => void; yicheUrlOnly: boolean; capabilities?: ReputationCapabilities }) {
   const [issue, setIssue] = useState<ReputationResult>()
   const platforms = Array.from(new Map(results.map((result) => [result.platform_code, result.platform_name])).entries())
   const vehicles = Array.from(new Map(results.map((result) => [result.vehicle_id, result])).values())
   const byTarget = new Map(results.map((result) => [`${result.vehicle_id}|${result.platform_code}`, result]))
-  const tableWidth = RANKING_IDENTITY_WIDTH + platforms.length * (RANKING_METRIC_WIDTH * 5 + RANKING_STATE_WIDTH)
+  const columnsFor = (code: string) => reputationMetricColumns(code, capabilities)
+  const totalColumns = 2 + platforms.reduce((count, [code]) => count + columnsFor(code).length + 1, 0)
+  const tableWidth = RANKING_IDENTITY_WIDTH + platforms.reduce((width, [code]) => width + RANKING_METRIC_WIDTH * columnsFor(code).length + RANKING_STATE_WIDTH, 0)
 
   return <Card className='reputation-ranking flex h-full min-h-0 flex-col gap-0 overflow-hidden border-border/70 bg-card/90 py-0 shadow-sm'>
     <div className='reputation-ranking-viewport' data-ranking-viewport tabIndex={0} role='region' aria-label='口碑排名数据，可横向和纵向滚动'>
       <Table style={{ width: tableWidth, minWidth: tableWidth }}>
         <colgroup><col style={{ width: 96 }} /><col style={{ width: 160 }} />{platforms.flatMap(([code]) => [
-          ...metricColumns.map(([key]) => <col key={`${code}-${key}`} style={{ width: RANKING_METRIC_WIDTH }} />),
+          ...columnsFor(code).map(([key]) => <col key={`${code}-${key}`} style={{ width: RANKING_METRIC_WIDTH }} />),
           <col key={`${code}-state`} style={{ width: RANKING_STATE_WIDTH }} />,
         ])}</colgroup>
         <TableHeader>
           <TableRow>
             <TableHead rowSpan={2} className='ranking-identity ranking-role'>角色</TableHead>
             <TableHead rowSpan={2} className='ranking-identity ranking-vehicle'>车型</TableHead>
-            {platforms.map(([code, name]) => <TableHead key={code} colSpan={6} scope='colgroup' className='ranking-platform'>{name}</TableHead>)}
+            {platforms.map(([code, name]) => <TableHead key={code} colSpan={columnsFor(code).length + 1} scope='colgroup' className='ranking-platform'>{name}</TableHead>)}
           </TableRow>
           <TableRow>{platforms.flatMap(([code]) => [
-            ...metricColumns.map(([key, label]) => <TableHead key={`${code}-${key}`} data-ranking-column={`${code}-${key}`} scope='col' className='text-right'>{label}</TableHead>),
+            ...columnsFor(code).map(([key, label]) => <TableHead key={`${code}-${key}`} data-ranking-column={`${code}-${key}`} scope='col' className='text-right'>{label}</TableHead>),
             <TableHead key={`${code}-state`} data-ranking-column={`${code}-state`} scope='col'>状态 / {code === 'yiche' && yicheUrlOnly ? 'URL' : '证据'}</TableHead>,
           ])}</TableRow>
         </TableHeader>
@@ -136,10 +148,10 @@ function RankingPanel({ results, onViewEvidence, yicheUrlOnly }: { results: Repu
             <TableCell className='ranking-identity ranking-vehicle'><div className='font-medium'>{vehicle.vehicle_name}</div><div className='mt-1 text-xs text-muted-foreground'>{vehicle.series_name}</div></TableCell>
             {platforms.flatMap(([code]) => {
               const result = byTarget.get(`${vehicle.vehicle_id}|${code}`)
-              if (!result) return [<TableCell key={`${code}-missing`} colSpan={6} className='text-center text-xs text-muted-foreground'>未纳入本批次</TableCell>]
+              if (!result) return [<TableCell key={`${code}-missing`} colSpan={columnsFor(code).length + 1} className='text-center text-xs text-muted-foreground'>未纳入本批次</TableCell>]
               const oldNativeFailure = yicheUrlOnly && code === 'yiche' && result.error_code?.startsWith('REPUTATION_NATIVE_')
               return [
-                ...metricColumns.map(([key]) => <TableCell key={`${code}-${key}`} data-ranking-cell={`${code}-${key}`} className='ranking-metric-cell text-right'><MetricCell metric={result.metrics[key] ?? historicalMetric()} inverseLabel={key === 'rank'} /></TableCell>),
+                ...columnsFor(code).map(([key]) => <TableCell key={`${code}-${key}`} data-ranking-cell={`${code}-${key}`} className='ranking-metric-cell text-right'><MetricCell metric={result.metrics[key] ?? historicalMetric()} inverseLabel={key === 'rank'} circleCount={key === 'circle_content_count'} /></TableCell>),
                 <TableCell key={`${code}-state`} data-ranking-cell={`${code}-state`}>
                   <div className='ranking-state-line'><StatusBadge value={result.status} label={oldNativeFailure ? '历史失败' : statusName(result.status)} />
                     {result.evidence ? <Button variant='ghost' size='icon' className='size-8' onClick={() => onViewEvidence(result)} aria-label={`查看${result.platform_name}截图`}><ImageIcon className='size-4' /></Button> : <span className='text-xs text-muted-foreground'>{!result.evidence_required ? '不要求截图' : oldNativeFailure ? '旧流程' : '缺图'}</span>}
@@ -149,11 +161,11 @@ function RankingPanel({ results, onViewEvidence, yicheUrlOnly }: { results: Repu
               ]
             })}
           </TableRow>)}
-          {!vehicles.length && <TableRow><TableCell colSpan={2 + platforms.length * 6} className='h-32 text-center'>暂无排名数据</TableCell></TableRow>}
+          {!vehicles.length && <TableRow><TableCell colSpan={totalColumns} className='h-32 text-center'>暂无排名数据</TableCell></TableRow>}
         </TableBody>
       </Table>
     </div>
-    <div className='shrink-0 border-t bg-card/95 px-4 py-3 text-xs text-muted-foreground'>每款车型一行；口碑分、口碑量和评价篇数升高为绿色，排名数字和差评率下降为绿色。缺失指标保持空值。</div>
+    <div className='shrink-0 border-t bg-card/95 px-4 py-3 text-xs text-muted-foreground'>每款车型一行；口碑分、口碑量和评价篇数升高为绿色，排名数字和懂车帝差评率下降为绿色。圈内内容数仅中性表示数量变化，来源为圈子列表，不在评分截图中。缺失指标保持空值。</div>
     <Dialog open={Boolean(issue)} onOpenChange={(open) => !open && setIssue(undefined)}><DialogContent><DialogHeader><DialogTitle>{issue?.vehicle_name} · {issue?.platform_name}</DialogTitle><DialogDescription>原批次保存的失败原因；切换采集方式不会改写历史记录。</DialogDescription></DialogHeader><div className='space-y-3 text-sm'><StatusBadge value={issue?.status ?? 'unknown'} label={statusName(issue?.status ?? 'unknown')} /><p className='break-all font-mono text-xs'>{issue?.error_code}</p><p className='whitespace-pre-wrap break-words leading-6'>{issue?.error_message}</p></div></DialogContent></Dialog>
   </Card>
 }
@@ -163,16 +175,16 @@ function historicalMetric(): ReputationMetric {
 }
 
 /** 指标与变化说明都在列内换行；完整值通过原生提示保留，零值不被当成缺失。 */
-function MetricCell({ metric, inverseLabel = false }: { metric: ReputationMetric; inverseLabel?: boolean }) {
+function MetricCell({ metric, inverseLabel = false, circleCount = false }: { metric: ReputationMetric; inverseLabel?: boolean; circleCount?: boolean }) {
   // 排名的数字方向与名次改善方向相反，箭头跟随“名次上升/下降”文案。
   const Icon = inverseLabel && metric.direction !== 'same' ? (metric.tone === 'positive' ? ArrowUp : metric.tone === 'negative' ? ArrowDown : Minus) : metric.direction === 'up' ? ArrowUp : metric.direction === 'down' ? ArrowDown : Minus
   const tone = metric.tone === 'positive' ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : metric.tone === 'negative' ? 'border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-300' : 'border-border bg-muted/35 text-foreground'
-  if (metric.raw == null || metric.raw === '') return <span className='text-sm text-muted-foreground' title={stateName(metric.comparison_status)}>—</span>
+  if (metric.raw == null || metric.raw === '') return <span className='text-sm text-muted-foreground' title={stateName(metric.comparison_status)}>{circleCount && metric.comparison_status === 'historical_not_collected' ? '历史未采集' : '—'}</span>
   const comparable = metric.comparison_status === 'comparable'
   const changeLabel = metric.direction === 'same' ? (inverseLabel ? '名次持平' : '较前日持平') : inverseLabel ? (metric.tone === 'positive' ? '名次上升' : '名次下降') : (metric.direction === 'up' ? '较前日上升' : '较前日下降')
   const delta = metric.delta == null ? '' : String(metric.delta).replace(/^[+−-]/, '')
-  const detail = comparable ? `${changeLabel}${metric.direction !== 'same' && delta ? ` ${delta}` : ''}` : stateName(metric.comparison_status)
-  return <div className={cn('ranking-metric', tone)} title={`${metric.raw} · ${detail}`}><span className='ranking-metric-value'>{metric.raw}</span><span className='ranking-metric-change'>{comparable && <Icon aria-hidden='true' />}<span>{detail}</span></span></div>
+  const detail = comparable ? `${metric.quantity_kind === 'rounded' ? '按显示值 · ' : ''}${changeLabel}${metric.direction !== 'same' && delta ? ` ${delta}` : ''}` : stateName(metric.comparison_status)
+  return <div className={cn('ranking-metric', tone)} title={`${metric.raw} · ${detail}${circleCount ? ' · 圈子列表计数，非评分截图指标' : ''}`}><span className='ranking-metric-value'>{circleCount && metric.source_url ? <a href={metric.source_url} target='_blank' rel='noreferrer' aria-label={`查看圈内内容数 ${metric.raw} 的来源页面`}>{metric.raw}</a> : metric.raw}</span><span className='ranking-metric-change'>{comparable && <Icon aria-hidden='true' />}<span>{detail}</span></span></div>
 }
 
 function EvidencePanel({ results, onViewEvidence }: { results: ReputationResult[]; onViewEvidence: (result: ReputationResult) => void }) {
@@ -246,9 +258,43 @@ function ReputationEvidenceDialog({ result, onOpenChange }: { result?: Reputatio
 
 function EvidenceMetric({ label, value }: { label: string; value?: string }) { return <div className='rounded-md bg-muted/45 p-2'><div className='text-muted-foreground'>{label}</div><div className='mt-0.5 font-semibold tabular-nums'>{value ?? '—'}</div></div> }
 
-function ReportPanel({ run }: { run: ReputationRun }) {
-  const report = run.report_text ?? ''
-  return <div className='grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_300px]'><Card className='flex min-h-0 flex-col overflow-hidden py-0'><div className='flex shrink-0 items-center justify-between border-b bg-muted/25 px-4 py-3'><div><div className='font-medium'>巡检汇报正文</div><div className='text-xs text-muted-foreground'>巡检终态后立即生成，不依赖颜色传达变化</div></div><Button variant='outline' size='sm' disabled={!report} onClick={async () => { await navigator.clipboard.writeText(report); toast.success('巡检汇报正文已复制') }}><Clipboard className='size-4' />复制</Button></div>{report ? <pre className='min-h-0 flex-1 overflow-auto whitespace-pre-wrap p-5 font-sans text-sm leading-7'>{report}</pre> : <CardContent className='grid min-h-64 flex-1 place-items-center text-center'><div><Clock3 className='mx-auto mb-2 size-7 text-muted-foreground/55' /><div className='font-medium'>{run.status === 'running' || run.status === 'queued' ? '巡检执行中' : '汇报生成中'}</div><div className='mt-1 text-sm text-muted-foreground'>{run.status === 'running' || run.status === 'queued' ? '汇报只读取终态冻结结果。' : '巡检已结束，系统正在生成汇报文件。'}</div></div></CardContent>}</Card><div className='space-y-4 overflow-auto'><Card><CardHeader><CardTitle className='flex items-center gap-2 text-base'><FileText className='size-4 text-primary' />交付完整性</CardTitle><CardDescription>同一运行生成三类可追溯文件。</CardDescription></CardHeader><CardContent className='space-y-2 text-sm'><DeliveryRow label='汇报 TXT' done={run.report_status === 'success'} /><DeliveryRow label='彩色 XLSX' done={Boolean(run.downloads?.xlsx)} /><DeliveryRow label='页面证据 ZIP' done={Boolean(run.downloads?.evidence_zip)} notRequired={run.required_evidence_count === 0} /></CardContent></Card><Card><CardHeader><CardTitle className='text-base'>异常口径</CardTitle></CardHeader><CardContent className='text-sm leading-6 text-muted-foreground'>只有访问、身份、解析或证据生成失败才进入异常；平台未提供的指标保持空白。</CardContent></Card></div></div>
+/** 模板选择只改变冻结数据的呈现；不触发采集或覆盖原始汇报存档。 */
+function ReportPanel({ run, selected, templateId, onTemplateChange }: {
+  run: ReputationRun
+  selected?: ReputationReportTemplate
+  templateId: ReputationReportTemplate['id']
+  onTemplateChange: (value: ReputationReportTemplate['id']) => void
+}) {
+  const report = selected?.text ?? run.report_text ?? ''
+  return <div className='grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_300px]'>
+    <Card className='flex min-h-0 flex-col overflow-hidden py-0'>
+      <div className='flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-muted/25 px-4 py-3'>
+        <div><div className='font-medium'>巡检汇报正文</div><div className='text-xs text-muted-foreground'>仅重点车型 · 复制与 TXT 使用当前模板</div></div>
+        <div className='flex items-center gap-2'>
+          <Select value={templateId} onValueChange={(value) => onTemplateChange(value as ReputationReportTemplate['id'])} disabled={!run.report_templates?.length}>
+            <SelectTrigger className='w-52' aria-label='汇报模板'><SelectValue placeholder='选择汇报模板' /></SelectTrigger>
+            <SelectContent>{run.report_templates?.map((item) => <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>)}</SelectContent>
+          </Select>
+          <Button variant='outline' size='sm' disabled={!report} onClick={async () => {
+            try { await navigator.clipboard.writeText(report); toast.success('当前模板汇报已复制') }
+            catch (error) { toast.error('复制失败', { description: errorMessage(error) }) }
+          }}><Clipboard className='size-4' />复制</Button>
+        </div>
+      </div>
+      {report ? <pre data-report-text className='min-h-0 flex-1 overflow-auto whitespace-pre-wrap p-5 font-sans text-sm leading-7'>{report}</pre>
+        : <CardContent className='grid min-h-64 flex-1 place-items-center text-center'><div><Clock3 className='mx-auto mb-2 size-7 text-muted-foreground/55' /><div className='font-medium'>巡检尚未生成汇报</div><div className='mt-1 text-sm text-muted-foreground'>汇报只读取终态冻结结果。</div></div></CardContent>}
+    </Card>
+    <div className='space-y-4 overflow-auto'>
+      <Card><CardHeader><CardTitle className='flex items-center gap-2 text-base'><FileText className='size-4 text-primary' />交付完整性</CardTitle><CardDescription>模板选择不改变原始数据和证据。</CardDescription></CardHeader>
+        <CardContent className='space-y-2 text-sm'><DeliveryRow label='当前模板 TXT' done={Boolean(selected)} /><DeliveryRow label='彩色 XLSX' done={Boolean(run.downloads?.xlsx)} /><DeliveryRow label='页面证据 ZIP' done={Boolean(run.downloads?.evidence_zip)} notRequired={run.required_evidence_count === 0} /></CardContent>
+      </Card>
+      <Card><CardHeader><CardTitle className='text-base'>汇报口径</CardTitle></CardHeader><CardContent className='space-y-3 text-sm leading-6 text-muted-foreground'>
+        <p>{templateId === 'vehicle_detail' ? '模板一列出全部重点车型的七项明细。论坛数取顶部帖子统计，口碑帖数量使用评价篇数；历史未采集不回填。' : '模板二仅列口碑分、排名或懂车帝差评率存在前日可比变化的重点车型，无基线不视为变化。'}</p>
+        <p>增减按数值差计算；“万”为页面舍入显示值，变化按显示值比较。排名数字越小，名次越靠前；缺失值不补零。</p>
+        {run.downloads?.txt && <a className='text-primary underline underline-offset-4' href={run.downloads.txt}>下载原始汇报存档</a>}
+      </CardContent></Card>
+    </div>
+  </div>
 }
 
 function DeliveryRow({ label, done, notRequired = false }: { label: string; done: boolean; notRequired?: boolean }) { if (notRequired) return <div className='flex items-center justify-between rounded-md bg-muted/40 px-3 py-2'><span>{label}</span><span className='text-xs text-muted-foreground'>未要求截图</span></div>; return <div className='flex items-center justify-between rounded-md bg-muted/40 px-3 py-2'><span>{label}</span><span className={cn('flex items-center gap-1 text-xs', done ? 'text-emerald-600 dark:text-emerald-300' : 'text-amber-600 dark:text-amber-300')}>{done ? <Check className='size-3.5' /> : <CircleAlert className='size-3.5' />}{done ? '已生成' : '待处理'}</span></div> }
