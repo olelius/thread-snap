@@ -10,6 +10,7 @@ import tempfile
 import threading
 import unittest
 import zipfile
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -22,9 +23,12 @@ from sqlalchemy import func, select
 
 from threadsnap.app import create_app
 from threadsnap.config import Settings
+from threadsnap.errors import DomainError
 from threadsnap.models import (
     ExtractionRun,
     PlatformConfig,
+    ReputationMappingValidationAttempt,
+    ReputationMappingValidationRun,
     ReputationResult,
     ReputationRun,
     ReputationScheduleEvent,
@@ -186,6 +190,27 @@ class ReputationInspectionTest(unittest.TestCase):
 
         scope = self.initialize_scope("three-platform-scope.csv")
         container = self.client.app.state.container
+        validation_ids = []
+
+        class PlatformAvailableMetricsAdapter(OfficialFakeAdapter):
+            """其它平台尚未提供差评率时，原样保留真实空值。"""
+
+            def validate_sync(self, targets, output_dir, on_result=None):
+                results = [
+                    replace(
+                        result,
+                        negative_rate_raw=None,
+                        negative_rate_url=None,
+                        negative_rate_positive_count=None,
+                        negative_rate_negative_count=None,
+                    )
+                    for result in super().validate_sync(targets, output_dir)
+                ]
+                if on_result:
+                    for index, (target, result) in enumerate(zip(targets, results, strict=True)):
+                        on_result(index, target, result)
+                return results
+
         platform_rows = {
             "autohome": [
                 {
@@ -221,13 +246,14 @@ class ReputationInspectionTest(unittest.TestCase):
                 platform_code,
                 {"cookies": [{"name": "fixture", "value": "session", "domain": ".example.com", "path": "/"}]},
             )
-            container.reputation.adapter_factories[platform_code] = OfficialFakeAdapter
+            container.reputation.adapter_factories[platform_code] = PlatformAvailableMetricsAdapter
             validated = self.client.post(
                 "/api/v1/reputation/scope/mapping-validations",
                 json={"revision": scope["revision"], "platform_code": platform_code},
             )
             self.assertEqual(200, validated.status_code, validated.text)
             payload = validated.json()
+            validation_ids.append(payload["id"])
             self.assertEqual(27, payload["succeeded_count"])
             self.assertEqual(platform_code, payload["platform_code"])
             scope = payload["scope"]
@@ -249,6 +275,7 @@ class ReputationInspectionTest(unittest.TestCase):
             json={"revision": scope["revision"], "platform_code": "dongchedi"},
         )
         self.assertEqual(200, validated.status_code, validated.text)
+        validation_ids.append(validated.json()["id"])
         scope = validated.json()["scope"]
         preview = self.client.get("/api/v1/reputation/scope/publish-preview").json()
         self.assertEqual(81, preview["verified_mapping_count"])
@@ -323,6 +350,29 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertTrue(all(not next(source for source in item["sources"] if source["platform_code"] == "yiche")["evidence_required"] for item in manifest_items))
         self.assertIn("页面证据：未要求截图。", generated["report_text"])
 
+        acceptance = container.reputation.create_real_acceptance(validation_ids)
+        self.assertEqual("success", acceptance["status"])
+        self.assertEqual(81, acceptance["planned_count"])
+        self.assertEqual(54, acceptance["required_evidence_count"])
+        self.assertEqual(54, acceptance["complete_evidence_count"])
+        self.assertEqual(27, len({row["vehicle_id"] for row in acceptance["results"]}))
+        for code in ("dongchedi", "autohome", "yiche"):
+            rows = [row for row in acceptance["results"] if row["platform_code"] == code]
+            self.assertEqual(27, len(rows))
+            self.assertTrue(all(row["status"] == "success" for row in rows))
+            self.assertEqual(
+                0 if code == "yiche" else 27, sum(bool(row["evidence"]) for row in rows)
+            )
+            if code != "dongchedi":
+                self.assertTrue(
+                    all(row["metrics"]["negative_rate"]["value"] is None for row in rows)
+                )
+                self.assertTrue(
+                    all(
+                        row["metrics"]["negative_rate"]["comparison_status"] == "not_available"
+                        for row in rows
+                    )
+                )
 
     def test_later_platform_url_contracts(self) -> None:
         """两个后续平台都规范到已验证的车型口碑入口。"""
@@ -821,9 +871,11 @@ class ReputationInspectionTest(unittest.TestCase):
             },
         )
 
+        construction_options = {}
+
         class FakeAdapter:
             def __init__(self, *_args, **_kwargs):
-                pass
+                construction_options.update(_kwargs)
 
             def validate_sync(self, targets, output_dir):
                 output_dir.mkdir(parents=True)
@@ -844,9 +896,9 @@ class ReputationInspectionTest(unittest.TestCase):
                             actual_name=target.platform_display_name,
                             score_raw="3.80",
                             rank_raw="4",
-                            volume_raw=str(500 + index),
-                            review_article_count_raw=None,
-                            review_article_count_url=None,
+                            volume_raw="1,234" if index == 0 else str(500 + index),
+                            review_article_count_raw="5,000",
+                            review_article_count_url=target.platform_url,
                             rank_scope="同级车评分",
                             measurements=[{"stable": True}] * 3,
                             full_page_path=full,
@@ -857,6 +909,13 @@ class ReputationInspectionTest(unittest.TestCase):
                             height=1200,
                             metric_rect={"x": 0, "y": 0, "width": 600, "height": 240},
                             duration_ms=100,
+                            negative_rate_raw="0%" if index == 1 else "37%",
+                            negative_rate_url=(
+                                "https://api.dcarapi.com/motor/car_score/api/v1/landing_page/"
+                                f"get_detail/?series_id={target.platform_vehicle_id}"
+                            ),
+                            negative_rate_positive_count=5 if index == 1 else 214,
+                            negative_rate_negative_count=0 if index == 1 else 128,
                         )
                     )
                 return values
@@ -868,13 +927,15 @@ class ReputationInspectionTest(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200, response.text)
         validation = response.json()
+        self.assertIs(True, construction_options["include_review_article_count"])
+        self.assertIs(True, construction_options["include_negative_rate"])
         self.assertEqual(validation["succeeded_count"], 27)
         self.assertEqual(validation["failed_count"], 0)
         verified = validation["scope"]["vehicles"]
         self.assertTrue(
             all(row["mappings"]["dongchedi"]["validation_status"] == "verified" for row in verified)
         )
-        self.assertEqual(verified[0]["mappings"]["dongchedi"]["latest_metrics"]["volume"], "500")
+        self.assertEqual(verified[0]["mappings"]["dongchedi"]["latest_metrics"]["volume"], "1,234")
         evidence = self.client.get(validation["attempts"][0]["metric_region_url"])
         self.assertEqual(evidence.status_code, 200)
         self.assertEqual(evidence.headers["content-type"], "image/png")
@@ -898,6 +959,44 @@ class ReputationInspectionTest(unittest.TestCase):
             [row["id"] for row in verified],
         )
         self.assertEqual(acceptance["complete_evidence_count"], 27)
+        metrics = acceptance["results"][0]["metrics"]
+        self.assertEqual("1234", metrics["volume"]["value"])
+        self.assertEqual("5000", metrics["review_article_count"]["value"])
+        self.assertEqual("同级车评分", metrics["rank"]["scope"])
+        self.assertEqual("37%", metrics["negative_rate"]["raw"])
+        self.assertEqual("37", metrics["negative_rate"]["value"])
+        self.assertEqual(214, metrics["negative_rate"]["positive_count"])
+        self.assertEqual(128, metrics["negative_rate"]["negative_count"])
+        self.assertEqual("0", acceptance["results"][1]["metrics"]["negative_rate"]["value"])
+        attempts = {row["vehicle_id"]: row for row in validation["attempts"]}
+        for result in acceptance["results"]:
+            attempt = attempts[result["vehicle_id"]]
+            self.assertEqual(attempt["metrics"]["frozen_metrics"], result["metrics"])
+            digest = hashlib.sha256(
+                self.client.get(attempt["metric_region_url"]).content
+            ).hexdigest()
+            self.assertEqual(digest, result["evidence"]["metric_region_sha256"])
+            mapping = next(row for row in verified if row["id"] == result["vehicle_id"])[
+                "mappings"
+            ]["dongchedi"]
+            self.assertEqual(
+                mapping["platform_url"], result["metrics"]["review_article_count"]["source_url"]
+            )
+            self.assertIn("series_id=", result["metrics"]["negative_rate"]["source_url"])
+        exported = self.client.get(acceptance["downloads"]["xlsx"])
+        self.assertEqual(200, exported.status_code)
+        xlsx_path = self.root / "real-acceptance.xlsx"
+        xlsx_path.write_bytes(exported.content)
+        workbook = load_workbook(xlsx_path)
+        self.assertEqual("5,000", workbook.active["H2"].value)
+        self.assertEqual("37%", workbook.active["I2"].value)
+        zero_row = next(
+            row
+            for row in workbook.active.iter_rows(min_row=2)
+            if row[3].value == verified[1]["vehicle_name"]
+        )
+        self.assertEqual("0%", zero_row[8].value)
+        workbook.close()
         compacted = self.client.app.state.container.reputation.compact_region_evidence()
         self.assertGreaterEqual(compacted["validation_attempts"], 27)
         self.assertGreaterEqual(compacted["run_evidence"], 27)
@@ -1070,8 +1169,8 @@ class ReputationInspectionTest(unittest.TestCase):
             )
         )
 
-    def test_dongchedi_missing_review_count_with_metrics_remains_an_error(self) -> None:
-        """已有口碑指标却缺评价篇数时仍按解析异常处理。"""
+    def test_dongchedi_missing_review_count_does_not_mark_whole_page_empty(self) -> None:
+        """已有口碑指标时，评价篇数缺失不代表整页暂无口碑。"""
 
         target = ReputationMappingTarget(
             vehicle_id="rep-active",
@@ -1568,6 +1667,167 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         self.assertIsNotNone(first["evidence"])
         self.assertEqual(27, finished["complete_evidence_count"])
         self.assertEqual("success", finished["status"])
+
+    def test_real_acceptance_rejects_attempts_without_collection_proof(self) -> None:
+        """旧漏采、采集开关关闭或来源缺失均不冒充新完整验收。"""
+
+        mapping = self.service.get_scope()["vehicles"][0]["mappings"]["dongchedi"]
+        run_id = mapping["validation_run_id"]
+        with self.service.sessions() as db:
+            attempt = db.get(ReputationMappingValidationAttempt, mapping["validation_attempt_id"])
+            original_metrics = json.loads(json.dumps(attempt.metrics))
+            original_gates = json.loads(json.dumps(attempt.gate_results))
+        for missing in (
+            "frozen_metrics",
+            "review_article_count",
+            "negative_rate",
+            "negative_source",
+            "article_source",
+            "negative_option",
+            "article_option",
+            "counts",
+            "raw",
+        ):
+            with self.subTest(missing=missing):
+                metrics = json.loads(json.dumps(original_metrics))
+                gates = json.loads(json.dumps(original_gates))
+                if missing == "frozen_metrics":
+                    metrics.pop("frozen_metrics")
+                elif missing == "negative_option":
+                    gates["collection_options"]["include_negative_rate"] = False
+                elif missing == "article_option":
+                    gates["collection_options"]["include_review_article_count"] = False
+                elif missing == "negative_source":
+                    metrics["frozen_metrics"]["negative_rate"]["source_url"] = None
+                elif missing == "article_source":
+                    metrics["frozen_metrics"]["review_article_count"]["source_url"] = None
+                elif missing == "counts":
+                    metrics["frozen_metrics"]["negative_rate"].pop("negative_count")
+                elif missing == "raw":
+                    metrics["frozen_metrics"]["score"].pop("raw")
+                else:
+                    metrics["frozen_metrics"].pop(missing)
+                with self.service.sessions.begin() as db:
+                    attempt = db.get(
+                        ReputationMappingValidationAttempt, mapping["validation_attempt_id"]
+                    )
+                    attempt.metrics = metrics
+                    attempt.gate_results = gates
+                with self.assertRaises(DomainError) as raised:
+                    self.service.create_real_acceptance([run_id])
+                self.assertEqual(
+                    "REPUTATION_ACCEPTANCE_COLLECTION_INCOMPLETE", raised.exception.code
+                )
+                self.assertEqual(0, self.service.list_runs()["total"])
+
+    def test_real_acceptance_waits_for_validation_terminal_state(self) -> None:
+        """已有分项结果也须等验证终态，避免将进行中采集冻结为已完成验收。"""
+
+        mapping = self.service.get_scope()["vehicles"][0]["mappings"]["dongchedi"]
+        run_id = mapping["validation_run_id"]
+        with self.service.sessions.begin() as db:
+            validation = db.get(ReputationMappingValidationRun, run_id)
+            validation.status = "running"
+            validation.finished_at = None
+        with self.assertRaises(DomainError) as raised:
+            self.service.create_real_acceptance([run_id])
+        self.assertEqual("REPUTATION_ACCEPTANCE_VALIDATION_UNFINISHED", raised.exception.code)
+        self.assertEqual(0, self.service.list_runs()["total"])
+
+    def test_real_acceptance_preserves_existing_batch_and_uses_new_measurement(self) -> None:
+        """新门禁对既有输入只读返回，重采创建新批次而不回填历史指标。"""
+
+        scope = self.service.get_scope()
+        mapping = scope["vehicles"][0]["mappings"]["dongchedi"]
+        acceptance = self.service.create_real_acceptance([mapping["validation_run_id"]])
+        old_xlsx = self.client.get(acceptance["downloads"]["xlsx"]).content
+        old_txt = self.client.get(acceptance["downloads"]["txt"]).content
+        with self.service.sessions.begin() as db:
+            attempt = db.get(ReputationMappingValidationAttempt, mapping["validation_attempt_id"])
+            legacy = dict(attempt.metrics)
+            legacy.pop("frozen_metrics")
+            attempt.metrics = legacy
+            attempt.gate_results = {}
+        self.assertEqual(
+            acceptance, self.service.create_real_acceptance([mapping["validation_run_id"]])
+        )
+
+        OfficialFakeAdapter.negative_rate_overrides = {"official-01": "0%"}
+        validation = self.service.validate_mappings(
+            type("Request", (), {"revision": scope["revision"], "vehicle_ids": None})()
+        )
+        fresh = self.service.create_real_acceptance([validation["id"]])
+        self.assertNotEqual(acceptance["id"], fresh["id"])
+        self.assertEqual("0%", fresh["results"][0]["metrics"]["negative_rate"]["raw"])
+        self.assertEqual(acceptance, self.service.get_run(acceptance["id"]))
+        self.assertEqual(old_xlsx, self.client.get(acceptance["downloads"]["xlsx"]).content)
+        self.assertEqual(old_txt, self.client.get(acceptance["downloads"]["txt"]).content)
+
+    def test_real_acceptance_keeps_confirmed_empty_and_zero_rate_distinct(self) -> None:
+        """已访问接口的缺标签、零分母和整页暂无合法留空；真实0%保留数值。"""
+
+        class EmptyMetricAdapter(OfficialFakeAdapter):
+            def validate_sync(self, targets, output_dir, on_result=None):
+                results = super().validate_sync(targets, output_dir, on_result)
+                results[0] = replace(
+                    results[0],
+                    negative_rate_raw=None,
+                    negative_rate_positive_count=None,
+                    negative_rate_negative_count=None,
+                )
+                results[1] = replace(
+                    results[1],
+                    negative_rate_raw=None,
+                    negative_rate_positive_count=0,
+                    negative_rate_negative_count=0,
+                )
+                results[2] = replace(
+                    results[2],
+                    score_raw=None,
+                    rank_raw=None,
+                    volume_raw=None,
+                    review_article_count_raw=None,
+                    negative_rate_raw=None,
+                    negative_rate_positive_count=0,
+                    negative_rate_negative_count=0,
+                    reputation_not_available=True,
+                )
+                results[3] = replace(
+                    results[3],
+                    negative_rate_raw="0%",
+                    negative_rate_positive_count=5,
+                    negative_rate_negative_count=0,
+                )
+                return results
+
+        self.service.adapter_factory = EmptyMetricAdapter
+        validation = self.service.validate_mappings(
+            type(
+                "Request",
+                (),
+                {
+                    "revision": self.service.get_scope()["revision"],
+                    "vehicle_ids": None,
+                },
+            )()
+        )
+        acceptance = self.service.create_real_acceptance([validation["id"]])
+        self.assertEqual("success", acceptance["status"])
+        for row in acceptance["results"][:3]:
+            rate = row["metrics"]["negative_rate"]
+            self.assertIsNone(rate["value"])
+            self.assertEqual("not_available", rate["comparison_status"])
+            self.assertTrue(rate["source_url"])
+            self.assertEqual("success", row["status"])
+        self.assertIsNone(acceptance["results"][0]["metrics"]["negative_rate"]["positive_count"])
+        self.assertEqual(0, acceptance["results"][1]["metrics"]["negative_rate"]["positive_count"])
+        self.assertTrue(
+            all(
+                metric["comparison_status"] == "not_available"
+                for metric in acceptance["results"][2]["metrics"].values()
+            )
+        )
+        self.assertEqual("0", acceptance["results"][3]["metrics"]["negative_rate"]["value"])
 
     def test_official_run_persists_linear_progress_before_terminal_state(self) -> None:
         """每个车型终态都应先落库并发布进度，批次结束后才冻结汇报。"""
