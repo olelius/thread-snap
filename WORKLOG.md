@@ -20,10 +20,12 @@
 
 ## 2026-09-08 — 修复真实验收差评率并重新采集
 **总目标**：修复真实验收漏采懂车帝差评率、百分数解析与来源丢失，生成新的三平台真实批次，保留旧批次。
-**状态**：⏳ 实现、独立审查及现场单车型通过，待最小部署与全量新批次验收。
+**状态**：✅ 修复提交11c4171已上线；新真实验收 `RP-A-20260908-044548-B752` 为81/81成功、54/54证据，懂车帝差评率27/27有值，API/XLSX/网页一致。
 **证据/边界**：远端旧正式批次0699有26/27差评率，新真实验收2FA9及源验证27/27为null；validate_mappings未开include_negative_rate，转换另用Decimal(raw)且无采集证明。保留平台真实未返回值的not_available/正常语义，不用旧值或零填充；新转换拒绝缺采证明，旧幂等读取保持原样。诊断见 `artifacts/runtime/negative-rate-diagnosis-20260908/`。
 **本轮实现/验证**：映射验证开启评价篇数及差评率，同次attempt冻结复用正式投影的raw/数值/来源URL/优缺点计数/排名scope；新真实验收拒绝缺采证明且保持旧幂等结果。按ADR0068修复DCD合法缺评价篇数误判，仍拒绝坏JSON/非法count/身份/证据错误。口碑46/46、后端与dashboard110/110、独立验收12/12、真实Chromium/HTTP静态28/28通过；Ruff、compileall、41个变更范围/新文件格式与diff检查通过。T7服务器独立进程预检：有效pageProps缺reviewListData，旧代码MISSING；冻结新模块成功取得67%（正4/负8）、同次PNG，评价篇数真实未提供保持空；未改业务DB。证据 `artifacts/runtime/acceptance-negative-rate-20260908/` 与远端 `/var/tmp/threadsnap-acceptance-rates-probe-20260908/`。
-**下一步**：复用既有最小离线部署和当前59文件前端/14文件部署payload，上线后用新验证ID重采81项并核对DCD差评率逐项及54份证据。
+**部署证据**：current=`/opt/threadsnap/releases/0.1.0-11c4171e59bd`、previous=`0.1.0-5a6bbc15056d`；离线包SHA `17305903619722dbe1cabf6dd9c975123eb3ecc0c9d7a2f07b960f7d46afda35`，复用59前端/14部署/17许可，无依赖或迁移变更。安装器38项补偿测试、目标机完整verify/新代码导入专项通过，维护38.259秒、13历史表及旧正式/旧验收/范围API未变。备份SHA `39098b07f32b410a2583b98169b76047f2075a51695866950c535d982e3bbd814`，目录 `/var/lib/threadsnap/backups/minimal-release-upgrade/20260908-acceptance-rates-11c4171/`。
+**真实验收**：首轮三平台新验证为DCD `01a07f4b-c781-7403-b043-818105c44d87`、汽车之家 `01a07f4c-b614-769d-95f0-163213b09d5d`、易车 `01a07f4e-32ac-7c1d-97a0-4d275941c177`。首轮汉DM-i接口未给差评率、汽车之家艾瑞泽8页面Error；仅完整复访这两项（新验证 `01a07f55-dd88-7bb3-84c7-4acff4dd2087` / `01a07f56-0dfd-7ed8-ac4c-6fe73420787d`），均成功并保留首轮记录。只用本轮5个验证ID选择各项最新成功结果，形成新批次 `01a07f56-294e-7317-a62a-a4f16ba3b752`，每平台27项。DCD27项均有差评率及来源/优缺点计数，按计数复算全部一致；XLSX27行和网页27行逐一匹配，截图已目视，JS异常/业务写请求0。54份PNG实际SHA校验、SQLite完整性、四服务通过；旧正式0699及旧验收2FA9完整API未变。
+**证据/下一步**：完整结果见 `artifacts/runtime/acceptance-negative-rate-20260908/live-rate-verification.json`、`server-evidence/deployment/final-verification.json`、`new-rates-detail.png`及`acceptance-export.xlsx`；完成PR合并并保持服务运行。真实平台未提供的其它指标仍依ADR0068保留空值，不宣称全部五指标必然有值。
 
 ---
 
