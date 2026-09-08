@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, CircleDot, FileText, Loader2, Plus, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { api, errorMessage } from '@/lib/api'
-import type { Circle, Platform, Run, Vehicle } from '@/lib/types'
+import type { Circle, Platform, Run, SentimentConfig, Vehicle } from '@/lib/types'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -35,9 +35,12 @@ export function NewExtractionSheet() {
   const [circleUrls, setCircleUrls] = useState('')
   const [postUrls, setPostUrls] = useState('')
   const [aiAnalysisEnabled, setAiAnalysisEnabled] = useState(true)
+  const [aiAccountId, setAiAccountId] = useState(1)
   const [screenshotEnabled, setScreenshotEnabled] = useState(true)
   const vehicles = useQuery({ queryKey: ['vehicles'], queryFn: () => api<Vehicle[]>('/vehicles') })
   const platforms = useQuery({ queryKey: ['platforms'], queryFn: () => api<Platform[]>('/platforms') })
+  const aiAccounts = useQuery({ queryKey: ['sentiment-accounts'], queryFn: () => api<SentimentConfig[]>('/sentiment/accounts'), enabled: open, staleTime: 30_000 })
+  const selectedAiAccount = aiAccounts.data?.find((account) => account.id === aiAccountId)
   const availablePlatforms = platforms.data?.filter((item) => item.adapter_status === 'available' && item.enabled) ?? []
   const selectedPlatform = availablePlatforms.find((item) => item.code === platform)
   const circles = useMemo(() => vehicles.data?.flatMap((item) => item.circles) ?? [], [vehicles.data])
@@ -66,6 +69,7 @@ export function NewExtractionSheet() {
 
   const submit = useMutation({
     mutationFn: () => {
+      if (aiAnalysisEnabled && (!selectedAiAccount || aiAccounts.isError)) throw new Error('请先选择一个可用的 AI 账户。')
       const body =
         mode === 'circle_discovery'
           ? {
@@ -75,6 +79,7 @@ export function NewExtractionSheet() {
               known_post_urls: [],
               quantity,
               ai_analysis_enabled: aiAnalysisEnabled,
+              ai_account_id: aiAccountId,
               screenshot_enabled: Boolean(selectedPlatform?.capabilities.page_evidence) && screenshotEnabled,
               idempotency_key: crypto.randomUUID(),
             }
@@ -85,6 +90,7 @@ export function NewExtractionSheet() {
               known_post_urls: lines(postUrls),
               quantity,
               ai_analysis_enabled: aiAnalysisEnabled,
+              ai_account_id: aiAccountId,
               screenshot_enabled: false,
               idempotency_key: crypto.randomUUID(),
             }
@@ -107,6 +113,7 @@ export function NewExtractionSheet() {
     setPostUrls('')
     setQuantity(30)
     setAiAnalysisEnabled(true)
+    setAiAccountId(1)
     setScreenshotEnabled(true)
   }
 
@@ -224,12 +231,23 @@ export function NewExtractionSheet() {
                 <Switch checked={mode === 'circle_discovery' && Boolean(selectedPlatform?.capabilities.page_evidence) && screenshotEnabled} disabled={mode === 'url_list' || !selectedPlatform?.capabilities.page_evidence} onCheckedChange={setScreenshotEnabled} />
               </label>
             </div>
+            {aiAnalysisEnabled && <div className='space-y-2'>
+              <Label htmlFor='manual-ai-account'>AI 账户</Label>
+              <Select value={String(aiAccountId)} onValueChange={(value) => setAiAccountId(Number(value))} disabled={aiAccounts.isLoading || aiAccounts.isError}>
+                <SelectTrigger id='manual-ai-account' className='w-full'><SelectValue placeholder='选择 AI 账户' /></SelectTrigger>
+                <SelectContent>
+                  {!selectedAiAccount && <SelectItem value={String(aiAccountId)} disabled>{aiAccounts.isLoading ? '正在加载账户…' : '请选择可用账户'}</SelectItem>}
+                  {aiAccounts.data?.map((account) => <SelectItem key={account.id} value={String(account.id)}>{account.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              {aiAccounts.isError ? <p className='text-xs text-destructive'>账户加载失败，请重新打开窗口后再试。</p> : selectedAiAccount ? <p className='text-xs text-muted-foreground'>本次使用“{selectedAiAccount.name}”的模型与判定对象；不会自动切换至其他账户。</p> : !aiAccounts.isLoading && <p className='text-xs text-destructive'>原账户已不可用，请明确选择账户或前往 AI 舆情配置创建。</p>}
+            </div>}
             <Alert><AlertTitle>提交范围</AlertTitle><AlertDescription>切换模式会保留两边输入；关闭窗口会直接放弃，提交只包含当前选择的模式。</AlertDescription></Alert>
           </div>
         </ScrollArea>
         <SheetFooter className='border-t bg-background/95 p-4 backdrop-blur'>
           <SheetClose asChild><Button variant='outline'>关闭</Button></SheetClose>
-          <Button disabled={currentEmpty || !selectedPlatform?.enabled || submit.isPending} onClick={() => submit.mutate()}>
+          <Button disabled={currentEmpty || !selectedPlatform?.enabled || (aiAnalysisEnabled && (!selectedAiAccount || aiAccounts.isError)) || submit.isPending} onClick={() => submit.mutate()}>
             {submit.isPending && <Loader2 className='size-4 animate-spin' />}
             提交提取
           </Button>

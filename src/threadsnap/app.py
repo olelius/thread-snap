@@ -62,6 +62,7 @@ from .schemas import (
     ManualSentimentRevisionCreate,
     PlatformConfigUpdate,
     SentimentConfigUpdate,
+    SentimentAccountCreate,
     SessionImport,
 )
 from .screenshots import ScreenshotService
@@ -380,12 +381,26 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
     ) -> dict[str, Any]:
         return _container(request).reputation.publish_scope(value)
 
+    @router.get("/sentiment/accounts")
+    def list_sentiment_accounts(request: Request) -> list[dict[str, Any]]:
+        return _container(request).sentiment.get_accounts()
+
+    @router.post("/sentiment/accounts", status_code=201)
+    def create_sentiment_account(value: SentimentAccountCreate, request: Request) -> dict[str, Any]:
+        result = _container(request).sentiment.create_account(value.name)
+        _container(request).events.publish("sentiment.config.changed", "sentiment-config")
+        return result
+
+    @router.get("/sentiment/accounts/{account_id}/balance")
+    def get_sentiment_account_balance(account_id: int, request: Request) -> dict[str, Any]:
+        return _container(request).sentiment.account_balance(account_id)
+
     @router.get("/sentiment/config")
-    def get_sentiment_config(request: Request) -> dict[str, Any]:
-        return _container(request).sentiment.get_config()
+    def get_sentiment_config(request: Request, account_id: int = Query(1, ge=1)) -> dict[str, Any]:
+        return _container(request).sentiment.get_config(account_id)
 
     @router.put("/sentiment/config")
-    def update_sentiment_config(value: SentimentConfigUpdate, request: Request) -> dict[str, Any]:
+    def update_sentiment_config(value: SentimentConfigUpdate, request: Request, account_id: int = Query(1, ge=1)) -> dict[str, Any]:
         if value.api_key is not None:
             host = request.client.host if request.client else ""
             loopback = host == "testclient"
@@ -401,17 +416,16 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
                     status_code=403,
                 )
         container = _container(request)
-        result = container.sentiment.update_config(value)
-        container.sentiment_worker.apply_runtime_config(
-            result["model_code"], result["cloud_concurrency"]
-        )
+        result = container.sentiment.update_config(value, account_id)
+        container.sentiment_worker.refresh_runtime_config()
         container.events.publish("sentiment.config.changed", "sentiment-config")
         return result
 
     @router.post("/sentiment/config/test")
-    def test_sentiment_config(request: Request) -> dict[str, Any]:
+    def test_sentiment_config(request: Request, account_id: int = Query(1, ge=1)) -> dict[str, Any]:
         container = _container(request)
-        result = container.sentiment.test_connection()
+        result = container.sentiment.test_connection(account_id)
+        container.sentiment_worker.refresh_runtime_config()
         container.events.publish("sentiment.config.changed", "sentiment-config")
         return result
 

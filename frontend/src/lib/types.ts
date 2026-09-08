@@ -25,6 +25,7 @@ export type ExtractionRule = {
   platform_quantities: Record<string, number>
   circle_ids: string[]
   ai_analysis_enabled: boolean
+  ai_account_id: number
   screenshot_enabled: boolean
   archived: boolean
   updated_at: string
@@ -180,6 +181,8 @@ export type SentimentSource = 'ai' | 'manual' | 'inherited_manual'
 export type AnalysisStatus = 'analysis_queued' | 'analysis_running' | 'analysis_completed' | 'analysis_partial' | 'analysis_failed' | 'analysis_paused' | 'analysis_disabled'
 
 export type SentimentConfig = {
+  id: number
+  name: string
   revision: number
   api_base_url: string
   api_key_configured: boolean
@@ -195,6 +198,15 @@ export type SentimentConfig = {
   validation_error?: string
   validated_at?: string
   subject: { brand: string; products: string[]; supplement?: string; version: number }
+}
+
+export type SentimentAccountBalance = {
+  account_id: number
+  status: 'available' | 'unsupported' | 'unconfigured' | 'unavailable'
+  balance_infos: Array<{ currency: string; total_balance: string; granted_balance: string; topped_up_balance: string }>
+  is_available?: boolean
+  message?: string
+  checked_at?: string
 }
 
 export type SentimentDetail = {

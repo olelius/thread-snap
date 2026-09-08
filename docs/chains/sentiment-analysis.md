@@ -2,6 +2,8 @@
 
 ## 当前口径
 
+- 2026-09-08按用户要求开发命名多账户、规则/手动选择和DeepSeek余额（ADR0072）；原单例保留为默认账户，任务路由/缓存/暂停/冷却按账户隔离，同来源冲突显式报错。本轮明确不运行测试、构建、审查或验收，由用户查看，不自动发布。
+
 - 功能范围 owner：`docs/design/product-design.md`。
 - 技术路线 owner：`docs/design/technical-route.md`。
 - 架构决策：`docs/adr/0022-use-hosted-multimodal-api-for-sentiment-feedback.md`、`docs/adr/0023-use-validated-runtime-config-for-sentiment-service.md`、`docs/adr/0024-add-local-text-sentiment-option.md`、`docs/adr/0025-add-deepseek-cloud-text-sentiment-option.md`、`docs/adr/0028-configure-bounded-sentiment-cloud-concurrency.md`、`docs/adr/0029-use-model-specific-strict-output-adapters.md`、`docs/adr/0030-treat-provider-strict-output-as-untrusted.md`、`docs/adr/0038-freeze-ai-and-screenshot-options-per-batch.md`。
@@ -20,7 +22,7 @@
 - 开启 AI 的关联圈子截图成果直接读取每个证据化帖子的当前有效结果，优先级仍为人工修正、继承人工结果、完整 AI 结果；不从截图 OCR，也不追加第二次模型判断。该路径等待全部证据化帖子具有有效结果后生成并框选负面卡片；关闭 AI 但开启截图的批次不等待模型，先生成无红框原图，后续人工结论变化可以创建新的不可变成果版本，详见 `docs/chains/circle-screenshot-artifacts.md`。
 - 同帖内容未实质变化时继承人工判定；无人工结果时只精确复用版本和输入完全一致的完整 AI 结果。任何历史批次保持不可变。
 - PoC 是 URL 获取、模态覆盖、结构、耗时、用量、成本和失败分布报告，不设置准确率、召回率、误判率或漏判上限。
-- 第一版以自动提取规则或手动批次的 AI 开关决定是否分析；模型配置只维护加密连接、受控模型、并发、判定对象和显式可用性测试，不再提供全局业务开关。千问与 DeepSeek 的 URL/Key 分槽加密保存，云端允许安全校验后的公网 HTTPS 代理，但代理必须实现所选模型的生产输出协议：千问 JSON Object 或 DeepSeek Beta Strict Tool；本地不要求 URL/Key 且不开放自由本地端点；不增加余额查询。
+- 第一版以自动提取规则或手动批次的 AI 开关决定是否分析；模型配置只维护加密连接、受控模型、并发、判定对象和显式可用性测试，不再提供全局业务开关。千问与 DeepSeek 的 URL/Key 分槽加密保存，云端允许安全校验后的公网 HTTPS 代理，但代理必须实现所选模型的生产输出协议：千问 JSON Object 或 DeepSeek Beta Strict Tool；本地不要求 URL/Key 且不开放自由本地端点；余额按ADR0072仅查询所选官方DeepSeek账户，其它服务显示明确不支持状态。
 - 列表分别筛选有效舆情结果与分析状态；人工入口只在详情的全局 Dialog 中提供，无有效结论时称“人工判定”，已有结论时称“人工修正”。运行、排队和暂停时禁止，完成、部分、失败和禁用时允许。
 - 图片由浏览器按需直连快照 URL；打开含视频的详情 Sheet 时，前端自动触发后端使用快照 `video_id` 通过授权与播放信息 HTTP 接口刷新当前临时 URL，再由浏览器直连媒体 CDN并使用 `preload="auto"` 预缓冲。刷新过程不加载原帖页面或启动 Chromium，ThreadSnap 不为展示下载或代理；第一版不提供重新分析和历史回刷。
 - 同一稳定媒体的多个查询、已知路径时效签名或等价懂车帝 CDN 主机 URL 只提交和展示一次；播放地址刷新返回最高码率地址，同一清晰度优先使用支持浏览器连续 Range 播放的备用 CDN，缺失时回退主地址，原始快照不改写。模型 Worker 对含视频任务也在请求前按快照 `video_id` 刷新当前临时 URL，避免把已过期快照 URL 送入模型。千问 JSON 的字段、层级、类型、枚举、索引和哈希必须原生符合完整合同；DeepSeek 严格工具参数只生成模型负责的七个语义字段，文字状态以及未接收媒体的数量与 `not_requested` 事实由后端补齐。

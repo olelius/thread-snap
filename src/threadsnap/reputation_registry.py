@@ -60,7 +60,7 @@ REPUTATION_PLATFORMS: dict[str, ReputationPlatformSpec] = {
         reputation_autohome.ADAPTER_VERSION,
         reputation_autohome.VALIDATION_CONTRACT_VERSION,
         reputation_autohome.VIEWPORT,
-        metric_keys=(*CORE_METRIC_KEYS, "circle_content_count"),
+        metric_keys=tuple(key for key in CORE_METRIC_KEYS if key != "negative_rate") + ("circle_content_count",),
     ),
     "yiche": ReputationPlatformSpec(
         "yiche",
@@ -72,6 +72,7 @@ REPUTATION_PLATFORMS: dict[str, ReputationPlatformSpec] = {
         reputation_yiche.VIEWPORT,
         requires_session=False,
         requires_evidence=False,
+        metric_keys=tuple(key for key in CORE_METRIC_KEYS if key != "negative_rate"),
     ),
 }
 

@@ -165,7 +165,7 @@ function RankingPanel({ results, onViewEvidence, yicheUrlOnly, capabilities }: {
         </TableBody>
       </Table>
     </div>
-    <div className='shrink-0 border-t bg-card/95 px-4 py-3 text-xs text-muted-foreground'>每款车型一行；口碑分、口碑量和评价篇数升高为绿色，排名数字和差评率下降为绿色。圈内内容数仅中性表示数量变化，来源为圈子列表，不在评分截图中。缺失指标保持空值。</div>
+    <div className='shrink-0 border-t bg-card/95 px-4 py-3 text-xs text-muted-foreground'>每款车型一行；口碑分、口碑量和评价篇数升高为绿色，排名数字和懂车帝差评率下降为绿色。圈内内容数仅中性表示数量变化，来源为圈子列表，不在评分截图中。缺失指标保持空值。</div>
     <Dialog open={Boolean(issue)} onOpenChange={(open) => !open && setIssue(undefined)}><DialogContent><DialogHeader><DialogTitle>{issue?.vehicle_name} · {issue?.platform_name}</DialogTitle><DialogDescription>原批次保存的失败原因；切换采集方式不会改写历史记录。</DialogDescription></DialogHeader><div className='space-y-3 text-sm'><StatusBadge value={issue?.status ?? 'unknown'} label={statusName(issue?.status ?? 'unknown')} /><p className='break-all font-mono text-xs'>{issue?.error_code}</p><p className='whitespace-pre-wrap break-words leading-6'>{issue?.error_message}</p></div></DialogContent></Dialog>
   </Card>
 }

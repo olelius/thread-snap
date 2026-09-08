@@ -30,7 +30,7 @@ export function EventBridge() {
       client.invalidateQueries({ queryKey: ['runs'] })
     })
     source.addEventListener('extraction-plan.changed', () => client.invalidateQueries({ queryKey: ['extraction-plan'] }))
-    source.addEventListener('sentiment.config.changed', () => client.invalidateQueries({ queryKey: ['sentiment-config'] }))
+    source.addEventListener('sentiment.config.changed', () => { client.invalidateQueries({ queryKey: ['sentiment-config'] }); client.invalidateQueries({ queryKey: ['sentiment-accounts'] }) })
     source.addEventListener('sentiment.changed', () => {
       client.invalidateQueries({ queryKey: ['posts'] })
       client.invalidateQueries({ queryKey: ['post'] })
