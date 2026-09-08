@@ -391,6 +391,14 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
         _container(request).events.publish("sentiment.config.changed", "sentiment-config")
         return result
 
+    @router.delete("/sentiment/accounts/{account_id}")
+    def delete_sentiment_account(account_id: int, request: Request) -> dict[str, Any]:
+        container = _container(request)
+        result = container.sentiment.delete_account(account_id)
+        container.sentiment_worker.refresh_runtime_config()
+        container.events.publish("sentiment.config.changed", "sentiment-config")
+        return result
+
     @router.get("/sentiment/accounts/{account_id}/balance")
     def get_sentiment_account_balance(account_id: int, request: Request) -> dict[str, Any]:
         return _container(request).sentiment.account_balance(account_id)

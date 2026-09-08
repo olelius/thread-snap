@@ -807,6 +807,7 @@ function SentimentPanel({ active, onDirtyChange }: { active: boolean; onDirtyCha
   const [accountId, setAccountId] = useState(1)
   const [dirty, setDirty] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
+  const [deleteOpen, setDeleteOpen] = useState(false)
   const [newName, setNewName] = useState('')
   const panelRef = useRef<HTMLDivElement>(null)
   const pendingScrollTop = useRef<number | null>(null)
@@ -833,6 +834,20 @@ function SentimentPanel({ active, onDirtyChange }: { active: boolean; onDirtyCha
     },
     onError: (error) => toast.error('创建账户失败', { description: errorMessage(error) }),
   })
+  const removeAccount = useMutation({
+    mutationFn: (id: number) => api<{ id: number; status: string }>(`/sentiment/accounts/${id}`, { method: 'DELETE' }),
+    onSuccess: (value) => {
+      rememberScroll()
+      setAccountId(1)
+      setDeleteOpen(false)
+      setDirty(false)
+      client.setQueryData<SentimentConfig[]>(['sentiment-accounts'], (current) => current?.filter((account) => account.id !== value.id))
+      client.removeQueries({ queryKey: ['sentiment-config', value.id], exact: true })
+      client.removeQueries({ queryKey: ['sentiment-balance', value.id] })
+      toast.success('账户已删除，已切换到默认账户')
+    },
+    onError: (error) => toast.error('删除账户失败', { description: errorMessage(error) }),
+  })
   const requireSavedDraft = () => {
     if (!dirty) return true
     toast.info('请先保存或放弃当前账户修改，再切换或新增账户。')
@@ -841,20 +856,27 @@ function SentimentPanel({ active, onDirtyChange }: { active: boolean; onDirtyCha
   const accountControls = <div className='space-y-2'>
     <Label htmlFor='sentiment-account'>AI 账户</Label>
     <div className='flex flex-wrap items-center gap-2'>
-      <Select value={String(accountId)} onValueChange={(value) => { if (Number(value) !== accountId && requireSavedDraft()) { rememberScroll(); setAccountId(Number(value)) } }} disabled={accounts.isLoading || accounts.isError || create.isPending}>
+      <Select value={String(accountId)} onValueChange={(value) => { if (Number(value) !== accountId && requireSavedDraft()) { rememberScroll(); setAccountId(Number(value)) } }} disabled={accounts.isLoading || accounts.isError || create.isPending || removeAccount.isPending}>
         <SelectTrigger id='sentiment-account' aria-label='切换 AI 账户' className='h-9 w-60 max-w-full'><SelectValue placeholder='选择并切换账户' /></SelectTrigger>
         <SelectContent onCloseAutoFocus={(event) => { event.preventDefault(); document.getElementById('sentiment-account')?.focus({ preventScroll: true }) }}>
           {!selectedAccount && <SelectItem value={String(accountId)} disabled>{accounts.isLoading ? '正在加载账户…' : '请选择可用账户'}</SelectItem>}
           {accounts.data?.map((account) => <SelectItem key={account.id} value={String(account.id)}>{account.name}</SelectItem>)}
         </SelectContent>
       </Select>
-      <Button type='button' variant='outline' size='sm' disabled={create.isPending || accounts.isLoading || accounts.isError} onClick={() => { if (requireSavedDraft()) setCreateOpen(true) }}><Plus className='size-4' />新增</Button>
+      <Button type='button' variant='outline' size='sm' disabled={create.isPending || removeAccount.isPending || accounts.isLoading || accounts.isError} onClick={() => { if (requireSavedDraft()) setCreateOpen(true) }}><Plus className='size-4' />新增</Button>
+      <Button type='button' variant='ghost' size='sm' className='text-destructive hover:text-destructive' title={accountId === 1 ? '默认账户保留用于历史兼容' : '删除当前未使用账户'} disabled={accountId === 1 || !selectedAccount || create.isPending || removeAccount.isPending} onClick={() => { if (requireSavedDraft()) setDeleteOpen(true) }}><Trash2 className='size-4' />删除</Button>
     </div>
     {accounts.isError && <p className='text-xs text-destructive'>账户加载失败：{errorMessage(accounts.error)} <Button variant='link' size='sm' onClick={() => void accounts.refetch()}>重新加载</Button></p>}
   </div>
   return <div ref={panelRef} className='space-y-5'>
     {selectedAccount ? <SentimentAccountEditor accountId={accountId} initialConfig={selectedAccount} onAccountReady={restoreScroll} active={active} onDirtyChange={setDirty} accountControls={accountControls} />
       : <Card className='max-w-2xl'><CardHeader><CardTitle>模型连接</CardTitle></CardHeader><CardContent className='space-y-3'>{accountControls}{!accounts.isLoading && !accounts.isError && <p className='text-sm text-muted-foreground'>请选择可用账户或新增账户。</p>}</CardContent></Card>}
+    <Dialog open={deleteOpen} onOpenChange={(open) => { if (!removeAccount.isPending) setDeleteOpen(open) }}>
+      <DialogContent onCloseAutoFocus={(event) => { event.preventDefault(); document.getElementById('sentiment-account')?.focus({ preventScroll: true }) }}>
+        <DialogHeader><DialogTitle>删除 AI 账户？</DialogTitle><DialogDescription>确认删除“{selectedAccount?.name}”？账户将从列表移除并清除已保存的 API Key。已有规则、任务或历史记录引用的账户会被保护，不自动改用其它账户。</DialogDescription></DialogHeader>
+        <div className='flex justify-end gap-2'><Button type='button' variant='outline' disabled={removeAccount.isPending} onClick={() => setDeleteOpen(false)}>取消</Button><Button type='button' variant='destructive' disabled={removeAccount.isPending || accountId === 1} onClick={() => removeAccount.mutate(accountId)}>{removeAccount.isPending && <Loader2 className='size-4 animate-spin' />}删除账户</Button></div>
+      </DialogContent>
+    </Dialog>
     <Dialog open={createOpen} onOpenChange={(open) => { if (!create.isPending) { setCreateOpen(open); if (!open) setNewName('') } }}>
       <DialogContent><DialogHeader><DialogTitle>新增 AI 账户</DialogTitle><DialogDescription>先填写便于识别的名称，再配置模型连接与判定对象。</DialogDescription></DialogHeader>
         <form className='space-y-4' onSubmit={(event) => { event.preventDefault(); if (newName.trim() && !create.isPending) create.mutate() }}>

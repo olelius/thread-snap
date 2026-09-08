@@ -469,3 +469,5 @@ Linux PoC 运行器必须把每个候选放入独立进程组；候选入口退�
 - ADR0072复用sentiment_configs为账户实体，追加名称；规则版本、分析任务增加账户关联，旧记录默认账户1，来源config_snapshot追加ID与名称。沿用原密钥加密器和双接口控制器，无新队列或第二后端。
 - 既有/sentiment/config及/config/test通过account_id定位账户；/sentiment/accounts列出/新增账户，账户余额接口只在官方DeepSeek同源GET /user/balance，禁止重定向转发密钥。API不返回明文Key。
 - Worker按账户领取与计数，账户独立冷却和故障暂停，缓存包含账户身份；总槽位按已就绪云端账户上限合计（本地共加一个槽）并受64约束，本地推理全进程单路。规则保存和调度均检测同来源账户冲突，旧快照缺字段时只落到默认账户。
+
+- AI账户删除复用内部validation_status=deleted作为不可选占位状态，清除密钥、释放显示名，列表过滤且require_account拒绝使用；默认账户及规则/批次/分析引用受保护，引用检查与移除在同一SQLite写事务内，不追加数据库迁移。
