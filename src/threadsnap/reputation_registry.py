@@ -18,6 +18,13 @@ METRIC_LABELS = {
 }
 
 
+def metric_label(platform_code: str, key: str) -> str:
+    """共用计数字段在不同平台保留各自业务名称。"""
+    if platform_code == "autohome" and key == "circle_content_count":
+        return "论坛帖子总数"
+    return METRIC_LABELS[key]
+
+
 @dataclass(frozen=True)
 class ReputationPlatformSpec:
     """一个口碑平台的稳定代码、适配器和验证合同。"""
@@ -53,6 +60,7 @@ REPUTATION_PLATFORMS: dict[str, ReputationPlatformSpec] = {
         reputation_autohome.ADAPTER_VERSION,
         reputation_autohome.VALIDATION_CONTRACT_VERSION,
         reputation_autohome.VIEWPORT,
+        metric_keys=(*CORE_METRIC_KEYS, "circle_content_count"),
     ),
     "yiche": ReputationPlatformSpec(
         "yiche",

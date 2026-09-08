@@ -52,7 +52,13 @@ from .reputation_adapter import (
     ReputationMappingTarget,
     ReputationPageResult,
 )
-from .reputation_registry import METRIC_LABELS, REPUTATION_PLATFORMS, ReputationPlatformSpec
+from .reputation_registry import (
+    METRIC_LABELS,
+    REPUTATION_PLATFORMS,
+    ReputationPlatformSpec,
+    metric_label,
+)
+from .reputation_reports import render_report_templates
 from .session_store import SessionStore
 
 FIXTURE_VERSION = "reputation-synthetic-v3-circle-content"
@@ -503,6 +509,20 @@ class ReputationService:
                 ).all()
             }
             payload = self._run_dict(run)
+            # 关联链用于排名页；模板只读取原批次，防止晚到补跑改写汇报输入。
+            report_results = (
+                self._results_in_scope_order(
+                    db, run, list(db.scalars(
+                        select(ReputationResult).where(ReputationResult.run_id == run_id)
+                        .order_by(ReputationResult.role_position, ReputationResult.vehicle_position, ReputationResult.id)
+                    ).all())
+                )
+                if run.source_type == "scheduled" else results
+            )
+            payload["report_templates"] = (
+                render_report_templates(run, report_results)
+                if run.status not in {"queued", "running"} else []
+            )
             payload["results"] = [
                 self._result_dict(row, evidence_by_result.get(row.id), prefix) for row in results
             ]
@@ -882,6 +902,17 @@ class ReputationService:
                         f"车型{vehicle['id']}的验证缺少评价篇数、差评率或圈内内容数采集来源，请重新验证。",
                     )
                 raw = attempt.metric_region_path
+                if code == "autohome" and (
+                    options.get("include_circle_content_count") is not True
+                    or not self._circle_collection_proven(
+                        frozen_metrics.get("circle_content_count"),
+                        mapping.get("platform_vehicle_id"), code,
+                    )
+                ):
+                    raise DomainError(
+                        "REPUTATION_ACCEPTANCE_COLLECTION_INCOMPLETE",
+                        f"车型{vehicle['id']}的验证缺少论坛顶部帖子总数采集证明，请重新验证。",
+                    )
                 digest = attempt.metric_region_sha256
                 if self._platform_spec(code).requires_evidence and (
                     not raw or not digest or not Path(raw).is_file() or _sha256(Path(raw)) != digest
@@ -1398,10 +1429,21 @@ class ReputationService:
             "negative_rate": negative_rate,
         }
         if "circle_content_count" in REPUTATION_PLATFORMS[platform_code].metric_keys:
+            proof = page.circle_content_count_measurement or {}
+            circle_raw = page.circle_content_count_raw
+            quantity_kind = proof.get("quantity_kind", "exact")
             circle = cls._official_metric(
-                page.circle_content_count_raw,
+                str(proof["visible_count"])
+                if platform_code == "autohome" and proof.get("visible_count") is not None
+                else circle_raw,
                 baseline.get("circle_content_count"),
             )
+            circle["raw"] = circle_raw
+            if platform_code == "autohome":
+                circle["quantity_kind"] = quantity_kind
+                prior = baseline.get("circle_content_count") or {}
+                if prior.get("value") is not None and prior.get("quantity_kind", "exact") != quantity_kind:
+                    circle.update(delta=None, direction="none", comparison_status="not_comparable")
             # 内容增减是流量变化，不解释为口碑改善或恶化。
             circle.update(
                 tone="neutral",
@@ -1412,14 +1454,14 @@ class ReputationService:
         return metrics
 
     @staticmethod
-    def _circle_collection_proven(metric: Any, expected_id: str | None) -> bool:
+    def _circle_collection_proven(metric: Any, expected_id: str | None, platform_code: str = PLATFORM_CODE) -> bool:
         """确认新验收来自同一次真实圈子读取，而非仅写入开关或空值。"""
 
         if not isinstance(metric, dict):
             return False
         proof = metric.get("source_measurement")
         if not isinstance(proof, dict) or (
-            proof.get("collection_method") != "circle_http_ssr"
+            proof.get("collection_method") != ("forum_http_html" if platform_code == "autohome" else "circle_http_ssr")
             or proof.get("source_url") != metric.get("source_url")
             or not metric.get("source_url")
             or str(proof.get("platform_vehicle_id")) != str(expected_id)
@@ -1436,7 +1478,8 @@ class ReputationService:
         if len(set(counts)) > 1:
             return False
         raw = str(counts[0]) if counts else None
-        return metric.get("raw") == raw and metric.get("value") == raw
+        display_raw = proof.get("display_count_raw", raw) if platform_code == "autohome" else raw
+        return metric.get("raw") == display_raw and metric.get("value") == raw
 
     @staticmethod
     def _needs_evidence(
@@ -3646,7 +3689,7 @@ class ReputationService:
             for result in [item for item in results if item.platform_code == platform_code]:
                 changes: list[str] = []
                 for key in REPUTATION_PLATFORMS[platform_code].metric_keys:
-                    name = METRIC_LABELS[key]
+                    name = metric_label(platform_code, key)
                     metric = result.metrics.get(key)
                     if not metric:
                         continue
@@ -3696,9 +3739,9 @@ class ReputationService:
         headers = (
             ["日期", "角色", "车系", "车型"]
             + [
-                METRIC_LABELS[key]
+                metric_label(code, key)
                 if single_platform
-                else f"{REPUTATION_PLATFORMS[code].display_name}-{METRIC_LABELS[key]}"
+                else f"{REPUTATION_PLATFORMS[code].display_name}-{metric_label(code, key)}"
                 for code in platform_codes
                 for key in REPUTATION_PLATFORMS[code].metric_keys
             ]

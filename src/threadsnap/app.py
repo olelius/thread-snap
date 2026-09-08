@@ -23,7 +23,13 @@ from fastapi import (
     WebSocket,
 )
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    FileResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from sqlalchemy.exc import OperationalError
 
 from .auth import BrowserAuthManager
@@ -249,7 +255,21 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
         return _container(request).reputation.delete_synthetic(run_id)
 
     @router.get("/reputation/runs/{run_id}/report.txt")
-    def download_reputation_report(run_id: str, request: Request) -> FileResponse:
+    def download_reputation_report(
+        run_id: str,
+        request: Request,
+        template: Literal["vehicle_detail", "daily_changes"] | None = None,
+    ) -> Response:
+        if template is not None:
+            run = _container(request).reputation.get_run(run_id, prefix)
+            selected = next((item for item in run["report_templates"] if item["id"] == template), None)
+            if selected is None:
+                raise DomainError("REPUTATION_REPORT_NOT_READY", "巡检尚未终态，汇报暂未生成。", status_code=409)
+            return Response(
+                content=selected["text"],
+                media_type="text/plain; charset=utf-8",
+                headers={"Content-Disposition": f'attachment; filename="{run["number"]}-{template}.txt"'},
+            )
         path = _container(request).reputation.get_file(run_id, "txt")
         return FileResponse(path, filename=path.name, media_type="text/plain; charset=utf-8")
 

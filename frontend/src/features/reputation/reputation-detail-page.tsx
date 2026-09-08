@@ -9,7 +9,7 @@ import { StatusBadge } from '@/components/status-badge'
 import { ReputationRoleLabel } from '@/features/reputation/reputation-role-label'
 import { reputationMetricColumns } from '@/features/reputation/reputation-metrics'
 import { api, errorMessage, formatDate } from '@/lib/api'
-import type { ReputationCapabilities, ReputationMetric, ReputationResult, ReputationRun } from '@/lib/types'
+import type { ReputationCapabilities, ReputationMetric, ReputationResult, ReputationRun, ReputationReportTemplate } from '@/lib/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -17,6 +17,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, Di
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Progress } from '@/components/ui/progress'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { cn } from '@/lib/utils'
@@ -32,6 +33,15 @@ export function ReputationDetailPage() {
   const queryClient = useQueryClient()
   const reduceMotion = useReducedMotion()
   const [evidenceViewer, setEvidenceViewer] = useState<ReputationResult>()
+  const [reportTemplate, setReportTemplate] = useState<ReputationReportTemplate['id']>(() => {
+    try { return localStorage.getItem('threadsnap-report-template') === 'daily_changes' ? 'daily_changes' : 'vehicle_detail' }
+    catch { return 'vehicle_detail' }
+  })
+  const selectReportTemplate = (value: ReputationReportTemplate['id']) => {
+    setReportTemplate(value)
+    try { localStorage.setItem('threadsnap-report-template', value) } catch { /* 存储受限不影响当前选择。 */ }
+  }
+
   const capabilities = useQuery({ queryKey: ['reputation-capabilities'], queryFn: () => api<ReputationCapabilities>('/reputation/capabilities') })
   const yicheUrlOnly = capabilities.data?.reputation_platforms.some((item) => item.code === 'yiche' && item.evidence_mode === 'url_only') ?? false
   const query = useQuery({
@@ -53,6 +63,9 @@ export function ReputationDetailPage() {
   if (query.isLoading) return <div className='space-y-4'><Skeleton className='h-20 w-full' /><div className='grid gap-3 md:grid-cols-4'>{Array.from({ length: 4 }).map((_, index) => <Skeleton key={index} className='h-28 w-full' />)}</div><Skeleton className='h-[420px] w-full' /></div>
   if (query.isError || !query.data) return <Card className='grid h-full place-items-center'><CardContent className='text-center'><CircleAlert className='mx-auto mb-2 size-7 text-destructive' /><div className='font-medium'>巡检详情加载失败</div><div className='mt-1 text-sm text-muted-foreground'>{errorMessage(query.error)}</div><Button className='mt-4' variant='outline' onClick={() => query.refetch()}><RefreshCw className='size-4' />重新加载</Button></CardContent></Card>
   const run = query.data
+  const selectedReport = run.report_templates?.find((item) => item.id === reportTemplate)
+  const reportDownload = view === 'report' && selectedReport
+    ? `/api/v1/reputation/runs/${run.id}/report.txt?template=${selectedReport.id}` : run.downloads?.txt
   const done = run.completed_count + run.failed_count
   const completion = run.planned_count ? Math.round(done / run.planned_count * 100) : 0
   const currentStatus = run.linked_status ?? run.status
@@ -79,13 +92,13 @@ export function ReputationDetailPage() {
         <TabsList><TabsTrigger value='ranking'>排名数据</TabsTrigger><TabsTrigger value='evidence'>页面证据</TabsTrigger><TabsTrigger value='report'>汇报结果</TabsTrigger></TabsList>
       </Tabs>
       <div className='flex flex-wrap gap-2'>
-        <DownloadButton href={run.downloads?.txt} icon={FileText}>TXT</DownloadButton>
+        <DownloadButton href={reportDownload} icon={FileText}>TXT</DownloadButton>
         <DownloadButton href={run.downloads?.xlsx} icon={FileSpreadsheet}>XLSX</DownloadButton>
         <DownloadButton href={run.downloads?.evidence_zip} icon={FileArchive}>证据 ZIP</DownloadButton>
       </div>
     </div>
     <motion.div key={view} initial={reduceMotion ? false : { opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18, ease: 'easeOut' }} className='min-h-0 flex-1 overflow-hidden'>
-      {view === 'ranking' ? <RankingPanel results={run.results ?? []} onViewEvidence={setEvidenceViewer} yicheUrlOnly={yicheUrlOnly} capabilities={capabilities.data} /> : view === 'evidence' ? <EvidencePanel results={run.results ?? []} onViewEvidence={setEvidenceViewer} /> : <ReportPanel run={run} />}
+      {view === 'ranking' ? <RankingPanel results={run.results ?? []} onViewEvidence={setEvidenceViewer} yicheUrlOnly={yicheUrlOnly} capabilities={capabilities.data} /> : view === 'evidence' ? <EvidencePanel results={run.results ?? []} onViewEvidence={setEvidenceViewer} /> : <ReportPanel run={run} selected={selectedReport} templateId={reportTemplate} onTemplateChange={selectReportTemplate} />}
     </motion.div>
     <ReputationEvidenceDialog result={evidenceViewer} onOpenChange={(open) => !open && setEvidenceViewer(undefined)} />
   </div>
@@ -170,7 +183,7 @@ function MetricCell({ metric, inverseLabel = false, circleCount = false }: { met
   const comparable = metric.comparison_status === 'comparable'
   const changeLabel = metric.direction === 'same' ? (inverseLabel ? '名次持平' : '较前日持平') : inverseLabel ? (metric.tone === 'positive' ? '名次上升' : '名次下降') : (metric.direction === 'up' ? '较前日上升' : '较前日下降')
   const delta = metric.delta == null ? '' : String(metric.delta).replace(/^[+−-]/, '')
-  const detail = comparable ? `${changeLabel}${metric.direction !== 'same' && delta ? ` ${delta}` : ''}` : stateName(metric.comparison_status)
+  const detail = comparable ? `${metric.quantity_kind === 'rounded' ? '按显示值 · ' : ''}${changeLabel}${metric.direction !== 'same' && delta ? ` ${delta}` : ''}` : stateName(metric.comparison_status)
   return <div className={cn('ranking-metric', tone)} title={`${metric.raw} · ${detail}${circleCount ? ' · 圈子列表计数，非评分截图指标' : ''}`}><span className='ranking-metric-value'>{circleCount && metric.source_url ? <a href={metric.source_url} target='_blank' rel='noreferrer' aria-label={`查看圈内内容数 ${metric.raw} 的来源页面`}>{metric.raw}</a> : metric.raw}</span><span className='ranking-metric-change'>{comparable && <Icon aria-hidden='true' />}<span>{detail}</span></span></div>
 }
 
@@ -245,9 +258,43 @@ function ReputationEvidenceDialog({ result, onOpenChange }: { result?: Reputatio
 
 function EvidenceMetric({ label, value }: { label: string; value?: string }) { return <div className='rounded-md bg-muted/45 p-2'><div className='text-muted-foreground'>{label}</div><div className='mt-0.5 font-semibold tabular-nums'>{value ?? '—'}</div></div> }
 
-function ReportPanel({ run }: { run: ReputationRun }) {
-  const report = run.report_text ?? ''
-  return <div className='grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_300px]'><Card className='flex min-h-0 flex-col overflow-hidden py-0'><div className='flex shrink-0 items-center justify-between border-b bg-muted/25 px-4 py-3'><div><div className='font-medium'>巡检汇报正文</div><div className='text-xs text-muted-foreground'>巡检终态后立即生成，不依赖颜色传达变化</div></div><Button variant='outline' size='sm' disabled={!report} onClick={async () => { await navigator.clipboard.writeText(report); toast.success('巡检汇报正文已复制') }}><Clipboard className='size-4' />复制</Button></div>{report ? <pre className='min-h-0 flex-1 overflow-auto whitespace-pre-wrap p-5 font-sans text-sm leading-7'>{report}</pre> : <CardContent className='grid min-h-64 flex-1 place-items-center text-center'><div><Clock3 className='mx-auto mb-2 size-7 text-muted-foreground/55' /><div className='font-medium'>{run.status === 'running' || run.status === 'queued' ? '巡检执行中' : '汇报生成中'}</div><div className='mt-1 text-sm text-muted-foreground'>{run.status === 'running' || run.status === 'queued' ? '汇报只读取终态冻结结果。' : '巡检已结束，系统正在生成汇报文件。'}</div></div></CardContent>}</Card><div className='space-y-4 overflow-auto'><Card><CardHeader><CardTitle className='flex items-center gap-2 text-base'><FileText className='size-4 text-primary' />交付完整性</CardTitle><CardDescription>同一运行生成三类可追溯文件。</CardDescription></CardHeader><CardContent className='space-y-2 text-sm'><DeliveryRow label='汇报 TXT' done={run.report_status === 'success'} /><DeliveryRow label='彩色 XLSX' done={Boolean(run.downloads?.xlsx)} /><DeliveryRow label='页面证据 ZIP' done={Boolean(run.downloads?.evidence_zip)} notRequired={run.required_evidence_count === 0} /></CardContent></Card><Card><CardHeader><CardTitle className='text-base'>异常口径</CardTitle></CardHeader><CardContent className='text-sm leading-6 text-muted-foreground'>只有访问、身份、解析或证据生成失败才进入异常；平台未提供的指标保持空白。</CardContent></Card></div></div>
+/** 模板选择只改变冻结数据的呈现；不触发采集或覆盖原始汇报存档。 */
+function ReportPanel({ run, selected, templateId, onTemplateChange }: {
+  run: ReputationRun
+  selected?: ReputationReportTemplate
+  templateId: ReputationReportTemplate['id']
+  onTemplateChange: (value: ReputationReportTemplate['id']) => void
+}) {
+  const report = selected?.text ?? run.report_text ?? ''
+  return <div className='grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_300px]'>
+    <Card className='flex min-h-0 flex-col overflow-hidden py-0'>
+      <div className='flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-muted/25 px-4 py-3'>
+        <div><div className='font-medium'>巡检汇报正文</div><div className='text-xs text-muted-foreground'>仅重点车型 · 复制与 TXT 使用当前模板</div></div>
+        <div className='flex items-center gap-2'>
+          <Select value={templateId} onValueChange={(value) => onTemplateChange(value as ReputationReportTemplate['id'])} disabled={!run.report_templates?.length}>
+            <SelectTrigger className='w-52' aria-label='汇报模板'><SelectValue placeholder='选择汇报模板' /></SelectTrigger>
+            <SelectContent>{run.report_templates?.map((item) => <SelectItem key={item.id} value={item.id}>{item.label}</SelectItem>)}</SelectContent>
+          </Select>
+          <Button variant='outline' size='sm' disabled={!report} onClick={async () => {
+            try { await navigator.clipboard.writeText(report); toast.success('当前模板汇报已复制') }
+            catch (error) { toast.error('复制失败', { description: errorMessage(error) }) }
+          }}><Clipboard className='size-4' />复制</Button>
+        </div>
+      </div>
+      {report ? <pre data-report-text className='min-h-0 flex-1 overflow-auto whitespace-pre-wrap p-5 font-sans text-sm leading-7'>{report}</pre>
+        : <CardContent className='grid min-h-64 flex-1 place-items-center text-center'><div><Clock3 className='mx-auto mb-2 size-7 text-muted-foreground/55' /><div className='font-medium'>巡检尚未生成汇报</div><div className='mt-1 text-sm text-muted-foreground'>汇报只读取终态冻结结果。</div></div></CardContent>}
+    </Card>
+    <div className='space-y-4 overflow-auto'>
+      <Card><CardHeader><CardTitle className='flex items-center gap-2 text-base'><FileText className='size-4 text-primary' />交付完整性</CardTitle><CardDescription>模板选择不改变原始数据和证据。</CardDescription></CardHeader>
+        <CardContent className='space-y-2 text-sm'><DeliveryRow label='当前模板 TXT' done={Boolean(selected)} /><DeliveryRow label='彩色 XLSX' done={Boolean(run.downloads?.xlsx)} /><DeliveryRow label='页面证据 ZIP' done={Boolean(run.downloads?.evidence_zip)} notRequired={run.required_evidence_count === 0} /></CardContent>
+      </Card>
+      <Card><CardHeader><CardTitle className='text-base'>汇报口径</CardTitle></CardHeader><CardContent className='space-y-3 text-sm leading-6 text-muted-foreground'>
+        <p>{templateId === 'vehicle_detail' ? '模板一列出全部重点车型的七项明细。论坛数取顶部帖子统计，口碑帖数量使用评价篇数；历史未采集不回填。' : '模板二仅列口碑分、排名或懂车帝差评率存在前日可比变化的重点车型，无基线不视为变化。'}</p>
+        <p>增减按数值差计算；“万”为页面舍入显示值，变化按显示值比较。排名数字越小，名次越靠前；缺失值不补零。</p>
+        {run.downloads?.txt && <a className='text-primary underline underline-offset-4' href={run.downloads.txt}>下载原始汇报存档</a>}
+      </CardContent></Card>
+    </div>
+  </div>
 }
 
 function DeliveryRow({ label, done, notRequired = false }: { label: string; done: boolean; notRequired?: boolean }) { if (notRequired) return <div className='flex items-center justify-between rounded-md bg-muted/40 px-3 py-2'><span>{label}</span><span className='text-xs text-muted-foreground'>未要求截图</span></div>; return <div className='flex items-center justify-between rounded-md bg-muted/40 px-3 py-2'><span>{label}</span><span className={cn('flex items-center gap-1 text-xs', done ? 'text-emerald-600 dark:text-emerald-300' : 'text-amber-600 dark:text-amber-300')}>{done ? <Check className='size-3.5' /> : <CircleAlert className='size-3.5' />}{done ? '已生成' : '待处理'}</span></div> }

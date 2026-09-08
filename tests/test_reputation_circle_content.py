@@ -29,7 +29,7 @@ from threadsnap.errors import DomainError
 from threadsnap.models import ReputationMappingValidationAttempt, ReputationResult
 from threadsnap.reputation_adapter import ReputationAdapterError, ReputationMappingTarget
 from threadsnap.reputation_dongchedi import DongchediReputationAdapter
-from threadsnap.reputation_registry import CORE_METRIC_KEYS, REPUTATION_PLATFORMS
+from threadsnap.reputation_registry import REPUTATION_PLATFORMS
 
 
 class CircleCountParserTests(unittest.TestCase):
@@ -265,7 +265,7 @@ class CircleCountLifecycleTests(unittest.TestCase):
             )
         )
         caps = self.client.get("/api/v1/reputation/capabilities").json()["reputation_platforms"]
-        self.assertEqual([6, 5, 5], [len(item["supported_metrics"]) for item in caps])
+        self.assertEqual([6, 6, 5], [len(item["supported_metrics"]) for item in caps])
 
     def test_new_acceptance_rejects_missing_source_proof_but_history_is_immutable(self):
         mapping = self.service.get_scope()["vehicles"][0]["mappings"]["dongchedi"]
@@ -358,7 +358,7 @@ class CircleCountLifecycleTests(unittest.TestCase):
         self.assertEqual("not_available", metrics["circle_content_count"]["comparison_status"])
         for code in ("autohome", "yiche"):
             self.assertEqual(
-                set(CORE_METRIC_KEYS), set(self.service._official_metrics(page, None, code))
+                set(REPUTATION_PLATFORMS[code].metric_keys), set(self.service._official_metrics(page, None, code))
             )
 
     def test_xlsx_dynamic_columns_neutral_color_and_single_remark_anchor(self):
@@ -367,9 +367,9 @@ class CircleCountLifecycleTests(unittest.TestCase):
         original_hash = hashlib.sha256(source.read_bytes()).hexdigest()
         for codes, count, note in (
             (["dongchedi"], 11, 10),
-            (["autohome"], 10, 9),
+            (["autohome"], 11, 10),
             (["yiche"], 10, 9),
-            (["dongchedi", "autohome", "yiche"], 21, 20),
+            (["dongchedi", "autohome", "yiche"], 22, 21),
             (["yiche", "dongchedi"], 16, 15),
         ):
             run = SimpleNamespace(

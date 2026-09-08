@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
+from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from time import monotonic
 from urllib.parse import urlsplit
+
+from lxml import etree, html
 
 from .reputation_adapter import (
     ReputationAdapterError,
@@ -19,7 +24,7 @@ from .reputation_browser import (
     stable_measure,
 )
 
-ADAPTER_VERSION = "autohome-reputation-v1"
+ADAPTER_VERSION = "autohome-reputation-v2-forum-count"
 VALIDATION_CONTRACT_VERSION = "autohome-reputation-mapping-v1"
 VIEWPORT = {"width": 1440, "height": 1600}
 SERIES_URL_RE = re.compile(r"^https://k\.autohome\.com\.cn/(?P<id>\d+)/?(?:\?.*)?$")
@@ -50,6 +55,75 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
     adapter_version = ADAPTER_VERSION
     validation_contract_version = VALIDATION_CONTRACT_VERSION
     viewport = VIEWPORT
+
+    def __init__(self, *args, include_circle_content_count: bool = False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.include_circle_content_count = include_circle_content_count
+
+    @staticmethod
+    def parse_forum_count(content: bytes, final_url: str, target: ReputationMappingTarget):
+        """读取论坛顶部“帖子”总数，排除列表total、车友数与认证车主数。"""
+        url = urlsplit(final_url)
+        expected_path = f"/bbs/forum-c-{target.platform_vehicle_id}-1.html"
+        if url.scheme != "https" or url.netloc != "club.autohome.com.cn" or url.path != expected_path:
+            raise ReputationAdapterError("REPUTATION_FORUM_IDENTITY_MISMATCH", "汽车之家论坛落地URL与车型映射不一致。")
+        try:
+            doc = html.fromstring(content.decode("utf-8"))
+            if "用户访问安全认证" in "".join(doc.xpath("//title/text()")):
+                raise ReputationAdapterError("AUTH_REQUIRED", "汽车之家论坛要求完成访问验证。")
+            headers = doc.xpath('//*[@id="js-bbs-info"]')
+            if len(headers) != 1:
+                raise ValueError("缺少唯一论坛统计区")
+            header = headers[0]
+            if header.get("data-bbsid") != target.platform_vehicle_id or header.get("data-bbs") != "c":
+                raise ReputationAdapterError("REPUTATION_FORUM_IDENTITY_MISMATCH", "汽车之家论坛身份与车型映射不一致。")
+            related = header.xpath('.//a/@href')
+            expected_series = f"/{target.platform_vehicle_id}/"
+            if not any(
+                urlsplit("https:" + href if href.startswith("//") else href).netloc == "www.autohome.com.cn"
+                and urlsplit(href).path == expected_series for href in related
+            ):
+                raise ReputationAdapterError("REPUTATION_FORUM_IDENTITY_MISMATCH", "论坛相关车系未对应当前车型ID。")
+            items = header.xpath('.//*[contains(concat(" ",normalize-space(@class)," ")," count-item ")]')
+            posts = [node for node in items if "".join(node.xpath('./text()')).strip() == "帖子"]
+            if len(posts) != 1:
+                raise ValueError("缺少唯一帖子计数")
+            raw = "".join(posts[0].xpath('./strong/text()')).strip()
+            quantity_kind = "exact"
+            if re.fullmatch(r"[0-9]+", raw):
+                count = int(raw)
+            elif re.fullmatch(r"[0-9]+(?:\.[0-9]+)?万", raw):
+                normalized = Decimal(raw[:-1]) * 10000
+                if normalized != normalized.to_integral_value():
+                    raise ValueError("帖子显示值的单位精度异常")
+                count, quantity_kind = int(normalized), "rounded"
+            else:
+                raise ValueError("帖子计数不是可识别的非负数量")
+        except ReputationAdapterError:
+            raise
+        except (ValueError, TypeError, etree.ParserError) as error:
+            raise ReputationAdapterError("REPUTATION_FORUM_COUNT_INVALID", "汽车之家论坛顶部帖子总数结构异常。") from error
+        return raw, {
+            "collection_method": "forum_http_html", "count_source": "visible",
+            "source_url": final_url, "platform_vehicle_id": target.platform_vehicle_id,
+            "actual_name": header.get("data-bbsname"), "json_count": None,
+            "visible_count": count, "visible_raw": f"{raw} 帖子",
+            "display_count_raw": raw, "quantity_kind": quantity_kind,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "response_sha256": hashlib.sha256(content).hexdigest(),
+        }
+
+    async def _forum_count(self, context, target, started):
+        """复用当前会话追加一次论坛HTML请求，使用执行项剩余时限。"""
+        remaining = self.timeout_seconds - (monotonic() - started)
+        if remaining <= 0:
+            raise ReputationAdapterError("REPUTATION_ITEM_TIMEOUT", "口碑执行项已达到采集时限。")
+        url = f"https://club.autohome.com.cn/bbs/forum-c-{target.platform_vehicle_id}-1.html?sort=topic"
+        response = await context.request.get(url, timeout=remaining * 1000)
+        if not response.ok:
+            raise ReputationAdapterError("REPUTATION_FORUM_HTTP_ERROR", f"汽车之家论坛返回HTTP {response.status}。", retryable=response.status >= 500 or response.status == 429)
+        raw, proof = self.parse_forum_count(await response.body(), response.url, target)
+        return raw, response.url, proof
 
     async def _visit(self, browser, target: ReputationMappingTarget, output_dir: Path):
         started = monotonic()
@@ -116,6 +190,9 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
             score = str(result.get("average") or "").strip() or measurement.get("score")
             volume = str(result.get("averagenum") or "").strip() or None
             review_count = str(result.get("rowcount") or "").strip() or None
+            forum_raw, forum_url, forum_proof = None, None, None
+            if self.include_circle_content_count:
+                forum_raw, forum_url, forum_proof = await self._forum_count(context, target, started)
             path = output_dir / f"{target.vehicle_id}-metric.png"
             width, height, digest = await capture_region(page, path, measurement["rect"])
             final_url = normalize_series_url(page.url, target.platform_vehicle_id)
@@ -151,6 +228,9 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
                 duration_ms=elapsed_ms(started),
                 negative_rate_raw=None,
                 reputation_not_available=False,
+                circle_content_count_raw=forum_raw,
+                circle_content_count_url=forum_url,
+                circle_content_count_measurement=forum_proof,
             )
         finally:
             await context.close()

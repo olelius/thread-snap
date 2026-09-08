@@ -353,11 +353,11 @@ class ReputationInspectionTest(unittest.TestCase):
         xlsx_path = self.root / "three-platform.xlsx"
         xlsx_path.write_bytes(xlsx_response.content)
         sheet = load_workbook(xlsx_path)["口碑巡检"]
-        self.assertEqual((28, 21), (sheet.max_row, sheet.max_column))
+        self.assertEqual((28, 22), (sheet.max_row, sheet.max_column))
         self.assertEqual("懂车帝-口碑分", sheet["E1"].value)
         self.assertEqual("汽车之家-口碑分", sheet["K1"].value)
-        self.assertEqual("易车-口碑分", sheet["P1"].value)
-        self.assertEqual("备注", sheet["U1"].value)
+        self.assertEqual("易车-口碑分", sheet["Q1"].value)
+        self.assertEqual("备注", sheet["V1"].value)
         self.assertEqual(27, len(sheet._images))
         preview_manifest = (
             self.settings.reputation_dir / finished["id"] / "xlsx-previews" / "manifest.json"

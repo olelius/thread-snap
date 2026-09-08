@@ -11,5 +11,5 @@ const coreMetrics: ReputationMetricKey[] = ['score', 'rank', 'volume', 'review_a
 /** 以服务端平台注册能力构造列组；未知能力不凭平台名称猜测新增指标。 */
 export function reputationMetricColumns(platformCode: string, capabilities?: Pick<ReputationCapabilities, 'reputation_platforms'>): Array<[ReputationMetricKey, string]> {
   const keys = capabilities?.reputation_platforms.find((platform) => platform.code === platformCode)?.supported_metrics ?? coreMetrics
-  return keys.filter((key): key is ReputationMetricKey => Object.prototype.hasOwnProperty.call(labels, key)).map((key) => [key, labels[key]])
+  return keys.filter((key): key is ReputationMetricKey => Object.prototype.hasOwnProperty.call(labels, key)).map((key) => [key, platformCode === 'autohome' && key === 'circle_content_count' ? '论坛帖子总数' : labels[key]])
 }

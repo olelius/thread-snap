@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+from html import escape
 
 from threadsnap.reputation_adapter import ReputationMappingTarget
+from threadsnap.reputation_autohome import AutohomeReputationAdapter
 from threadsnap.reputation_dongchedi import DongchediReputationAdapter
 
 
@@ -27,6 +29,16 @@ def circle_html(series_id: str, name: str, count: int | None) -> bytes:
 def circle_result_fields(target: ReputationMappingTarget, count: int | None = 500) -> dict:
     """确定性适配器也从真实形状解析路径形成可验证的同次采集证明。"""
 
+    if target.platform_url.startswith("https://k.autohome.com.cn/"):
+        sid = target.platform_vehicle_id
+        url = f"https://club.autohome.com.cn/bbs/forum-c-{sid}-1.html?sort=topic"
+        content = (f'<div id="js-bbs-info" data-bbsid="{sid}" data-bbs="c" '
+                   f'data-bbsname="{escape(target.platform_display_name)}论坛">'
+                   f'<span class="count-item"><strong>{count}</strong>帖子</span>'
+                   f'<a href="//www.autohome.com.cn/{sid}/">相关车系</a></div>').encode()
+        raw, proof = AutohomeReputationAdapter.parse_forum_count(content, url, target)
+        return {"circle_content_count_raw": raw, "circle_content_count_url": url,
+                "circle_content_count_measurement": proof}
     url = f"https://www.dongchedi.com/community/{target.platform_vehicle_id}/dongtai-release"
     raw, proof = DongchediReputationAdapter._parse_circle_content(
         target,

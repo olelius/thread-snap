@@ -237,6 +237,7 @@ export type ReputationMetric = {
   source_measurement?: { collection_method: string; captured_at: string; source_url: string; json_count: number | null; visible_count: number | null; visible_raw: string | null }
   positive_count?: number
   negative_count?: number
+  quantity_kind?: 'exact' | 'rounded'
 }
 
 export type ReputationEvidence = {
@@ -272,6 +273,12 @@ export type ReputationResult = {
   evidence?: ReputationEvidence
 }
 
+export type ReputationReportTemplate = {
+  id: 'vehicle_detail' | 'daily_changes'
+  label: string
+  text: string
+}
+
 export type ReputationRun = {
   id: string
   number: string
@@ -301,6 +308,7 @@ export type ReputationRun = {
   report_status: string
   report_attempt_count?: number
   report_text?: string
+  report_templates?: ReputationReportTemplate[]
   created_at: string
   started_at?: string
   finished_at?: string
