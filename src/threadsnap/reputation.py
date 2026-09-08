@@ -52,10 +52,10 @@ from .reputation_adapter import (
     ReputationMappingTarget,
     ReputationPageResult,
 )
-from .reputation_registry import REPUTATION_PLATFORMS, ReputationPlatformSpec
+from .reputation_registry import METRIC_LABELS, REPUTATION_PLATFORMS, ReputationPlatformSpec
 from .session_store import SessionStore
 
-FIXTURE_VERSION = "reputation-synthetic-v2-all-evidence"
+FIXTURE_VERSION = "reputation-synthetic-v3-circle-content"
 PLATFORM_CODE = "dongchedi"
 PLATFORM_NAME = "懂车帝"
 DEFAULT_PROJECT_GROUP = "奇瑞项目组"
@@ -271,19 +271,25 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
             score = _metric(score_base + Decimal("0.12"), score_base)
             rank = _metric(rank_base - 1, rank_base, inverse=True)
             volume = _metric(volume_base + 120, volume_base)
-            review_article_count = _metric(review_article_count_base + 45, review_article_count_base)
+            review_article_count = _metric(
+                review_article_count_base + 45, review_article_count_base
+            )
             negative_rate = _metric(negative_rate_base - 3, negative_rate_base, inverse=True)
         elif pattern == 1:
             score = _metric(score_base - Decimal("0.08"), score_base)
             rank = _metric(rank_base + 2, rank_base, inverse=True)
             volume = _metric(volume_base - 80, volume_base)
-            review_article_count = _metric(review_article_count_base - 20, review_article_count_base)
+            review_article_count = _metric(
+                review_article_count_base - 20, review_article_count_base
+            )
             negative_rate = _metric(negative_rate_base + 4, negative_rate_base, inverse=True)
         elif pattern == 2:
             score = _metric(score_base + Decimal("0.05"), score_base)
             rank = _metric(rank_base + 1, rank_base, inverse=True)
             volume = _metric(volume_base, volume_base)
-            review_article_count = _metric(review_article_count_base + 12, review_article_count_base)
+            review_article_count = _metric(
+                review_article_count_base + 12, review_article_count_base
+            )
             negative_rate = _metric(negative_rate_base + 1, negative_rate_base, inverse=True)
         elif pattern == 3:
             score = _metric(score_base, score_base)
@@ -295,7 +301,9 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
             score = _metric(score_base, score_base)
             rank = _metric(rank_base, rank_base, inverse=True)
             volume = _metric(volume_base + 300, volume_base)
-            review_article_count = _metric(review_article_count_base + 180, review_article_count_base)
+            review_article_count = _metric(
+                review_article_count_base + 180, review_article_count_base
+            )
             negative_rate = _metric(negative_rate_base, negative_rate_base, inverse=True)
         elif pattern == 5:
             score = _metric(score_base, None)
@@ -308,9 +316,7 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
             rank = _metric(None, None, state="not_available", raw="暂无排名")
             volume = _metric(volume_base, volume_base)
             review_article_count = _metric(review_article_count_base, review_article_count_base)
-            negative_rate = _metric(
-                None, None, state="not_available", raw="暂无差评率"
-            )
+            negative_rate = _metric(None, None, state="not_available", raw="暂无差评率")
         elif pattern == 7:
             score = _metric(None, None, state="unknown")
             rank = _metric(None, None, state="unknown")
@@ -329,6 +335,16 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
             status = "failed"
             error_code = "AUTH_REQUIRED"
             error_message = "合成场景：共享平台会话需要更新。"
+        circle_base = Decimal(9000 + index * 17)
+        circle = (
+            _metric(
+                circle_base + (1 if pattern == 0 else -1 if pattern == 1 else 0),
+                None if baseline_mode or pattern == 5 else circle_base,
+            )
+            if status == "success"
+            else _metric(None, None, state=score["comparison_status"])
+        )
+        circle["tone"] = "neutral"
         rows.append(
             {
                 "vehicle": vehicle,
@@ -341,6 +357,7 @@ def _scenario_rows(scenario_id: str) -> list[dict[str, Any]]:
                     "volume": volume,
                     "review_article_count": review_article_count,
                     "negative_rate": negative_rate,
+                    "circle_content_count": circle,
                 },
                 "evidence_required": True,
             }
@@ -393,8 +410,7 @@ class ReputationService:
             "reputation_synthetic_runs": self.synthetic_enabled,
             "real_adapter_status": "available",
             "real_adapter_message": (
-                "懂车帝、汽车之家保留指标区域截图；"
-                "易车临时使用URL模式读取页面指标，不采集截图。"
+                "懂车帝、汽车之家保留指标区域截图；易车临时使用URL模式读取页面指标，不采集截图。"
             ),
             "reputation_platforms": [
                 {
@@ -403,12 +419,11 @@ class ReputationService:
                     "adapter_version": spec.adapter_version,
                     "validation_contract_version": spec.validation_contract_version,
                     "evidence_mode": "screenshot" if spec.requires_evidence else "url_only",
+                    "supported_metrics": list(spec.metric_keys),
                 }
                 for spec in REPUTATION_PLATFORMS.values()
             ],
-            "scenarios": [
-                {"id": key, **value} for key, value in SCENARIOS.items()
-            ]
+            "scenarios": [{"id": key, **value} for key, value in SCENARIOS.items()]
             if self.synthetic_enabled
             else [],
         }
@@ -744,7 +759,7 @@ class ReputationService:
                 }
                 report = self._render_report(run, stored_results)
                 report_path = run_dir / f"{run_number}.txt"
-                report_path.write_text(report, encoding="utf-8")
+                report_path.write_text(report, encoding="utf-8", newline="\n")
                 xlsx_path = run_dir / f"{run_number}.xlsx"
                 self._create_xlsx(run, stored_results, evidence_by_result, xlsx_path)
                 run.report_text = report
@@ -780,23 +795,17 @@ class ReputationService:
                 .order_by(ReputationMappingValidationAttempt.finished_at)
             ).all()
             snapshot = json.loads(json.dumps(version.snapshot, ensure_ascii=False))
-            vehicles = [
-                item for item in snapshot.get("vehicles", []) if item.get("enabled", True)
-            ]
+            vehicles = [item for item in snapshot.get("vehicles", []) if item.get("enabled", True)]
             run_platforms = {
                 item.id: item.platform_code for item in validation_runs if item is not None
             }
-            by_target = {
-                (run_platforms[item.run_id], item.vehicle_id): item for item in attempts
-            }
+            by_target = {(run_platforms[item.run_id], item.vehicle_id): item for item in attempts}
             platform_codes = [
                 code
                 for code in REPUTATION_PLATFORMS
                 if any(vehicle.get("mappings", {}).get(code) for vehicle in vehicles)
             ]
-            targets = [
-                (vehicle, code) for vehicle in vehicles for code in platform_codes
-            ]
+            targets = [(vehicle, code) for vehicle in vehicles for code in platform_codes]
             missing = [
                 {"vehicle_id": vehicle["id"], "platform_code": code}
                 for vehicle, code in targets
@@ -848,7 +857,7 @@ class ReputationService:
                 if not isinstance(frozen_metrics, dict) or any(
                     not isinstance(frozen_metrics.get(name), dict)
                     or not {"raw", "value", "comparison_status"} <= frozen_metrics[name].keys()
-                    for name in ("score", "rank", "volume", "review_article_count", "negative_rate")
+                    for name in self._platform_spec(code).metric_keys
                 ):
                     raise DomainError(
                         "REPUTATION_ACCEPTANCE_COLLECTION_INCOMPLETE",
@@ -862,10 +871,15 @@ class ReputationService:
                     or not frozen_metrics["negative_rate"].get("source_url")
                     or not {"positive_count", "negative_count"}
                     <= frozen_metrics["negative_rate"].keys()
+                    or options.get("include_circle_content_count") is not True
+                    or not self._circle_collection_proven(
+                        frozen_metrics.get("circle_content_count"),
+                        mapping.get("platform_vehicle_id"),
+                    )
                 ):
                     raise DomainError(
                         "REPUTATION_ACCEPTANCE_COLLECTION_INCOMPLETE",
-                        f"车型{vehicle['id']}的验证缺少评价篇数或差评率采集来源，请重新验证。",
+                        f"车型{vehicle['id']}的验证缺少评价篇数、差评率或圈内内容数采集来源，请重新验证。",
                     )
                 raw = attempt.metric_region_path
                 digest = attempt.metric_region_sha256
@@ -877,7 +891,9 @@ class ReputationService:
                         f"车型{vehicle['id']}的真实页面证据缺失或校验失败。",
                     )
             started_at = min(item.started_at for item in validation_runs if item is not None)
-            finished_at = max(item.finished_at for item in validation_runs if item and item.finished_at)
+            finished_at = max(
+                item.finished_at for item in validation_runs if item and item.finished_at
+            )
 
         now = datetime.now(timezone.utc)
         run_id = uuid7()
@@ -898,8 +914,12 @@ class ReputationService:
             planned_count=len(targets),
             completed_count=len(targets),
             failed_count=0,
-            required_evidence_count=sum(self._platform_spec(code).requires_evidence for _, code in targets),
-            complete_evidence_count=sum(self._platform_spec(code).requires_evidence for _, code in targets),
+            required_evidence_count=sum(
+                self._platform_spec(code).requires_evidence for _, code in targets
+            ),
+            complete_evidence_count=sum(
+                self._platform_spec(code).requires_evidence for _, code in targets
+            ),
             report_status="success",
             created_at=now,
             started_at=started_at,
@@ -968,7 +988,7 @@ class ReputationService:
                 }
                 report = self._render_report(run, stored_results)
                 report_path = run_dir / f"{run_number}.txt"
-                report_path.write_text(report, encoding="utf-8")
+                report_path.write_text(report, encoding="utf-8", newline="\n")
                 xlsx_path = run_dir / f"{run_number}.xlsx"
                 self._create_xlsx(run, stored_results, evidence_by_result, xlsx_path)
                 run.report_text = report
@@ -1332,7 +1352,10 @@ class ReputationService:
 
     @classmethod
     def _official_metrics(
-        cls, page: ReputationPageResult, baseline_row: dict[str, Any] | None
+        cls,
+        page: ReputationPageResult,
+        baseline_row: dict[str, Any] | None,
+        platform_code: str = PLATFORM_CODE,
     ) -> dict[str, Any]:
         baseline = (baseline_row or {}).get("metrics", {})
         # 单个指标在平台页面上不存在是正常业务状态（例如未上市车型或平台未展示排名）。
@@ -1357,7 +1380,7 @@ class ReputationService:
                 "negative_count": page.negative_rate_negative_count,
             }
         )
-        return {
+        metrics = {
             "score": cls._official_metric(
                 page.score_raw, baseline.get("score"), missing_state=missing_state
             ),
@@ -1374,6 +1397,46 @@ class ReputationService:
             "review_article_count": review_article_count,
             "negative_rate": negative_rate,
         }
+        if "circle_content_count" in REPUTATION_PLATFORMS[platform_code].metric_keys:
+            circle = cls._official_metric(
+                page.circle_content_count_raw,
+                baseline.get("circle_content_count"),
+            )
+            # 内容增减是流量变化，不解释为口碑改善或恶化。
+            circle.update(
+                tone="neutral",
+                source_url=page.circle_content_count_url,
+                source_measurement=page.circle_content_count_measurement,
+            )
+            metrics["circle_content_count"] = circle
+        return metrics
+
+    @staticmethod
+    def _circle_collection_proven(metric: Any, expected_id: str | None) -> bool:
+        """确认新验收来自同一次真实圈子读取，而非仅写入开关或空值。"""
+
+        if not isinstance(metric, dict):
+            return False
+        proof = metric.get("source_measurement")
+        if not isinstance(proof, dict) or (
+            proof.get("collection_method") != "circle_http_ssr"
+            or proof.get("source_url") != metric.get("source_url")
+            or not metric.get("source_url")
+            or str(proof.get("platform_vehicle_id")) != str(expected_id)
+            or not proof.get("captured_at")
+            or len(str(proof.get("response_sha256", ""))) != 64
+            or not {"json_count", "visible_count", "visible_raw"} <= proof.keys()
+        ):
+            return False
+        counts = [proof[key] for key in ("json_count", "visible_count") if proof[key] is not None]
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0 for value in counts
+        ):
+            return False
+        if len(set(counts)) > 1:
+            return False
+        raw = str(counts[0]) if counts else None
+        return metric.get("raw") == raw and metric.get("value") == raw
 
     @staticmethod
     def _needs_evidence(
@@ -1413,13 +1476,13 @@ class ReputationService:
                 )
             )
             if row:
-                db.execute(
-                    delete(ReputationEvidence).where(ReputationEvidence.result_id == row.id)
-                )
+                db.execute(delete(ReputationEvidence).where(ReputationEvidence.result_id == row.id))
 
             if isinstance(result, ReputationPageResult):
-                metrics = self._official_metrics(result, baseline)
-                evidence_required = REPUTATION_PLATFORMS[platform_code].requires_evidence and self._needs_evidence(
+                metrics = self._official_metrics(result, baseline, platform_code)
+                evidence_required = REPUTATION_PLATFORMS[
+                    platform_code
+                ].requires_evidence and self._needs_evidence(
                     run.run_type, run.schedule_type, vehicle["role"], metrics
                 )
                 has_evidence = bool(
@@ -1434,20 +1497,12 @@ class ReputationService:
                 if evidence_required and not has_evidence:
                     row_status = "partial_success"
                     error_code = "REPUTATION_EVIDENCE_MISSING"
-                    error_message = (
-                        f"{error_message or ''}本项必需页面证据缺失。"
-                    )
+                    error_message = f"{error_message or ''}本项必需页面证据缺失。"
                 duration_ms = result.duration_ms
             else:
                 metrics = {
                     name: _metric(None, None, state="unknown")
-                    for name in (
-                        "score",
-                        "rank",
-                        "volume",
-                        "review_article_count",
-                        "negative_rate",
-                    )
+                    for name in REPUTATION_PLATFORMS[platform_code].metric_keys
                 }
                 evidence_required = REPUTATION_PLATFORMS[platform_code].requires_evidence
                 has_evidence = False
@@ -1583,9 +1638,7 @@ class ReputationService:
             schedule_type = run.schedule_type
 
         vehicles = {
-            item["id"]: item
-            for item in snapshot.get("vehicles", [])
-            if item.get("enabled", True)
+            item["id"]: item for item in snapshot.get("vehicles", []) if item.get("enabled", True)
         }
         targets: list[ReputationMappingTarget] = []
         target_platform_codes: list[str] = []
@@ -1611,7 +1664,9 @@ class ReputationService:
                 )
                 target_platform_codes.append(platform_code)
 
-        required_count = sum(REPUTATION_PLATFORMS[code].requires_evidence for code in target_platform_codes)
+        required_count = sum(
+            REPUTATION_PLATFORMS[code].requires_evidence for code in target_platform_codes
+        )
         with self.sessions.begin() as db:
             run = db.get(ReputationRun, run_id)
             if not run:
@@ -1671,9 +1726,7 @@ class ReputationService:
 
         def execute_platform(platform_code: str) -> None:
             indexes = [
-                index
-                for index, code in enumerate(target_platform_codes)
-                if code == platform_code
+                index for index, code in enumerate(target_platform_codes) if code == platform_code
             ]
             if not indexes:
                 return
@@ -1695,7 +1748,9 @@ class ReputationService:
                     )
                 return
 
-            def evidence_policy(target: ReputationMappingTarget, measurement: dict[str, Any]) -> bool:
+            def evidence_policy(
+                target: ReputationMappingTarget, measurement: dict[str, Any]
+            ) -> bool:
                 vehicle = vehicles[target.vehicle_id]
                 baseline = baseline_snapshot.get(f"{target.vehicle_id}|{platform_code}")
                 metrics = {
@@ -1710,7 +1765,9 @@ class ReputationService:
                         scope=str(measurement.get("rank_scope") or "同级车评分"),
                     ),
                 }
-                return spec.requires_evidence and self._needs_evidence(run_type, schedule_type, vehicle["role"], metrics)
+                return spec.requires_evidence and self._needs_evidence(
+                    run_type, schedule_type, vehicle["role"], metrics
+                )
 
             factory = (
                 self.adapter_factory
@@ -1727,6 +1784,7 @@ class ReputationService:
                 prefer_http_first=False,
                 include_review_article_count=True,
                 include_negative_rate=True,
+                include_circle_content_count="circle_content_count" in spec.metric_keys,
                 global_limiter=global_limiter,
             )
             group_targets = [targets[index] for index in indexes]
@@ -1781,7 +1839,9 @@ class ReputationService:
                     close()
 
         with ThreadPoolExecutor(max_workers=max(1, len(run.platform_codes))) as pool:
-            futures = [pool.submit(execute_platform, platform_code) for platform_code in run.platform_codes]
+            futures = [
+                pool.submit(execute_platform, platform_code) for platform_code in run.platform_codes
+            ]
             for future in futures:
                 future.result()
 
@@ -1901,9 +1961,7 @@ class ReputationService:
                 run.report_status = "not_generated"
                 run.report_generated_at = current
                 event = db.scalar(
-                    select(ReputationScheduleEvent).where(
-                        ReputationScheduleEvent.run_id == run_id
-                    )
+                    select(ReputationScheduleEvent).where(ReputationScheduleEvent.run_id == run_id)
                 )
                 if event:
                     event.message = "正式口碑巡检全部失败，未生成普通排名汇报。"
@@ -1940,7 +1998,7 @@ class ReputationService:
             report_temp = run_dir / f".{run.number}.{uuid7()}.tmp.txt"
             xlsx_temp = run_dir / f".{run.number}.{uuid7()}.tmp.xlsx"
             try:
-                report_temp.write_text(report, encoding="utf-8")
+                report_temp.write_text(report, encoding="utf-8", newline="\n")
                 self._create_xlsx(run, results, evidence_by_result, xlsx_temp)
                 report_temp.replace(report_path)
                 xlsx_temp.replace(xlsx_path)
@@ -3038,7 +3096,11 @@ class ReputationService:
                     started_at=now,
                 )
             )
-        factory = self.adapter_factory if spec.code == PLATFORM_CODE else self.adapter_factories[spec.code]
+        factory = (
+            self.adapter_factory
+            if spec.code == PLATFORM_CODE
+            else self.adapter_factories[spec.code]
+        )
         adapter = factory(
             storage_state,
             concurrency=concurrency,
@@ -3047,6 +3109,7 @@ class ReputationService:
             evidence_policy=lambda *_args: spec.requires_evidence,
             include_review_article_count=True,
             include_negative_rate=True,
+            include_circle_content_count="circle_content_count" in spec.metric_keys,
         )
         root = self.settings.reputation_dir / "mapping-validations" / run_id
         try:
@@ -3126,6 +3189,11 @@ class ReputationService:
                                 "review_article_count": final_result.review_article_count_raw,
                                 "negative_rate": final_result.negative_rate_raw,
                                 "rank_scope": final_result.rank_scope,
+                                **(
+                                    {"circle_content_count": final_result.circle_content_count_raw}
+                                    if "circle_content_count" in spec.metric_keys
+                                    else {}
+                                ),
                             },
                             "validation_error": None,
                         }
@@ -3193,8 +3261,13 @@ class ReputationService:
                     "review_article_count": result.review_article_count_raw,
                     "negative_rate": result.negative_rate_raw,
                     "rank_scope": result.rank_scope,
+                    **(
+                        {"circle_content_count": result.circle_content_count_raw}
+                        if "circle_content_count" in spec.metric_keys
+                        else {}
+                    ),
                     # 保留旧的原始值键供映射页使用，巡检转换读取同次冻结的完整投影。
-                    "frozen_metrics": self._official_metrics(result, None),
+                    "frozen_metrics": self._official_metrics(result, None, spec.code),
                     "reputation_not_available": result.reputation_not_available,
                 },
                 gate_results={
@@ -3212,6 +3285,8 @@ class ReputationService:
                     "collection_options": {
                         "include_review_article_count": True,
                         "include_negative_rate": True,
+                        "include_circle_content_count": result.circle_content_count_measurement
+                        is not None,
                     },
                 },
                 full_page_path=str(result.full_page_path) if result.full_page_path else None,
@@ -3537,9 +3612,7 @@ class ReputationService:
         lines = [title]
         if run.run_type == "baseline_initialization":
             for platform_code in run.platform_codes:
-                platform_results = [
-                    item for item in results if item.platform_code == platform_code
-                ]
+                platform_results = [item for item in results if item.platform_code == platform_code]
                 lines.extend(
                     [
                         "",
@@ -3560,7 +3633,10 @@ class ReputationService:
             if missing:
                 lines.extend(
                     ["", "异常与缺失："]
-                    + [f"- {item.platform_name}/{item.vehicle_name}：{item.error_message or item.status}" for item in missing]
+                    + [
+                        f"- {item.platform_name}/{item.vehicle_name}：{item.error_message or item.status}"
+                        for item in missing
+                    ]
                 )
             return "\n".join(lines) + "\n"
         for platform_code in run.platform_codes:
@@ -3569,13 +3645,8 @@ class ReputationService:
             platform_anomalies: list[str] = []
             for result in [item for item in results if item.platform_code == platform_code]:
                 changes: list[str] = []
-                for key, name in (
-                ("score", "口碑分"),
-                ("rank", "排名"),
-                ("volume", "口碑量"),
-                ("review_article_count", "口碑评价篇数"),
-                ("negative_rate", "差评率"),
-            ):
+                for key in REPUTATION_PLATFORMS[platform_code].metric_keys:
+                    name = METRIC_LABELS[key]
                     metric = result.metrics.get(key)
                     if not metric:
                         continue
@@ -3586,7 +3657,9 @@ class ReputationService:
                         )
                 if changes:
                     platform_changed += 1
-                    lines.append(f"{platform_changed}. 【{result.vehicle_name}】" + "；".join(changes) + "。")
+                    lines.append(
+                        f"{platform_changed}. 【{result.vehicle_name}】" + "；".join(changes) + "。"
+                    )
                 if result.status != "success":
                     states = sorted(
                         {
@@ -3620,12 +3693,17 @@ class ReputationService:
         sheet.title = "口碑巡检"
         platform_codes = list(run.platform_codes or [PLATFORM_CODE])
         single_platform = len(platform_codes) == 1
-        metric_headers = ("口碑分", "排名", "口碑量", "口碑评价篇数", "差评率")
-        headers = ["日期", "角色", "车系", "车型"] + [
-            label if single_platform else f"{REPUTATION_PLATFORMS[code].display_name}-{label}"
-            for code in platform_codes
-            for label in metric_headers
-        ] + ["备注"]
+        headers = (
+            ["日期", "角色", "车系", "车型"]
+            + [
+                METRIC_LABELS[key]
+                if single_platform
+                else f"{REPUTATION_PLATFORMS[code].display_name}-{METRIC_LABELS[key]}"
+                for code in platform_codes
+                for key in REPUTATION_PLATFORMS[code].metric_keys
+            ]
+            + ["备注"]
+        )
         sheet.append(headers)
         for cell in sheet[1]:
             cell.fill = HEADER_FILL
@@ -3646,32 +3724,37 @@ class ReputationService:
                 result = by_target.get((vehicle.vehicle_id, code))
                 values.extend(
                     [
-                        result.metrics["score"].get("raw") or "—" if result else "—",
-                        result.metrics["rank"].get("raw") or "—" if result else "—",
-                        result.metrics["volume"].get("raw") or "—" if result else "—",
-                        result.metrics.get("review_article_count", {}).get("raw") or "—" if result else "—",
-                        result.metrics.get("negative_rate", {}).get("raw") or "—" if result else "—",
+                        result.metrics.get(key, {}).get("raw") or "—" if result else "—"
+                        for key in REPUTATION_PLATFORMS[code].metric_keys
                     ]
                 )
             missing: list[str] = []
             for code in platform_codes:
                 result = by_target.get((vehicle.vehicle_id, code))
                 evidence = evidence_by_result.get(result.id) if result else None
-                if not evidence:
+                # 按执行项冻结策略判断；URL模式的正常无图不写成证据缺失。
+                if result is None:
+                    missing.append(f"{REPUTATION_PLATFORMS[code].display_name}：未取得执行结果")
+                elif result.evidence_required and not evidence:
                     reason = result.error_message if result and result.error_message else "证据缺失"
                     missing.append(f"{REPUTATION_PLATFORMS[code].display_name}：{reason}")
             values.append("；".join(missing))
             sheet.append(values)
-            for platform_index, code in enumerate(platform_codes):
+            first_column = 5
+            for code in platform_codes:
                 result = by_target.get((vehicle.vehicle_id, code))
-                first_column = 5 + platform_index * 5
-                for offset, metric_name in enumerate(
-                    ("score", "rank", "volume", "review_article_count", "negative_rate")
-                ):
+                for offset, metric_name in enumerate(REPUTATION_PLATFORMS[code].metric_keys):
                     tone = result.metrics.get(metric_name, {}).get("tone") if result else None
                     cell = sheet.cell(row_index, first_column + offset)
-                    cell.fill = GREEN_FILL if tone == "positive" else RED_FILL if tone == "negative" else NEUTRAL_FILL
+                    cell.fill = (
+                        GREEN_FILL
+                        if tone == "positive"
+                        else RED_FILL
+                        if tone == "negative"
+                        else NEUTRAL_FILL
+                    )
                     cell.alignment = Alignment(horizontal="center")
+                first_column += len(REPUTATION_PLATFORMS[code].metric_keys)
             preview_path, preview_record = self._xlsx_preview(
                 vehicle.vehicle_id,
                 platform_codes,
@@ -3687,13 +3770,20 @@ class ReputationService:
                 else:
                     preview.width, preview.height = 720, 135
                     sheet.row_dimensions[row_index].height = 104
-                note_column = 5 + len(platform_codes) * 5
+                note_column = first_column
                 sheet.add_image(preview, f"{get_column_letter(note_column)}{row_index}")
             if preview_record:
                 preview_manifest.append(preview_record)
-        widths = [13, 12, 18, 22] + [
-            value for _ in platform_codes for value in (12, 12, 14, 16, 12)
-        ] + [105 if not single_platform else 44]
+        metric_widths = dict(zip(METRIC_LABELS, (12, 12, 14, 16, 12, 16), strict=True))
+        widths = (
+            [13, 12, 18, 22]
+            + [
+                metric_widths[key]
+                for code in platform_codes
+                for key in REPUTATION_PLATFORMS[code].metric_keys
+            ]
+            + [105 if not single_platform else 44]
+        )
         for index, width in enumerate(widths, start=1):
             sheet.column_dimensions[get_column_letter(index)].width = width
         sheet.freeze_panes = "E2"

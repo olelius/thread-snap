@@ -1,5 +1,6 @@
 ---
 status: accepted
+amended_by: ADR 0068 (optional missing metrics), ADR 0071 (independent circle content count)
 ---
 
 # 使用评分页口碑评价篇数替代车型圈子帖子总量

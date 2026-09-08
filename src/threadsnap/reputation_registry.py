@@ -7,6 +7,16 @@ from typing import Any, Callable
 
 from . import reputation_autohome, reputation_dongchedi, reputation_yiche
 
+CORE_METRIC_KEYS = ("score", "rank", "volume", "review_article_count", "negative_rate")
+METRIC_LABELS = {
+    "score": "口碑分",
+    "rank": "排名",
+    "volume": "口碑量",
+    "review_article_count": "口碑评价篇数",
+    "negative_rate": "差评率",
+    "circle_content_count": "圈内内容数",
+}
+
 
 @dataclass(frozen=True)
 class ReputationPlatformSpec:
@@ -21,6 +31,7 @@ class ReputationPlatformSpec:
     viewport: dict[str, int]
     requires_session: bool = True
     requires_evidence: bool = True
+    metric_keys: tuple[str, ...] = CORE_METRIC_KEYS
 
 
 REPUTATION_PLATFORMS: dict[str, ReputationPlatformSpec] = {
@@ -32,6 +43,7 @@ REPUTATION_PLATFORMS: dict[str, ReputationPlatformSpec] = {
         reputation_dongchedi.ADAPTER_VERSION,
         reputation_dongchedi.VALIDATION_CONTRACT_VERSION,
         reputation_dongchedi.VIEWPORT,
+        metric_keys=(*CORE_METRIC_KEYS, "circle_content_count"),
     ),
     "autohome": ReputationPlatformSpec(
         "autohome",

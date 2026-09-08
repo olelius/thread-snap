@@ -57,6 +57,9 @@ class ReputationPageResult:
     negative_rate_positive_count: int | None = None
     negative_rate_negative_count: int | None = None
     reputation_not_available: bool = False
+    circle_content_count_raw: str | None = None
+    circle_content_count_url: str | None = None
+    circle_content_count_measurement: dict[str, Any] | None = None
 
 
 class ReputationAdapter(Protocol):

@@ -7,6 +7,7 @@ import { toast } from 'sonner'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
 import { ReputationRoleLabel } from '@/features/reputation/reputation-role-label'
+import { reputationMetricColumns } from '@/features/reputation/reputation-metrics'
 import { api, errorMessage, formatDate } from '@/lib/api'
 import type { ReputationCapabilities, ReputationMetric, ReputationResult, ReputationRun } from '@/lib/types'
 import { Badge } from '@/components/ui/badge'
@@ -84,7 +85,7 @@ export function ReputationDetailPage() {
       </div>
     </div>
     <motion.div key={view} initial={reduceMotion ? false : { opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.18, ease: 'easeOut' }} className='min-h-0 flex-1 overflow-hidden'>
-      {view === 'ranking' ? <RankingPanel results={run.results ?? []} onViewEvidence={setEvidenceViewer} yicheUrlOnly={yicheUrlOnly} /> : view === 'evidence' ? <EvidencePanel results={run.results ?? []} onViewEvidence={setEvidenceViewer} /> : <ReportPanel run={run} />}
+      {view === 'ranking' ? <RankingPanel results={run.results ?? []} onViewEvidence={setEvidenceViewer} yicheUrlOnly={yicheUrlOnly} capabilities={capabilities.data} /> : view === 'evidence' ? <EvidencePanel results={run.results ?? []} onViewEvidence={setEvidenceViewer} /> : <ReportPanel run={run} />}
     </motion.div>
     <ReputationEvidenceDialog result={evidenceViewer} onOpenChange={(open) => !open && setEvidenceViewer(undefined)} />
   </div>
@@ -99,34 +100,32 @@ const RANKING_IDENTITY_WIDTH = 256
 // 136px 指标卡片 + 两侧各 12px 留白，相邻卡片始终保持 24px 间距。
 const RANKING_METRIC_WIDTH = 160
 const RANKING_STATE_WIDTH = 192
-const metricColumns = [
-  ['score', '口碑分'], ['rank', '排名'], ['volume', '口碑量'],
-  ['review_article_count', '评价篇数'], ['negative_rate', '差评率'],
-] as const
 
 /** 单表单滚动参照，表头和正文共用列宽；不再用两张表互相同步 scrollLeft。 */
-function RankingPanel({ results, onViewEvidence, yicheUrlOnly }: { results: ReputationResult[]; onViewEvidence: (result: ReputationResult) => void; yicheUrlOnly: boolean }) {
+function RankingPanel({ results, onViewEvidence, yicheUrlOnly, capabilities }: { results: ReputationResult[]; onViewEvidence: (result: ReputationResult) => void; yicheUrlOnly: boolean; capabilities?: ReputationCapabilities }) {
   const [issue, setIssue] = useState<ReputationResult>()
   const platforms = Array.from(new Map(results.map((result) => [result.platform_code, result.platform_name])).entries())
   const vehicles = Array.from(new Map(results.map((result) => [result.vehicle_id, result])).values())
   const byTarget = new Map(results.map((result) => [`${result.vehicle_id}|${result.platform_code}`, result]))
-  const tableWidth = RANKING_IDENTITY_WIDTH + platforms.length * (RANKING_METRIC_WIDTH * 5 + RANKING_STATE_WIDTH)
+  const columnsFor = (code: string) => reputationMetricColumns(code, capabilities)
+  const totalColumns = 2 + platforms.reduce((count, [code]) => count + columnsFor(code).length + 1, 0)
+  const tableWidth = RANKING_IDENTITY_WIDTH + platforms.reduce((width, [code]) => width + RANKING_METRIC_WIDTH * columnsFor(code).length + RANKING_STATE_WIDTH, 0)
 
   return <Card className='reputation-ranking flex h-full min-h-0 flex-col gap-0 overflow-hidden border-border/70 bg-card/90 py-0 shadow-sm'>
     <div className='reputation-ranking-viewport' data-ranking-viewport tabIndex={0} role='region' aria-label='口碑排名数据，可横向和纵向滚动'>
       <Table style={{ width: tableWidth, minWidth: tableWidth }}>
         <colgroup><col style={{ width: 96 }} /><col style={{ width: 160 }} />{platforms.flatMap(([code]) => [
-          ...metricColumns.map(([key]) => <col key={`${code}-${key}`} style={{ width: RANKING_METRIC_WIDTH }} />),
+          ...columnsFor(code).map(([key]) => <col key={`${code}-${key}`} style={{ width: RANKING_METRIC_WIDTH }} />),
           <col key={`${code}-state`} style={{ width: RANKING_STATE_WIDTH }} />,
         ])}</colgroup>
         <TableHeader>
           <TableRow>
             <TableHead rowSpan={2} className='ranking-identity ranking-role'>角色</TableHead>
             <TableHead rowSpan={2} className='ranking-identity ranking-vehicle'>车型</TableHead>
-            {platforms.map(([code, name]) => <TableHead key={code} colSpan={6} scope='colgroup' className='ranking-platform'>{name}</TableHead>)}
+            {platforms.map(([code, name]) => <TableHead key={code} colSpan={columnsFor(code).length + 1} scope='colgroup' className='ranking-platform'>{name}</TableHead>)}
           </TableRow>
           <TableRow>{platforms.flatMap(([code]) => [
-            ...metricColumns.map(([key, label]) => <TableHead key={`${code}-${key}`} data-ranking-column={`${code}-${key}`} scope='col' className='text-right'>{label}</TableHead>),
+            ...columnsFor(code).map(([key, label]) => <TableHead key={`${code}-${key}`} data-ranking-column={`${code}-${key}`} scope='col' className='text-right'>{label}</TableHead>),
             <TableHead key={`${code}-state`} data-ranking-column={`${code}-state`} scope='col'>状态 / {code === 'yiche' && yicheUrlOnly ? 'URL' : '证据'}</TableHead>,
           ])}</TableRow>
         </TableHeader>
@@ -136,10 +135,10 @@ function RankingPanel({ results, onViewEvidence, yicheUrlOnly }: { results: Repu
             <TableCell className='ranking-identity ranking-vehicle'><div className='font-medium'>{vehicle.vehicle_name}</div><div className='mt-1 text-xs text-muted-foreground'>{vehicle.series_name}</div></TableCell>
             {platforms.flatMap(([code]) => {
               const result = byTarget.get(`${vehicle.vehicle_id}|${code}`)
-              if (!result) return [<TableCell key={`${code}-missing`} colSpan={6} className='text-center text-xs text-muted-foreground'>未纳入本批次</TableCell>]
+              if (!result) return [<TableCell key={`${code}-missing`} colSpan={columnsFor(code).length + 1} className='text-center text-xs text-muted-foreground'>未纳入本批次</TableCell>]
               const oldNativeFailure = yicheUrlOnly && code === 'yiche' && result.error_code?.startsWith('REPUTATION_NATIVE_')
               return [
-                ...metricColumns.map(([key]) => <TableCell key={`${code}-${key}`} data-ranking-cell={`${code}-${key}`} className='ranking-metric-cell text-right'><MetricCell metric={result.metrics[key] ?? historicalMetric()} inverseLabel={key === 'rank'} /></TableCell>),
+                ...columnsFor(code).map(([key]) => <TableCell key={`${code}-${key}`} data-ranking-cell={`${code}-${key}`} className='ranking-metric-cell text-right'><MetricCell metric={result.metrics[key] ?? historicalMetric()} inverseLabel={key === 'rank'} circleCount={key === 'circle_content_count'} /></TableCell>),
                 <TableCell key={`${code}-state`} data-ranking-cell={`${code}-state`}>
                   <div className='ranking-state-line'><StatusBadge value={result.status} label={oldNativeFailure ? '历史失败' : statusName(result.status)} />
                     {result.evidence ? <Button variant='ghost' size='icon' className='size-8' onClick={() => onViewEvidence(result)} aria-label={`查看${result.platform_name}截图`}><ImageIcon className='size-4' /></Button> : <span className='text-xs text-muted-foreground'>{!result.evidence_required ? '不要求截图' : oldNativeFailure ? '旧流程' : '缺图'}</span>}
@@ -149,11 +148,11 @@ function RankingPanel({ results, onViewEvidence, yicheUrlOnly }: { results: Repu
               ]
             })}
           </TableRow>)}
-          {!vehicles.length && <TableRow><TableCell colSpan={2 + platforms.length * 6} className='h-32 text-center'>暂无排名数据</TableCell></TableRow>}
+          {!vehicles.length && <TableRow><TableCell colSpan={totalColumns} className='h-32 text-center'>暂无排名数据</TableCell></TableRow>}
         </TableBody>
       </Table>
     </div>
-    <div className='shrink-0 border-t bg-card/95 px-4 py-3 text-xs text-muted-foreground'>每款车型一行；口碑分、口碑量和评价篇数升高为绿色，排名数字和差评率下降为绿色。缺失指标保持空值。</div>
+    <div className='shrink-0 border-t bg-card/95 px-4 py-3 text-xs text-muted-foreground'>每款车型一行；口碑分、口碑量和评价篇数升高为绿色，排名数字和差评率下降为绿色。圈内内容数仅中性表示数量变化，来源为圈子列表，不在评分截图中。缺失指标保持空值。</div>
     <Dialog open={Boolean(issue)} onOpenChange={(open) => !open && setIssue(undefined)}><DialogContent><DialogHeader><DialogTitle>{issue?.vehicle_name} · {issue?.platform_name}</DialogTitle><DialogDescription>原批次保存的失败原因；切换采集方式不会改写历史记录。</DialogDescription></DialogHeader><div className='space-y-3 text-sm'><StatusBadge value={issue?.status ?? 'unknown'} label={statusName(issue?.status ?? 'unknown')} /><p className='break-all font-mono text-xs'>{issue?.error_code}</p><p className='whitespace-pre-wrap break-words leading-6'>{issue?.error_message}</p></div></DialogContent></Dialog>
   </Card>
 }
@@ -163,16 +162,16 @@ function historicalMetric(): ReputationMetric {
 }
 
 /** 指标与变化说明都在列内换行；完整值通过原生提示保留，零值不被当成缺失。 */
-function MetricCell({ metric, inverseLabel = false }: { metric: ReputationMetric; inverseLabel?: boolean }) {
+function MetricCell({ metric, inverseLabel = false, circleCount = false }: { metric: ReputationMetric; inverseLabel?: boolean; circleCount?: boolean }) {
   // 排名的数字方向与名次改善方向相反，箭头跟随“名次上升/下降”文案。
   const Icon = inverseLabel && metric.direction !== 'same' ? (metric.tone === 'positive' ? ArrowUp : metric.tone === 'negative' ? ArrowDown : Minus) : metric.direction === 'up' ? ArrowUp : metric.direction === 'down' ? ArrowDown : Minus
   const tone = metric.tone === 'positive' ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : metric.tone === 'negative' ? 'border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-300' : 'border-border bg-muted/35 text-foreground'
-  if (metric.raw == null || metric.raw === '') return <span className='text-sm text-muted-foreground' title={stateName(metric.comparison_status)}>—</span>
+  if (metric.raw == null || metric.raw === '') return <span className='text-sm text-muted-foreground' title={stateName(metric.comparison_status)}>{circleCount && metric.comparison_status === 'historical_not_collected' ? '历史未采集' : '—'}</span>
   const comparable = metric.comparison_status === 'comparable'
   const changeLabel = metric.direction === 'same' ? (inverseLabel ? '名次持平' : '较前日持平') : inverseLabel ? (metric.tone === 'positive' ? '名次上升' : '名次下降') : (metric.direction === 'up' ? '较前日上升' : '较前日下降')
   const delta = metric.delta == null ? '' : String(metric.delta).replace(/^[+−-]/, '')
   const detail = comparable ? `${changeLabel}${metric.direction !== 'same' && delta ? ` ${delta}` : ''}` : stateName(metric.comparison_status)
-  return <div className={cn('ranking-metric', tone)} title={`${metric.raw} · ${detail}`}><span className='ranking-metric-value'>{metric.raw}</span><span className='ranking-metric-change'>{comparable && <Icon aria-hidden='true' />}<span>{detail}</span></span></div>
+  return <div className={cn('ranking-metric', tone)} title={`${metric.raw} · ${detail}${circleCount ? ' · 圈子列表计数，非评分截图指标' : ''}`}><span className='ranking-metric-value'>{circleCount && metric.source_url ? <a href={metric.source_url} target='_blank' rel='noreferrer' aria-label={`查看圈内内容数 ${metric.raw} 的来源页面`}>{metric.raw}</a> : metric.raw}</span><span className='ranking-metric-change'>{comparable && <Icon aria-hidden='true' />}<span>{detail}</span></span></div>
 }
 
 function EvidencePanel({ results, onViewEvidence }: { results: ReputationResult[]; onViewEvidence: (result: ReputationResult) => void }) {

@@ -10,17 +10,21 @@ import re
 import threading
 import time
 from dataclasses import replace
+from datetime import datetime, timezone
 from decimal import ROUND_HALF_UP, Decimal
 from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
-from lxml import html
+from lxml import etree, html
 from patchright.async_api import Browser, BrowserContext, Page, async_playwright
 from patchright.async_api import Error as PlaywrightError
 from PIL import Image
 
 from .browser_runtime import browser_launch_args
+from .collectors.base import CollectorFailure
+from .collectors.dongchedi import normalize_circle_url
+from .collectors.dongchedi_count import circle_count_visible_text, parse_circle_content_count
 from .reputation_adapter import (
     ReputationAdapterError,
     ReputationMappingTarget,
@@ -30,12 +34,10 @@ from .scrapling_transport import ExecutionScopeKey, ScraplingHttpPool
 
 logger = logging.getLogger(__name__)
 
-ADAPTER_VERSION = "dongchedi-reputation-v9-scrapling"
+ADAPTER_VERSION = "dongchedi-reputation-v10-circle-content"
 VALIDATION_CONTRACT_VERSION = "dongchedi-reputation-mapping-v1"
 VIEWPORT = {"width": 1440, "height": 1000}
-NEGATIVE_RATE_API_URL = (
-    "https://api.dcarapi.com/motor/car_score/api/v1/landing_page/get_detail/"
-)
+NEGATIVE_RATE_API_URL = "https://api.dcarapi.com/motor/car_score/api/v1/landing_page/get_detail/"
 NEGATIVE_RATE_APP_PARAMS = {
     "aid": "36",
     "app_name": "automobile",
@@ -133,6 +135,7 @@ class DongchediReputationAdapter:
         prefer_http_first: bool = False,
         include_review_article_count: bool = False,
         include_negative_rate: bool = False,
+        include_circle_content_count: bool = False,
         execution_scope: ExecutionScopeKey | None = None,
         global_limiter: threading.Semaphore | None = None,
     ) -> None:
@@ -145,19 +148,152 @@ class DongchediReputationAdapter:
         self.prefer_http_first = prefer_http_first
         self.include_review_article_count = include_review_article_count
         self.include_negative_rate = include_negative_rate
+        self.include_circle_content_count = include_circle_content_count
         self.global_limiter = global_limiter
         self.http = ScraplingHttpPool(
             storage_state,
             timeout_seconds=timeout_seconds,
-            scope=(execution_scope or ExecutionScopeKey()).bind_platform(
-                "dongchedi-reputation"
-            ),
+            scope=(execution_scope or ExecutionScopeKey()).bind_platform("dongchedi-reputation"),
         )
 
     def _http_session(self) -> Any:
         """返回当前线程独享的 Scrapling FetcherSession 适配器。"""
 
         return self.http.session()
+
+    @staticmethod
+    def _parse_circle_content(
+        target: ReputationMappingTarget,
+        final_url: str,
+        content: bytes,
+    ) -> tuple[str | None, dict[str, Any]]:
+        """核对圈子身份与独立计数来源，不依赖帖子卡片或首帖详情。"""
+
+        expected_url = normalize_circle_url(
+            f"https://www.dongchedi.com/community/{target.platform_vehicle_id}/dongtai-release"
+        )[1]
+        try:
+            circle_id, normalized = normalize_circle_url(final_url)
+        except CollectorFailure as error:
+            raise ReputationAdapterError(
+                "REPUTATION_CIRCLE_IDENTITY_MISMATCH", "圈子页面落地URL不是预期的车型动态列表。"
+            ) from error
+        if (
+            circle_id != target.platform_vehicle_id
+            or normalized != expected_url
+            or urlsplit(final_url).path.rstrip("/") != urlsplit(expected_url).path
+        ):
+            raise ReputationAdapterError(
+                "REPUTATION_CIRCLE_IDENTITY_MISMATCH",
+                "圈子页面落地身份或列表顺序与车型映射不一致。",
+            )
+        try:
+            document = html.fromstring(content.decode("utf-8"))
+            scripts = document.xpath("//script[@id='__NEXT_DATA__']")
+            if len(scripts) != 1:
+                raise ValueError("圈子页面缺少唯一服务端状态")
+            props = json.loads(scripts[0].text or "")["props"]["pageProps"]
+            if not isinstance(props, dict) or not isinstance(props.get("cheyouHead"), dict):
+                raise ValueError("圈子服务端身份结构异常")
+            head = props["cheyouHead"]
+            for identifier in (props.get("series_id"), head.get("series_id")):
+                if isinstance(identifier, bool) or re.fullmatch(r"[0-9]+", str(identifier)) is None:
+                    raise ValueError("圈子身份字段格式异常")
+                if str(identifier) != target.platform_vehicle_id:
+                    raise ReputationAdapterError(
+                        "REPUTATION_CIRCLE_IDENTITY_MISMATCH", "圈子服务端车型ID与冻结映射不一致。"
+                    )
+            name = head.get("series_name")
+            if not isinstance(name, str) or _name_key(name) != _name_key(
+                target.platform_display_name
+            ):
+                raise ReputationAdapterError(
+                    "REPUTATION_CIRCLE_IDENTITY_MISMATCH", "圈子车型展示名与冻结映射不一致。"
+                )
+            listing = props.get("cheyouList")
+            if listing is not None and not isinstance(listing, dict):
+                raise ValueError("圈子列表状态不是对象")
+            json_count = listing.get("total_count") if isinstance(listing, dict) else None
+            if json_count is not None and (
+                not isinstance(json_count, int) or isinstance(json_count, bool) or json_count < 0
+            ):
+                raise ValueError("圈子内容总数不是精确非负整数")
+            # 排除脚本及帖子正文，避免引用文字被当作页面自身的总数标签。
+            text = circle_count_visible_text(document)
+            visible_count, visible_raw = parse_circle_content_count(text)
+            if json_count is not None and visible_count is not None and json_count != visible_count:
+                raise ValueError("圈子可见总数与服务端状态不一致")
+            count = json_count if json_count is not None else visible_count
+        except ReputationAdapterError:
+            raise
+        except (KeyError, TypeError, ValueError, UnicodeDecodeError, etree.ParserError) as error:
+            raise ReputationAdapterError(
+                "REPUTATION_CIRCLE_CONTENT_INVALID", "圈子页面身份结构或内容总数格式异常。"
+            ) from error
+        return str(count) if count is not None else None, {
+            "collection_method": "circle_http_ssr",
+            "count_source": (
+                "ssr_and_visible"
+                if json_count is not None and visible_count is not None
+                else "ssr"
+                if json_count is not None
+                else "visible"
+                if visible_count is not None
+                else "not_available"
+            ),
+            "source_url": final_url,
+            "platform_vehicle_id": target.platform_vehicle_id,
+            "actual_name": name,
+            "json_count": json_count,
+            "visible_count": visible_count,
+            "visible_raw": visible_raw,
+            "captured_at": datetime.now(timezone.utc).isoformat(),
+            "response_sha256": hashlib.sha256(content).hexdigest(),
+        }
+
+    def _visit_circle_content(
+        self,
+        target: ReputationMappingTarget,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> tuple[str | None, str, dict[str, Any]]:
+        """在当前执行项槽位内补取一个圈子页面，复用Session及有界HTTP传输。"""
+
+        url = normalize_circle_url(
+            f"https://www.dongchedi.com/community/{target.platform_vehicle_id}/dongtai-release"
+        )[1]
+        remaining = (
+            self.timeout_seconds
+            if timeout_seconds is None
+            else min(self.timeout_seconds, timeout_seconds)
+        )
+        if remaining <= 0:
+            raise ReputationAdapterError("REPUTATION_ITEM_TIMEOUT", "口碑执行项已达到采集时限。")
+        try:
+            response = self._http_session().get(url, timeout=remaining)
+        except Exception as error:
+            raise ReputationAdapterError(
+                "REPUTATION_CIRCLE_NETWORK_ERROR", "圈内内容数页面访问失败。", retryable=True
+            ) from error
+        final_url = str(response.url)
+        content = bytes(response.content or b"")
+        if (
+            "/login-required" in urlsplit(final_url).path
+            or b"login-required" in content[:200_000].lower()
+        ):
+            raise ReputationAdapterError("AUTH_REQUIRED", "懂车帝共享Session需要更新。")
+        if response.status_code != 200:
+            raise ReputationAdapterError(
+                "REPUTATION_CIRCLE_HTTP_ERROR",
+                f"圈内内容数页面返回HTTP {response.status_code}。",
+                retryable=response.status_code >= 500 or response.status_code == 429,
+            )
+        if not content:
+            raise ReputationAdapterError(
+                "REPUTATION_CIRCLE_CONTENT_INVALID", "圈内内容数页面返回空文档。"
+            )
+        raw, measurement = self._parse_circle_content(target, final_url, content)
+        return raw, final_url, measurement
 
     def close(self) -> None:
         """关闭巡检线程创建的全部 Scrapling Session。"""
@@ -601,9 +737,7 @@ class DongchediReputationAdapter:
                 rank_raw=str(rank_raw) if rank_raw is not None else None,
                 volume_raw=volume_raw,
                 review_article_count_raw=(
-                    str(review_article_count_raw)
-                    if review_article_count_raw is not None
-                    else None
+                    str(review_article_count_raw) if review_article_count_raw is not None else None
                 ),
                 page_not_available=bool(current.get("reputation_not_available")),
                 negative_rate_positive_count=negative_rate_positive_count,
@@ -613,6 +747,13 @@ class DongchediReputationAdapter:
             if self.include_review_article_count:
                 # 合法可选字段未返回时仍保留同次评分页来源，不抹掉其它指标。
                 review_article_count_url = page.url
+            circle_raw, circle_url, circle_measurement = None, None, None
+            if self.include_circle_content_count:
+                circle_raw, circle_url, circle_measurement = await asyncio.to_thread(
+                    self._visit_circle_content,
+                    target,
+                    timeout_seconds=self.timeout_seconds - (time.monotonic() - started),
+                )
             capture = (
                 force_capture
                 or self.evidence_policy is None
@@ -677,6 +818,9 @@ class DongchediReputationAdapter:
                 negative_rate_positive_count=negative_rate_positive_count,
                 negative_rate_negative_count=negative_rate_negative_count,
                 reputation_not_available=reputation_not_available,
+                circle_content_count_raw=circle_raw,
+                circle_content_count_url=circle_url,
+                circle_content_count_measurement=circle_measurement,
             )
         except PlaywrightError as error:
             raise self._browser_runtime_error(target, stage, error) from error
@@ -887,7 +1031,10 @@ class DongchediReputationAdapter:
             ) from error
         final_url = str(response.url)
         body = bytes(response.content or b"")
-        if "/login-required" in urlsplit(final_url).path or b"login-required" in body[:200_000].lower():
+        if (
+            "/login-required" in urlsplit(final_url).path
+            or b"login-required" in body[:200_000].lower()
+        ):
             raise ReputationAdapterError("AUTH_REQUIRED", "懂车帝共享Session需要更新。")
         if response.status_code >= 500 or response.status_code == 429:
             raise ReputationAdapterError(
@@ -933,6 +1080,12 @@ class DongchediReputationAdapter:
             negative_rate_negative_count=negative_rate_negative_count,
             require_negative_rate_confirmation=self.include_negative_rate,
         )
+        circle_raw, circle_url, circle_measurement = None, None, None
+        if self.include_circle_content_count:
+            circle_raw, circle_url, circle_measurement = self._visit_circle_content(
+                target,
+                timeout_seconds=self.timeout_seconds - (time.monotonic() - started),
+            )
         return replace(
             result,
             duration_ms=round((time.monotonic() - started) * 1000),
@@ -948,6 +1101,9 @@ class DongchediReputationAdapter:
             negative_rate_positive_count=negative_rate_positive_count,
             negative_rate_negative_count=negative_rate_negative_count,
             reputation_not_available=reputation_not_available,
+            circle_content_count_raw=circle_raw,
+            circle_content_count_url=circle_url,
+            circle_content_count_measurement=circle_measurement,
         )
 
     async def _validate_browser_targets(

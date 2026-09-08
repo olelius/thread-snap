@@ -21,6 +21,7 @@ from patchright.async_api import Error as PlaywrightError
 from PIL import Image
 from sqlalchemy import func, select
 
+from tests.reputation_circle_fixtures import circle_result_fields
 from threadsnap.app import create_app
 from threadsnap.config import Settings
 from threadsnap.errors import DomainError
@@ -54,11 +55,13 @@ class OfficialFakeAdapter:
 
     score_overrides: dict[str, str] = {}
     negative_rate_overrides: dict[str, str] = {}
+    circle_count_overrides: dict[str, int | None] = {}
     failures: set[str] = set()
     retry_once: set[str] = set()
     progress_probe = None
     last_prefer_http_first: bool | None = None
     last_include_negative_rate: bool | None = None
+    last_include_circle_content_count: bool | None = None
     last_concurrency: int | None = None
     parallel_probe = None
 
@@ -75,6 +78,9 @@ class OfficialFakeAdapter:
         self.validation_calls = 0
         type(self).last_prefer_http_first = prefer_http_first
         type(self).last_include_negative_rate = include_negative_rate
+        type(self).last_include_circle_content_count = _kwargs.get(
+            "include_circle_content_count", False
+        )
         type(self).last_concurrency = int(_kwargs["concurrency"])
 
     def validate_sync(self, targets, output_dir, on_result=None):
@@ -106,9 +112,7 @@ class OfficialFakeAdapter:
                     "volume_raw": str(500 + index),
                     "rank_scope": "同级车评分",
                 }
-                capture = self.evidence_policy is None or self.evidence_policy(
-                    target, measurement
-                )
+                capture = self.evidence_policy is None or self.evidence_policy(target, measurement)
                 metric = None
                 digest = None
                 if capture:
@@ -145,6 +149,13 @@ class OfficialFakeAdapter:
                     ),
                     negative_rate_positive_count=214,
                     negative_rate_negative_count=128,
+                    **(
+                        circle_result_fields(
+                            target, self.circle_count_overrides.get(target.vehicle_id, 500 + index)
+                        )
+                        if "dongchedi.com" in target.platform_url
+                        else {}
+                    ),
                 )
             values.append(result)
             if on_result:
@@ -244,7 +255,16 @@ class ReputationInspectionTest(unittest.TestCase):
             scope = saved.json()
             container.session_store.import_state(
                 platform_code,
-                {"cookies": [{"name": "fixture", "value": "session", "domain": ".example.com", "path": "/"}]},
+                {
+                    "cookies": [
+                        {
+                            "name": "fixture",
+                            "value": "session",
+                            "domain": ".example.com",
+                            "path": "/",
+                        }
+                    ]
+                },
             )
             container.reputation.adapter_factories[platform_code] = PlatformAvailableMetricsAdapter
             validated = self.client.post(
@@ -266,7 +286,11 @@ class ReputationInspectionTest(unittest.TestCase):
 
         container.session_store.import_state(
             "dongchedi",
-            {"cookies": [{"name": "fixture", "value": "session", "domain": ".example.com", "path": "/"}]},
+            {
+                "cookies": [
+                    {"name": "fixture", "value": "session", "domain": ".example.com", "path": "/"}
+                ]
+            },
         )
         container.reputation.adapter_factory = OfficialFakeAdapter
         container.reputation.adapter_factories["dongchedi"] = OfficialFakeAdapter
@@ -302,25 +326,24 @@ class ReputationInspectionTest(unittest.TestCase):
             finished = container.reputation.execute_run(due["queued_run_ids"][0])
         finally:
             OfficialFakeAdapter.parallel_probe = None
-        self.assertEqual(
-            {"www.dongchedi.com", "k.autohome.com.cn", "dianping.yiche.com"}, entered
-        )
+        self.assertEqual({"www.dongchedi.com", "k.autohome.com.cn", "dianping.yiche.com"}, entered)
         self.assertEqual(["dongchedi", "autohome", "yiche"], finished["platform_codes"])
         self.assertEqual(81, finished["planned_count"])
         self.assertEqual(81, finished["completed_count"])
         self.assertEqual(54, finished["required_evidence_count"])
         self.assertEqual(54, finished["complete_evidence_count"])
-        self.assertTrue(all(not item["evidence_required"] and not item.get("evidence") for item in finished["results"] if item["platform_code"] == "yiche"))
+        self.assertTrue(
+            all(
+                not item["evidence_required"] and not item.get("evidence")
+                for item in finished["results"]
+                if item["platform_code"] == "yiche"
+            )
+        )
         self.assertEqual(2, finished["concurrency"])
         self.assertEqual(2, OfficialFakeAdapter.last_concurrency)
         self.assertEqual(
             81,
-            len(
-                {
-                    (item["vehicle_id"], item["platform_code"])
-                    for item in finished["results"]
-                }
-            ),
+            len({(item["vehicle_id"], item["platform_code"]) for item in finished["results"]}),
         )
         generated = container.reputation.generate_report(
             finished["id"], datetime(2030, 1, 2, 2, 1, tzinfo=timezone.utc)
@@ -330,24 +353,28 @@ class ReputationInspectionTest(unittest.TestCase):
         xlsx_path = self.root / "three-platform.xlsx"
         xlsx_path.write_bytes(xlsx_response.content)
         sheet = load_workbook(xlsx_path)["口碑巡检"]
-        self.assertEqual((28, 20), (sheet.max_row, sheet.max_column))
+        self.assertEqual((28, 21), (sheet.max_row, sheet.max_column))
         self.assertEqual("懂车帝-口碑分", sheet["E1"].value)
-        self.assertEqual("汽车之家-口碑分", sheet["J1"].value)
-        self.assertEqual("易车-口碑分", sheet["O1"].value)
-        self.assertEqual("备注", sheet["T1"].value)
+        self.assertEqual("汽车之家-口碑分", sheet["K1"].value)
+        self.assertEqual("易车-口碑分", sheet["P1"].value)
+        self.assertEqual("备注", sheet["U1"].value)
         self.assertEqual(27, len(sheet._images))
         preview_manifest = (
-            self.settings.reputation_dir
-            / finished["id"]
-            / "xlsx-previews"
-            / "manifest.json"
+            self.settings.reputation_dir / finished["id"] / "xlsx-previews" / "manifest.json"
         )
         self.assertEqual(
             27,
             len(json.loads(preview_manifest.read_text(encoding="utf-8"))["items"]),
         )
         manifest_items = json.loads(preview_manifest.read_text(encoding="utf-8"))["items"]
-        self.assertTrue(all(not next(source for source in item["sources"] if source["platform_code"] == "yiche")["evidence_required"] for item in manifest_items))
+        self.assertTrue(
+            all(
+                not next(
+                    source for source in item["sources"] if source["platform_code"] == "yiche"
+                )["evidence_required"]
+                for item in manifest_items
+            )
+        )
         self.assertIn("页面证据：未要求截图。", generated["report_text"])
 
         acceptance = container.reputation.create_real_acceptance(validation_ids)
@@ -916,6 +943,7 @@ class ReputationInspectionTest(unittest.TestCase):
                             ),
                             negative_rate_positive_count=5 if index == 1 else 214,
                             negative_rate_negative_count=0 if index == 1 else 128,
+                            **circle_result_fields(target, 0 if index == 1 else 36701),
                         )
                     )
                 return values
@@ -929,6 +957,7 @@ class ReputationInspectionTest(unittest.TestCase):
         validation = response.json()
         self.assertIs(True, construction_options["include_review_article_count"])
         self.assertIs(True, construction_options["include_negative_rate"])
+        self.assertIs(True, construction_options["include_circle_content_count"])
         self.assertEqual(validation["succeeded_count"], 27)
         self.assertEqual(validation["failed_count"], 0)
         verified = validation["scope"]["vehicles"]
@@ -1468,6 +1497,7 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         self.service.adapter_factory = OfficialFakeAdapter
         OfficialFakeAdapter.score_overrides = {}
         OfficialFakeAdapter.negative_rate_overrides = {}
+        OfficialFakeAdapter.circle_count_overrides = {}
         OfficialFakeAdapter.failures = set()
         OfficialFakeAdapter.retry_once = set()
         OfficialFakeAdapter.progress_probe = None
@@ -1824,7 +1854,8 @@ class OfficialReputationLifecycleTest(unittest.TestCase):
         self.assertTrue(
             all(
                 metric["comparison_status"] == "not_available"
-                for metric in acceptance["results"][2]["metrics"].values()
+                for key, metric in acceptance["results"][2]["metrics"].items()
+                if key != "circle_content_count"
             )
         )
         self.assertEqual("0", acceptance["results"][3]["metrics"]["negative_rate"]["value"])
