@@ -18,6 +18,16 @@
 
 ---
 
+## 2026-09-08 — 当前开发显式合并main，旧易车实验原样保留
+**总目标**：按用户明确确认完成Git提交、合并、推送与当前目录归位，不动fix/yiche-empty-metrics。
+**状态**：✅ 开发提交3219812及此前4个本地提交已通过PR #288合入远程main，合并提交06c0c9df97e33d02aa7844c89548feebdb2221c3；H:/ThreadSnap-tactile-ui已切main并快进同步。
+**范围**：圈内内容数、论坛顶部帖子数、两汇报模板/文案、AI多账户/余额与提取选择、账户UI及滚动修复、两平台差评率隐藏。本轮是用户明确要求按现状合并，不追加测试、构建、代码审查或应用验收；Git成功不代表未经验证功能已通过验收。
+**保留/清理**：H:/ThreadSnap仍为fix/yiche-empty-metrics@e96549f；分支、HEAD、状态及21个未提交文件哈希与操作前一致。仅删除已合并的本次功能分支feat/ai-accounts（本地/远程）、feat/reputation-circle-content和feat/reputation-report-templates（本地）；有未提交内容的AI UI工作树及其它独立实验工作树保留，未强制清理。
+**证据/边界**：PR https://github.com/olelius/thread-snap/pull/288（MERGED）；artifacts/runtime/main-closeout-20260908/protected-worktree-before.json、protected-worktree-after.json及final-git-state.json。GitHub应用创建PR返回权限403后使用本机已认证gh完成；未修改数据库、未停止本地服务、未SSH部署远端。
+**下一步**：从H:/ThreadSnap-tactile-ui的main继续新任务；原目录旧实验内容不整体覆盖主干，也不因主干收尾而删除。
+
+---
+
 ## 2026-09-08 — 移除汽车之家和易车差评率列
 **状态**：📝 代码已修改，供用户查看；未测试、构建、审查或验收。
 **改动**：两平台从展示能力集合去掉negative_rate，排名页/车型映射同步隐藏（含旧缓存能力过滤），新生成XLSX和原始汇报按平台集合输出；懂车帝差评率和两模板正文保持原规则。历史字段与已有导出不删除、不重建。
