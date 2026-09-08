@@ -18,13 +18,25 @@
 
 ---
 
+## 2026-09-08 — 启动本机前端并部署侧栏精简版
+**总目标**：更新本机前端，通过既有SSH入口部署已合并的侧栏精简版，保留远端配置、历史与回退。
+**状态**：✅ 本机5173前端已启动；远端应用 `main@5a6bbc1` 上线，完整部署验证及公网目标页面验收通过。本机8000后端原未运行，本轮未擅自恢复本机采集与调度。
+**本机证据**：`H:/ThreadSnap-tactile-ui` 的Vite以隐藏窗口PID41080监听 `127.0.0.1:5173`，首页、配置浅/深色、390px抽屉4/4确认五项导航与首页三概览保留、装饰卡为0，JS异常/业务写请求0；数据连接仍为“连接中”。证据 `artifacts/runtime/deploy-sidebar-20260908/local/`。
+**制包/门禁**：相对远端63843d0，后端源码、22条wheel依赖、前端清单与部署输入Git对象未变；隔离npm ci/check/build、新wheel资源校验通过。r1预检在停机前拦截6个部署模板CRLF/LF差异，旧服务保持运行；r2原样复用已校验63843d0部署payload的14文件，不降低逐字节门禁，也不重跑已成功的前端/wheel构建。最终离线包 `threadsnap-5a6bbc1-sidebar-offline-update-r2.tar.gz` 为1,154,312字节、SHA-256 `04f4ace44832f15dcdc9621fd69aa923cdf326fabc7006deac1802e57211c182`；不重装服务器依赖，安装器38/38隔离补偿测试通过。
+**远端证据**：SSH61039使用既有主机公钥校验；XFS reflink新release，七类任务在停机前后全为空闲、SQLite完整性ok、Alembic `c3f7a1d9e402`未变化。安装单元退出0，current=`/opt/threadsnap/releases/0.1.0-5a6bbc15056d`、previous=`/opt/threadsnap/releases/0.1.0-63843d026f24`；维护窗口30.03秒。完整 `deploy/verify.sh --listen-port 8088 --server-name _`、完整Chromium无头专项、四服务active、8000/8088健康通过；维护POST/CF入口503探测2/2，后台与公网配置随后恢复。安装态92个交付文件校验通过，分母不含复用venv；13张冻结历史表逐行哈希及范围/发布预览API哈希前后一致。
+**公网/产物**：既有Quick Tunnel的7项HTTP检查通过（6项200、内部API404）；公网首页专项18/18（保留原业务断言，仅runtime副本使用DOM就绪等待），JS异常/业务写请求0；导出模板页浅色/深色/390px抽屉3/3确认装饰卡0、导航5、服务已连接，等待真实模板字段加载后冻结截图并目视核验，JS异常/业务写请求0。主入口为 `https://shirt-neither-fundamentals-part.trycloudflare.com/`；证据入口 `artifacts/runtime/deploy-sidebar-20260908/deployment-summary.json`、`server-evidence/`、`public/`，构建与审查回执在 `build-v2/receipt.md` 和 `review/receipt.md`。
+**回退/边界**：SQLite备份 `/var/lib/threadsnap/backups/minimal-release-upgrade/20260908-sidebar-5a6bbc1/threadsnap.db`，SHA-256 `f3f3482abb1c9f5ecca4515f3292e530ae2b1b04b908fab1c708185e63e554f14`。完整离线包、补充运行时包和previous保留；现在已开放写入，仅兼容程序回退，禁止用停机备份覆盖新数据。密码未进入文件、包或Git；原 `H:/ThreadSnap` 的20项研发修改、其他服务及服务器业务范围保持原状。
+**下一步**：保持本机前端和远端服务运行；本机后端仍维持停止状态，是否恢复由用户另行确认。
+
+---
+
 ## 2026-09-08 — 移除侧栏触感装饰卡
 **总目标**：删除用户截图中的“有形的反馈。轻盈的工作流。 / TACTILE EDITION”小组件，保持业务导航与页面功能。
 **状态**：✅ 已删除唯一挂载、专用组件与样式，并完成生产构建浏览器验收。
 **当前进度**：在 `H:/ThreadSnap-tactile-ui` 的 `fix/remove-sidebar-promo` 基于 `main@eb205bd` 实施；顶部品牌、五项导航、服务连接状态、首页三张概览卡及公共 React Bits 保持原样，无占位卡。产品/技术 owner 文档与两验收脚本同步；全站脚本认证选择器补充已有会话时的“更新 Session / 更新会话”，避免测试因数据状态变化漏选入口。
 **验证证据**：`npm --prefix frontend run check`、`build`、`build:tactile`，两脚本 Ruff 检查/格式检查及 `git diff --check` 通过。`verify-react-bits-home.py --base-url http://127.0.0.1:5176` 为18/18；`verify-tactile-ui.py --base-url http://127.0.0.1:5176` 默认只读回归23/23，页面JS异常0；详细JSON位于 `artifacts/runtime/sidebar-promo-removal/{home,regression}/verification.json`。同目录 `verify-target.py` 对导出模板页浅色/深色/390px抽屉3/3验证：五项导航、卡片DOM为0、无横溢出、业务写请求0；`config-light.png`、`config-dark.png`、`config-mobile.png`已目视核验。独立审查回执：`artifacts/runtime/agents/sidebar-promo-removal/review.md`。
 **边界/回退**：浏览器使用当前生产构建及本机数据库一致性副本，后台服务关闭；未访问平台、未修改原数据库或服务器。原 `H:/ThreadSnap` 的20项未提交研发修改保持原状。回退恢复本次前端提交并重建即可，不涉及数据回退。
-**下一步**：完成本分支提交/合并；后续仅按新增反馈调整，服务器发布另行执行。
+**下一步**：实现已通过PR #284合并为main@5a6bbc1；服务器发布与本机服务状态见顶部部署条目，后续仅按新增反馈调整。
 
 ---
 
