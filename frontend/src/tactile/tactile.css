@@ -97,15 +97,6 @@ html[data-ui='tactile'] body { background: var(--background); background-image: 
 .tactile-nav-copy strong { font-size: 13px; font-weight: 600; }
 .tactile-nav-copy small { color: var(--muted-foreground); font-size: 11px; }
 .tactile-nav-number { color: var(--muted-foreground); font: 10px ui-monospace, monospace; }
-.tactile-edition { position: relative; margin: 26px 16px 12px; min-height: 152px; overflow: hidden; border: 1px solid var(--border); border-radius: 23px 18px 25px 20px; background: linear-gradient(145deg, var(--accent), var(--tactile-inset)); padding: 18px; box-shadow: 3px 4px 0 var(--tactile-edge), inset 1px 1px 3px var(--tactile-highlight); }
-.tactile-sculpture { position: absolute; top: 14px; right: 7px; width: 91px; height: 74px; transform: rotate(-11deg); }
-.tactile-sculpture i { position: absolute; display: block; width: 51px; height: 32px; border: 1px solid var(--tactile-highlight); border-radius: 50% 28% 53% 38%; background: linear-gradient(130deg, var(--tactile-lilac), var(--tactile-mint)); box-shadow: 3px 4px 0 var(--tactile-shadow); }
-.tactile-sculpture i:nth-child(1) { top: 3px; left: 17px; transform: rotate(21deg); }
-.tactile-sculpture i:nth-child(2) { top: 26px; left: 5px; transform: rotate(-18deg); }
-.tactile-sculpture i:nth-child(3) { top: 38px; right: 0; transform: rotate(26deg); }
-.tactile-edition-caption { position: relative; display: block; font-size: 15px; line-height: 1.6; }
-.tactile-edition.bits-spotlight .tactile-sculpture-footer > span { color: color-mix(in srgb, var(--foreground) 80%, var(--muted-foreground)); }
-.tactile-edition-tag { position: absolute; right: 14px; bottom: 15px; display: inline-flex; align-items: center; gap: 6px; color: var(--muted-foreground); font: 10px ui-monospace, monospace; }
 .tactile-sidebar-footer { gap: 8px; padding: 13px 14px; }
 .tactile-connection { display: flex; align-items: center; gap: 9px; min-height: 40px; border-radius: 12px; color: var(--muted-foreground); font-size: 12px; padding: 0 9px; }
 .tactile-connection { border: 1px solid var(--border); background: var(--card); }
@@ -113,7 +104,7 @@ html[data-ui='tactile'] body { background: var(--background); background-image: 
 .tactile-connection > span.is-connected { background: var(--tactile-success); box-shadow: 0 0 0 4px color-mix(in srgb, var(--tactile-success) 12%, transparent); }
 [data-collapsible='icon'] .tactile-sidebar .tactile-brand { justify-content: center; padding: 20px 4px; }
 [data-collapsible='icon'] .tactile-sidebar [data-slot='sidebar-group'] { padding: 4px; }
-[data-collapsible='icon'] .tactile-sidebar :is(.tactile-brand-copy, .tactile-nav-copy, .tactile-nav-number, .tactile-edition) { display: none; }
+[data-collapsible='icon'] .tactile-sidebar :is(.tactile-brand-copy, .tactile-nav-copy, .tactile-nav-number) { display: none; }
 [data-collapsible='icon'] .tactile-sidebar .tactile-brand-mark { width: 30px; height: 30px; border-radius: 10px; }
 [data-collapsible='icon'] .tactile-sidebar .tactile-nav { padding-inline: 0; }
 [data-collapsible='icon'] .tactile-sidebar .tactile-nav-item { padding: 0 !important; height: 36px !important; width: 36px !important; }
@@ -233,13 +224,7 @@ html[data-ui='tactile'] [data-slot='button']:not(:disabled):active, .tactile-roo
 .tactile-root .workspace-detail-row__value--green { color: var(--tactile-success); }
 .tactile-root .workspace-detail-row__value--amber { color: var(--tactile-warning); }
 
-/* 品牌形体是唯一持续装饰动效；业务表面使用统一短过渡，表格内容不形变。 */
-.tactile-edition { min-height: 154px; }
-.tactile-edition-caption { max-width: 95px; font-size: 13px; pointer-events: none; }
-.tactile-sculpture-control { position: absolute; top: 25px; right: 2px; display: grid; place-items: center; width: 101px; height: 88px; border-radius: 18px; touch-action: manipulation; }
-.tactile-sculpture-control .tactile-sculpture { position: relative; display: block; top: auto; right: auto; width: 90px; height: 76px; }
-.tactile-sculpture-footer { position: absolute; left: 16px; right: 10px; bottom: 10px; display: flex; align-items: center; justify-content: space-between; gap: 5px; }
-.tactile-sculpture-footer > span { display: flex; align-items: center; gap: 5px; color: var(--muted-foreground); font: 9px ui-monospace, monospace; }
+/* 业务表面使用统一短过渡，表格内容不形变。 */
 .tactile-root .tactile-list-table { box-shadow: 3px 4px 0 var(--tactile-edge); border-radius: 19px 16px 21px 17px; }
 @keyframes tactile-panel-enter { from { opacity: .4; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 html[data-ui='tactile'] [data-slot='tabs-content'][data-state='active'] { animation: tactile-panel-enter .24s ease-out both; }
@@ -247,6 +232,6 @@ html[data-ui='tactile'] [data-slot='tabs-trigger'] { transition: background-colo
 html[data-ui='tactile'] [data-slot='switch-thumb'] { transition: transform .24s var(--tactile-ease), background-color .2s; }
 html[data-ui='tactile'] [data-slot='progress-indicator'] { transition: transform .32s ease-out; }
 html[data-ui='tactile'] :is([data-slot='input'], [data-slot='textarea'], [data-slot='select-trigger']) { transition: background-color .2s, border-color .2s, box-shadow .2s; }
-@media (hover: hover) and (pointer: fine) { .home-batch:hover, .home-attention-group button:hover { background: var(--accent); }.tactile-sculpture-control:hover { background: color-mix(in srgb, var(--card) 30%, transparent); } }
+@media (hover: hover) and (pointer: fine) { .home-batch:hover, .home-attention-group button:hover { background: var(--accent); } }
 @media (max-height: 640px), (max-width: 640px) { .tactile-run-list { overflow: auto; }.tactile-list-table { min-height: 380px; flex: none; }}
 @media (pointer: coarse) { html[data-ui='tactile'] :is([data-slot='button'], [data-slot='input'], [data-slot='select-trigger']) { min-height: 44px; }.home-segment { min-height: 44px; } }
