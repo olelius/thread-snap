@@ -18,6 +18,19 @@
 
 ---
 
+## 2026-09-10 — 云端 AI 按整篇评价判负，轻微不足不直接判负
+**总目标**：处理客户反馈的“整体评价不错，仅有小毛病却判负”，保持主要投诉和明显不满的识别。
+**状态**：✅ 代码与相关回归完成，2026-09-10用户明确要求完成main合并，按本条范围执行Git收尾；客户真实误判样本尚未验收，本轮不部署。
+**身份**：已 fetch origin/main，main 与 origin/main 为同一 e24a2db；从 main 创建 `fix/sentiment-overall-tone` 和独立工作树 `H:/ThreadSnap-sentiment-overall-tone`，未触碰 `H:/ThreadSnap` 既有未提交修改。
+**实现**：千问与 DeepSeek 共享整篇主旨/态度/影响规则，整体满意附带轻微不足归为非负面，主要投诉/否定/劝退仍为负面；保留反讽、否认、转述及严重问题语境边界，先判断整体再选类型。版本升级为 `v5-overall-tone` / `deepseek-text-v6-overall-tone`，本地 `local-v1` 不变；历史完整结果不回刷，旧排队任务沿用领取时绑定实际执行版本的现有逻辑。
+**验证**：新增 `python -m unittest tests.test_sentiment_overall_tone -v` 4/4 通过，含两条提示词/纠正请求、版本、隔离SQLite旧缓存拒用与新版缓存复用。相关后端19项加新增/本地/PoC测试共34项，33通过、1失败：`test_sentiment_worker_applies_dynamic_cloud_and_local_concurrency` 断言 `8 != 1`；使用 `git show e24a2db:src/threadsnap/sentiment.py` 替换导入后，同一测试在未改基线上复现同一失败。日志分别为 `artifacts/runtime/sentiment-overall-tone/tests.log` 与 `baseline-test.log`。未顺带修改并发逻辑或降低断言。Ruff（两项修改Python文件）、compileall 与 `git diff --check` 通过。
+**真实模型证据**：只读本地配置确认当前账户为已验证 DeepSeek；仅在内存解密凭证，未输出或保存凭据。经正式 `SentimentModelClient`、请求构造和合同校验执行10条构造样本×新旧各一次，共20次响应；两版均10/10符合构造样本预期，说明本组未复现客户误判，不构成误判率改善结论。样本覆盖轻微不足、个人偏好、混合评价、主要投诉、服务投诉、反讽、咨询、否认故障、不相关、安全问题投诉；没有客户确认标签，也未实测千问多模态效果。`artifacts/runtime/sentiment-overall-tone/synthetic-comparison.json` SHA-256 `70957a8c23a3776728e65de4e94e03903ba21f20ab4b77a933f578e27d8ed8fc`；复跑脚本为同目录 `compare_synthetic.py`。运行环境复用 `H:/ThreadSnap/.vevn/Scripts/python.exe`，`PYTHONPATH` 指向当前工作树 `src` 与根目录。
+**收尾验证**：整合最新main `dc4f976` 的空值兼容及排名修复，仅账本插入点发生冲突并保留双方条目。并发旧测试补齐“启用且验证通过的云端账户”前提，同时断言无可用账户时为1槽；生产并发逻辑未改。新缓存测试复用main新增的来源名称辅助参数。整合后定向后端21项+新增/本地/PoC测试共36/36通过（22.988秒），证据 `artifacts/runtime/sentiment-overall-tone/merged-tests.log`；3项Python文件Ruff、compileall及暂存/工作树diff-check通过。提示词与模型请求参数未因整合变化，复用前述20次真实模型证据，不重复付费调用。
+**精确下一步**：按用户明确指令提交、推送并通过PR合并main；后续取得客户实际误判原文与AI理由，冻结预期标签，按相同模型/对象配置比较新旧提示词。该效果验收保留为后续工作，不把代码合并解释为客户误判已解决。
+**边界**：非负面仍包含正面和中性，不新增分类、可调阈值、第二模型或后端关键词重判；正式数据库、历史快照、人工修订与原始截图未修改。
+
+---
+
 ## 2026-09-10 — 不相关结果优先及字符串null兼容
 **状态**：开发与定向验证完成；从最新main@4b3e227创建独立工作树和分支codex/fix-sentiment-null-compat，旧易车实验及其他工作树未修改。
 **逻辑**：两个模型输出类型在类型校验前仅把sentiment、primary_category中的字符串"null"视为None；统一结果在subject_relevance=false时优先映射unrelated并清空结构化情感/主要及次要分类。raw_response、依据、总结和人工结果不改；相关内容缺情感/负面主类型、未知枚举和必要模态缺失继续按原合同处理。
