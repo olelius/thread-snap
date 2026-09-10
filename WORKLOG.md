@@ -18,6 +18,14 @@
 
 ---
 
+## 2026-09-10 — 易车提问帖ask链接与页面卡片兼容
+**状态**：按用户明确要求完成代码修改，单独从main@dc4f976创建codex/fix-yiche-question-links分支处理；不执行测试、静态检查、构建、代码审查或修改后验收，用户授权直接提交合并。
+**实现**：易车适配器升级yiche-community-v11-question-page-evidence。详情URL规范化保留thread/ask类型，页面清单读取同时识别两种链接ID，卡片选择器按实际容器取全而不排除ask；无页面href的候选及来源首帖验证按postType=2生成ask入口。提问帖复用既有DiscussionForumPosting正文、媒体和评论流程；域名、来源、帖子ID、数量、顺序与边界校验全部保留。
+**依据**：复用上一轮已保存的本机真实诊断，瑞虎8接口50项、实际DOM50项、旧选择器49项；漏项53886501为ask链接且postType=2。已有提问页HTML含相同详情根节点和DiscussionForumPosting字段；本轮仅阅读该原始文件，不重新请求网站。证据位于H:/ThreadSnap-tactile-ui/artifacts/runtime/local-failed-source-diagnosis-20260910/yiche/。
+**边界/下一步**：仅修改易车论坛采集器和相关owner文档；不改汽车之家、不改AI、不改来源配置，不动旧工作树、远端服务和历史失败批次。Git收尾通过本分支提交及PR追溯；完成合并不代表修改后场景已经验收，远端部署另行处理。
+
+---
+
 ## 2026-09-10 — 不相关结果优先及字符串null兼容
 **状态**：开发与定向验证完成；从最新main@4b3e227创建独立工作树和分支codex/fix-sentiment-null-compat，旧易车实验及其他工作树未修改。
 **逻辑**：两个模型输出类型在类型校验前仅把sentiment、primary_category中的字符串"null"视为None；统一结果在subject_relevance=false时优先映射unrelated并清空结构化情感/主要及次要分类。raw_response、依据、总结和人工结果不改；相关内容缺情感/负面主类型、未知枚举和必要模态缺失继续按原合同处理。

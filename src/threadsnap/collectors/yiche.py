@@ -37,12 +37,14 @@ from .base import (
 from .yiche_waf import YicheWafCallbackError, submit_yiche_waf_callback
 
 BASE_URL = "https://baa.yiche.com"
-ADAPTER_VERSION = "yiche-community-v10-page-evidence"
+ADAPTER_VERSION = "yiche-community-v11-question-page-evidence"
 CIRCLE_RE = re.compile(
     r"^/(?P<id>[A-Za-z0-9_-]+)/?"
     r"(?:index-0-(?P<order>[01])-(?P<page>\d+)\.html)?/?$"
 )
-POST_RE = re.compile(r"^/(?P<circle>[A-Za-z0-9_-]+)/thread-(?P<id>\d+)\.html/?$")
+POST_RE = re.compile(
+    r"^/(?P<circle>[A-Za-z0-9_-]+)/(?P<kind>thread|ask)-(?P<id>\d+)\.html/?$"
+)
 WAF_MARKERS = ("TencentCaptcha", "TCaptcha.js", "/WafCaptcha", "__captcha")
 PUA_RE = re.compile("[\ue000-\uf8ff]")
 YICHE_TIMEZONE = ZoneInfo("Asia/Shanghai")
@@ -166,7 +168,7 @@ def normalize_circle_url(url: str) -> tuple[str, str]:
 
 
 def normalize_post_url(url: str) -> tuple[str, str]:
-    """规范化易车社区帖子详情链接。"""
+    """规范化易车社区详情链接，保留普通帖或提问帖的入口类型。"""
 
     parsed = urlsplit(url.strip())
     if parsed.scheme not in {"http", "https"} or parsed.netloc.lower() != "baa.yiche.com":
@@ -175,10 +177,10 @@ def normalize_post_url(url: str) -> tuple[str, str]:
     if not match:
         raise CollectorFailure(
             "POST_URL_INVALID",
-            "易车帖子链接必须是圈子下的 thread-数字.html 详情页。",
+            "易车帖子链接必须是圈子下的 thread-数字.html 或 ask-数字.html 详情页。",
         )
     post_id = match.group("id")
-    return post_id, f"{BASE_URL}/{match.group('circle')}/thread-{post_id}.html"
+    return post_id, f"{BASE_URL}/{match.group('circle')}/{match.group('kind')}-{post_id}.html"
 
 
 def _post_identity(url: str) -> tuple[str, str, str]:
@@ -714,7 +716,7 @@ class YicheCollector:
         return cards.evaluate_all(
             """els => els.map((e,i) => {
               const r=e.getBoundingClientRect();
-              const match=e.href.match(/thread-([0-9]+)[.]html/);
+              const match=e.href.match(/(?:thread|ask)-([0-9]+)[.]html/);
               return {index:i,post_id:match?match[1]:null,href:e.href,
                 text:e.innerText||'',image_count:e.querySelectorAll('img').length,
                 rect:{x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height}};
@@ -733,6 +735,8 @@ class YicheCollector:
         forum_app = str(item.get("forumApp") or "").strip()
         if forum_app and forum_app.lower() != source.external_id.lower():
             raise CollectorFailure("WRONG_POST", "易车列表帖子不属于当前社区来源。")
+        # 官方提问帖使用 ask 入口；页面捕获合并时仍以同页真实 href 为准。
+        post_kind = "ask" if _integer(item.get("postType")) == 2 else "thread"
         result = {
             key: item.get(key)
             for key in (
@@ -753,7 +757,7 @@ class YicheCollector:
             {
                 "id": post_id,
                 "post_id": post_id,
-                "url": f"{BASE_URL}/{source.external_id}/thread-{post_id}.html",
+                "url": f"{BASE_URL}/{source.external_id}/{post_kind}-{post_id}.html",
                 "order_index": source_index,
             }
         )
@@ -859,7 +863,8 @@ class YicheCollector:
                         )
                     list_page = self._browser_list_page(list_responses[-1], trigger_url=exact_url)
                     api_items = list_page["list"]
-                    selector = 'div.col-panel > a.col-row.bankuai[href*="/thread-"]'
+                    # 按实际帖子卡片取全，不因链接前缀漏掉提问帖；身份仍逐项校验。
+                    selector = "div.col-panel > a.col-row.bankuai"
                     cards = page.locator(selector)
                     for _attempt in range(120):
                         if cards.count() == len(api_items):
@@ -968,7 +973,7 @@ class YicheCollector:
             or str(forum.get("name") or "").strip() != forum_name
         ):
             raise CollectorFailure("CIRCLE_IDENTITY_MISMATCH", "易车社区短名与稳定身份不一致。")
-        first_url = f"{BASE_URL}/{source.external_id}/thread-{first.get('id')}.html"
+        first_url = self._candidate(source, first, 0)["url"]
         self._fetch_post(first_url, list_row=first)
         return {
             "external_id": source.external_id,
