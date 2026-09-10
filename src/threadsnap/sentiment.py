@@ -69,9 +69,25 @@ MODEL_PROFILES = {
         "output_mode": "local",
     },
 }
-HOSTED_PROMPT_VERSION = "v4-clean-correction"
-DEEPSEEK_PROMPT_VERSION = "deepseek-text-v5-strict-tool"
+HOSTED_PROMPT_VERSION = "v5-overall-tone"
+DEEPSEEK_PROMPT_VERSION = "deepseek-text-v6-overall-tone"
 LOCAL_PIPELINE_VERSION = "local-v1"
+# 两条云端路径共用整篇评价口径；仅指导模型，不在后端重判结果。
+OVERALL_SENTIMENT_POLICY = """情感判定规则（先判整篇倾向，再选负面类型）：
+1. 针对判定对象，综合作者整篇主旨、最终态度及问题的实际影响；不是检测是否出现负面词或任何缺点。
+2. 整体认可、满意或推荐，仅附带轻微不足、个人偏好或改进建议，应为 non_negative；中性陈述、正常咨询也为 non_negative。
+3. 以明显不满、投诉、否定或劝退为主旨，应为 negative；夹带优点或礼貌性表扬不抵消主要负面态度。
+4. 正负混合时综合主旨、态度和影响，不按正负词句数量投票，不机械以最后一句为准。严重故障、安全风险或维权要结合语境判断，避免被表面称赞、反讽掩盖；转述、否认、假设或正常咨询中出现相关词不自动判负。
+5. 先确定整篇倾向，只有 negative 才选择负面类型；non_negative 的 primary_category=null、secondary_categories=[]。依据和总结应解释主导态度，并说明局部不足为何影响或不影响整体结论，不只摘取缺点。
+示例（仅说明口径，不作为当前帖子的事实依据）：
+- “整体很满意，空间动力都不错，就是车机偶尔慢一点，不影响使用，还是推荐。” → non_negative。
+- “座椅颜色选择少，希望以后增加配色，其他方面都挺满意。” → non_negative。
+- “空间不错，但车机天天死机影响导航，修了几次没好，后悔买了。” → negative。
+- “外观漂亮，但行驶中多次失去动力，售后一直推诿，要求解决。” → negative。
+- “质量真好，一个月修三次，谁买谁知道。” → negative（反讽）。
+- “听说有人遇到故障，我的车没遇到，目前很满意。” → non_negative。
+请仅依据下方实际帖子及本次提供的模态形成结论，勿把以上示例当作输入内容。"""
+
 CATEGORIES = (
     "product_complaint",
     "product_criticism",
@@ -590,7 +606,8 @@ def build_prompt(
     return f"""只返回一个标准 JSON 对象，不使用 Markdown，不联网搜索。
 判定对象配置：{json.dumps(subject, ensure_ascii=False)}。
 请结合语境自行识别品牌、产品、服务和常见别名；内容与判定对象无关时 subject_relevance=false。
-对判定对象不利为 negative，中性或正面为 non_negative。负面主要类型仅允许：{json.dumps(CATEGORIES, ensure_ascii=False)}。
+{OVERALL_SENTIMENT_POLICY}
+负面主要类型仅允许：{json.dumps(CATEGORIES, ensure_ascii=False)}。
 只分析标题、正文、全部图片和全部视频，不分析评论。逐项报告文字、图片、视频画面和视频音频的实际处理状态与中文事实依据。
 
 标题：{post.title or ""}
@@ -623,7 +640,8 @@ def build_text_only_prompt(
     return f"""只根据标题和正文进行舆情分析，不联网搜索；图片、视频画面、视频音频均未提供，不得据此形成观点或依据。
 判定对象配置：{json.dumps(subject, ensure_ascii=False)}。
 请结合文字语境自行识别品牌、产品、服务和常见别名；内容与判定对象无关时 subject_relevance=false。
-对判定对象不利为 negative，中性或正面为 non_negative；负面时选择函数 Schema 中最符合语义的主要类型。
+{OVERALL_SENTIMENT_POLICY}
+负面时选择函数 Schema 中最符合语义的主要类型。
 
 标题：{post.title or ""}
 正文：{post.content or ""}

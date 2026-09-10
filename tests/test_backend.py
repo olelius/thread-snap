@@ -702,6 +702,14 @@ class ApiAndConfigTests(AppCase):
             SentimentFeedback.model_validate(payload)
 
     def test_sentiment_worker_applies_dynamic_cloud_and_local_concurrency(self) -> None:
+        # 多账户调度只汇总已启用且验证通过的账户；无可用账户时仅保留一个槽位。
+        self.assertEqual(1, self.container.sentiment.worker_config()["cloud_concurrency"])
+        with self.container.sessions.begin() as db:
+            config = self.container.sentiment.ensure_default(db)
+            config.enabled = True
+            config.validation_status = "valid"
+            config.model_code = HOSTED_MODEL_CODE
+            config.cloud_concurrency = 8
         worker = self.container.sentiment_worker
         worker.start()
         try:
