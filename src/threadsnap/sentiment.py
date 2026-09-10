@@ -9,8 +9,8 @@ import re
 import socket
 import threading
 from copy import deepcopy
-from difflib import SequenceMatcher
 from decimal import Decimal, InvalidOperation
+from difflib import SequenceMatcher
 from ipaddress import ip_address, ip_network
 from time import monotonic
 from typing import Any, Callable, Literal
@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 
 import httpx
 from json_repair import repair_json
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 from sqlalchemy import func, select, text, update
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -276,15 +276,20 @@ class SentimentFeedback(BaseModel):
     modalities: Modalities
     summary: str = Field(min_length=1)
 
+    @field_validator("sentiment", "primary_category", mode="before")
+    @classmethod
+    def normalize_nullable_result(cls, value: Any) -> Any:
+        """只兼容结果可空字段的字符串 null，不改写原始响应。"""
+
+        return None if value == "null" else value
+
     @model_validator(mode="after")
     def validate_result(self) -> "SentimentFeedback":
         if not self.subject_relevance:
-            if (
-                self.sentiment is not None
-                or self.primary_category is not None
-                or self.secondary_categories
-            ):
-                raise ValueError("不相关结果的情感和负面类型必须为空")
+            # 相关性优先：仅归一化有效结果，模型原始判断仍由 raw_response 留存。
+            self.sentiment = None
+            self.primary_category = None
+            self.secondary_categories = []
         elif self.sentiment == "negative" and self.primary_category is None:
             raise ValueError("负面结果必须包含 primary_category")
         elif self.sentiment == "non_negative" and (
@@ -331,6 +336,13 @@ class DeepSeekTextFeedback(BaseModel):
     ]
     evidence: list[str]
     summary: str = Field(min_length=1)
+
+    @field_validator("sentiment", "primary_category", mode="before")
+    @classmethod
+    def normalize_nullable_result(cls, value: Any) -> Any:
+        """在最小工具参数的类型门前兼容空值，业务优先级由统一结果处理。"""
+
+        return None if value == "null" else value
 
 
 def deduplicate_media_urls(values: list[str] | None) -> list[str]:
