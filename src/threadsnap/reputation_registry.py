@@ -15,6 +15,7 @@ METRIC_LABELS = {
     "review_article_count": "口碑评价篇数",
     "negative_rate": "差评率",
     "circle_content_count": "圈内内容数",
+    "owner_review_count": "车主点评",
 }
 
 
@@ -22,6 +23,8 @@ def metric_label(platform_code: str, key: str) -> str:
     """共用计数字段在不同平台保留各自业务名称。"""
     if platform_code == "autohome" and key == "circle_content_count":
         return "论坛帖子总数"
+    if platform_code == "yiche" and key == "volume":
+        return "参与人数"
     return METRIC_LABELS[key]
 
 
@@ -72,7 +75,7 @@ REPUTATION_PLATFORMS: dict[str, ReputationPlatformSpec] = {
         reputation_yiche.VIEWPORT,
         requires_session=False,
         requires_evidence=False,
-        metric_keys=tuple(key for key in CORE_METRIC_KEYS if key != "negative_rate"),
+        metric_keys=("score", "rank", "volume", "owner_review_count"),
     ),
 }
 

@@ -273,6 +273,7 @@ export type ReputationResult = {
   status: string
   metrics: Record<'score' | 'rank' | 'volume', ReputationMetric> & {
     review_article_count?: ReputationMetric
+    owner_review_count?: ReputationMetric
     negative_rate?: ReputationMetric
     circle_content_count?: ReputationMetric
   }
@@ -371,7 +372,7 @@ export type ReputationScopeMapping = {
   validation_attempt_id?: string
   validated_at?: string
   actual_name?: string
-  latest_metrics?: { score?: string; rank?: string; volume?: string; review_article_count?: string; negative_rate?: string; circle_content_count?: string | null; rank_scope?: string }
+  latest_metrics?: { score?: string; rank?: string; volume?: string; review_article_count?: string; owner_review_count?: string; negative_rate?: string; circle_content_count?: string | null; rank_scope?: string }
   validation_error?: string
 }
 
@@ -391,7 +392,7 @@ export type ReputationMappingValidation = {
     attempt_number: number
     status: string
     actual_name?: string
-    metrics: { score?: string; rank?: string; volume?: string; review_article_count?: string; negative_rate?: string; circle_content_count?: string | null; rank_scope?: string }
+    metrics: { score?: string; rank?: string; volume?: string; review_article_count?: string; owner_review_count?: string; negative_rate?: string; circle_content_count?: string | null; rank_scope?: string }
     error_code?: string
     error_message?: string
     duration_ms?: number

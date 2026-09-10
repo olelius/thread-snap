@@ -18,6 +18,17 @@
 
 ---
 
+## 2026-09-10 — 独立移植两平台排名与易车数量字段修正
+**总目标**：只把本对话已确认的汽车之家/易车口碑字段与URL修正，从最新 `main` 新建的独立分支合入主干；不提交、不清理旧 `fix/yiche-empty-metrics` 工作树中的混合修改。
+**状态**：✅ 功能、文档、真实代表样本和前端配置界面验证完成；分支 `fix/reputation-rank-url` 基于 `main@e24a2db`，进入Git自动收尾。旧工作树操作前仍为 `fix/yiche-empty-metrics@e96549f`、25项未提交状态，逐文件哈希已冻结，收尾后复核不变。
+**字段与来源**：汽车之家排名从 `/pc/series/list` 的 `cmpSeriesTitle/cmpSeriesScore` 按稳定车系ID及原数组位置读取，不再使用 `levelrank`；易车排名从移动端 `app_review/api/v1/review/serial_rating_sort.serialList` 按稳定ID及原数组位置读取。易车通用 `volume` 在界面显示“参与人数”，来源仍为点评网页 `pointCommontInfo.authorCount`；新增独立 `owner_review_count`“车主点评”，来源为移动端 `app_review/api/v1/review/overview_review_list.ratingCard.topicCount`；易车撤销 `review_article_count` 能力。
+**模式边界**：易车保持ADR 0070的URL-only、`requires_session=false`、`requires_evidence=false`，没有移入旧分支的APK文件、原生适配器、ADB脚本、截图配置或原生Runtime前置条件；懂车帝与汽车之家证据策略不变。合同版本升级为汽车之家/易车 `mapping-v2`，旧结果和验证不回填。
+**验证证据**：相关后端45项测试通过；新增纯解析合同覆盖榜单原始顺序、稳定ID、同分、目标缺席、重复、未评分及错误榜单。前端 `npm run check`、`npm run build` 通过；任务文件Ruff通过。真实风云A9L当次URL结果为口碑分4.53、热门对比排名1、网页参与人数1396、移动端车主点评1086、评价篇数为空且无PNG；真实瑞虎9当次对比榜原数组排名2，而旧 `levelrank` 为10，证明字段修正生效。隔离前端配置界面已目视核验：易车表头只含口碑分/排名/参与人数/车主点评并显示URL模式，汽车之家维持自身指标和截图入口，浏览器控制台错误0。
+**证据入口**：`artifacts/runtime/rank-fields-url-acceptance-20260910/`、`artifacts/runtime/rank-fields-ui/ui-validation.json`；旧工作树保护快照为 `H:/ThreadSnap/artifacts/runtime/rank-fields-merge-20260910/protected-before.json`。真实平台数值会随平台实时变化，验收绑定各自响应与保存哈希，不把当前值写成长期常量。
+**下一步**：精确暂存本条列出的源码、测试和owner文档，提交、推送、PR合并到 `main`；随后同步主工作树、重启本地main后端并复核版本/能力，同时用逐文件哈希确认旧混合分支原样保留。
+
+---
+
 ## 2026-09-08 — 最小离线包更新远端至659ddb8
 **状态**：✅ 远端应用659ddb8已上线，current=0.1.0-659ddb8cca8a、previous=0.1.0-11c4171e59bd；维护24.931秒，四项服务active，公网health200且首页字节与新构建一致。
 **包与复用**：threadsnap-659ddb8-minimal-update.tar.gz为1,174,509字节，SHA256 7e5b3c9fecc4f70201e426414f58ec8417775947d4162792db1aafb19b2cd049。相对11c4171，Python22项依赖、前端package/lock及部署输入不变；仅构建新应用wheel与59项前端，部署14/许可17等36文件原样复用，服务器138已装包版本未变，不重装运行依赖。构建工具缺bdist_wheel后仅恢复隔离构建工具安装，未重复前端构建。

@@ -16,8 +16,8 @@ from .reputation_adapter import (
 )
 from .reputation_browser import BrowserReputationAdapter, elapsed_ms, stable_measure
 
-ADAPTER_VERSION = "yiche-reputation-url-v2"
-VALIDATION_CONTRACT_VERSION = "yiche-reputation-mapping-v1"
+ADAPTER_VERSION = "yiche-reputation-url-v3-mobile-metrics"
+VALIDATION_CONTRACT_VERSION = "yiche-reputation-mapping-v2"
 VIEWPORT = {"width": 1440, "height": 1000}
 SERIES_URL_RE = re.compile(
     r"^https://(?:car|dianping)\.yiche\.com/(?P<slug>[a-zA-Z0-9_-]+)/(?:koubei/?)?(?:\?.*)?$"
@@ -37,8 +37,42 @@ def normalize_series_url(url: str, expected_id: str | None = None) -> str:
     return f"https://dianping.yiche.com/{match.group('slug')}/koubei/"
 
 
-def _api_url(path: str, params: dict[str, object]) -> str:
-    return f"https://mapi.yiche.com/{path}?cid=508&param={quote(json.dumps(params, separators=(',', ':')))}"
+def _mobile_api_url(path: str, params: dict[str, object]) -> str:
+    """构造APK移动接口的最小URL；该接口不使用PC cid与签名。"""
+    return f"https://mapi.yiche.com/{path}?param={quote(json.dumps(params, separators=(',', ':')))}"
+
+
+def parse_mobile_rank(payload: object, series_id: str) -> tuple[str | None, str, list[dict]]:
+    """按移动端热门对比评分榜原始顺序与稳定车系ID读取排名。"""
+    scope = f"yiche:comparison-score:{series_id}:热门对比车系评分"
+    data = payload.get("data") if isinstance(payload, dict) and str(payload.get("status")) == "1" else None
+    rows = data.get("serialList") if isinstance(data, dict) else None
+    rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    matches: list[str] = []
+    for index, row in enumerate(rows):
+        if str(row.get("serialId")) != str(series_id):
+            continue
+        try:
+            scored = float(str(row.get("rating"))) > 0
+        except (TypeError, ValueError):
+            scored = False
+        if scored:
+            matches.append(str(index + 1))
+    return (matches[0] if len(matches) == 1 else None), scope, rows
+
+
+def parse_owner_review_count(payload: object, series_id: str) -> tuple[str | None, str | None]:
+    """从车型页合并使用的移动点评摘要读取车主点评数与参与人数。"""
+    data = payload.get("data") if isinstance(payload, dict) and str(payload.get("status")) == "1" else None
+    card = data.get("ratingCard") if isinstance(data, dict) else None
+    if not isinstance(card, dict) or str(card.get("serialId")) != str(series_id):
+        return None, None
+
+    def count(name: str) -> str | None:
+        value = card.get(name)
+        return str(value) if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
+
+    return count("topicCount"), count("authorCount")
 
 
 class YicheReputationAdapter(BrowserReputationAdapter):
@@ -67,11 +101,6 @@ class YicheReputationAdapter(BrowserReputationAdapter):
             async def capture(response) -> None:
                 if "/point_comment/tags?" in response.url and response.status == 200:
                     captured["tags"] = await response.json()
-                elif (
-                    "/point_comment/query_comment_page_list?" in response.url
-                    and response.status == 200
-                ):
-                    captured["list"] = await response.json()
 
             page.on(
                 "response",
@@ -84,32 +113,41 @@ class YicheReputationAdapter(BrowserReputationAdapter):
                     "REPUTATION_PAGE_UNAVAILABLE", "易车点评页访问异常。", retryable=True
                 )
             await page.wait_for_selector(".middle-nav-box .container")
-            list_url = _api_url(
-                "information_api/api/v1/point_comment/query_comment_page_list",
-                {
-                    "tagId": "-10",
-                    "currentPage": "1",
-                    "serialId": target.platform_vehicle_id,
-                    "pageSize": 20,
-                },
-            )
             for _ in range(40):
-                if "tags" in captured and "list" in captured:
+                if "tags" in captured:
                     break
                 await page.wait_for_timeout(250)
             if response_tasks:
                 await asyncio.gather(*response_tasks, return_exceptions=True)
-            if "tags" not in captured or "list" not in captured:
+            if "tags" not in captured:
                 raise ReputationAdapterError(
                     "REPUTATION_METRICS_MISSING", "易车点评指标接口访问异常。", retryable=True
                 )
-            tags_payload, list_payload = captured["tags"], captured["list"]
+            tags_payload = captured["tags"]
             info = ((tags_payload or {}).get("data") or {}).get("pointCommontInfo") or {}
-            listing = (list_payload or {}).get("data") or {}
             if str(info.get("serialId") or "") != target.platform_vehicle_id:
                 raise ReputationAdapterError(
                     "REPUTATION_IDENTITY_MISMATCH", "易车页面车系ID与冻结映射不一致。"
                 )
+            rank_url = _mobile_api_url(
+                "app_review/api/v1/review/serial_rating_sort",
+                {"serialId": target.platform_vehicle_id},
+            )
+            owner_review_url = _mobile_api_url(
+                "app_review/api/v1/review/overview_review_list",
+                {"serialId": target.platform_vehicle_id},
+            )
+            mobile_payloads: dict[str, object] = {}
+            mobile_errors: dict[str, str] = {}
+            for name, url in (("rank", rank_url), ("owner_review", owner_review_url)):
+                try:
+                    api_response = await context.request.get(url)
+                    if api_response.status == 200:
+                        mobile_payloads[name] = await api_response.json()
+                    else:
+                        mobile_errors[name] = f"HTTP {api_response.status}"
+                except Exception as error:
+                    mobile_errors[name] = f"{type(error).__name__}: {error}"
             script = """
             () => {
               const identity = document.querySelector('.middle-nav-box .container');
@@ -120,7 +158,7 @@ class YicheReputationAdapter(BrowserReputationAdapter):
               ) : null;
               const score = document.querySelector('.cm-list-score-val');
               const volume = document.querySelector('.cm-list-count');
-              const rank = document.querySelector('.brand-rank');
+              const legacyRank = document.querySelector('.brand-rank');
               if (!identity || !title) return null;
               const boxes = [identity, metrics].filter(Boolean).map((node) => node.getBoundingClientRect());
               const left = Math.max(0, Math.min(...boxes.map((box) => box.left)) - 20);
@@ -130,8 +168,9 @@ class YicheReputationAdapter(BrowserReputationAdapter):
               return {
                 actual_name: (serialTitle || title).textContent.replace(/点评/g, '').trim(),
                 score: score ? (score.textContent.match(/[0-9.]+/) || [])[0] || null : null,
-                rank: rank ? (rank.textContent.match(/第\s*(\d+)\s*名/) || [])[1] || null : null,
-                rank_scope: rank ? rank.textContent.replace(/第\s*\d+\s*名.*/, '').trim() : '同级车型指数排行',
+                legacy_rank: legacyRank ? (legacyRank.textContent.match(/第\s*(\d+)\s*名/) || [])[1] || null : null,
+                rank: null,
+                rank_scope: null,
                 volume: volume ? (volume.textContent.match(/[0-9,]+/) || [])[0] || null : null,
                 rect: {x: left, y: top, width: right-left, height: bottom-top},
                 document_width: document.documentElement.scrollWidth,
@@ -149,12 +188,17 @@ class YicheReputationAdapter(BrowserReputationAdapter):
                 )
             score = str(info.get("score") or measurement.get("score") or "").strip() or None
             volume = str(info.get("authorCount") or measurement.get("volume") or "").strip() or None
+            rank, rank_scope, rank_rows = parse_mobile_rank(
+                mobile_payloads.get("rank"), target.platform_vehicle_id
+            )
+            owner_review_count, mobile_author_count = parse_owner_review_count(
+                mobile_payloads.get("owner_review"), target.platform_vehicle_id
+            )
             # 暂无评分时的0.00是页面占位，不作为真实口碑分；点评总数0则是合法数量。
             if not info.get("authorCount") and measurement.get("volume") in (None, "", "0"):
                 volume = None
                 if score in (None, "0", "0.0", "0.00"):
                     score = None
-            review_count = str(listing["total"]).strip() if listing.get("total") is not None else None
             # 该阶段只读取URL，截图门禁与文件写入都停用，不能用空白PNG占位。
             return ReputationPageResult(
                 vehicle_id=target.vehicle_id,
@@ -163,12 +207,24 @@ class YicheReputationAdapter(BrowserReputationAdapter):
                 final_url=normalize_series_url(page.url, target.platform_vehicle_id),
                 actual_name=actual_name,
                 score_raw=score,
-                rank_raw=measurement.get("rank"),
+                rank_raw=rank,
                 volume_raw=volume,
-                review_article_count_raw=review_count,
-                review_article_count_url=list_url,
-                rank_scope=str(measurement.get("rank_scope") or "同级车型指数排行"),
-                measurements=[{**item, "api_review_total": review_count} for item in measurements],
+                review_article_count_raw=None,
+                review_article_count_url=None,
+                rank_scope=rank_scope,
+                measurements=[
+                    {
+                        **item,
+                        "legacy_index_rank": item.get("legacy_rank"),
+                        "mobile_rank_url": rank_url,
+                        "mobile_rank_rows": rank_rows,
+                        "mobile_owner_review_url": owner_review_url,
+                        "mobile_owner_review_count": owner_review_count,
+                        "mobile_author_count": mobile_author_count,
+                        "mobile_errors": mobile_errors,
+                    }
+                    for item in measurements
+                ],
                 full_page_path=None,
                 metric_region_path=None,
                 full_page_sha256=None,
@@ -179,6 +235,8 @@ class YicheReputationAdapter(BrowserReputationAdapter):
                 duration_ms=elapsed_ms(started),
                 negative_rate_raw=None,
                 reputation_not_available=score is None and volume is None,
+                owner_review_count_raw=owner_review_count,
+                owner_review_count_url=owner_review_url,
             )
         finally:
             await context.close()

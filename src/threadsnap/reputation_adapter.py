@@ -60,6 +60,8 @@ class ReputationPageResult:
     circle_content_count_raw: str | None = None
     circle_content_count_url: str | None = None
     circle_content_count_measurement: dict[str, Any] | None = None
+    owner_review_count_raw: str | None = None
+    owner_review_count_url: str | None = None
 
 
 class ReputationAdapter(Protocol):

@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from datetime import datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from time import monotonic
 from urllib.parse import urlsplit
@@ -24,9 +24,29 @@ from .reputation_browser import (
     stable_measure,
 )
 
-ADAPTER_VERSION = "autohome-reputation-v2-forum-count"
-VALIDATION_CONTRACT_VERSION = "autohome-reputation-mapping-v1"
+ADAPTER_VERSION = "autohome-reputation-v3-comparison-rank"
+VALIDATION_CONTRACT_VERSION = "autohome-reputation-mapping-v2"
 VIEWPORT = {"width": 1440, "height": 1600}
+
+
+def comparison_rank(result: dict, series_id: str) -> tuple[str | None, str]:
+    """按页面评分榜原始顺序匹配车系，不使用接口级别排名。"""
+    title = str(result.get("cmpSeriesTitle") or "").strip()
+    scope = f"autohome:comparison-score:{series_id}:{title}"
+    try:
+        if result.get("average") is not None and Decimal(str(result["average"])) <= 0:
+            return None, scope
+    except InvalidOperation:
+        return None, scope
+    rows = result.get("cmpSeriesScore")
+    if title not in {"热门对比车系评分排行", "同级别车系评分排行"} or not isinstance(rows, list):
+        return None, scope
+    matches = [
+        str(index + 1)
+        for index, row in enumerate(rows)
+        if isinstance(row, dict) and str(row.get("seriesId")) == str(series_id)
+    ]
+    return (matches[0] if len(matches) == 1 else None), scope
 SERIES_URL_RE = re.compile(r"^https://k\.autohome\.com\.cn/(?P<id>\d+)/?(?:\?.*)?$")
 
 
@@ -186,7 +206,7 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
                 raise ReputationAdapterError(
                     "REPUTATION_IDENTITY_MISMATCH", "汽车之家页面车型身份与冻结映射不一致。"
                 )
-            rank = str(result.get("levelrank") or "").strip() or None
+            rank, rank_scope = comparison_rank(result, target.platform_vehicle_id)
             score = str(result.get("average") or "").strip() or measurement.get("score")
             volume = str(result.get("averagenum") or "").strip() or None
             review_count = str(result.get("rowcount") or "").strip() or None
@@ -207,11 +227,14 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
                 volume_raw=volume,
                 review_article_count_raw=review_count,
                 review_article_count_url=api_url,
-                rank_scope=f"{str(result.get('levelname') or '同级车型')}口碑评分排行",
+                rank_scope=rank_scope,
                 measurements=[
                     {
                         **item,
-                        "api_levelrank": rank,
+                        "api_levelrank": result.get("levelrank"),
+                        "api_comparison_rank": rank,
+                        "api_comparison_title": result.get("cmpSeriesTitle"),
+                        "api_comparison_rows": result.get("cmpSeriesScore"),
                         "api_levelseriescount": result.get("levelseriescount"),
                         "api_averagenum": volume,
                         "api_rowcount": review_count,

@@ -5,9 +5,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from threadsnap.reputation import ReputationService
 from threadsnap.reputation_adapter import ReputationAdapterError, ReputationMappingTarget
-from threadsnap.reputation_registry import REPUTATION_PLATFORMS
-from threadsnap.reputation_yiche import YicheReputationAdapter
+from threadsnap.reputation_registry import REPUTATION_PLATFORMS, metric_label
+from threadsnap.reputation_yiche import (
+    YicheReputationAdapter,
+    parse_mobile_rank,
+    parse_owner_review_count,
+)
 
 
 class Response:
@@ -85,12 +90,39 @@ class Browser:
     def __init__(self, page):
         self.page = page
         self.closed = False
+        self.request = self
 
     async def new_context(self, **_kwargs):
         return self
 
     async def new_page(self):
         return self.page
+
+    async def get(self, url):
+        if "serial_rating_sort" in url:
+            payload = {
+                "status": "1",
+                "data": {
+                    "serialList": []
+                    if self.page.empty
+                    else [
+                        {"serialId": 100, "serialName": "测试车型", "rating": "4.2"},
+                        {"serialId": 200, "serialName": "其它车型", "rating": "4.1"},
+                    ]
+                },
+            }
+        else:
+            payload = {
+                "status": "1",
+                "data": {
+                    "ratingCard": {
+                        "serialId": 100,
+                        "topicCount": 0 if self.page.empty else 7,
+                        "authorCount": 0 if self.page.empty else 9,
+                    }
+                },
+            }
+        return Response("mobile", payload)
 
     async def close(self):
         self.closed = True
@@ -111,7 +143,13 @@ class YicheUrlTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as temp:
             result = await adapter._visit(browser, self.target, Path(temp))
             self.assertEqual("4.2", result.score_raw)
-            self.assertEqual("12", result.review_article_count_raw)
+            self.assertEqual("1", result.rank_raw)
+            self.assertEqual("9", result.volume_raw)
+            self.assertEqual("7", result.owner_review_count_raw)
+            self.assertIsNone(result.review_article_count_raw)
+            metrics = ReputationService._official_metrics(result, None, "yiche")
+            self.assertEqual("9", metrics["volume"]["raw"])
+            self.assertEqual("7", metrics["owner_review_count"]["raw"])
             self.assertIsNone(result.metric_region_path)
             self.assertIsNone(result.full_page_sha256)
             self.assertEqual([], list(Path(temp).rglob("*.png")))
@@ -123,7 +161,8 @@ class YicheUrlTests(unittest.IsolatedAsyncioTestCase):
             result = await YicheReputationAdapter(None)._visit(browser, self.target, Path(temp))
         self.assertIsNone(result.score_raw)
         self.assertIsNone(result.volume_raw)
-        self.assertEqual("0", result.review_article_count_raw)
+        self.assertEqual("0", result.owner_review_count_raw)
+        self.assertIsNone(result.review_article_count_raw)
         self.assertTrue(result.reputation_not_available)
 
     async def test_identity_failures_are_not_hidden(self):
@@ -152,12 +191,50 @@ class YicheUrlTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual("4.2", result.score_raw)
         self.assertIsNone(result.volume_raw)
-        self.assertEqual("0", result.review_article_count_raw)
+        self.assertIsNone(result.review_article_count_raw)
+
+    def test_mobile_metric_contracts_keep_rank_and_counts_separate(self):
+        rank, scope, rows = parse_mobile_rank(
+            {
+                "status": "1",
+                "data": {
+                    "serialList": [
+                        {"serialId": 200, "rating": "4.3"},
+                        {"serialId": 100, "rating": "4.2"},
+                    ]
+                },
+            },
+            "100",
+        )
+        self.assertEqual("2", rank)
+        self.assertIn(":100:", scope)
+        self.assertEqual(2, len(rows))
+        owner, participants = parse_owner_review_count(
+            {
+                "status": "1",
+                "data": {
+                    "ratingCard": {
+                        "serialId": 100,
+                        "topicCount": 1086,
+                        "authorCount": 1396,
+                    }
+                },
+            },
+            "100",
+        )
+        self.assertEqual("1086", owner)
+        self.assertEqual("1396", participants)
 
     async def test_platform_policy_is_scoped_to_yiche(self):
         self.assertFalse(REPUTATION_PLATFORMS["yiche"].requires_evidence)
         self.assertFalse(REPUTATION_PLATFORMS["yiche"].requires_session)
         self.assertIs(REPUTATION_PLATFORMS["yiche"].adapter_factory, YicheReputationAdapter)
+        self.assertEqual(
+            ("score", "rank", "volume", "owner_review_count"),
+            REPUTATION_PLATFORMS["yiche"].metric_keys,
+        )
+        self.assertEqual("参与人数", metric_label("yiche", "volume"))
+        self.assertEqual("车主点评", metric_label("yiche", "owner_review_count"))
         for code in ("dongchedi", "autohome"):
             self.assertTrue(REPUTATION_PLATFORMS[code].requires_evidence)
             self.assertTrue(REPUTATION_PLATFORMS[code].requires_session)
