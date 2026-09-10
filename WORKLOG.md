@@ -18,6 +18,15 @@
 
 ---
 
+## 2026-09-10 — 不相关结果优先及字符串null兼容
+**状态**：开发与定向验证完成；从最新main@4b3e227创建独立工作树和分支codex/fix-sentiment-null-compat，旧易车实验及其他工作树未修改。
+**逻辑**：两个模型输出类型在类型校验前仅把sentiment、primary_category中的字符串"null"视为None；统一结果在subject_relevance=false时优先映射unrelated并清空结构化情感/主要及次要分类。raw_response、依据、总结和人工结果不改；相关内容缺情感/负面主类型、未知枚举和必要模态缺失继续按原合同处理。
+**边界**：不改提示词、模型、工具Schema、请求参数或重试次数；五个提示词/请求构造函数AST与main基线一致。不重跑真实AI、不修改远端或历史11条失败记录，不扩展截图页面状态修复。
+**证据**：两类固定响应经现有隔离SQLite/FastAPI容器的真实SentimentWorker各处理一次，均analysis_completed/unrelated，原文逐字保留、retry_count=0且模型传输仅调用一次。6项定向unittest最终通过（首次集成样本名称重复，仅修正测试辅助参数并重跑该项）；任务文件Ruff、py_compile与git diff --check通过。命令为python -m unittest test_backend.ApiAndConfigTests.test_sentiment_unrelated_priority_and_nullable_result_fields等6项；明细artifacts/runtime/sentiment-null-compat-20260910/verification.json。
+**下一步**：本轮只交付分支代码并按项目授权完成Git收尾；远端发布和既有失败记录的处理需另行执行，不因代码更新自动回写历史。
+
+---
+
 ## 2026-09-10 — 独立移植两平台排名与易车数量字段修正
 **总目标**：只把本对话已确认的汽车之家/易车口碑字段与URL修正，从最新 `main` 新建的独立分支合入主干；不提交、不清理旧 `fix/yiche-empty-metrics` 工作树中的混合修改。
 **状态**：✅ 功能、文档、真实代表样本和前端配置界面验证完成；分支 `fix/reputation-rank-url` 基于 `main@e24a2db`，进入Git自动收尾。旧工作树操作前仍为 `fix/yiche-empty-metrics@e96549f`、25项未提交状态，逐文件哈希已冻结，收尾后复核不变。

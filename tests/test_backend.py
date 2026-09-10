@@ -368,7 +368,9 @@ class AppCase(unittest.TestCase):
             db.flush()
             return circle
 
-    def queue_deepseek_sentiment(self, post_suffix: str) -> tuple[str, str]:
+    def queue_deepseek_sentiment(
+        self, post_suffix: str, *, source_name: str = "风云A9"
+    ) -> tuple[str, str]:
         """创建一条不访问公网的 DeepSeek 排队任务，供 Worker 状态回归测试复用。"""
 
         with self.container.sessions.begin() as db:
@@ -380,7 +382,9 @@ class AppCase(unittest.TestCase):
             config.deepseek_encrypted_api_key = self.container.session_store.encrypt_secret(
                 "deepseek-test-secret"
             )
-        circle = self.save_verified_circle(external_id=f"sentiment-{post_suffix}")
+        circle = self.save_verified_circle(
+            external_id=f"sentiment-{post_suffix}", name=source_name
+        )
         run = self.container.runs.create_manual(
             ManualRunCreate(platform_code="dongchedi", circle_ids=[circle.id], quantity=1),
             scope="api",
@@ -1343,6 +1347,97 @@ class ApiAndConfigTests(AppCase):
         invalid["modalities"] = {"text": {"status": "processed"}}
         with self.assertRaises(ValidationError):
             complete_deepseek_tool_payload(invalid, post)
+
+    def test_sentiment_unrelated_priority_and_nullable_result_fields(self) -> None:
+        """不相关优先且只兼容可空结果字段；相关内容与异常枚举仍严格校验。"""
+
+        post = PostSnapshot(title="周末出游", content="天气很好。", image_urls=[], video_urls=[])
+        payload = {
+            "subject_relevance": False,
+            "matched_subjects": [],
+            "sentiment": "non_negative",
+            "primary_category": None,
+            "secondary_categories": [],
+            "evidence": ["正文描述出游。"],
+            "summary": "null",
+        }
+        cases = [
+            (False, "non_negative", None, []),
+            (False, "negative", "product_complaint", ["other"]),
+            (False, "null", "null", []),
+            (False, None, None, []),
+            (True, "non_negative", "null", []),
+        ]
+        for relevant, sentiment, category, secondary in cases:
+            with self.subTest(relevant=relevant, sentiment=sentiment):
+                original = dict(
+                    payload, subject_relevance=relevant, sentiment=sentiment,
+                    primary_category=category, secondary_categories=secondary,
+                )
+                raw = json.dumps(original, ensure_ascii=False)
+                completed = complete_deepseek_tool_payload(original, post)
+                # 统一模型也直接接收原值，覆盖非 DeepSeek 路径。
+                completed.update(sentiment=sentiment, primary_category=category)
+                feedback = SentimentFeedback.model_validate(completed)
+                self.assertEqual("non_negative" if relevant else None, feedback.sentiment)
+                self.assertIsNone(feedback.primary_category)
+                self.assertEqual([], feedback.secondary_categories)
+                self.assertEqual("null", feedback.summary)
+                self.assertEqual(raw, json.dumps(original, ensure_ascii=False))
+
+        invalid_cases = [
+            dict(payload, subject_relevance=True, sentiment="null"),
+            dict(payload, subject_relevance=True, sentiment="negative"),
+            dict(payload, sentiment="unknown"),
+            dict(payload, primary_category="unknown"),
+        ]
+        for invalid in invalid_cases:
+            with self.subTest(invalid=invalid), self.assertRaises(ValidationError):
+                SentimentFeedback.model_validate(complete_deepseek_tool_payload(invalid, post))
+
+    def test_sentiment_unrelated_worker_keeps_raw_without_correction(self) -> None:
+        """复现两类实际返回，经正式 Worker 落库成功且不增加模型调用。"""
+
+        for index, sentiment in enumerate(("null", "non_negative")):
+            with self.subTest(sentiment=sentiment):
+                analysis_id, post_id = self.queue_deepseek_sentiment(
+                    f"null-compat-{index}", source_name=f"空值兼容来源{index}"
+                )
+                payload = {
+                    "subject_relevance": False,
+                    "matched_subjects": [],
+                    "sentiment": sentiment,
+                    "primary_category": "null" if sentiment == "null" else None,
+                    "secondary_categories": [],
+                    "evidence": ["文字未评价配置的品牌产品。"],
+                    "summary": "内容与判定对象不相关。",
+                }
+                raw = json.dumps(payload, ensure_ascii=False)
+                with (
+                    patch.object(
+                        self.container.sentiment.client, "request",
+                        return_value=(raw, {"total_tokens": 10}, "null-compat", 1),
+                    ) as request,
+                    patch(
+                        "threadsnap.sentiment.validate_public_https_base_url",
+                        side_effect=lambda value, resolve: value.rstrip("/"),
+                    ),
+                ):
+                    self.assertTrue(self.container.sentiment_worker.process_once())
+                    request.assert_called_once()
+                with self.container.sessions() as db:
+                    analysis = db.get(SentimentAnalysis, analysis_id)
+                    post = db.get(PostSnapshot, post_id)
+                    assert analysis is not None and post is not None
+                    self.assertEqual("analysis_completed", analysis.status)
+                    self.assertEqual("unrelated", analysis.result)
+                    self.assertEqual("unrelated", post.sentiment_result)
+                    self.assertIsNone(analysis.primary_category)
+                    self.assertEqual([], analysis.secondary_categories)
+                    self.assertEqual(raw, analysis.raw_response)
+                    self.assertEqual(0, analysis.retry_count)
+                    self.assertEqual([], analysis.attempt_failures)
+                    self.assertIsNone(analysis.error_code)
 
     def test_deepseek_uses_minimal_strict_tool_without_json_object(self) -> None:
         """DeepSeek 独占最小严格工具；千问 JSON Object 合同不受影响。"""
