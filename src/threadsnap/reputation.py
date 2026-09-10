@@ -53,7 +53,6 @@ from .reputation_adapter import (
     ReputationPageResult,
 )
 from .reputation_registry import (
-    METRIC_LABELS,
     REPUTATION_PLATFORMS,
     ReputationPlatformSpec,
     metric_label,
@@ -1428,6 +1427,14 @@ class ReputationService:
             "review_article_count": review_article_count,
             "negative_rate": negative_rate,
         }
+        if "owner_review_count" in REPUTATION_PLATFORMS[platform_code].metric_keys:
+            owner_review_count = cls._official_metric(
+                page.owner_review_count_raw,
+                baseline.get("owner_review_count"),
+                missing_state=missing_state,
+            )
+            owner_review_count["source_url"] = page.owner_review_count_url
+            metrics["owner_review_count"] = owner_review_count
         if "circle_content_count" in REPUTATION_PLATFORMS[platform_code].metric_keys:
             proof = page.circle_content_count_measurement or {}
             circle_raw = page.circle_content_count_raw
@@ -3233,6 +3240,11 @@ class ReputationService:
                                 "negative_rate": final_result.negative_rate_raw,
                                 "rank_scope": final_result.rank_scope,
                                 **(
+                                    {"owner_review_count": final_result.owner_review_count_raw}
+                                    if "owner_review_count" in spec.metric_keys
+                                    else {}
+                                ),
+                                **(
                                     {"circle_content_count": final_result.circle_content_count_raw}
                                     if "circle_content_count" in spec.metric_keys
                                     else {}
@@ -3305,6 +3317,11 @@ class ReputationService:
                     "negative_rate": result.negative_rate_raw,
                     "rank_scope": result.rank_scope,
                     **(
+                        {"owner_review_count": result.owner_review_count_raw}
+                        if "owner_review_count" in spec.metric_keys
+                        else {}
+                    ),
+                    **(
                         {"circle_content_count": result.circle_content_count_raw}
                         if "circle_content_count" in spec.metric_keys
                         else {}
@@ -3327,6 +3344,7 @@ class ReputationService:
                     "region": {"width": result.width, "height": result.height},
                     "collection_options": {
                         "include_review_article_count": True,
+                        "include_owner_review_count": result.owner_review_count_url is not None,
                         "include_negative_rate": True,
                         "include_circle_content_count": result.circle_content_count_measurement
                         is not None,
@@ -3817,7 +3835,15 @@ class ReputationService:
                 sheet.add_image(preview, f"{get_column_letter(note_column)}{row_index}")
             if preview_record:
                 preview_manifest.append(preview_record)
-        metric_widths = dict(zip(METRIC_LABELS, (12, 12, 14, 16, 12, 16), strict=True))
+        metric_widths = {
+            "score": 12,
+            "rank": 12,
+            "volume": 14,
+            "review_article_count": 16,
+            "negative_rate": 12,
+            "circle_content_count": 16,
+            "owner_review_count": 14,
+        }
         widths = (
             [13, 12, 18, 22]
             + [

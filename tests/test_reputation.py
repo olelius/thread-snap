@@ -149,11 +149,18 @@ class OfficialFakeAdapter:
                     ),
                     negative_rate_positive_count=214,
                     negative_rate_negative_count=128,
+                    owner_review_count_raw=(
+                        str(700 + index) if "yiche.com" in target.platform_url else None
+                    ),
+                    owner_review_count_url=(
+                        target.platform_url if "yiche.com" in target.platform_url else None
+                    ),
                     **(
                         circle_result_fields(
                             target, self.circle_count_overrides.get(target.vehicle_id, 500 + index)
                         )
                         if "dongchedi.com" in target.platform_url
+                        or "autohome.com.cn" in target.platform_url
                         else {}
                     ),
                 )
@@ -353,11 +360,15 @@ class ReputationInspectionTest(unittest.TestCase):
         xlsx_path = self.root / "three-platform.xlsx"
         xlsx_path.write_bytes(xlsx_response.content)
         sheet = load_workbook(xlsx_path)["口碑巡检"]
-        self.assertEqual((28, 22), (sheet.max_row, sheet.max_column))
+        self.assertEqual((28, 20), (sheet.max_row, sheet.max_column))
         self.assertEqual("懂车帝-口碑分", sheet["E1"].value)
         self.assertEqual("汽车之家-口碑分", sheet["K1"].value)
-        self.assertEqual("易车-口碑分", sheet["Q1"].value)
-        self.assertEqual("备注", sheet["V1"].value)
+        self.assertEqual("易车-口碑分", sheet["P1"].value)
+        self.assertEqual("易车-参与人数", sheet["R1"].value)
+        self.assertEqual("易车-车主点评", sheet["S1"].value)
+        self.assertEqual("700", str(sheet["S2"].value))
+        self.assertNotIn("易车-口碑评价篇数", [cell.value for cell in sheet[1]])
+        self.assertEqual("备注", sheet["T1"].value)
         self.assertEqual(27, len(sheet._images))
         preview_manifest = (
             self.settings.reputation_dir / finished["id"] / "xlsx-previews" / "manifest.json"
