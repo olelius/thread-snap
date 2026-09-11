@@ -2,6 +2,8 @@
 
 ## 当前口径
 
+- 2026-09-11按用户要求从根本移除颜色边界恢复，采用ADR0073的证据绑定卡片几何与截图前后稳定门。下文v3～v6像素恢复只记录旧实现及故障背景，不再作为新渲染规范。原图和旧成果版本不可变，远端仅对具备有效证据的受影响成果生成新版；不重新采集或重判AI。
+
 - 功能范围 owner：`docs/design/product-design.md` 的“圈子页面原始证据与关联截图成果”“页面截图成果”和验收边界。
 - 技术路线 owner：`docs/design/technical-route.md` 的“页面证据与关联截图成果技术契约”。
 - 架构决策：ADR 0026、覆盖成果合成部分的 `docs/adr/0031-render-negative-artifacts-on-full-page-evidence.md`，以及按批次启停与原图捕获修订 `docs/adr/0038-freeze-ai-and-screenshot-options-per-batch.md`。
