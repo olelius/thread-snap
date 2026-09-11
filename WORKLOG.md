@@ -22,7 +22,9 @@
 **身份/范围**：fetch后从origin/main@f0544f07ba618cf54f280ae766567f957a2e05e5直接创建codex/fix-frame-coordinates及H:/ThreadSnap-frame-coordinates。并非从功能分支分叉；旧H:/ThreadSnap混合工作树未动。本条覆盖上一条通用几何校验设计，远端在本条开发时仍为87c3107。
 **实现**：删除168行通用几何验证模块与v2证书、重复媒体/顺序/重叠校验，沿用circle-page-v1。直接使用已保存的帖子矩形，不读颜色猜边界；截图启动原生同宽，保留前后布局/PNG尺寸必要检查和已有Worker限速续作。旧DCD v4/v7重建遇到已发布成果时保持旧版并明确提示，避免按已漂移历史坐标重画，不宣称这类旧版已修复。原图、AI与旧成果不覆盖。
 **证据**：定向19项中18项首轮通过，1项旧像素恢复预期边界含额外1px，修正为直接DOM边界后只重验该项通过；Ruff及diff-check通过，无全库测试或重复真实采集。收敛后T9真实冻结输入重生哈希仍为14a6ea2ad7ff7a0b56b86fbbbd3694c42f92c50a8875b3f3bf69643389d26bc2，与已目视产物逐字节相同；50帖/4负面不变，喷粉框[112,647,880,73]，38720变化像素仅为4条红框。原生启动参数未变，复用Windows及目标Linux离线35/35同宽实验，不重复执行。
-**入口/剩余**：H:/ThreadSnap-frame-coordinates/artifacts/runtime/frame-coordinates/{targeted-tests.log,affected-test.log,t9/receipt.json}；最小包构建脚本artifacts/runtime/deploy-frame-fix-20260911/build_minimal.py已准备，复用87c3107前端59文件及修正SELinux安装器。下一步提交合并、最小包更新远端、仅版本化重生已确认7组汽车之家成果；本条不处理字体裁剪，不重采平台、不调AI。
+**入口/剩余**：H:/ThreadSnap-frame-coordinates/artifacts/runtime/frame-coordinates/{targeted-tests.log,affected-test.log,t9/receipt.json}；最小包构建脚本artifacts/runtime/deploy-frame-fix-20260911/build_minimal.py已准备，复用87c3107前端59文件及修正SELinux安装器。PR #295已合并，服务部署main@0911381da53cd728319c8f4f6c44ee5036954b17；仅处理7组已确认汽车之家成果。本条不处理字体裁剪，不重采平台、不调AI。
+**远端完成**：最小包1176640字节，SHA256 d22a544eed59fce07d613d75d7831c76cb64887823751aba7b80fe450b4fe11d；59个前端文件和138项已装包版本保持，current=0.1.0-0911381da53c、previous=0.1.0-87c31070ebbb。切换29.325秒，四服务active，23张历史/配置表未变，数据库仍e7a4c8d2b601，公网health/index均200。7组汽车之家共350帖/75负面由v1升v2，逐项坐标等于保存值，AI结论、原图/清单与旧版文件hash不变；用户T9组01a08ec6-854b-7e36-9cc8-82aab228069e的新PNG与上述预览hash相同。323个旧DCD候选不重画，历史限制已在ADR说明。未触发采集或模型调用。
+**回退/证据**：远端/var/tmp/threadsnap-frame-fix-20260911/{regeneration-result.json,threadsnap-0911381-minimal-update/activation-result.json}；本地artifacts/runtime/deploy-frame-fix-20260911/{public-health.json,deployment-receipt-0911381.tar.gz}。停机备份/var/lib/threadsnap/backups/minimal-release-upgrade/20260911-frame-0911381保留；已恢复写入，回退代码可切previous，禁止直接覆盖现在业务库。功能已交付，下一步由用户刷新远端查看v2；本次后续账本提交不改变部署源码。
 
 ---
 
