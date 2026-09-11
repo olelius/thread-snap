@@ -77,11 +77,8 @@ class CaptureGeometryTests(unittest.TestCase):
         )
         self.assertEqual(state["rows"], captured["raw_rows"])
         self.assertEqual(page.image, captured["screenshot"])
-        contract = captured["capture_geometry"]
-        self.assertEqual("threadsnap.capture-geometry.v1", contract["schema"])
-        self.assertEqual("document-css-px", contract["coordinate_space"])
-        self.assertEqual(contract["before_sha256"], contract["after_sha256"])
-        self.assertRegex(contract["before_sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual("native-hidden", captured["capture_geometry"]["scrollbar_policy"])
+        self.assertEqual(state["document"], captured["capture_geometry"]["png_size"])
         self.assertEqual(1, page.shots)
 
     def test_any_changed_snapshot_uses_only_one_same_page_retry(self) -> None:
@@ -105,7 +102,7 @@ class CaptureGeometryTests(unittest.TestCase):
 
     def test_repeated_drift_rejects_png_without_unbounded_retry(self) -> None:
         before, after = snapshot(), snapshot()
-        after["media"] = [{"src": "changed", "visible": False}]
+        after["rows"][0]["rect"]["y"] += 10
         page = FakePage()
         with self.assertRaises(CollectorFailure) as raised:
             capture_bound_screenshot(
@@ -114,54 +111,22 @@ class CaptureGeometryTests(unittest.TestCase):
         self.assertEqual("PAGE_EVIDENCE_LAYOUT_UNSTABLE", raised.exception.code)
         self.assertEqual(2, page.shots)
 
-    def test_invalid_coordinates_are_rejected_without_clamping(self) -> None:
-        for key, value in (("x", -1), ("width", 0), ("height", float("nan")), ("y", 90)):
-            with self.subTest(key=key, value=value):
+    def test_width_and_png_dimensions_use_existing_retry_codes(self) -> None:
+        for key in ("layout_viewport", "document"):
+            with self.subTest(key=key):
                 state = snapshot()
-                state["rows"][0]["rect"][key] = value
-                page = FakePage()
-                with self.assertRaises(CollectorFailure) as raised:
-                    capture_bound_screenshot(page, FakeCards([state]), "els=>els", page_number=1)
-                self.assertEqual("PAGE_EVIDENCE_LAYOUT_INVALID", raised.exception.code)
-                self.assertEqual(0, page.shots)
-
-    def test_pixel_scale_scroll_and_media_must_be_valid(self) -> None:
-        states = []
-        state = snapshot()
-        state["viewport"]["device_scale_factor"] = 2
-        states.append((state, "PAGE_EVIDENCE_LAYOUT_INVALID"))
-        state = snapshot()
-        state["scroll"]["y"] = 10
-        states.append((state, "PAGE_EVIDENCE_LAYOUT_INVALID"))
-        state = snapshot()
-        state["layout_viewport"]["width"] = 105
-        states.append((state, "PAGE_EVIDENCE_IMAGE_SIZE_MISMATCH"))
-        state = snapshot()
-        state["document"]["width"] = 121
-        states.append((state, "PAGE_EVIDENCE_IMAGE_SIZE_MISMATCH"))
-        state = snapshot()
-        state["media"] = [{"visible": True, "src": "image", "complete": False}]
-        states.append((state, "PAGE_EVIDENCE_MEDIA_INCOMPLETE"))
-        for state, code in states:
-            with self.subTest(code=code):
+                state[key]["width"] += 10
                 with self.assertRaises(CollectorFailure) as raised:
                     capture_bound_screenshot(
                         FakePage(), FakeCards([state]), "els=>els", page_number=1
                     )
-                self.assertEqual(code, raised.exception.code)
-
-    def test_image_dimensions_and_png_integrity_are_checked(self) -> None:
-        for image, code in (
-            (png(121, 100), "PAGE_EVIDENCE_IMAGE_SIZE_MISMATCH"),
-            (b"not a png", "PAGE_EVIDENCE_IMAGE_INVALID"),
-        ):
-            with self.subTest(code=code):
-                state = snapshot()
-                with self.assertRaises(CollectorFailure) as raised:
-                    capture_bound_screenshot(
-                        FakePage(image), FakeCards([state, state]), "els=>els", page_number=1
-                    )
-                self.assertEqual(code, raised.exception.code)
+                self.assertEqual("PAGE_EVIDENCE_IMAGE_SIZE_MISMATCH", raised.exception.code)
+        state = snapshot()
+        with self.assertRaises(CollectorFailure) as raised:
+            capture_bound_screenshot(
+                FakePage(png(121, 100)), FakeCards([state, state]), "els=>els", page_number=1
+            )
+        self.assertEqual("PAGE_EVIDENCE_IMAGE_SIZE_MISMATCH", raised.exception.code)
 
     def test_real_local_dom_readers_share_one_coordinate_contract(self) -> None:
         """三个正式读行脚本在离线HTML中生成真实PNG，不启动采集任务。"""

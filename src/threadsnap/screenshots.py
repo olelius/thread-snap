@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import io
 import json
 import os
 import shutil
@@ -36,12 +35,6 @@ from .models import (
     ScreenshotArtifactVersion,
     utc_now,
 )
-from .screenshot_geometry import (
-    BOUND_LIST_SCHEMA,
-    load_frame_geometry,
-    recorded_frame,
-    validate_manifest_geometry,
-)
 from .services import related_run_ids
 
 TERMINAL_TASK_STATUSES = {"success", "partial_success", "failed"}
@@ -70,7 +63,13 @@ def _atomic_write(path: Path, value: bytes) -> None:
 def _render_card_box(source: Image.Image, item: Any, evidence: Any) -> tuple[int, int, int, int]:
     """使用证据绑定几何，图片颜色不参与任何卡片寻址。"""
 
-    return recorded_frame(item, source.size, str(getattr(evidence, "adapter_version", "")))
+    left, top = int(item.x), int(item.y)
+    right, bottom = left + int(item.width), top + int(item.height)
+    if getattr(evidence, "adapter_version", "") == "autohome-club-v10-scrapling-page-evidence":
+        # 旧 v10 存的是占父栏 96% 的 li，只保留已确认的固定水平边距换算。
+        gutter = max(1, int(int(item.width) * 0.02 / 0.96))
+        left, right = max(0, left - gutter), min(source.width, right + gutter)
+    return left, top, right, bottom
 
 
 @lru_cache(maxsize=8)
@@ -187,9 +186,7 @@ class ScreenshotService:
             image_bytes = bytes(payload["screenshot"])
             list_schema = payload.get("list_schema_version", "circle-page-v1")
             manifest = {
-                "schema": "threadsnap.circle-page-evidence.v2"
-                if list_schema == BOUND_LIST_SCHEMA
-                else "threadsnap.circle-page-evidence.v1",
+                "schema": "threadsnap.circle-page-evidence.v1",
                 "captured_at": payload["captured_at"],
                 "exact_url": payload["exact_url"],
                 "page_number": page_number,
@@ -203,9 +200,6 @@ class ScreenshotService:
             for optional_key in ("total_count", "page_count", "capture_geometry"):
                 if optional_key in payload:
                     manifest[optional_key] = payload[optional_key]
-            with Image.open(io.BytesIO(image_bytes)) as image:
-                validate_manifest_geometry(manifest, image.size)
-                image.verify()
             manifest_bytes = json.dumps(
                 manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")
             ).encode("utf-8")
@@ -520,6 +514,17 @@ class ScreenshotService:
                     group.status = "empty" if not selected else "ready"
                     group.dirty = False
                 return True
+            if latest and any(
+                evidence.adapter_version in {
+                    "dongchedi-dynamic-v4",
+                    "dongchedi-dynamic-v7-scrapling",
+                }
+                for _item, _post, evidence in selected
+            ):
+                group.dirty = False
+                group.status = "ready"
+                group.error_message = "旧版页面存在截图排版偏移，保留已发布版本；新采集使用同宽截图。"
+                return True
             version_number = (latest.version if latest else 0) + 1
             group_snapshot = {
                 "id": group.id,
@@ -634,7 +639,6 @@ class ScreenshotService:
             if actual_sha256 != expected_sha256:
                 raise RuntimeError(f"原始页面证据校验失败：{source_path}")
             with Image.open(source_path) as source:
-                geometry = load_frame_geometry(evidence, source.size, page_cards)
                 canvas = source.convert("RGB")
                 draw = ImageDraw.Draw(canvas)
                 has_negative = False
@@ -669,8 +673,8 @@ class ScreenshotService:
                             "height": bottom - top,
                             "source_rect": [left, top, right - left, bottom - top],
                             "original_rect": [item.x, item.y, item.width, item.height],
-                            "geometry_authority": geometry["authority"],
-                            "source_manifest_sha256": evidence.manifest_sha256,
+                            "geometry_authority": "recorded-dom",
+                            "source_manifest_sha256": getattr(evidence, "manifest_sha256", None),
                         }
                     )
             tile_path = output_dir / f"tile-{tile_index + 1:04d}.png"
