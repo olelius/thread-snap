@@ -18,6 +18,15 @@
 
 ---
 
+## 2026-09-11 — 批次表格导出筛选后的全部结果
+**身份/范围**：从已同步的 main@c1c8cfc 创建 codex/export-filtered-table，独立工作树 H:/ThreadSnap-export-filtered-table；原 H:/ThreadSnap 的混合修改保持原样。用户明确选择包含其他分页的全部筛选结果。
+**状态/实现**：✅ 开发与目标验收完成。“导出筛选结果”无需模板，GET posts/export 复用列表的标题、来源多选、可见状态、舆情、分析状态和排序查询，保持关联补提去重及批次隔离；固定十列 XLSX，保留来源/列表顺序/跨论坛、删除帖、人工或 AI 结果、上海时区、空值和数字零，文本不作为公式执行。原模板入口改名“按模板导出”，逻辑保持；无新依赖、迁移或持久导出记录。两类批次详情共用，零结果、请求错误、非终态、筛选更新及生成中禁用。1800px 起筛选与操作单行，较窄布局自然换行。
+**证据**：新增 7 项 unittest 及既有模板导出回归通过（初轮 6 项、跨论坛受影响项与模板回归 2 项、600 条不截断项 1 项）；浏览器真实从第 2 页 20 行下载全部 60 行，逐项顺序对账，含循环详情、键盘 Enter、生成中禁用、下载错误恢复、列表失败和空结果。数据库导出前后全表 hash 均为 6ebbdcc6c60c5d2b98536bad6e6b7e957e755a728873609b1750b1a3aee68190。前端生产构建（含 tsc）、定向 Ruff、git diff --check 通过；390/768/1024/1280/1536/1799/1800/1920/2560 布局与浅深色已核验。初次 1800px 操作换行通过 max-content 列宽修正，仅补验受影响断点和未覆盖交互，不重跑无关采集或全库测试。
+**复核入口**：artifacts/runtime/filtered-export/{tests.log,affected-tests.log,large-export-test.log,build-final.log,browser-report.json,final-ui-report.json,final-1920.png,final-dark.png}；真实下载 XLSX 的 SHA-256 为 acc532bd8989dff1ff97cc5808e54de7fa45e58c10e197dc211d7ad06094cd6a。
+**边界/下一步**：按本条对应提交及 PR 完成 Git 收尾；本次未部署服务器、不重新采集、不调 AI、不改写历史快照或已有模板文件。正式环境发布独立处理。产品设计与技术路线已同步，回退可撤销本功能提交。
+
+---
+
 ## 2026-09-11 — 明确删除帖按成功保存并跳过AI
 **身份/范围**：fetch后直接从origin/main@8b9ebe61a654c5369f191267e9c4d536ca328a0e创建codex/fix-deleted-post-status、H:/ThreadSnap-deleted-post-status；前端独立工作树同基线、两文件patch单次整合。旧H:/ThreadSnap混合分支未动。
 **实现**：汽车之家topicDelete=3沿用已保存116097983主楼删除诊断，在详情帖子/论坛身份核对后返回成功快照；保留标题链接、原始删除字段与可得列表计数，缺失正文/点赞保持空，不继续点赞/媒体/评论请求。raw_status.content_state=deleted经PostSnapshot.is_deleted派生为API字段，前端显示“删除”和“已跳过（帖子已删除）”。入AI前复用analysis_disabled直接返回，不读取账户/建分析任务/继承结果/开放人工判定；截图不等待该项、不画负面框，保留原始列表像素。普通hidden、未知空正文、身份异常沿用原处理，无数据库迁移、无提示词变更。

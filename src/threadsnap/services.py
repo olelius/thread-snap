@@ -43,6 +43,7 @@ from .schemas import (
     PlatformConfigUpdate,
 )
 from .sentiment import SentimentService, deduplicate_media_urls, sentiment_summary
+from .table_export import render_filtered_table
 
 TERMINAL_STATUSES = frozenset({"success", "partial_success", "failed"})
 RUN_STATUS_ZH = {
@@ -2099,6 +2100,29 @@ class RunService:
                 "limit": limit,
                 "source_options": related_source_options(db, run_id),
             }
+
+    def export_filtered_table(self, run_id: str, **filters: Any) -> tuple[str, bytes]:
+        """复用列表查询导出全部命中行；返回文件名和字节，不落库、不落历史文件。"""
+        with self.factory() as db:
+            run = db.get(ExtractionRun, run_id)
+            if not run:
+                raise DomainError("RUN_NOT_FOUND", "指定提取批次不存在。", status_code=404)
+            if run.status not in TERMINAL_STATUSES:
+                raise DomainError("EXPORT_NOT_ALLOWED", "请等待批次结束后导出筛选结果。", status_code=409)
+            id_query, total = self._filtered_post_ids(db, run_id, **filters)
+            if not total:
+                raise DomainError("EXPORT_EMPTY", "当前筛选条件下没有可导出的帖子结果。", status_code=409)
+            ids = list(db.scalars(id_query))
+            rows = db.execute(
+                select(PostSnapshot, CircleTask)
+                .join(CircleTask, CircleTask.id == PostSnapshot.circle_task_id)
+                .where(PostSnapshot.id.in_(id_query))
+            ).all()
+            names = current_source_names(db, (task for _, task in rows))
+            by_id = {post.id: post_dict(post, [], task, names) for post, task in rows}
+            posts = [by_id[post_id] for post_id in ids]
+            filename = f"{run.number}-筛选结果.xlsx"
+        return filename, render_filtered_table(posts)
 
     def post_detail(self, run_id: str, post_id: str) -> dict[str, Any]:
         with self.factory() as db:
