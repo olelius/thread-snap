@@ -45,7 +45,7 @@ CAPTURE_ROWS_SCRIPT = """els => els.map((e,i) => {
                   width:r.width+marginLeft+marginRight,height:r.height}};
             })"""
 
-ADAPTER_VERSION = "autohome-club-v12-bound-geometry"
+ADAPTER_VERSION = "autohome-club-v13-deleted-post-status"
 BASE_URL = "https://club.autohome.com.cn"
 LIST_API_URL = "https://club-open-api.autohome.com.cn/api/pc/bbs/index/getClubTopicList"
 VIDEO_MEDIA_URL = "https://p-vp.autohome.com.cn/api/gpi"
@@ -1039,7 +1039,6 @@ class AutohomeCollector:
         observed_id = _js_int(topic_block, "topicId")
         if observed_id != int(post_id):
             raise CollectorFailure("POST_ID_MISMATCH", "汽车之家详情帖子 ID 与输入链接不一致。")
-        like_count = self._topic_like_count(post_id, normalized_url)
         bbs_id = _integer(bbs_info.get("bbsId"))
         bbs_type = str(bbs_info.get("bbs") or "").lower()
         canonical_bbs_id_hint = (candidate or {}).get("canonical_bbs_id_hint")
@@ -1060,6 +1059,38 @@ class AutohomeCollector:
         title_nodes = document.xpath(f"//*[{_class_tokens('post-title')}]")
         title = self._node_text(title_nodes[0]) if title_nodes else None
         title = title or _js_string(topic_block, "topicTitle")
+        topic_delete = _js_int(topic_block, "topicDelete")
+        if topic_delete == 3:
+            # 已保存真实主楼删除样本的状态值为3。其他非零值只沿用hidden，
+            # 不因空正文或通用隐藏状态猜测删除；也不再请求点赞、媒体或评论。
+            return {
+                "platform_post_id": post_id,
+                "url": normalized_url,
+                "title": title or (candidate or {}).get("title"),
+                "author": _js_string(topic_block, "topicMemberName"),
+                "published_at": None,
+                "content": None,
+                "image_urls": [],
+                "video_urls": [],
+                "reply_count": (candidate or {}).get("reply_count"),
+                "like_count": None,
+                "section": "dynamic",
+                "visibility": "hidden",
+                "raw_status": {
+                    "response_class": "post", "content_state": "deleted",
+                    "bbs_type": bbs_type, "bbs_id": bbs_id,
+                    "discovery_bbs_type": discovery_bbs_type,
+                    "discovery_bbs_id": discovery_bbs_id,
+                    "cross_forum_aggregate": cross_forum_aggregate,
+                    "topic_delete": topic_delete,
+                    "list_is_delete": (candidate or {}).get("is_delete"),
+                    "list_club_delete_flag": (candidate or {}).get("club_delete_flag"),
+                    "page_message": "主楼已被删除" if "主楼已被删除" in source else None,
+                    "source_raw": (candidate or {}).get("list_raw"),
+                },
+                "comments": [],
+            }
+        like_count = self._topic_like_count(post_id, normalized_url)
         body_nodes = document.xpath(f"//*[{_class_tokens('post-container')}]")
         body = body_nodes[0] if body_nodes else None
         content = self._body_text(body) if body is not None else None

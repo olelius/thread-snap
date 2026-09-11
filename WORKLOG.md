@@ -18,6 +18,14 @@
 
 ---
 
+## 2026-09-11 — 明确删除帖按成功保存并跳过AI
+**身份/范围**：fetch后直接从origin/main@8b9ebe61a654c5369f191267e9c4d536ca328a0e创建codex/fix-deleted-post-status、H:/ThreadSnap-deleted-post-status；前端独立工作树同基线、两文件patch单次整合。旧H:/ThreadSnap混合分支未动。
+**实现**：汽车之家topicDelete=3沿用已保存116097983主楼删除诊断，在详情帖子/论坛身份核对后返回成功快照；保留标题链接、原始删除字段与可得列表计数，缺失正文/点赞保持空，不继续点赞/媒体/评论请求。raw_status.content_state=deleted经PostSnapshot.is_deleted派生为API字段，前端显示“删除”和“已跳过（帖子已删除）”。入AI前复用analysis_disabled直接返回，不读取账户/建分析任务/继承结果/开放人工判定；截图不等待该项、不画负面框，保留原始列表像素。普通hidden、未知空正文、身份异常沿用原处理，无数据库迁移、无提示词变更。
+**证据**：6项定向unittest一次通过（4.781秒），包含正式AutohomeCollector→Worker→隔离SQLite→API成功1/1、失败0、详情请求1次、点赞/媒体/账户调用0、SentimentAnalysis行0、人工修正409；截图删除项不阻塞且PNG等于原图；普通隐藏/空正文/错ID保持原行为。前端两文件TypeScript检查一次通过；后端Ruff通过（新测试导入顺序自动修正，未重跑不受影响逻辑）。未执行全量测试、真实平台/AI请求或历史回填。
+**入口/剩余**：artifacts/runtime/deleted-post-status/targeted-tests.log；前端回执H:/ThreadSnap-deleted-post-ui/artifacts/runtime/deleted-post-ui/receipt.md。按项目流程提交合并；已向用户询问是否同步发布远端并只补提这一条。未获该范围答复前不部署或创建远端批次。原失败批次保持，补提只形成关联成功删除快照。
+
+---
+
 ## 2026-09-11 — 从最新main收敛框选修复
 **身份/范围**：fetch后从origin/main@f0544f07ba618cf54f280ae766567f957a2e05e5直接创建codex/fix-frame-coordinates及H:/ThreadSnap-frame-coordinates。并非从功能分支分叉；旧H:/ThreadSnap混合工作树未动。本条覆盖上一条通用几何校验设计，远端在本条开发时仍为87c3107。
 **实现**：删除168行通用几何验证模块与v2证书、重复媒体/顺序/重叠校验，沿用circle-page-v1。直接使用已保存的帖子矩形，不读颜色猜边界；截图启动原生同宽，保留前后布局/PNG尺寸必要检查和已有Worker限速续作。旧DCD v4/v7重建遇到已发布成果时保持旧版并明确提示，避免按已漂移历史坐标重画，不宣称这类旧版已修复。原图、AI与旧成果不覆盖。

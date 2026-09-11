@@ -2387,6 +2387,7 @@ def post_dict(
         "like_count": item.like_count,
         "section": item.section,
         "visibility": item.visibility,
+        "is_deleted": item.is_deleted,
         "raw_status": item.raw_status,
         "order_index": item.order_index,
         "analysis_status": item.analysis_status,

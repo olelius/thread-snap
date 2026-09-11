@@ -315,6 +315,11 @@ class PostSnapshot(Base):
         cascade="all, delete-orphan", passive_deletes=True
     )
 
+    @property
+    def is_deleted(self) -> bool:
+        """只消费适配器明确归一化的删除状态，不把普通隐藏或空正文视为删除。"""
+        return isinstance(self.raw_status, dict) and self.raw_status.get("content_state") == "deleted"
+
 
 class CirclePageEvidence(Base):
     """圈子列表页的不可变原始页面证据。"""
