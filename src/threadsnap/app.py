@@ -9,6 +9,7 @@ from datetime import datetime
 from ipaddress import ip_address
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import quote
 
 from fastapi import (
     APIRouter,
@@ -61,8 +62,8 @@ from .schemas import (
     ManualRunCreate,
     ManualSentimentRevisionCreate,
     PlatformConfigUpdate,
-    SentimentConfigUpdate,
     SentimentAccountCreate,
+    SentimentConfigUpdate,
     SessionImport,
 )
 from .screenshots import ScreenshotService
@@ -713,6 +714,34 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
             analysis_status=analysis_status,
             sort_by=sort_by,
             sort_direction=sort_direction,
+        )
+
+    @router.get("/runs/{run_id}/posts/export")
+    def export_filtered_posts(
+        run_id: str,
+        request: Request,
+        title: str | None = None,
+        circle: str | None = None,
+        source_key: list[str] | None = Query(None),
+        visibility: str | None = None,
+        sentiment_result: Literal["negative", "non_negative", "unrelated"] | None = None,
+        analysis_status: str | None = None,
+        sort_by: str = Query("source", pattern="^(source|published_at|reply_count|like_count)$"),
+        sort_direction: str = Query("asc", pattern="^(asc|desc)$"),
+    ) -> Response:
+        """直接下载与列表筛选、排序一致的完整 XLSX，不按当前分页截断。"""
+        filename, content = _container(request).runs.export_filtered_table(
+            run_id, title=title, circle=circle, source_keys=source_key,
+            visibility=visibility, sentiment_result=sentiment_result,
+            analysis_status=analysis_status, sort_by=sort_by, sort_direction=sort_direction,
+        )
+        return Response(
+            content,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename, safe='')}",
+                "Cache-Control": "no-store",
+            },
         )
 
     @router.get("/runs/{run_id}/posts/{post_id}")
