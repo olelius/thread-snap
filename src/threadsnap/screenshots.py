@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import shutil
+import threading
 import zipfile
 from collections import OrderedDict
 from contextlib import nullcontext
@@ -34,16 +36,16 @@ from .models import (
     ScreenshotArtifactVersion,
     utc_now,
 )
+from .screenshot_geometry import (
+    BOUND_LIST_SCHEMA,
+    load_frame_geometry,
+    recorded_frame,
+    validate_manifest_geometry,
+)
 from .services import related_run_ids
 
 TERMINAL_TASK_STATUSES = {"success", "partial_success", "failed"}
-RENDERER_VERSION = "v6-yiche-full-row-boundaries"
-LEGACY_AUTOHOME_NARROW_FRAME_ADAPTERS = {
-    "autohome-club-v10-scrapling-page-evidence",
-}
-EXACT_YICHE_ROW_FRAME_ADAPTERS = {
-    "yiche-community-v10-page-evidence",
-}
+RENDERER_VERSION = "v7-evidence-bound-dom-frames"
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -65,113 +67,10 @@ def _atomic_write(path: Path, value: bytes) -> None:
     os.replace(temporary, path)
 
 
-def _pixel_distance(first: tuple[int, ...], second: tuple[int, ...]) -> int:
-    return sum(abs(left - right) for left, right in zip(first[:3], second[:3], strict=True))
-
-
-def _recover_card_crop_box(source: Image.Image, item: Any) -> tuple[int, int, int, int]:
-    """从原始证据像素恢复卡片可见边界，旧证据异常时不改写原图或坐标。"""
-
-    left = max(0, int(item.x))
-    top = max(0, int(item.y))
-    width = max(1, int(item.width))
-    height = max(1, int(item.height))
-    fallback = (
-        left,
-        top,
-        min(source.width, left + width),
-        min(source.height, top + height),
-    )
-    if left < 8 or top < 4 or left + 2 >= source.width:
-        return fallback
-
-    outside_x = left - 6
-    inside_x = left + 2
-
-    def edge_visible(y: int) -> bool:
-        return _pixel_distance(
-            source.getpixel((outside_x, y)),
-            source.getpixel((inside_x, y)),
-        ) >= 12
-
-    search_top = range(max(4, top - 96), min(source.height - 4, top + 97))
-    rising_edges = [
-        y
-        for y in search_top
-        if edge_visible(y)
-        and all(not edge_visible(y - offset) for offset in range(1, 5))
-        and all(edge_visible(y + offset) for offset in range(3))
-    ]
-    if not rising_edges:
-        return fallback
-    recovered_top = min(rising_edges, key=lambda value: abs(value - top))
-
-    expected_bottom = recovered_top + height
-    search_bottom = range(
-        max(recovered_top + max(20, height // 2), expected_bottom - 96),
-        min(source.height - 4, expected_bottom + 97),
-    )
-    falling_edges = [
-        y
-        for y in search_bottom
-        if not edge_visible(y)
-        and all(edge_visible(y - offset) for offset in range(1, 4))
-        and all(not edge_visible(y + offset) for offset in range(3))
-    ]
-    if not falling_edges:
-        return fallback
-    recovered_bottom = min(falling_edges, key=lambda value: abs(value - expected_bottom))
-
-    probe_y = min(recovered_bottom - 1, recovered_top + 12)
-    background = source.getpixel((outside_x, probe_y))
-    horizontal = [
-        (
-            x,
-            _pixel_distance(background, source.getpixel((x, probe_y))) >= 12,
-        )
-        for x in range(max(0, left - 32), min(source.width, left + width + 129))
-    ]
-    probe_index = next(
-        (index for index, (x, _visible) in enumerate(horizontal) if x == inside_x),
-        None,
-    )
-    if probe_index is None or not horizontal[probe_index][1]:
-        return fallback
-    start_index = probe_index
-    end_index = probe_index
-    while start_index > 0 and horizontal[start_index - 1][1]:
-        start_index -= 1
-    while end_index + 1 < len(horizontal) and horizontal[end_index + 1][1]:
-        end_index += 1
-    recovered_left = horizontal[start_index][0]
-    recovered_right = horizontal[end_index][0] + 1
-    recovered_width = recovered_right - recovered_left
-    if not 0.8 * width <= recovered_width <= 1.3 * width:
-        return fallback
-    return recovered_left, recovered_top, recovered_right, recovered_bottom
-
-
 def _render_card_box(source: Image.Image, item: Any, evidence: Any) -> tuple[int, int, int, int]:
-    """按适配器证据合同取得成果框边界。"""
+    """使用证据绑定几何，图片颜色不参与任何卡片寻址。"""
 
-    adapter_version = str(getattr(evidence, "adapter_version", ""))
-    if adapter_version in EXACT_YICHE_ROW_FRAME_ADAPTERS:
-        # 易车 v10 在截图前后同一原始页首布局中验证整行矩形。首条上方紧邻
-        # 列表表头，通用像素恢复会把表头边界误认成卡片上边界，因此直接
-        # 使用清单中的精确 DOM 坐标；原图和清单仍保持不可变。
-        left = max(0, int(item.x))
-        top = max(0, int(item.y))
-        right = min(source.width, left + max(1, int(item.width)))
-        bottom = min(source.height, top + max(1, int(item.height)))
-    else:
-        left, top, right, bottom = _recover_card_crop_box(source, item)
-    if adapter_version in LEGACY_AUTOHOME_NARROW_FRAME_ADAPTERS:
-        # v10 记录的是占父栏 96% 的 li；平台 ul 左右各 2% 外边距也属于条目框。
-        # 原始证据保持不变，只在新派生成果中恢复到父栏完整宽度。
-        horizontal_gutter = max(1, int(int(item.width) * 0.02 / 0.96))
-        left = max(0, left - horizontal_gutter)
-        right = min(source.width, right + horizontal_gutter)
-    return left, top, right, bottom
+    return recorded_frame(item, source.size, str(getattr(evidence, "adapter_version", "")))
 
 
 @lru_cache(maxsize=8)
@@ -191,6 +90,7 @@ class ScreenshotService:
     def __init__(self, factory: sessionmaker[Session], settings: Settings):
         self.factory = factory
         self.settings = settings
+        self._rebuild_lock = threading.RLock()
 
     @staticmethod
     def _root_run_id(db: Session, run_id: str) -> str:
@@ -285,8 +185,11 @@ class ScreenshotService:
             image_path = root / f"page-{page_number:04d}.png"
             manifest_path = root / f"page-{page_number:04d}.json"
             image_bytes = bytes(payload["screenshot"])
+            list_schema = payload.get("list_schema_version", "circle-page-v1")
             manifest = {
-                "schema": "threadsnap.circle-page-evidence.v1",
+                "schema": "threadsnap.circle-page-evidence.v2"
+                if list_schema == BOUND_LIST_SCHEMA
+                else "threadsnap.circle-page-evidence.v1",
                 "captured_at": payload["captured_at"],
                 "exact_url": payload["exact_url"],
                 "page_number": page_number,
@@ -294,12 +197,15 @@ class ScreenshotService:
                 "document": payload["document"],
                 "browser_version": payload["browser_version"],
                 "adapter_version": payload["adapter_version"],
-                "list_schema_version": "circle-page-v1",
+                "list_schema_version": list_schema,
                 "rows": payload["rows"],
             }
-            for optional_key in ("total_count", "page_count"):
+            for optional_key in ("total_count", "page_count", "capture_geometry"):
                 if optional_key in payload:
                     manifest[optional_key] = payload[optional_key]
+            with Image.open(io.BytesIO(image_bytes)) as image:
+                validate_manifest_geometry(manifest, image.size)
+                image.verify()
             manifest_bytes = json.dumps(
                 manifest, ensure_ascii=False, sort_keys=True, separators=(",", ":")
             ).encode("utf-8")
@@ -319,7 +225,7 @@ class ScreenshotService:
                         status="ready",
                         adapter_version=str(payload["adapter_version"]),
                         browser_version=str(payload["browser_version"]),
-                        list_schema_version="circle-page-v1",
+                        list_schema_version=list_schema,
                         device_scale_factor=int(payload["viewport"].get("device_scale_factor", 1)),
                         viewport_width=int(payload["viewport"]["width"]),
                         viewport_height=int(payload["viewport"]["height"]),
@@ -427,11 +333,13 @@ class ScreenshotService:
         """生成一个已具备完整结论的脏成果组。"""
 
         with self.factory() as db:
-            group_ids = list(db.scalars(
-                select(ScreenshotArtifactGroup.id)
-                .where(ScreenshotArtifactGroup.dirty.is_(True))
-                .order_by(ScreenshotArtifactGroup.updated_at)
-            ))
+            group_ids = list(
+                db.scalars(
+                    select(ScreenshotArtifactGroup.id)
+                    .where(ScreenshotArtifactGroup.dirty.is_(True))
+                    .order_by(ScreenshotArtifactGroup.updated_at)
+                )
+            )
         for group_id in group_ids:
             if self.rebuild(group_id):
                 return True
@@ -490,6 +398,11 @@ class ScreenshotService:
         return self.rebuild(stale_id, reason="sentiment_changed") if stale_id else False
 
     def rebuild(self, group_id: str, reason: str = "automatic") -> bool:
+        # 同一服务实例的后台与手动重建串行，避免同时占用或清理同一个版本目录。
+        with self._rebuild_lock:
+            return self._rebuild(group_id, reason)
+
+    def _rebuild(self, group_id: str, reason: str) -> bool:
         with self.factory.begin() as db:
             group = db.get(ScreenshotArtifactGroup, group_id)
             if not group:
@@ -511,28 +424,32 @@ class ScreenshotService:
                 with nullcontext():
                     group.status = "evidence_running"
                 return False
-            rows = list(
-                db.execute(
-                    select(CirclePageEvidenceItem, PostSnapshot, CirclePageEvidence)
-                    .join(
-                        PostSnapshot,
-                        PostSnapshot.id == CirclePageEvidenceItem.post_snapshot_id,
-                    )
-                    .join(
-                        CirclePageEvidence,
-                        CirclePageEvidence.id == CirclePageEvidenceItem.evidence_id,
-                    )
-                    .where(
-                        CirclePageEvidenceItem.circle_task_id.in_(
-                            [item.circle_task_id for item in contributions]
+            rows = (
+                list(
+                    db.execute(
+                        select(CirclePageEvidenceItem, PostSnapshot, CirclePageEvidence)
+                        .join(
+                            PostSnapshot,
+                            PostSnapshot.id == CirclePageEvidenceItem.post_snapshot_id,
+                        )
+                        .join(
+                            CirclePageEvidence,
+                            CirclePageEvidence.id == CirclePageEvidenceItem.evidence_id,
+                        )
+                        .where(
+                            CirclePageEvidenceItem.circle_task_id.in_(
+                                [item.circle_task_id for item in contributions]
+                            )
+                        )
+                        .order_by(
+                            CirclePageEvidence.captured_at,
+                            CirclePageEvidenceItem.source_position,
                         )
                     )
-                    .order_by(
-                        CirclePageEvidence.captured_at,
-                        CirclePageEvidenceItem.source_position,
-                    )
                 )
-            ) if contributions else []
+                if contributions
+                else []
+            )
             deduped: OrderedDict[str, tuple[Any, Any, Any]] = OrderedDict()
             for item, post, evidence in rows:
                 deduped.setdefault(post.platform_post_id, (item, post, evidence))
@@ -541,9 +458,7 @@ class ScreenshotService:
                 post.sentiment_result
                 if post.sentiment_result is not None
                 else (
-                    "not_analyzed"
-                    if not task_ai_enabled.get(item.circle_task_id, True)
-                    else None
+                    "not_analyzed" if not task_ai_enabled.get(item.circle_task_id, True) else None
                 )
                 for item, post, _evidence in selected
             ]
@@ -560,7 +475,9 @@ class ScreenshotService:
                 return True
             run_numbers = {
                 evidence.run_id: (
-                    run.number if (run := db.get(ExtractionRun, evidence.run_id)) else evidence.run_id
+                    run.number
+                    if (run := db.get(ExtractionRun, evidence.run_id))
+                    else evidence.run_id
                 )
                 for _item, _post, evidence in selected
             }
@@ -574,6 +491,8 @@ class ScreenshotService:
                     ),
                     "evidence_id": evidence.id,
                     "evidence_sha256": evidence.screenshot_sha256,
+                    "evidence_manifest_sha256": evidence.manifest_sha256,
+                    "geometry_schema": evidence.list_schema_version,
                     "evidence_run_id": evidence.run_id,
                     "evidence_page_number": evidence.page_number,
                     "evidence_adapter_version": evidence.adapter_version,
@@ -609,6 +528,9 @@ class ScreenshotService:
                 "list_order": group.list_order,
             }
             group.status = "rendering"
+        output_existed = (
+            self.settings.screenshot_artifact_dir / group_snapshot["id"] / f"v{version_number:04d}"
+        ).exists()
         try:
             rendered = self._render(group_snapshot, version_number, selected, inputs)
             with self.factory.begin() as db:
@@ -622,9 +544,7 @@ class ScreenshotService:
                     reason=reason,
                     input_sha256=input_sha,
                     item_count=len(selected),
-                    negative_count=sum(
-                        item["sentiment"] == "negative" for item in inputs
-                    ),
+                    negative_count=sum(item["sentiment"] == "negative" for item in inputs),
                     tiles=rendered["tiles"],
                     items=rendered["items"],
                     package_path=rendered["package_path"],
@@ -666,12 +586,13 @@ class ScreenshotService:
                 group.error_message = None
             return True
         except Exception as exc:
-            shutil.rmtree(
-                self.settings.screenshot_artifact_dir
-                / group_snapshot["id"]
-                / f"v{version_number:04d}",
-                ignore_errors=True,
-            )
+            if not output_existed:
+                shutil.rmtree(
+                    self.settings.screenshot_artifact_dir
+                    / group_snapshot["id"]
+                    / f"v{version_number:04d}",
+                    ignore_errors=True,
+                )
             with self.factory.begin() as db:
                 group = db.get(ScreenshotArtifactGroup, group_id)
                 if group:
@@ -713,6 +634,7 @@ class ScreenshotService:
             if actual_sha256 != expected_sha256:
                 raise RuntimeError(f"原始页面证据校验失败：{source_path}")
             with Image.open(source_path) as source:
+                geometry = load_frame_geometry(evidence, source.size, page_cards)
                 canvas = source.convert("RGB")
                 draw = ImageDraw.Draw(canvas)
                 has_negative = False
@@ -746,6 +668,9 @@ class ScreenshotService:
                             "y": top,
                             "height": bottom - top,
                             "source_rect": [left, top, right - left, bottom - top],
+                            "original_rect": [item.x, item.y, item.width, item.height],
+                            "geometry_authority": geometry["authority"],
+                            "source_manifest_sha256": evidence.manifest_sha256,
                         }
                     )
             tile_path = output_dir / f"tile-{tile_index + 1:04d}.png"
@@ -800,7 +725,9 @@ class ScreenshotService:
             "version": version,
             "created_at": utc_now().isoformat(),
             "inputs": inputs,
-            "tiles": [{key: value for key, value in item.items() if key != "path"} for item in tiles],
+            "tiles": [
+                {key: value for key, value in item.items() if key != "path"} for item in tiles
+            ],
             "items": artifact_items,
         }
         manifest_path = output_dir / "manifest.json"
@@ -857,7 +784,9 @@ class ScreenshotService:
                         "external_id": task.external_id,
                         "section": task.section,
                         "list_order": task.list_order,
-                        "status": "not_applicable" if run.input_mode == "url_list" else "not_collected",
+                        "status": "not_applicable"
+                        if run.input_mode == "url_list"
+                        else "not_collected",
                         "current_version": 0,
                         "item_count": 0,
                         "negative_count": 0,
@@ -868,7 +797,9 @@ class ScreenshotService:
                 covered.add(key)
             return {"items": result}
 
-    def _group_dict(self, db: Session, group: ScreenshotArtifactGroup, prefix: str) -> dict[str, Any]:
+    def _group_dict(
+        self, db: Session, group: ScreenshotArtifactGroup, prefix: str
+    ) -> dict[str, Any]:
         contributions = list(
             db.scalars(
                 select(ScreenshotArtifactContribution).where(
@@ -877,13 +808,17 @@ class ScreenshotService:
             )
         )
         task_ids = [item.circle_task_id for item in contributions]
-        evidence = list(
-            db.scalars(
-                select(CirclePageEvidence)
-                .where(CirclePageEvidence.circle_task_id.in_(task_ids))
-                .order_by(CirclePageEvidence.captured_at, CirclePageEvidence.page_number)
+        evidence = (
+            list(
+                db.scalars(
+                    select(CirclePageEvidence)
+                    .where(CirclePageEvidence.circle_task_id.in_(task_ids))
+                    .order_by(CirclePageEvidence.captured_at, CirclePageEvidence.page_number)
+                )
             )
-        ) if task_ids else []
+            if task_ids
+            else []
+        )
         version = db.scalar(
             select(ScreenshotArtifactVersion).where(
                 ScreenshotArtifactVersion.group_id == group.id,
@@ -964,7 +899,9 @@ class ScreenshotService:
                 return Path(version.package_path)
             tile = next((item for item in version.tiles if int(item["index"]) == tile_index), None)
             if not tile:
-                raise DomainError("ARTIFACT_TILE_NOT_FOUND", "指定截图分片不存在。", status_code=404)
+                raise DomainError(
+                    "ARTIFACT_TILE_NOT_FOUND", "指定截图分片不存在。", status_code=404
+                )
             return Path(tile["path"])
 
     def prepare_run_delete(self, run_id: str) -> tuple[list[str], list[str]]:
@@ -998,7 +935,9 @@ class ScreenshotService:
                 )
                 if not remaining:
                     db.delete(group)
-                    shutil.rmtree(self.settings.screenshot_artifact_dir / group_id, ignore_errors=True)
+                    shutil.rmtree(
+                        self.settings.screenshot_artifact_dir / group_id, ignore_errors=True
+                    )
                     continue
                 surviving_run_id = db.scalar(
                     select(ScreenshotArtifactContribution.run_id)

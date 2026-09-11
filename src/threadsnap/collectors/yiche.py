@@ -21,7 +21,6 @@ from json_repair import repair_json
 from lxml import html
 from patchright.sync_api import sync_playwright
 
-from ..browser_runtime import browser_launch_args
 from ..scrapling_transport import ExecutionScopeKey, ScraplingHttpPool
 from ..tencent_captcha import (
     TencentCaptchaError,
@@ -34,10 +33,23 @@ from .base import (
     CollectorFailure,
     PageEvidenceCallback,
 )
+from .capture_geometry import (
+    LIST_SCHEMA_VERSION,
+    capture_bound_screenshot,
+    capture_browser_launch_args,
+)
 from .yiche_waf import YicheWafCallbackError, submit_yiche_waf_callback
 
 BASE_URL = "https://baa.yiche.com"
-ADAPTER_VERSION = "yiche-community-v11-question-page-evidence"
+CAPTURE_ROWS_SCRIPT = """els => els.map((e,i) => {
+              const r=e.getBoundingClientRect();
+              const match=e.href.match(/(?:thread|ask)-([0-9]+)[.]html/);
+              return {index:i,post_id:match?match[1]:null,href:e.href,
+                text:e.innerText||'',image_count:e.querySelectorAll('img').length,
+                rect:{x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height}};
+            })"""
+
+ADAPTER_VERSION = "yiche-community-v12-bound-geometry"
 CIRCLE_RE = re.compile(
     r"^/(?P<id>[A-Za-z0-9_-]+)/?"
     r"(?:index-0-(?P<order>[01])-(?P<page>\d+)\.html)?/?$"
@@ -713,15 +725,7 @@ class YicheCollector:
     def _read_capture_rows(cards: Any) -> list[dict[str, Any]]:
         """读取易车列表整行边界，保留标题、作者、回复和最后回复区域。"""
 
-        return cards.evaluate_all(
-            """els => els.map((e,i) => {
-              const r=e.getBoundingClientRect();
-              const match=e.href.match(/(?:thread|ask)-([0-9]+)[.]html/);
-              return {index:i,post_id:match?match[1]:null,href:e.href,
-                text:e.innerText||'',image_count:e.querySelectorAll('img').length,
-                rect:{x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height}};
-            })"""
-        )
+        return cards.evaluate_all(CAPTURE_ROWS_SCRIPT)
 
     @staticmethod
     def _candidate(source: CircleSource, item: object, source_index: int) -> dict[str, Any]:
@@ -824,7 +828,7 @@ class YicheCollector:
         with self.page_capture_lock, self.semaphore:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(
-                    headless=self.browser_headless, args=browser_launch_args()
+                    headless=self.browser_headless, args=capture_browser_launch_args()
                 )
                 context = browser.new_context(
                     storage_state=self.storage_state,
@@ -920,15 +924,12 @@ class YicheCollector:
                             f"易车圈子第 {page_number} 页仍有 {len(incomplete)} 个可见媒体处于空白、加载或破图状态。",
                         )
                     self._stabilize_capture_layout(page, cards, page_number)
-                    raw_rows = self._read_capture_rows(cards)
-                    rows = self._merge_capture_rows(source, raw_rows, api_items)
-                    document = page.evaluate(
-                        """() => ({
-                          width:Math.max(document.documentElement.scrollWidth,document.body.scrollWidth),
-                          height:Math.max(document.documentElement.scrollHeight,document.body.scrollHeight)
-                        })"""
+                    captured = capture_bound_screenshot(
+                        page, cards, CAPTURE_ROWS_SCRIPT, page_number=page_number
                     )
-                    screenshot = page.screenshot(full_page=True, type="png")
+                    rows = self._merge_capture_rows(source, captured["raw_rows"], api_items)
+                    document = captured["document"]
+                    screenshot = captured["screenshot"]
                     final_url = page.url
                 finally:
                     context.close()
@@ -944,6 +945,8 @@ class YicheCollector:
             "browser_version": browser_version,
             "viewport": {"width": 1440, "height": 900, "device_scale_factor": 1},
             "document": document,
+            "list_schema_version": LIST_SCHEMA_VERSION,
+            "capture_geometry": captured["capture_geometry"],
             "rows": rows,
             "screenshot": screenshot,
             "total_count": total_count,

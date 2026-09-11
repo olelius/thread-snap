@@ -42,6 +42,11 @@ RETRYABLE_ACCESS_FAILURE_CODES = {
 }
 # 页面证据列表偶发未触发时，等同一批次首轮来源全部完成后统一复访一次。
 BATCH_RETRYABLE_SOURCE_FAILURE_CODES = {"PAGE_EVIDENCE_LIST_RESPONSE_MISSING"}
+# 只恢复同次截图几何暂时失稳；身份、哈希与未知合同错误保持终态诊断。
+GEOMETRY_RETRYABLE_SOURCE_FAILURE_CODES = {
+    "PAGE_EVIDENCE_LAYOUT_UNSTABLE",
+    "PAGE_EVIDENCE_IMAGE_SIZE_MISMATCH",
+}
 BATCH_RETRY_WAVE_KEY = "batch_retry_wave"
 INTERACTIVE_RECOVERY_CODES = {"PLATFORM_CAPTCHA_REQUIRED", "PLATFORM_CHALLENGE"}
 AUTH_RECOVERY_PROBE_KEY = "auth_recovery_probe"
@@ -814,7 +819,7 @@ class WorkerService:
                     "retry_source_indexes": source_indexes,
                     "terminal_failures": prior_terminal_failures,
                 }
-            if exc.code in RETRYABLE_ACCESS_FAILURE_CODES:
+            if exc.code in RETRYABLE_ACCESS_FAILURE_CODES | GEOMETRY_RETRYABLE_SOURCE_FAILURE_CODES:
                 failure = {
                     "url": exc.trigger_url or circle_url,
                     "code": exc.code,
@@ -1088,7 +1093,9 @@ class WorkerService:
                         failure.get("code")
                         for failure in retry_failures
                         if failure.get("code")
-                        in RETRYABLE_ACCESS_FAILURE_CODES | BATCH_RETRYABLE_SOURCE_FAILURE_CODES
+                        in RETRYABLE_ACCESS_FAILURE_CODES
+                        | BATCH_RETRYABLE_SOURCE_FAILURE_CODES
+                        | GEOMETRY_RETRYABLE_SOURCE_FAILURE_CODES
                     ),
                     NETWORK_RETRYABLE_FAILURE_CODE,
                 )
@@ -1134,6 +1141,12 @@ class WorkerService:
             )
             if retry_error_code in BATCH_RETRYABLE_SOURCE_FAILURE_CODES:
                 checkpoint[BATCH_RETRY_WAVE_KEY] = True
+            elif (
+                retry_error_code in GEOMETRY_RETRYABLE_SOURCE_FAILURE_CODES
+                and previous_checkpoint.get(BATCH_RETRY_WAVE_KEY)
+            ):
+                # 布局恢复不重置已消费的批次复访额度，之后列表响应再缺失仍按原规则处理。
+                checkpoint[BATCH_RETRY_WAVE_KEY] = True
             if retry_error_code == RATE_LIMIT_RETRYABLE_FAILURE_CODE:
                 checkpoint["rate_limit_completed_count"] = task.completed_count
         elif result["kind"] == "auth" and result.get("retry_urls"):
@@ -1161,6 +1174,8 @@ class WorkerService:
                     if task.platform_code == "yiche"
                     else "平台请求频率受限，正在冷却并自动续跑原任务。"
                 )
+            elif checkpoint.get("retry_error_code") in GEOMETRY_RETRYABLE_SOURCE_FAILURE_CODES:
+                task.stop_reason = "页面布局稳定中，稍后自动续作；已保存页面和帖子保持不变。"
             elif checkpoint.get(BATCH_RETRY_WAVE_KEY):
                 task.stop_reason = "首轮批次完成后统一复访来源。"
             else:

@@ -18,7 +18,6 @@ from zoneinfo import ZoneInfo
 from lxml import html
 from patchright.sync_api import sync_playwright
 
-from ..browser_runtime import browser_launch_args
 from ..scrapling_transport import ExecutionScopeKey, ScraplingHttpPool
 from .base import (
     AuthenticationRequired,
@@ -27,8 +26,26 @@ from .base import (
     PageEvidenceCallback,
     ProgressCallback,
 )
+from .capture_geometry import (
+    LIST_SCHEMA_VERSION,
+    capture_bound_screenshot,
+    capture_browser_launch_args,
+)
 
-ADAPTER_VERSION = "autohome-club-v11-scrapling-page-evidence-frame"
+CAPTURE_ROWS_SCRIPT = """els => els.map((e,i) => {
+              const r=e.getBoundingClientRect();
+              const list=e.closest('ul.post-list');
+              const style=list?getComputedStyle(list):null;
+              const marginLeft=Math.max(0,parseFloat(style?.marginLeft||'0')||0);
+              const marginRight=Math.max(0,parseFloat(style?.marginRight||'0')||0);
+              const a=e.querySelector('p.post-title a[href*="/bbs/thread/"]');
+              return {index:i,href:a?a.href:null,text:e.innerText||'',
+                image_count:e.querySelectorAll('img').length,
+                rect:{x:r.x+scrollX-marginLeft,y:r.y+scrollY,
+                  width:r.width+marginLeft+marginRight,height:r.height}};
+            })"""
+
+ADAPTER_VERSION = "autohome-club-v12-bound-geometry"
 BASE_URL = "https://club.autohome.com.cn"
 LIST_API_URL = "https://club-open-api.autohome.com.cn/api/pc/bbs/index/getClubTopicList"
 VIDEO_MEDIA_URL = "https://p-vp.autohome.com.cn/api/gpi"
@@ -692,20 +709,7 @@ class AutohomeCollector:
     def _read_capture_rows(cards: Any) -> list[dict[str, Any]]:
         """读取完整列表框；汽车之家 ul 的左右外边距属于条目可视范围。"""
 
-        return cards.evaluate_all(
-            """els => els.map((e,i) => {
-              const r=e.getBoundingClientRect();
-              const list=e.closest('ul.post-list');
-              const style=list?getComputedStyle(list):null;
-              const marginLeft=Math.max(0,parseFloat(style?.marginLeft||'0')||0);
-              const marginRight=Math.max(0,parseFloat(style?.marginRight||'0')||0);
-              const a=e.querySelector('p.post-title a[href*="/bbs/thread/"]');
-              return {index:i,href:a?a.href:null,text:e.innerText||'',
-                image_count:e.querySelectorAll('img').length,
-                rect:{x:r.x+scrollX-marginLeft,y:r.y+scrollY,
-                  width:r.width+marginLeft+marginRight,height:r.height}};
-            })"""
-        )
+        return cards.evaluate_all(CAPTURE_ROWS_SCRIPT)
 
     @classmethod
     def _merge_capture_rows(
@@ -767,7 +771,7 @@ class AutohomeCollector:
         with self.page_capture_lock, self.semaphore:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(
-                    headless=self.browser_headless, args=browser_launch_args()
+                    headless=self.browser_headless, args=capture_browser_launch_args()
                 )
                 context = browser.new_context(
                     storage_state=self.storage_state,
@@ -862,15 +866,12 @@ class AutohomeCollector:
                             f"汽车之家圈子第 {page_number} 页仍有 {len(incomplete)} 个帖子媒体处于空白、加载或破图状态。",
                         )
                     self._stabilize_capture_layout(page, cards, page_number)
-                    raw_rows = self._read_capture_rows(cards)
-                    rows = self._merge_capture_rows(source, raw_rows, list_page["items"])
-                    document = page.evaluate(
-                        """() => ({
-                          width:Math.max(document.documentElement.scrollWidth,document.body.scrollWidth),
-                          height:Math.max(document.documentElement.scrollHeight,document.body.scrollHeight)
-                        })"""
+                    captured = capture_bound_screenshot(
+                        page, cards, CAPTURE_ROWS_SCRIPT, page_number=page_number
                     )
-                    screenshot = page.screenshot(full_page=True, type="png")
+                    rows = self._merge_capture_rows(source, captured["raw_rows"], list_page["items"])
+                    document = captured["document"]
+                    screenshot = captured["screenshot"]
                     final_url = page.url
                 finally:
                     context.close()
@@ -884,6 +885,8 @@ class AutohomeCollector:
             "browser_version": browser_version,
             "viewport": {"width": 1440, "height": 900, "device_scale_factor": 1},
             "document": document,
+            "list_schema_version": LIST_SCHEMA_VERSION,
+            "capture_geometry": captured["capture_geometry"],
             "rows": rows,
             "screenshot": screenshot,
             "total_count": total_count,

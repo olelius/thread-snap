@@ -20,6 +20,7 @@ from threadsnap.config import Settings
 from threadsnap.db import build_engine, build_session_factory, migrate_database
 from threadsnap.models import (
     CirclePageEvidence,
+    CirclePageEvidenceItem,
     CircleTask,
     ExtractionRun,
     PostSnapshot,
@@ -28,7 +29,8 @@ from threadsnap.models import (
     ScreenshotArtifactTile,
     ScreenshotArtifactVersion,
 )
-from threadsnap.screenshots import ScreenshotService, _recover_card_crop_box, _render_card_box
+from threadsnap.screenshot_geometry import validate_manifest_geometry
+from threadsnap.screenshots import ScreenshotService, _render_card_box
 
 
 def png_fixture() -> bytes:
@@ -141,7 +143,18 @@ class ScreenshotArtifactTests(unittest.TestCase):
             "page_number": 1,
             "exact_url": "https://www.dongchedi.com/community/24729",
             "captured_at": "2026-08-23T00:00:00+00:00",
-            "adapter_version": "test-v1",
+            "adapter_version": "fixture-bound-v2",
+            "list_schema_version": "circle-page-v2-bound-geometry",
+            "capture_geometry": {
+                "schema": "threadsnap.capture-geometry.v1",
+                "coordinate_space": "document-css-px",
+                "device_scale_factor": 1,
+                "png_size": {"width": 600, "height": 440},
+                "before_sha256": "a" * 64,
+                "after_sha256": "a" * 64,
+                "scrollbar_policy": "native-hidden",
+                "layout_viewport": {"width": 600, "height": 400},
+            },
             "browser_version": "test-browser-v1",
             "viewport": {"width": 600, "height": 400},
             "document": {"width": 600, "height": 440},
@@ -212,7 +225,9 @@ class ScreenshotArtifactTests(unittest.TestCase):
 
         response = self.service.list_for_run(run_id, "/api/v1")
         group = response["items"][0]
-        self.assertEqual((group["status"], group["item_count"], group["negative_count"]), ("ready", 2, 1))
+        self.assertEqual(
+            (group["status"], group["item_count"], group["negative_count"]), ("ready", 2, 1)
+        )
         self.assertEqual(len(group["artifact"]["tiles"]), 1)
         tile_path = self.service.artifact_file(group["id"], 0)
         with Image.open(original_path) as original, Image.open(tile_path) as tile:
@@ -221,7 +236,7 @@ class ScreenshotArtifactTests(unittest.TestCase):
             self.assertEqual(tile.getpixel((10, 10)), original.getpixel((10, 10)))
             self.assertEqual(tile.getpixel((30, 230)), original.getpixel((30, 230)))
             difference = ImageChops.difference(original.convert("RGB"), tile.convert("RGB"))
-            self.assertEqual(difference.getbbox(), (22, 42, 519, 179))
+            self.assertEqual(difference.getbbox(), (22, 42, 518, 178))
         self.assertEqual(original_bytes, original_path.read_bytes())
         package = self.service.artifact_file(group["id"])
         with zipfile.ZipFile(package) as archive:
@@ -237,9 +252,9 @@ class ScreenshotArtifactTests(unittest.TestCase):
         self.add_posts(task_id)
         self.service.mark_task_complete(task_id)
         self.assertTrue(self.service.process_once())
-        first_url = self.service.list_for_run(_run_id, "/api/v1")["items"][0]["artifact"][
-            "tiles"
-        ][0]["image_url"]
+        first_url = self.service.list_for_run(_run_id, "/api/v1")["items"][0]["artifact"]["tiles"][
+            0
+        ]["image_url"]
         with self.factory.begin() as db:
             post = db.scalar(select(PostSnapshot).where(PostSnapshot.platform_post_id == "1002"))
             assert post is not None
@@ -261,9 +276,9 @@ class ScreenshotArtifactTests(unittest.TestCase):
             )
             self.assertEqual([item.negative_count for item in versions], [1, 2])
             self.assertTrue(all(Path(item.package_path).is_file() for item in versions))
-        second_url = self.service.list_for_run(_run_id, "/api/v1")["items"][0]["artifact"][
-            "tiles"
-        ][0]["image_url"]
+        second_url = self.service.list_for_run(_run_id, "/api/v1")["items"][0]["artifact"]["tiles"][
+            0
+        ]["image_url"]
         self.assertIn("version=1", first_url)
         self.assertIn("version=2", second_url)
         self.assertNotEqual(first_url, second_url)
@@ -328,6 +343,7 @@ class ScreenshotArtifactTests(unittest.TestCase):
         collector = DongchediCollector(None, browser_headless=True)
         payload = self.evidence_payload()
         payload["persisted"] = True
+
         def callback(_payload: dict) -> None:
             self.fail("复用冻结清单时不应再次持久化")
 
@@ -383,31 +399,75 @@ class ScreenshotArtifactTests(unittest.TestCase):
         )
         self.assertEqual([item["platform_post_id"] for item in result["records"]], ["31"])
 
-    def test_renderer_recovers_card_boundaries_from_drifted_evidence_rect(self) -> None:
-        """旧证据发生渐进式坐标漂移时，成果裁片仍应覆盖完整可见卡片。"""
+    def test_renderer_ignores_every_sidebar_color_and_neighbor_edge(self) -> None:
+        """侧栏任意颜色和纹理不改变已绑定帖子框，覆盖喷粉帖误吸附上一行。"""
 
-        source = Image.new("RGB", (300, 420), "#f7f8fc")
-        draw = ImageDraw.Draw(source)
-        draw.rectangle((20, 60, 219, 159), fill="white")
-        draw.rectangle((20, 180, 229, 319), fill="white")
-        first = SimpleNamespace(x=20, y=50, width=190, height=100)
-        second = SimpleNamespace(x=20, y=160, width=190, height=140)
+        item = SimpleNamespace(x=112, y=647, width=880, height=73)
+        evidence = SimpleNamespace(
+            adapter_version="autohome-club-v11-scrapling-page-evidence-frame"
+        )
+        for color in ("#372cfc", "black", "white", "red", "#f7f8fc"):
+            with self.subTest(color=color):
+                source = Image.new("RGB", (1425, 900), "white")
+                draw = ImageDraw.Draw(source)
+                draw.rectangle((0, 553, 107, 641), fill=color)
+                draw.rectangle((108, 553, 1120, 641), outline="black", width=3)
+                self.assertEqual((112, 647, 992, 720), _render_card_box(source, item, evidence))
+                source.close()
 
-        self.assertEqual((20, 60, 220, 160), _recover_card_crop_box(source, first))
-        self.assertEqual((20, 180, 230, 320), _recover_card_crop_box(source, second))
-        source.close()
+    def test_geometry_rejects_invalid_overlap_and_unknown_contract(self) -> None:
+        payload = self.evidence_payload()
+        for name in ("overlap", "duplicate", "outside", "nan", "unknown"):
+            with self.subTest(name=name):
+                manifest = json.loads(
+                    json.dumps({k: v for k, v in payload.items() if k != "screenshot"})
+                )
+                if name == "overlap":
+                    manifest["rows"][1]["rect"] = dict(manifest["rows"][0]["rect"])
+                elif name == "duplicate":
+                    manifest["rows"][1]["post_id"] = manifest["rows"][0]["post_id"]
+                elif name == "outside":
+                    manifest["rows"][0]["rect"]["x"] = 601
+                elif name == "nan":
+                    manifest["rows"][0]["rect"]["y"] = float("nan")
+                else:
+                    manifest["adapter_version"] = "unknown-future-adapter"
+                    manifest["list_schema_version"] = "circle-page-v1"
+                with self.assertRaises(ValueError):
+                    validate_manifest_geometry(manifest, (600, 440))
+
+    def test_rebuild_rejects_database_frame_change_and_retains_old_version(self) -> None:
+        _run_id, task_id = self.create_task()
+        self.service.persist_page(task_id, self.evidence_payload())
+        self.add_posts(task_id)
+        with self.factory() as db:
+            group = db.scalar(select(ScreenshotArtifactGroup))
+            group_id = group.id
+        self.assertTrue(self.service.rebuild(group_id))
+        with self.factory.begin() as db:
+            item = db.scalar(
+                select(CirclePageEvidenceItem).where(
+                    CirclePageEvidenceItem.platform_post_id == "1001"
+                )
+            )
+            item.y += 10
+            tile = db.scalar(select(ScreenshotArtifactTile))
+            old_path, old_bytes = Path(tile.file_path), Path(tile.file_path).read_bytes()
+        self.assertTrue(self.service.rebuild(group_id))
+        with self.factory() as db:
+            group = db.get(ScreenshotArtifactGroup, group_id)
+            self.assertEqual(1, group.current_version)
+            self.assertIn("未绑定", group.error_message)
+            self.assertEqual(1, len(list(db.scalars(select(ScreenshotArtifactVersion)))))
+        self.assertEqual(old_bytes, old_path.read_bytes())
 
     def test_renderer_restores_legacy_autohome_full_card_width(self) -> None:
         """汽车之家 v10 旧清单只存 li 时，新成果应恢复列表父栏的横向边距。"""
 
         source = Image.new("RGB", (1425, 900), "white")
         item = SimpleNamespace(x=129, y=200, width=846, height=205)
-        legacy = SimpleNamespace(
-            adapter_version="autohome-club-v10-scrapling-page-evidence"
-        )
-        current = SimpleNamespace(
-            adapter_version="autohome-club-v11-scrapling-page-evidence-frame"
-        )
+        legacy = SimpleNamespace(adapter_version="autohome-club-v10-scrapling-page-evidence")
+        current = SimpleNamespace(adapter_version="autohome-club-v11-scrapling-page-evidence-frame")
 
         self.assertEqual((112, 200, 992, 405), _render_card_box(source, item, legacy))
         self.assertEqual((129, 200, 975, 405), _render_card_box(source, item, current))
@@ -440,6 +500,12 @@ class ScreenshotArtifactTests(unittest.TestCase):
                 screenshot_sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
                 run_id=f"run-{index}",
                 page_number=index,
+                circle_task_id=f"task-{index}",
+                exact_url="https://example.test/circle",
+                adapter_version="fixture-bound-v2",
+                list_schema_version="circle-page-v2-bound-geometry",
+                document_width=(500, 640)[index - 1],
+                document_height=(350, 480)[index - 1],
                 captured_at=datetime(2026, 8, 23, tzinfo=timezone.utc),
             )
             for index, path in enumerate(source_paths, start=1)
@@ -454,6 +520,54 @@ class ScreenshotArtifactTests(unittest.TestCase):
                 title=f"帖子 {index}",
                 sentiment_result="negative" if index == 0 else "non_negative",
             )
+            item.platform_post_id = post.platform_post_id
+            item.post_snapshot_id = post.id
+            item.evidence_id = evidence.id
+            item.circle_task_id = evidence.circle_task_id
+            item.source_position = 0
+            item.url = f"https://example.test/post/{index}"
+            item.text_sha256 = hashlib.sha256(b"fixture").hexdigest()
+            manifest = {
+                "page_number": evidence.page_number,
+                "exact_url": evidence.exact_url,
+                "adapter_version": evidence.adapter_version,
+                "list_schema_version": evidence.list_schema_version,
+                "viewport": {
+                    "device_scale_factor": 1,
+                    "width": evidence.document_width,
+                    "height": evidence.document_height,
+                },
+                "capture_geometry": {
+                    "schema": "threadsnap.capture-geometry.v1",
+                    "coordinate_space": "document-css-px",
+                    "device_scale_factor": 1,
+                    "png_size": {
+                        "width": evidence.document_width,
+                        "height": evidence.document_height,
+                    },
+                    "before_sha256": "b" * 64,
+                    "after_sha256": "b" * 64,
+                    "scrollbar_policy": "native-hidden",
+                    "layout_viewport": {
+                        "width": evidence.document_width,
+                        "height": evidence.document_height,
+                    },
+                },
+                "document": {"width": evidence.document_width, "height": evidence.document_height},
+                "rows": [
+                    {
+                        "post_id": post.platform_post_id,
+                        "url": item.url,
+                        "source_position": 0,
+                        "text": "fixture",
+                        "rect": {"x": 20, "y": 40, "width": 200, "height": 100},
+                    }
+                ],
+            }
+            path = Path(self.temporary.name) / f"page-{index}.json"
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            evidence.manifest_path = str(path)
+            evidence.manifest_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
             selected.append((item, post, evidence))
             inputs.append(
                 {
@@ -472,7 +586,10 @@ class ScreenshotArtifactTests(unittest.TestCase):
             selected,
             inputs,
         )
-        self.assertEqual([(tile["width"], tile["height"]) for tile in rendered["tiles"]], [(500, 350), (640, 480)])
+        self.assertEqual(
+            [(tile["width"], tile["height"]) for tile in rendered["tiles"]],
+            [(500, 350), (640, 480)],
+        )
         self.assertEqual(len(rendered["items"]), 2)
         self.assertEqual(
             sum(1 for item in rendered["items"] if item["sentiment_result"] == "negative"),
@@ -493,7 +610,7 @@ class ScreenshotArtifactTests(unittest.TestCase):
         with zipfile.ZipFile(rendered["package_path"]) as archive:
             manifest = json.loads(archive.read("manifest.json"))
         self.assertEqual("threadsnap.screenshot-artifact.v2", manifest["schema"])
-        self.assertEqual("v6-yiche-full-row-boundaries", manifest["renderer_version"])
+        self.assertEqual("v7-evidence-bound-dom-frames", manifest["renderer_version"])
 
 
 if __name__ == "__main__":

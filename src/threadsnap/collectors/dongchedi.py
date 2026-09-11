@@ -17,12 +17,24 @@ from urllib.parse import urlencode, urljoin, urlsplit
 from lxml import html
 from patchright.sync_api import sync_playwright
 
-from ..browser_runtime import browser_launch_args
 from ..scrapling_transport import ExecutionScopeKey, ScraplingHttpPool
 from .base import AuthenticationRequired, CircleSource, CollectorFailure
+from .capture_geometry import (
+    LIST_SCHEMA_VERSION,
+    capture_bound_screenshot,
+    capture_browser_launch_args,
+)
 from .dongchedi_count import circle_count_visible_text, parse_circle_content_count
 
-ADAPTER_VERSION = "dongchedi-dynamic-v7-scrapling"
+CAPTURE_ROWS_SCRIPT = """els => els.map((e, i) => {
+                      const r=e.getBoundingClientRect();
+                      return {index:i,text:e.innerText||'',
+                        hrefs:Array.from(e.querySelectorAll('a')).map(a=>a.href),
+                        image_count:e.querySelectorAll('img').length,
+                        rect:{x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height}};
+                    })"""
+
+ADAPTER_VERSION = "dongchedi-dynamic-v8-bound-geometry"
 BASE_URL = "https://www.dongchedi.com"
 DETAIL_ROOT = f"{BASE_URL}/motor/pc/ugc/detail"
 VIDEO_TOKEN_URL = f"{BASE_URL}/motor/pc/common/token"
@@ -261,7 +273,7 @@ class DongchediCollector:
         with self.page_capture_lock, self.semaphore:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(
-                    headless=self.browser_headless, args=browser_launch_args()
+                    headless=self.browser_headless, args=capture_browser_launch_args()
                 )
                 context = browser.new_context(
                     storage_state=self.storage_state,
@@ -319,15 +331,10 @@ class DongchediCollector:
                         f"圈子第 {page_number} 页仍有 {len(incomplete)} 个帖子媒体处于空白、加载或破图状态。",
                     )
                 self._stabilize_capture_layout(page, cards, page_number)
-                raw_rows = cards.evaluate_all(
-                    """els => els.map((e, i) => {
-                      const r=e.getBoundingClientRect();
-                      return {index:i,text:e.innerText||'',
-                        hrefs:Array.from(e.querySelectorAll('a')).map(a=>a.href),
-                        image_count:e.querySelectorAll('img').length,
-                        rect:{x:r.x+scrollX,y:r.y+scrollY,width:r.width,height:r.height}};
-                    })"""
+                captured = capture_bound_screenshot(
+                    page, cards, CAPTURE_ROWS_SCRIPT, page_number=page_number
                 )
+                raw_rows = captured["raw_rows"]
                 normalized = self._normalize_card_rows(raw_rows)
                 by_index = {int(item.get("index", -1)): item for item in raw_rows}
                 rows = []
@@ -341,10 +348,8 @@ class DongchediCollector:
                             "rect": raw.get("rect") or {},
                         }
                     )
-                document = page.evaluate(
-                    "() => ({width:Math.max(document.documentElement.scrollWidth,document.body.scrollWidth),height:Math.max(document.documentElement.scrollHeight,document.body.scrollHeight)})"
-                )
-                screenshot = page.screenshot(full_page=True, type="png")
+                document = captured["document"]
+                screenshot = captured["screenshot"]
                 final_url = page.url
                 context.close()
                 browser.close()
@@ -356,6 +361,8 @@ class DongchediCollector:
             "browser_version": browser_version,
             "viewport": {"width": 1440, "height": 900, "device_scale_factor": 1},
             "document": document,
+            "list_schema_version": LIST_SCHEMA_VERSION,
+            "capture_geometry": captured["capture_geometry"],
             "rows": rows,
             "screenshot": screenshot,
         }
