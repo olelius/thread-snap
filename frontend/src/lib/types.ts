@@ -161,6 +161,7 @@ export type Post = {
   like_count?: number
   section?: string
   visibility: 'visible' | 'hidden' | 'unknown'
+  is_deleted: boolean
   raw_status?: Record<string, unknown>
   analysis_status?: AnalysisStatus
   sentiment_result?: SentimentResult

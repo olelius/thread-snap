@@ -230,6 +230,23 @@ class ScreenshotArtifactTests(unittest.TestCase):
             self.assertEqual(len(list(db.scalars(select(ScreenshotArtifactTile)))), 1)
             self.assertEqual(len(list(db.scalars(select(ScreenshotArtifactItem)))), 2)
 
+    def test_deleted_post_never_waits_for_ai_or_draws_negative(self) -> None:
+        run_id, task_id = self.create_task()
+        self.service.persist_page(task_id, self.evidence_payload())
+        self.add_posts(task_id)
+        with self.factory.begin() as db:
+            post = db.scalar(select(PostSnapshot).where(PostSnapshot.platform_post_id == "1001"))
+            post.raw_status = {"content_state": "deleted", "topic_delete": 3}
+            post.visibility = "hidden"
+            post.analysis_status = "analysis_disabled"
+            # 即使出现旧负面值，删除状态仍优先，不重用或画框。
+            post.sentiment_result = "negative"
+        self.service.mark_task_complete(task_id)
+        self.assertTrue(self.service.process_once())
+        group = self.service.list_for_run(run_id, "/api/v1")["items"][0]
+        self.assertEqual(("ready", 2, 0), (group["status"], group["item_count"], group["negative_count"]))
+        self.assertEqual(png_fixture(), self.service.artifact_file(group["id"], 0).read_bytes())
+
     def test_sentiment_change_creates_version_and_retains_previous_file(self) -> None:
         _run_id, task_id = self.create_task()
         self.service.register_task(task_id)
@@ -516,7 +533,7 @@ class ScreenshotArtifactTests(unittest.TestCase):
         with zipfile.ZipFile(rendered["package_path"]) as archive:
             manifest = json.loads(archive.read("manifest.json"))
         self.assertEqual("threadsnap.screenshot-artifact.v2", manifest["schema"])
-        self.assertEqual("v7-evidence-bound-dom-frames", manifest["renderer_version"])
+        self.assertEqual("v8-skip-deleted-posts", manifest["renderer_version"])
 
 
 if __name__ == "__main__":

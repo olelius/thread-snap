@@ -38,7 +38,7 @@ from .models import (
 from .services import related_run_ids
 
 TERMINAL_TASK_STATUSES = {"success", "partial_success", "failed"}
-RENDERER_VERSION = "v7-evidence-bound-dom-frames"
+RENDERER_VERSION = "v8-skip-deleted-posts"
 
 
 def _sha256_bytes(value: bytes) -> str:
@@ -449,11 +449,11 @@ class ScreenshotService:
                 deduped.setdefault(post.platform_post_id, (item, post, evidence))
             selected = list(deduped.values())
             effective_sentiments = [
-                post.sentiment_result
+                "not_analyzed"
+                if post.is_deleted
+                else post.sentiment_result
                 if post.sentiment_result is not None
-                else (
-                    "not_analyzed" if not task_ai_enabled.get(item.circle_task_id, True) else None
-                )
+                else ("not_analyzed" if not task_ai_enabled.get(item.circle_task_id, True) else None)
                 for item, post, _evidence in selected
             ]
             if any(sentiment is None for sentiment in effective_sentiments):

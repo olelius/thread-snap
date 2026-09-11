@@ -1603,6 +1603,13 @@ class SentimentService:
     ) -> None:
         """新帖子入库时决定禁用、继承、精确复用或排队。"""
 
+        if post.is_deleted:
+            # 删除是成功取得的帖子状态，不是待分析内容；先于账户检查和历史复用。
+            post.analysis_status = "analysis_disabled"
+            post.sentiment_result = None
+            post.sentiment_source = None
+            post.sentiment_updated_at = utc_now()
+            return
         config = self.require_account(db, account_id)
         input_hash = sentiment_input_hash(post, config.model_code)
         if not analysis_enabled:
@@ -1717,6 +1724,8 @@ class SentimentService:
             analysis = db.scalar(
                 select(SentimentAnalysis).where(SentimentAnalysis.post_id == post.id)
             )
+            if post.is_deleted:
+                raise DomainError("POST_DELETED", "帖子已删除，已跳过舆情判定。", status_code=409)
             if post.analysis_status not in MANUAL_ALLOWED_STATUSES:
                 raise DomainError(
                     "SENTIMENT_MANUAL_CONFLICT",
@@ -1805,9 +1814,14 @@ class SentimentService:
             "error_code": analysis.error_code if analysis else None,
             "error_message": analysis.error_message if analysis else None,
             "updated_at": post.sentiment_updated_at,
-            "can_manual_correct": post.analysis_status in MANUAL_ALLOWED_STATUSES,
+            "can_manual_correct": (
+                not post.is_deleted and post.analysis_status in MANUAL_ALLOWED_STATUSES
+            ),
             "can_restore_ai": bool(
-                analysis and analysis.status == "analysis_completed" and analysis.result
+                not post.is_deleted
+                and analysis
+                and analysis.status == "analysis_completed"
+                and analysis.result
             ),
             "manual_history": [
                 {
