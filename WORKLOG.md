@@ -18,6 +18,15 @@
 
 ---
 
+## 2026-09-13 — 证据ZIP中文命名与页面截图车型筛选
+**身份/范围**：fetch 确认 main 与 origin/main 同为 ccd202b，从 main 创建 codex/evidence-names-vehicle-filter 及 H:/ThreadSnap-evidence-names-vehicle-filter；原 H:/ThreadSnap 混合工作区及其他工作树未触碰，依赖独立安装，不启动或重启现有服务。
+**状态/实现**：✅ 两项优化与必要定向验证完成。口碑证据 ZIP 使用中文平台目录及冻结“巡检日期-车型”目录/图片名，清理非法字符、重名加序号，清单路径/校验值一致；旧缓存派生独立中文命名副本，原包、数据库发布路径、图片字节与缺失项保留。帖子批次页面截图增加车型下拉与来源计数，按冻结圈子名过滤，同名不同排序仍独立展示；两类详情共用，切换批次重置，链接筛选及下载范围不受影响。
+**证据**：3项定向 unittest（test_evidence_zip_uses_frozen_chinese_names_and_unique_safe_paths、test_legacy_evidence_zip_gets_named_copy_without_replacing_frozen_source、test_txt_xlsx_and_evidence_zip_are_real_traceable_artifacts）一次通过，4.466秒；覆盖27项清单/26张缺图样本、中文平台、重名、日期、逐图哈希、旧包不变及重复下载缓存。npm run build（含tsc）、定向 Ruff 与 git diff --check 通过。隔离静态构建浏览器使用4个来源/3个冻结圈子名，验证4→2→4筛选、双排序、原图查看/下载链接、循环详情、390px无横向溢出、空态及错误重试；page_errors=[]，桌面和移动端截图已目视。
+**复核入口**：artifacts/runtime/evidence-optimizations/{targeted-tests.log,build.log,check_ui.py,browser-report.json,vehicle-filter-desktop.png,vehicle-filter-mobile.png}。浏览器 API 为本地确定性样本，不代表真实平台采集；未执行全库测试、多Agent审查、平台重采、AI请求或生产发布。
+**下一步/边界**：按本条对应提交/PR完成Git收尾；服务器更新独立处理。回退只撤销本任务提交；旧包及原始PNG保留，中文命名缓存不改业务数据，随原批次目录备份/清理。无新依赖声明、迁移或接口。
+
+---
+
 ## 2026-09-11 — 批次表格导出筛选后的全部结果
 **身份/范围**：从已同步的 main@c1c8cfc 创建 codex/export-filtered-table，独立工作树 H:/ThreadSnap-export-filtered-table；原 H:/ThreadSnap 的混合修改保持原样。用户明确选择包含其他分页的全部筛选结果。
 **状态/实现**：✅ 开发与目标验收完成。“导出筛选结果”无需模板，GET posts/export 复用列表的标题、来源多选、可见状态、舆情、分析状态和排序查询，保持关联补提去重及批次隔离；固定十列 XLSX，保留来源/列表顺序/跨论坛、删除帖、人工或 AI 结果、上海时区、空值和数字零，文本不作为公式执行。原模板入口改名“按模板导出”，逻辑保持；无新依赖、迁移或持久导出记录。两类批次详情共用，零结果、请求错误、非终态、筛选更新及生成中禁用。1800px 起筛选与操作单行，较窄布局自然换行。
