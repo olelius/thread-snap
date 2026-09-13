@@ -658,7 +658,7 @@ class ExportRecord(Base):
     __tablename__ = "export_records"
     __table_args__ = (
         UniqueConstraint(
-            "run_id", "summary_version", "template_version_id", name="uq_export_version"
+            "run_id", "summary_version", "template_version_id", "input_sha256", name="uq_export_version"
         ),
     )
 
@@ -670,6 +670,7 @@ class ExportRecord(Base):
     template_version_id: Mapped[str] = mapped_column(
         ForeignKey("template_versions.id"), nullable=False
     )
+    input_sha256: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     file_path: Mapped[str | None] = mapped_column(Text)
     file_sha256: Mapped[str | None] = mapped_column(String(64))
