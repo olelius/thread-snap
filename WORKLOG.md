@@ -23,7 +23,7 @@
 **状态/实现**：✅ 取消320×180缩略及720×135拼图绘制；保留指标与备注，其后按平台分列嵌入原始PNG，552×480等比显示、四周12px留白、行高自适应，独立图片可复制/放大。文件哈希校验，缺图/损坏写文字，URL模式不造空图。新增显式“原图Excel”下载，按原批次/存档哈希/布局版本生成并复用独立文件；“存档XLSX”与历史文件、数据库不变，不纳入关联补跑。
 **最小验证**：按用户要求只跑3项定向unittest（tests.test_reputation_xlsx_images、原图下载幂等与历史保护、既有三平台81项/54证据），4.071秒通过；定向Ruff、前端build（含tsc）、git diff --check通过。首次build因旧工作树依赖缺少headlessui失败，改用package-lock相同的既有依赖后通过，未安装新依赖。
 **真实产物**：只读当前批次 RP-S-20260913-1F50（81项、27车型），导出28行22列、54张独立图片；54/54嵌入字节与原图SHA-256一致，既有指标、原存档及55个源文件哈希不变。Excel16实际打开识别54张图片，原生渲染U1:V3确认平台分列、比例与留白；浏览器实点“原图Excel”下载字节等于该已核验文件。XLSX SHA-256：8cd8ec51fb7a84ba99cb708a582ed63561305f9f6adcb2307906ebb94787a351。
-**入口/下一步**：artifacts/runtime/excel-original-images/{tests.log,build.log,real-export.json,native-excel.json,excel-original-images.png,download-entry.log,download-entry.png}；按本条对应提交与PR完成Git收尾。未部署/重启原服务、未重新采集；上线后从“原图Excel”取得修复版，已有本地下载不自动变化。回退撤销本功能提交，旧存档与原始证据仍可用。
+**入口/下一步**：artifacts/runtime/excel-original-images/{tests.log,build.log,real-export.json,native-excel.json,excel-original-images.png,download-entry.log,download-entry.png}；实现提交7be53c1。收尾fetch发现main并行合入ffbf97f（汽车之家指标标签）；`git merge-tree --write-tree HEAD origin/main`预检仅WORKLOG.md与口碑链档新增条目位置冲突，代码可自动合并。按项目规则停止自动推送/合并，当前分支干净且未启动实际merge；后续保留双方文档条目后再收尾。未部署/重启原服务、未重新采集；上线后从“原图Excel”取得修复版，已有本地下载不自动变化。回退撤销本功能提交，旧存档与原始证据仍可用。
 
 ---
 
