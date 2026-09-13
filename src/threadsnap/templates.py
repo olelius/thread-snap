@@ -3,17 +3,24 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import unicodedata
 from copy import copy
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from openpyxl import load_workbook
 from openpyxl.cell import Cell
+from openpyxl.drawing.image import Image as WorksheetImage
+from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.units import pixels_to_EMU, points_to_pixels
+from PIL import Image as PillowImage
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -32,6 +39,7 @@ from .models import (
     utc_now,
 )
 from .services import current_source_names, related_run_ids, task_source_name
+from .template_fields import EXTRA_FIELDS, extra_post_values, source_screenshots
 
 TAG_RE = re.compile(
     r"^s\.(?P<source_key>[23456789abcdefghjkmnpqrstuvwxyz]{10})\."
@@ -67,6 +75,7 @@ FIELD_REGISTRY: dict[str, dict[str, str]] = {
         "description": "主评论作者、时间、正文和可用点赞数",
     },
 }
+FIELD_REGISTRY.update({field: {"type": kind, "description": description} for field, (kind, description) in EXTRA_FIELDS.items()})
 PUBLIC_FIELD_PRIORITY = ("source.name", "source.list_order_name")
 PUBLIC_FIELDS = PUBLIC_FIELD_PRIORITY + tuple(
     field for field in FIELD_REGISTRY if field not in PUBLIC_FIELD_PRIORITY
@@ -322,11 +331,17 @@ class TemplateService:
                     "指定模板版本不存在。",
                     status_code=404,
                 )
+            extra_data = self._extra_inputs(db, run_id, version)
+            input_sha256 = sha256_bytes(json.dumps(
+                extra_data, ensure_ascii=False, sort_keys=True,
+                default=lambda value: value.isoformat(),
+            ).encode("utf-8")) if extra_data else ""
             existing = db.scalar(
                 select(ExportRecord).where(
                     ExportRecord.run_id == run_id,
                     ExportRecord.summary_version == run.summary_version,
                     ExportRecord.template_version_id == template_version_id,
+                    ExportRecord.input_sha256 == input_sha256,
                     ExportRecord.status == "success",
                 )
             )
@@ -337,7 +352,7 @@ class TemplateService:
         output_path = self.settings.export_dir / run_id / f"{export_id}.xlsx"
         output_path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            self._render(run_id, version, output_path)
+            self._render(run_id, version, output_path, extra_data)
             digest = hashlib.sha256(output_path.read_bytes()).hexdigest()
         except Exception:
             output_path.unlink(missing_ok=True)
@@ -348,6 +363,7 @@ class TemplateService:
                 run_id=run_id,
                 summary_version=summary_version,
                 template_version_id=template_version_id,
+                input_sha256=input_sha256,
                 status="success",
                 file_path=str(output_path.resolve()),
                 file_sha256=digest,
@@ -360,9 +376,36 @@ class TemplateService:
     def _related_run_ids(self, db: Session, root_id: str) -> list[str]:
         return related_run_ids(db, root_id)
 
-    def _render(self, run_id: str, version: TemplateVersion, output_path: Path) -> None:
+    def _extra_inputs(self, db: Session, run_id: str, version: TemplateVersion) -> dict[str, Any]:
+        """一次冻结本模板新增字段及图片身份，缓存和渲染共用，不触发采集。"""
+        fields_by_source: dict[str, set[str]] = {}
+        for binding in version.bindings:
+            if binding["field"] in EXTRA_FIELDS:
+                fields_by_source.setdefault(binding["source_id"], set()).add(binding["field"])
+        if not fields_by_source:
+            return {}
+        tasks = db.scalars(select(CircleTask).where(
+            CircleTask.run_id.in_(self._related_run_ids(db, run_id)),
+            CircleTask.circle_id.in_(fields_by_source), CircleTask.completed_count > 0,
+        ).order_by(CircleTask.created_at, CircleTask.queue_sequence)).all()
+        result: dict[str, Any] = {"schema": "template-extra-v3", "posts": {}, "images": {}}
+        for task in tasks:
+            fields = fields_by_source[task.circle_id] - {"source.screenshot"}
+            if fields:
+                for post in db.scalars(select(PostSnapshot).where(PostSnapshot.circle_task_id == task.id)):
+                    values = extra_post_values(db, post, task)
+                    result["posts"][post.id] = {field: values[field] for field in fields}
+        for source_id, fields in fields_by_source.items():
+            if "source.screenshot" in fields:
+                source_tasks = [task for task in tasks if task.circle_id == source_id]
+                result["images"][source_id] = source_screenshots(db, source_tasks) if source_tasks else []
+        return result
+
+    def _render(self, run_id: str, version: TemplateVersion, output_path: Path, extra_data: dict[str, Any] | None = None) -> None:
         workbook = load_workbook(version.file_path, data_only=False)
         with self.factory() as db:
+            if extra_data is None:
+                extra_data = self._extra_inputs(db, run_id, version)
             run_ids = self._related_run_ids(db, run_id)
             tasks = list(
                 db.scalars(
@@ -410,10 +453,58 @@ class TemplateService:
         errors: list[dict[str, Any]] = []
         column_widths: dict[tuple[str, int], int] = {}
         output_rows: dict[str, set[int]] = {}
+        image_rows: dict[tuple[str, int], float] = {}
+        image_columns: dict[tuple[str, int], float] = {}
         for binding in version.bindings:
             sheet = workbook[binding["sheet"]]
             origin = sheet[binding["cell"]]
             posts = source_post_map.get(binding["source_id"], [])
+            if binding["field"] == "source.screenshot":
+                images = extra_data.get("images", {}).get(binding["source_id"], [])
+                image_row = origin.row
+                for item in images:
+                    target = sheet.cell(row=image_row, column=origin.column)
+                    if image_row != origin.row and target.value not in (None, ""):
+                        errors.append({"sheet": sheet.title, "cell": target.coordinate, "field": binding["tag"], "reason": "预计图片写入范围已有文字、公式或其他内容"})
+                        continue
+                    if image_row != origin.row:
+                        self._copy_style(origin, target)
+                    target.value = item.get("message")
+                    alignment = copy(target.alignment)
+                    alignment.wrap_text = True
+                    alignment.vertical = "top"
+                    target.alignment = alignment
+                    column_key = (sheet.title, target.column)
+                    column_letter = get_column_letter(target.column)
+                    column_width = sheet.column_dimensions[column_letter].width if column_letter in sheet.column_dimensions else 18
+                    image_columns[column_key] = column_width
+                    if "path" in item:
+                        data = Path(item["path"]).read_bytes()
+                        if sha256_bytes(data) != item["sha256"]:
+                            raise DomainError("EXPORT_SCREENSHOT_CHANGED", "截图文件已变化，请重新导出。", status_code=409)
+                        try:
+                            with PillowImage.open(BytesIO(data)) as source_image:
+                                source_image.verify()
+                            image = WorksheetImage(BytesIO(data))
+                        except (OSError, ValueError):
+                            target.value = "截图文件损坏"
+                            image_row += 1
+                            continue
+                        # 用户确认窄列单行显示；仅设置绘图尺寸，保留原PNG字节和像素。
+                        row_height = min(409, max(120, sheet.row_dimensions[image_row].height or 0))
+                        column_pixels = max(13, column_width * 7 + 5)
+                        scale = min(1, (column_pixels - 12) / image.width, (points_to_pixels(row_height) - 12) / image.height)
+                        width, height = image.width * scale, image.height * scale
+                        image_rows[(sheet.title, image_row)] = max(image_rows.get((sheet.title, image_row), 0), row_height)
+                        image.anchor = OneCellAnchor(
+                            _from=AnchorMarker(col=target.column - 1, row=target.row - 1, colOff=pixels_to_EMU((column_pixels - width) / 2), rowOff=pixels_to_EMU(6)),
+                            ext=XDRPositiveSize2D(pixels_to_EMU(width), pixels_to_EMU(height)),
+                        )
+                        sheet.add_image(image)
+                    image_row += 1
+                if not images:
+                    origin.value = None
+                continue
             width_key = (sheet.title, origin.column)
             if origin.row > 1:
                 column_widths[width_key] = max(
@@ -434,7 +525,17 @@ class TemplateService:
                     continue
                 if offset:
                     self._copy_style(origin, target)
-                target.value = self._field_value(binding["field"], *item)
+                if binding["field"] in EXTRA_FIELDS:
+                    value = extra_data["posts"][item[0].id][binding["field"]]
+                    if FIELD_REGISTRY[binding["field"]]["type"] == "datetime":
+                        value = self._local_naive(value)
+                    elif isinstance(value, list):
+                        value = self._numbered(value)
+                    target.value = value
+                    if isinstance(value, str):
+                        target.data_type = "s"
+                else:
+                    target.value = self._field_value(binding["field"], *item)
                 if (
                     FIELD_REGISTRY[binding["field"]]["type"] == "datetime"
                     and target.value is not None
@@ -461,6 +562,10 @@ class TemplateService:
         for sheet_name, rows in output_rows.items():
             for row in rows:
                 workbook[sheet_name].row_dimensions[row].height = None
+        for (sheet_name, column), width in image_columns.items():
+            workbook[sheet_name].column_dimensions[get_column_letter(column)].width = min(255, width)
+        for (sheet_name, row), height in image_rows.items():
+            workbook[sheet_name].row_dimensions[row].height = height
         workbook.save(output_path)
 
     @staticmethod
