@@ -18,6 +18,15 @@
 
 ---
 
+## 2026-09-14 — 最小包更新远端至aa94343
+**状态/身份**：✅ 按用户要求更新服务并提供当前入口；fetch确认最新main@aa94343293ef25adad7c8f0d388925e692f4469f。SSH实查旧current=0.1.0-0911381da53c及实际进程cwd一致，七类业务任务无活动；只读检查后从冻结main制包，不使用旧H:/ThreadSnap实验分支。
+**包/执行**：最小包1187617字节，SHA256 078a55e5cfb780d43afb8f43b1d0dfe29e80bdd25fe2da1150d6a05c71b55968；只构建应用wheel和59项前端，36项部署/许可文件复用，22项运行依赖声明与138项已装包版本不变，无npm安装或服务器依赖安装。沿用reflink、双空闲门、Nginx先停/后端先起及restorecon PID标签修正，维护期关闭后台与外部写入。
+**迁移/保全**：数据库e7a4c8d2b601→f3b6c9d2a804，仅为导出缓存追加input_sha256与新唯一键。27张指定历史/配置表的旧列记录数和行哈希一致；26条既有导出记录保留且新指纹为空，foreign_key_check为空。一次停机窗口备份保留于/var/lib/threadsnap/backups/minimal-release-upgrade/20260914-main-aa94343。未同步本机数据库/会话，未触发平台采集、AI、旧失败项补提或历史文件重生。
+**已上线**：current=0.1.0-aa94343293ef、previous=0.1.0-0911381da53c，实际服务进程cwd核对一致。切换26.744秒，四项systemd服务active；公网https://dept-brother-thrown-ringtone.trycloudflare.com的health/首页/模板字段均200，51项字段已发布，首页SHA256=759620a539c13faee89f8e35187580122922881219175e6561ef120d7a665e1b与新构建一致。入口为当前Quick Tunnel，重建隧道后可能改变。
+**证据/回退**：H:/ThreadSnap-tactile-ui/artifacts/runtime/deploy-main-20260914/{deployment-summary.json,public-health.json,server-evidence/,build/receipt.json}；远端/var/tmp/threadsnap-main-aa94343-20260914/threadsnap-aa94343-minimal-update/activation-result.json。用户现在可访问新入口。写入开放前失败可恢复旧release与匹配备份；已开放写入，不用停机旧库覆盖后续数据。后续仅提交此部署账本，不重复测试、制包或修改服务代码。
+
+---
+
 ## 2026-09-13 — 补齐帖子模板字段与完整框选截图
 **身份/范围**：从同步后的 main@940b55e 创建 codex/template-export-fields、H:/ThreadSnap-template-screenshot-field，单写手隔离实施；原 H:/ThreadSnap 混合修改与其它功能分支不动。只完善帖子模板，独立口碑巡检导出不混入。
 **状态/实现**：✅ 开发与必要目标验收完成。原22字段的名称/类型/说明/顺序及取值保持，追加29项平台、实际采集批次、采集时间、删除状态、有效舆情结果/来源/分类/AI总结与依据/人工说明/模型和来源截图字段，共51项。页面按平台选择来源并显示平台名，支持搜索与复制；三平台共用稳定后缀，当前37来源全部仍可用。截图采用用户最终确认的窄列单行等比显示，原PNG字节不变、每页独立、不裁剪拼接；来源内只引用当前就绪版本的负面框选整页，未采集/待生成/无负面/缺图明确说明。既有模板文件不自动改写，新字段需添加标签后上传新版本。
