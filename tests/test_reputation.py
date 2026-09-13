@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import csv
 import hashlib
+import io
 import json
 import tempfile
 import threading
@@ -28,6 +29,7 @@ from threadsnap.errors import DomainError
 from threadsnap.models import (
     ExtractionRun,
     PlatformConfig,
+    ReputationEvidence,
     ReputationMappingValidationAttempt,
     ReputationMappingValidationRun,
     ReputationResult,
@@ -594,6 +596,92 @@ class ReputationInspectionTest(unittest.TestCase):
             self.assertEqual(manifest["schema_version"], "reputation-evidence-region-v1")
             digest, name = checksums[0].split("  ", 1)
             self.assertEqual(hashlib.sha256(bundle.read(name)).hexdigest(), digest)
+
+    def test_evidence_zip_uses_frozen_chinese_names_and_unique_safe_paths(self) -> None:
+        """真实下载覆盖中文平台、冻结日期、同名清理、缺图和重复请求缓存。"""
+        run = self.create_run("baseline_initialization")
+        container = self.client.app.state.container
+        with container.reputation.sessions.begin() as db:
+            record = db.get(ReputationRun, run["id"])
+            record.planned_date = "2026-09-01"
+            results = db.scalars(
+                select(ReputationResult).where(ReputationResult.run_id == run["id"])
+                .order_by(ReputationResult.vehicle_position)
+            ).all()
+            for result in results[:3]:
+                result.vehicle_name = "瑞虎/8:*? ."
+                result.platform_code = "autohome"
+                result.platform_name = "汽车之家"
+            missing = db.scalar(
+                select(ReputationEvidence).where(ReputationEvidence.result_id == results[-1].id)
+            )
+            Path(missing.metric_region_path).unlink()
+            original_hashes = {
+                item.id: hashlib.sha256(Path(item.metric_region_path).read_bytes()).hexdigest()
+                for item in db.scalars(select(ReputationEvidence)).all()
+                if Path(item.metric_region_path).is_file()
+            }
+        response = self.client.get(run["downloads"]["evidence_zip"])
+        self.assertEqual(response.status_code, 200, response.text[:100] if response.status_code != 200 else "")
+        with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
+            manifest = json.loads(bundle.read("manifest.json"))
+            self.assertEqual(manifest["naming_version"], "date-vehicle-cn-v2")
+            self.assertEqual(len(manifest["items"]), 27)
+            images = [name for name in bundle.namelist() if name.endswith(".png")]
+            self.assertEqual(len(images), 26)
+            self.assertEqual(len(set(name.casefold() for name in images)), 26)
+            autohome = [name for name in images if name.startswith("汽车之家/")]
+            self.assertEqual(len(autohome), 3)
+            self.assertTrue(any("-2/" in name for name in autohome))
+            self.assertTrue(any(name.startswith("懂车帝/") for name in images))
+            for name in images:
+                platform, folder, filename = name.split("/")
+                self.assertTrue(folder.startswith("2026-09-01-"))
+                self.assertEqual(filename, f"{folder}.png")
+                self.assertNotRegex(name, r'[<>:"\\|?*\x00-\x1f]')
+            for item in manifest["items"]:
+                if item["status"] == "complete":
+                    digest = hashlib.sha256(bundle.read(item["region_path"])).hexdigest()
+                    self.assertEqual(digest, original_hashes[item["evidence_id"]])
+            for line in bundle.read("SHA256SUMS").decode("utf-8").splitlines():
+                digest, name = line.split("  ", 1)
+                self.assertEqual(digest, hashlib.sha256(bundle.read(name)).hexdigest())
+        self.assertEqual(response.content, self.client.get(run["downloads"]["evidence_zip"]).content)
+
+    def test_legacy_evidence_zip_gets_named_copy_without_replacing_frozen_source(self) -> None:
+        """旧包已有缺图时仍保留原清单，中文副本不依赖已丢失的磁盘原图。"""
+        run = self.create_run("baseline_initialization")
+        service = self.client.app.state.container.reputation
+        with service.sessions.begin() as db:
+            record = db.get(ReputationRun, run["id"])
+            result = db.scalar(select(ReputationResult).where(ReputationResult.run_id == run["id"]))
+            evidence = db.scalar(select(ReputationEvidence).where(ReputationEvidence.result_id == result.id))
+            original = Path(evidence.metric_region_path).read_bytes()
+            legacy_path = self.settings.reputation_dir / run["id"] / "legacy-evidence.zip"
+            legacy_items = [
+                {"status": "complete", "result_id": result.id, "evidence_id": evidence.id,
+                 "vehicle_id": result.vehicle_id, "platform_code": result.platform_code,
+                 "region_path": "dongchedi/rep-old/region.png", "region_sha256": evidence.metric_region_sha256},
+                {"status": "missing", "result_id": "missing-old", "reason": "原包冻结的缺图原因"},
+            ]
+            with zipfile.ZipFile(legacy_path, "w") as bundle:
+                bundle.writestr("dongchedi/rep-old/region.png", original)
+                bundle.writestr("manifest.json", json.dumps({"schema_version": "reputation-evidence-region-v1", "items": legacy_items}))
+                bundle.writestr("SHA256SUMS", f"{evidence.metric_region_sha256}  dongchedi/rep-old/region.png\n")
+            record.evidence_zip_path = str(legacy_path)
+            Path(evidence.metric_region_path).unlink()
+        legacy_bytes = legacy_path.read_bytes()
+        response = self.client.get(run["downloads"]["evidence_zip"])
+        self.assertEqual(response.status_code, 200)
+        with zipfile.ZipFile(io.BytesIO(response.content)) as bundle:
+            items = json.loads(bundle.read("manifest.json"))["items"]
+            self.assertEqual(items[1], legacy_items[1])
+            self.assertEqual(bundle.read(items[0]["region_path"]), original)
+            self.assertTrue(items[0]["region_path"].startswith("懂车帝/"))
+        self.assertEqual(legacy_path.read_bytes(), legacy_bytes)
+        with service.sessions() as db:
+            self.assertEqual(db.get(ReputationRun, run["id"]).evidence_zip_path, str(legacy_path))
+        self.assertEqual(response.content, self.client.get(run["downloads"]["evidence_zip"]).content)
 
     def test_scope_initialization_and_atomic_mapping_preview(self) -> None:
         csv_path = self.root / "scope.csv"

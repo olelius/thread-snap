@@ -6,6 +6,7 @@ import csv
 import hashlib
 import io
 import json
+import re
 import shutil
 import threading
 import zipfile
@@ -88,6 +89,27 @@ GREEN_FILL = PatternFill("solid", fgColor="E2F0D9")
 RED_FILL = PatternFill("solid", fgColor="F4CCCC")
 NEUTRAL_FILL = PatternFill("solid", fgColor="F8FAFC")
 HEADER_FILL = PatternFill("solid", fgColor="E8EEF8")
+
+
+def _evidence_member_name(
+    result: ReputationResult, planned_date: str, used_names: set[str]
+) -> str:
+    """按冻结巡检日期和车型生成包内中文路径，清理文件名并避开重名。"""
+
+    def clean(value: str, fallback: str) -> str:
+        # 同时兼容 Windows 解压：去除路径分隔符、控制字符和结尾空白/点。
+        return re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", value).strip(" .")[:60].rstrip(" .") or fallback
+
+    spec = REPUTATION_PLATFORMS.get(result.platform_code)
+    platform = clean(spec.display_name if spec else result.platform_name, "未知平台")
+    stem = f"{clean(planned_date, '日期未知')}-{clean(result.vehicle_name, '未命名车型')}"
+    candidate = stem
+    index = 1
+    while f"{platform}/{candidate}".casefold() in used_names:
+        index += 1
+        candidate = f"{stem}-{index}"
+    used_names.add(f"{platform}/{candidate}".casefold())
+    return f"{platform}/{candidate}/{candidate}.png"
 
 
 class SyntheticRunCreate(BaseModel):
@@ -2548,14 +2570,19 @@ class ReputationService:
             return path
 
     def evidence_zip(self, run_id: str) -> Path:
+        """缓存中文命名下载包；历史缓存只作重命名输入，原包和原图均保留。"""
         with self.sessions.begin() as db:
             run = db.get(ReputationRun, run_id)
             if not run:
                 raise DomainError(
                     "REPUTATION_RUN_NOT_FOUND", "口碑巡检运行不存在。", status_code=404
                 )
-            if run.evidence_zip_path and Path(run.evidence_zip_path).is_file():
-                return Path(run.evidence_zip_path)
+            run_dir = self.settings.reputation_dir / run_id
+            zip_path = run_dir / f"{run.number}-evidence-cn-v2.zip"
+            if zip_path.is_file():
+                return zip_path
+            previous_zip = Path(run.evidence_zip_path) if run.evidence_zip_path else None
+            previous_zip = previous_zip if previous_zip and previous_zip.is_file() else None
             results = db.scalars(
                 select(ReputationResult)
                 .where(ReputationResult.run_id == run_id)
@@ -2572,44 +2599,59 @@ class ReputationService:
                 )
             ).all()
             evidence_by_result = {item.result_id: item for item in evidence}
-            run_dir = self.settings.reputation_dir / run_id
-            zip_path = run_dir / f"{run.number}-evidence.zip"
             zip_temp = run_dir / f".{run.number}-{uuid7()}.tmp.zip"
             manifest: list[dict[str, Any]] = []
             checksums: list[str] = []
+            used_names: set[str] = set()
             try:
                 with zipfile.ZipFile(zip_temp, "w", compression=zipfile.ZIP_STORED) as archive:
-                    for result in [item for item in results if item.evidence_required]:
-                        item = evidence_by_result.get(result.id)
-                        name = f"{result.platform_code}/{result.vehicle_id}/region.png"
-                        if item and Path(item.metric_region_path).is_file():
-                            archive.write(item.metric_region_path, name)
-                            checksums.append(f"{item.metric_region_sha256}  {name}")
-                            manifest.append(
-                                {
-                                    "status": "complete",
-                                    "evidence_id": item.id,
-                                    "result_id": result.id,
-                                    "vehicle_id": result.vehicle_id,
-                                    "platform_code": result.platform_code,
-                                    "region_path": name,
-                                    "region_sha256": item.metric_region_sha256,
-                                }
-                            )
-                        else:
-                            manifest.append(
-                                {
-                                    "status": "missing",
-                                    "result_id": result.id,
-                                    "vehicle_id": result.vehicle_id,
-                                    "platform_code": result.platform_code,
-                                    "reason": result.error_message or "必需指标区域证据缺失。",
-                                }
-                            )
+                    if previous_zip:
+                        # 旧包已经冻结的缺失项和 PNG 字节优先于后来磁盘上的证据状态。
+                        with zipfile.ZipFile(previous_zip) as previous:
+                            manifest = json.loads(previous.read("manifest.json"))["items"]
+                            for entry in manifest:
+                                if entry["status"] != "complete":
+                                    continue
+                                result = result_by_id[entry["result_id"]]
+                                name = _evidence_member_name(result, run.planned_date, used_names)
+                                content = previous.read(entry["region_path"])
+                                if hashlib.sha256(content).hexdigest() != entry["region_sha256"]:
+                                    raise ValueError("原证据包图片校验失败。")
+                                archive.writestr(name, content)
+                                entry["region_path"] = name
+                                checksums.append(f"{entry['region_sha256']}  {name}")
+                    else:
+                        for result in [item for item in results if item.evidence_required]:
+                            item = evidence_by_result.get(result.id)
+                            name = _evidence_member_name(result, run.planned_date, used_names)
+                            entry = {
+                                "result_id": result.id,
+                                "vehicle_id": result.vehicle_id,
+                                "platform_code": result.platform_code,
+                            }
+                            if item and Path(item.metric_region_path).is_file():
+                                archive.write(item.metric_region_path, name)
+                                checksums.append(f"{item.metric_region_sha256}  {name}")
+                                entry.update(
+                                    status="complete",
+                                    evidence_id=item.id,
+                                    region_path=name,
+                                    region_sha256=item.metric_region_sha256,
+                                )
+                            else:
+                                entry.update(
+                                    status="missing",
+                                    reason=result.error_message or "必需指标区域证据缺失。",
+                                )
+                            manifest.append(entry)
                     archive.writestr(
                         "manifest.json",
                         json.dumps(
-                            {"schema_version": "reputation-evidence-region-v1", "items": manifest},
+                            {
+                                "schema_version": "reputation-evidence-region-v1",
+                                "naming_version": "date-vehicle-cn-v2",
+                                "items": manifest,
+                            },
                             ensure_ascii=False,
                             indent=2,
                         ),
@@ -2619,7 +2661,8 @@ class ReputationService:
             except Exception:
                 zip_temp.unlink(missing_ok=True)
                 raise
-            run.evidence_zip_path = str(zip_path)
+            if not previous_zip:
+                run.evidence_zip_path = str(zip_path)
             return zip_path
 
     def get_scope(self) -> dict[str, Any]:

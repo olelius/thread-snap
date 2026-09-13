@@ -2,6 +2,8 @@
 
 ## 当前口径
 
+- 2026-09-13：证据 ZIP 下载使用中文平台目录和“巡检日期-车型”目录/图片名，同名追加序号。旧缓存只派生中文命名副本，原包、发布路径、图片字节与缺失清单保持；无旧包才首次打包，不重新访问平台或改写历史证据。
+
 - 2026-09-13按用户原页截图统一汽车之家数量标签：`volume` 为“在售”、`review_article_count` 为“口碑量”，不互换字段、不重采或重写历史文件；其他平台保持原标签。
 
 - 2026-09-10将两平台已确认的排名与易车数量字段从最新 `main` 独立移植：汽车之家排名改取 `/pc/series/list` 的 `cmpSeriesScore` 对比榜原始位置，不再取 `levelrank`；易车排名改取移动端 `serial_rating_sort.serialList` 原始位置，网页 `authorCount` 显示为“参与人数”，移动端 `overview_review_list.ratingCard.topicCount` 新增为独立“车主点评”，并撤销易车“口碑评价篇数”能力。易车仍为 URL-only、`requires_evidence=false`，不引入旧实验分支的截图、ADB或原生Runtime改动。
