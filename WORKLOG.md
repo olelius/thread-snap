@@ -18,6 +18,16 @@
 
 ---
 
+## 2026-09-13 — 修复口碑Excel图片连体与缩略模糊
+**身份/目标**：从同步后的 main@ccd202b 创建 codex/reputation-excel-original-images、独立工作树 H:/ThreadSnap-excel-original-images；原 H:/ThreadSnap 混合修改保持原样。取消缩略拼图，独立保留原图。
+**状态/实现**：✅ 取消320×180缩略及720×135拼图绘制；保留指标与备注，其后按平台分列嵌入原始PNG，552×480等比显示、四周12px留白、行高自适应，独立图片可复制/放大。文件哈希校验，缺图/损坏写文字，URL模式不造空图。新增显式“原图Excel”下载，按原批次/存档哈希/布局版本生成并复用独立文件；“存档XLSX”与历史文件、数据库不变，不纳入关联补跑。
+**最小验证**：按用户要求只跑3项定向unittest（tests.test_reputation_xlsx_images、原图下载幂等与历史保护、既有三平台81项/54证据），4.071秒通过；定向Ruff、前端build（含tsc）、git diff --check通过。首次build因旧工作树依赖缺少headlessui失败，改用package-lock相同的既有依赖后通过，未安装新依赖。
+**真实产物**：只读当前批次 RP-S-20260913-1F50（81项、27车型），导出28行22列、54张独立图片；54/54嵌入字节与原图SHA-256一致，既有指标、原存档及55个源文件哈希不变。Excel16实际打开识别54张图片，原生渲染U1:V3确认平台分列、比例与留白；浏览器实点“原图Excel”下载字节等于该已核验文件。XLSX SHA-256：8cd8ec51fb7a84ba99cb708a582ed63561305f9f6adcb2307906ebb94787a351。
+**入口/收尾**：artifacts/runtime/excel-original-images/{tests.log,build.log,real-export.json,native-excel.json,excel-original-images.png,download-entry.log,download-entry.png}；实现提交7be53c1。用户明确要求继续完成分支收尾，同步main@997b82a（汽车之家指标标签、证据ZIP命名），WORKLOG.md、口碑链档和测试文件均为独立新增内容插入冲突，已完整保留双方条目/函数；业务代码自动合并。本次仅对共享导出组合路径补验两项测试和前端类型检查，其余原图字节/Excel/浏览器证据继续复用，不重新采集、构建或执行全库测试。
+**整合验证/边界**：两项组合测试3.762秒通过（merge-tests.log），前端tsc、定向Ruff与git diff --check通过；按本条对应合并提交与PR完成推送、合并及分支删除，并核对本地main与远端一致。保留隔离工作树中的已交付Excel产物，原H:/ThreadSnap混合修改不动。本轮不部署/重启服务、不改写历史文件；回退撤销本功能提交，旧存档与原始证据仍可用。
+
+---
+
 ## 2026-09-13 — 证据ZIP中文命名与页面截图车型筛选
 **身份/范围**：fetch 确认 main 与 origin/main 同为 ccd202b，从 main 创建 codex/evidence-names-vehicle-filter 及 H:/ThreadSnap-evidence-names-vehicle-filter；原 H:/ThreadSnap 混合工作区及其他工作树未触碰，依赖独立安装，不启动或重启现有服务。
 **状态/实现**：✅ 两项优化与必要定向验证完成。口碑证据 ZIP 使用中文平台目录及冻结“巡检日期-车型”目录/图片名，清理非法字符、重名加序号，清单路径/校验值一致；旧缓存派生独立中文命名副本，原包、数据库发布路径、图片字节与缺失项保留。帖子批次页面截图增加车型下拉与来源计数，按冻结圈子名过滤，同名不同排序仍独立展示；两类详情共用，切换批次重置，链接筛选及下载范围不受影响。

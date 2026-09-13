@@ -276,8 +276,14 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
         return FileResponse(path, filename=path.name, media_type="text/plain; charset=utf-8")
 
     @router.get("/reputation/runs/{run_id}/export.xlsx")
-    def download_reputation_xlsx(run_id: str, request: Request) -> FileResponse:
-        path = _container(request).reputation.get_file(run_id, "xlsx")
+    def download_reputation_xlsx(
+        run_id: str, request: Request, layout: Literal["original_images"] | None = None,
+    ) -> FileResponse:
+        service = _container(request).reputation
+        path = (
+            service.get_original_images_xlsx(run_id)
+            if layout == "original_images" else service.get_file(run_id, "xlsx")
+        )
         return FileResponse(
             path,
             filename=path.name,

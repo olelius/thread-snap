@@ -362,7 +362,7 @@ class ReputationInspectionTest(unittest.TestCase):
         xlsx_path = self.root / "three-platform.xlsx"
         xlsx_path.write_bytes(xlsx_response.content)
         sheet = load_workbook(xlsx_path)["口碑巡检"]
-        self.assertEqual((28, 20), (sheet.max_row, sheet.max_column))
+        self.assertEqual((28, 22), (sheet.max_row, sheet.max_column))
         self.assertEqual("懂车帝-口碑分", sheet["E1"].value)
         self.assertEqual("汽车之家-口碑分", sheet["K1"].value)
         self.assertEqual("汽车之家-在售", sheet["M1"].value)
@@ -373,23 +373,11 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual("700", str(sheet["S2"].value))
         self.assertNotIn("易车-口碑评价篇数", [cell.value for cell in sheet[1]])
         self.assertEqual("备注", sheet["T1"].value)
-        self.assertEqual(27, len(sheet._images))
-        preview_manifest = (
-            self.settings.reputation_dir / finished["id"] / "xlsx-previews" / "manifest.json"
-        )
-        self.assertEqual(
-            27,
-            len(json.loads(preview_manifest.read_text(encoding="utf-8"))["items"]),
-        )
-        manifest_items = json.loads(preview_manifest.read_text(encoding="utf-8"))["items"]
-        self.assertTrue(
-            all(
-                not next(
-                    source for source in item["sources"] if source["platform_code"] == "yiche"
-                )["evidence_required"]
-                for item in manifest_items
-            )
-        )
+        self.assertEqual(54, len(sheet._images))
+        self.assertEqual("懂车帝-页面证据", sheet["U1"].value)
+        self.assertEqual("汽车之家-页面证据", sheet["V1"].value)
+        self.assertEqual({20, 21}, {picture.anchor._from.col for picture in sheet._images})
+        self.assertFalse((self.settings.reputation_dir / finished["id"] / "xlsx-previews").exists())
         self.assertIn("页面证据：未要求截图。", generated["report_text"])
 
         acceptance = container.reputation.create_real_acceptance(validation_ids)
@@ -596,6 +584,27 @@ class ReputationInspectionTest(unittest.TestCase):
             self.assertEqual(manifest["schema_version"], "reputation-evidence-region-v1")
             digest, name = checksums[0].split("  ", 1)
             self.assertEqual(hashlib.sha256(bundle.read(name)).hexdigest(), digest)
+
+    def test_original_images_download_preserves_archive_and_reuses_derivative(self) -> None:
+        """显式原图版可重复下载，不改历史存档、数据库状态或接入平台。"""
+
+        run = self.create_run("daily_mixed_changes")
+        url = run["downloads"]["xlsx"]
+        archived = self.client.get(url).content
+        before = self.client.app.state.container.reputation.get_run(run["id"])
+        response = self.client.get(url, params={"layout": "original_images"})
+        self.assertEqual(200, response.status_code, response.text[:100] if response.is_error else "")
+        self.assertIn("independent-original-images-v1", response.headers["content-disposition"])
+        self.assertEqual(response.content, self.client.get(url + "?layout=original_images").content)
+        self.assertEqual(archived, self.client.get(url).content)
+        self.assertEqual(before, self.client.app.state.container.reputation.get_run(run["id"]))
+        directory = self.settings.reputation_dir / run["id"] / "xlsx-originals"
+        self.assertEqual(1, len(list(directory.glob("*.xlsx"))))
+        self.assertFalse(list(directory.glob(".*.tmp.xlsx")))
+        self.assertEqual(422, self.client.get(url + "?layout=unknown").status_code)
+        self.assertEqual(404, self.client.get(
+            "/api/v1/reputation/runs/missing/export.xlsx?layout=original_images"
+        ).status_code)
 
     def test_evidence_zip_uses_frozen_chinese_names_and_unique_safe_paths(self) -> None:
         """真实下载覆盖中文平台、冻结日期、同名清理、缺图和重复请求缓存。"""
