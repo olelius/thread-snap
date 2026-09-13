@@ -8,9 +8,20 @@ const labels: Record<ReputationMetricKey, string> = {
 }
 const coreMetrics: ReputationMetricKey[] = ['score', 'rank', 'volume', 'review_article_count', 'negative_rate']
 
+/** 平台数量字段沿用各自原页名称，仅变更标签，不转换或互换数值。 */
+export function reputationMetricLabel(platformCode: string, key: ReputationMetricKey): string {
+  if (platformCode === 'autohome') {
+    if (key === 'volume') return '在售'
+    if (key === 'review_article_count') return '口碑量'
+    if (key === 'circle_content_count') return '论坛帖子总数'
+  }
+  if (platformCode === 'yiche' && key === 'volume') return '参与人数'
+  return labels[key]
+}
+
 /** 以服务端平台注册能力构造列组；未知能力不凭平台名称猜测新增指标。 */
 export function reputationMetricColumns(platformCode: string, capabilities?: Pick<ReputationCapabilities, 'reputation_platforms'>): Array<[ReputationMetricKey, string]> {
   const keys = capabilities?.reputation_platforms.find((platform) => platform.code === platformCode)?.supported_metrics ?? coreMetrics
   // 同时过滤旧能力缓存，汽车之家和易车不再展示差评率。
-  return keys.filter((key): key is ReputationMetricKey => Object.prototype.hasOwnProperty.call(labels, key) && !(key === 'negative_rate' && ['autohome', 'yiche'].includes(platformCode))).map((key) => [key, platformCode === 'autohome' && key === 'circle_content_count' ? '论坛帖子总数' : platformCode === 'yiche' && key === 'volume' ? '参与人数' : labels[key]])
+  return keys.filter((key): key is ReputationMetricKey => Object.prototype.hasOwnProperty.call(labels, key) && !(key === 'negative_rate' && ['autohome', 'yiche'].includes(platformCode))).map((key) => [key, reputationMetricLabel(platformCode, key)])
 }

@@ -18,6 +18,14 @@
 
 ---
 
+## 2026-09-13 — 汽车之家数量列改名为在售与口碑量
+**身份/范围**：从同步后的 main@ccd202b 创建 codex/autohome-metric-labels；在当前提供本地服务的 H:/ThreadSnap-tactile-ui 单写手完成，不触及 H:/ThreadSnap 混合修改。
+**状态/实现**：✅ 汽车之家 `volume` 标签由口碑量变为“在售”，`review_article_count` 由评价篇数变为“口碑量”；共用前端标签覆盖排名/映射表和证据卡/弹窗，后端 `metric_label` 同步新生成的汇报/XLSX。字段键、顺序、数值、比较与其他平台名称保持不变，历史截图/TXT/XLSX不重写。
+**证据**：`node --experimental-strip-types --test frontend/tests/reputation-metrics.test.mjs` 2项通过；`python -m unittest tests.test_reputation.ReputationInspectionTest.test_three_platform_registry_mapping_validation_and_publish_denominator -v` 通过，真实生成三平台XLSX确认M1“汽车之家-在售”、N1“汽车之家-口碑量”。生产构建（含tsc）、定向Ruff、diff-check通过。真实本地批次RP-S-20260913-1F50逐项核对27行的两数量值，MONA03为54/278；证据卡和弹窗显示“在售”，全部81项结果前后JSON SHA256均为22085d58ae723c409e6c53c2d203013ba71e53566ec818d92524eb1bed50df3a。
+**入口/边界**：artifacts/runtime/autohome-metric-labels/{frontend-tests.log,xlsx-test.log,build.log,ui-report.json,ranking-labels.png}；沿用5173→8000和原本地数据库，不重新采集、不创建新批次、不重写历史文件。领域词汇、产品设计、技术路线与口碑链档已同步；按本条提交/PR收尾，服务器部署不在本次范围。
+
+---
+
 ## 2026-09-11 — 批次表格导出筛选后的全部结果
 **身份/范围**：从已同步的 main@c1c8cfc 创建 codex/export-filtered-table，独立工作树 H:/ThreadSnap-export-filtered-table；原 H:/ThreadSnap 的混合修改保持原样。用户明确选择包含其他分页的全部筛选结果。
 **状态/实现**：✅ 开发与目标验收完成。“导出筛选结果”无需模板，GET posts/export 复用列表的标题、来源多选、可见状态、舆情、分析状态和排序查询，保持关联补提去重及批次隔离；固定十列 XLSX，保留来源/列表顺序/跨论坛、删除帖、人工或 AI 结果、上海时区、空值和数字零，文本不作为公式执行。原模板入口改名“按模板导出”，逻辑保持；无新依赖、迁移或持久导出记录。两类批次详情共用，零结果、请求错误、非终态、筛选更新及生成中禁用。1800px 起筛选与操作单行，较窄布局自然换行。
