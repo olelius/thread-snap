@@ -23,7 +23,25 @@
 **状态/实现**：✅ 取消320×180缩略及720×135拼图绘制；保留指标与备注，其后按平台分列嵌入原始PNG，552×480等比显示、四周12px留白、行高自适应，独立图片可复制/放大。文件哈希校验，缺图/损坏写文字，URL模式不造空图。新增显式“原图Excel”下载，按原批次/存档哈希/布局版本生成并复用独立文件；“存档XLSX”与历史文件、数据库不变，不纳入关联补跑。
 **最小验证**：按用户要求只跑3项定向unittest（tests.test_reputation_xlsx_images、原图下载幂等与历史保护、既有三平台81项/54证据），4.071秒通过；定向Ruff、前端build（含tsc）、git diff --check通过。首次build因旧工作树依赖缺少headlessui失败，改用package-lock相同的既有依赖后通过，未安装新依赖。
 **真实产物**：只读当前批次 RP-S-20260913-1F50（81项、27车型），导出28行22列、54张独立图片；54/54嵌入字节与原图SHA-256一致，既有指标、原存档及55个源文件哈希不变。Excel16实际打开识别54张图片，原生渲染U1:V3确认平台分列、比例与留白；浏览器实点“原图Excel”下载字节等于该已核验文件。XLSX SHA-256：8cd8ec51fb7a84ba99cb708a582ed63561305f9f6adcb2307906ebb94787a351。
-**入口/下一步**：artifacts/runtime/excel-original-images/{tests.log,build.log,real-export.json,native-excel.json,excel-original-images.png,download-entry.log,download-entry.png}；实现提交7be53c1。收尾fetch发现main并行合入ffbf97f（汽车之家指标标签）；`git merge-tree --write-tree HEAD origin/main`预检仅WORKLOG.md与口碑链档新增条目位置冲突，代码可自动合并。按项目规则停止自动推送/合并，当前分支干净且未启动实际merge；后续保留双方文档条目后再收尾。未部署/重启原服务、未重新采集；上线后从“原图Excel”取得修复版，已有本地下载不自动变化。回退撤销本功能提交，旧存档与原始证据仍可用。
+**入口/收尾**：artifacts/runtime/excel-original-images/{tests.log,build.log,real-export.json,native-excel.json,excel-original-images.png,download-entry.log,download-entry.png}；实现提交7be53c1。用户明确要求继续完成分支收尾，同步main@997b82a（汽车之家指标标签、证据ZIP命名），WORKLOG.md、口碑链档和测试文件均为独立新增内容插入冲突，已完整保留双方条目/函数；业务代码自动合并。本次仅对共享导出组合路径补验两项测试和前端类型检查，其余原图字节/Excel/浏览器证据继续复用，不重新采集、构建或执行全库测试。
+**整合验证/边界**：两项组合测试3.762秒通过（merge-tests.log），前端tsc、定向Ruff与git diff --check通过；按本条对应合并提交与PR完成推送、合并及分支删除，并核对本地main与远端一致。保留隔离工作树中的已交付Excel产物，原H:/ThreadSnap混合修改不动。本轮不部署/重启服务、不改写历史文件；回退撤销本功能提交，旧存档与原始证据仍可用。
+
+---
+
+## 2026-09-13 — 证据ZIP中文命名与页面截图车型筛选
+**身份/范围**：fetch 确认 main 与 origin/main 同为 ccd202b，从 main 创建 codex/evidence-names-vehicle-filter 及 H:/ThreadSnap-evidence-names-vehicle-filter；原 H:/ThreadSnap 混合工作区及其他工作树未触碰，依赖独立安装，不启动或重启现有服务。
+**状态/实现**：✅ 两项优化与必要定向验证完成。口碑证据 ZIP 使用中文平台目录及冻结“巡检日期-车型”目录/图片名，清理非法字符、重名加序号，清单路径/校验值一致；旧缓存派生独立中文命名副本，原包、数据库发布路径、图片字节与缺失项保留。帖子批次页面截图增加车型下拉与来源计数，按冻结圈子名过滤，同名不同排序仍独立展示；两类详情共用，切换批次重置，链接筛选及下载范围不受影响。
+**证据**：3项定向 unittest（test_evidence_zip_uses_frozen_chinese_names_and_unique_safe_paths、test_legacy_evidence_zip_gets_named_copy_without_replacing_frozen_source、test_txt_xlsx_and_evidence_zip_are_real_traceable_artifacts）一次通过，4.466秒；覆盖27项清单/26张缺图样本、中文平台、重名、日期、逐图哈希、旧包不变及重复下载缓存。npm run build（含tsc）、定向 Ruff 与 git diff --check 通过。隔离静态构建浏览器使用4个来源/3个冻结圈子名，验证4→2→4筛选、双排序、原图查看/下载链接、循环详情、390px无横向溢出、空态及错误重试；page_errors=[]，桌面和移动端截图已目视。
+**复核入口**：artifacts/runtime/evidence-optimizations/{targeted-tests.log,build.log,check_ui.py,browser-report.json,vehicle-filter-desktop.png,vehicle-filter-mobile.png}。浏览器 API 为本地确定性样本，不代表真实平台采集；未执行全库测试、多Agent审查、平台重采、AI请求或生产发布。
+**整合/下一步**：收尾同步 main@ffbf97f 的汽车之家标签修改，业务代码无冲突，两处文档插入冲突保留双方内容。本任务代码、ZIP输入及截图组件未改变，复用已通过证据，不重复全量验证；按本条对应提交/PR完成Git收尾，服务器更新独立处理。回退只撤销本任务提交；旧包及原始PNG保留，中文命名缓存不改业务数据，随原批次目录备份/清理。无新依赖声明、迁移或接口。
+
+---
+
+## 2026-09-13 — 汽车之家数量列改名为在售与口碑量
+**身份/范围**：从同步后的 main@ccd202b 创建 codex/autohome-metric-labels；在当前提供本地服务的 H:/ThreadSnap-tactile-ui 单写手完成，不触及 H:/ThreadSnap 混合修改。
+**状态/实现**：✅ 汽车之家 `volume` 标签由口碑量变为“在售”，`review_article_count` 由评价篇数变为“口碑量”；共用前端标签覆盖排名/映射表和证据卡/弹窗，后端 `metric_label` 同步新生成的汇报/XLSX。字段键、顺序、数值、比较与其他平台名称保持不变，历史截图/TXT/XLSX不重写。
+**证据**：`node --experimental-strip-types --test frontend/tests/reputation-metrics.test.mjs` 2项通过；`python -m unittest tests.test_reputation.ReputationInspectionTest.test_three_platform_registry_mapping_validation_and_publish_denominator -v` 通过，真实生成三平台XLSX确认M1“汽车之家-在售”、N1“汽车之家-口碑量”。生产构建（含tsc）、定向Ruff、diff-check通过。真实本地批次RP-S-20260913-1F50逐项核对27行的两数量值，MONA03为54/278；证据卡和弹窗显示“在售”，全部81项结果前后JSON SHA256均为22085d58ae723c409e6c53c2d203013ba71e53566ec818d92524eb1bed50df3a。
+**入口/边界**：artifacts/runtime/autohome-metric-labels/{frontend-tests.log,xlsx-test.log,build.log,ui-report.json,ranking-labels.png}；沿用5173→8000和原本地数据库，不重新采集、不创建新批次、不重写历史文件。领域词汇、产品设计、技术路线与口碑链档已同步；按本条提交/PR收尾，服务器部署不在本次范围。
 
 ---
 
