@@ -23,7 +23,15 @@
 **状态/实现**：✅ 两项优化与必要定向验证完成。口碑证据 ZIP 使用中文平台目录及冻结“巡检日期-车型”目录/图片名，清理非法字符、重名加序号，清单路径/校验值一致；旧缓存派生独立中文命名副本，原包、数据库发布路径、图片字节与缺失项保留。帖子批次页面截图增加车型下拉与来源计数，按冻结圈子名过滤，同名不同排序仍独立展示；两类详情共用，切换批次重置，链接筛选及下载范围不受影响。
 **证据**：3项定向 unittest（test_evidence_zip_uses_frozen_chinese_names_and_unique_safe_paths、test_legacy_evidence_zip_gets_named_copy_without_replacing_frozen_source、test_txt_xlsx_and_evidence_zip_are_real_traceable_artifacts）一次通过，4.466秒；覆盖27项清单/26张缺图样本、中文平台、重名、日期、逐图哈希、旧包不变及重复下载缓存。npm run build（含tsc）、定向 Ruff 与 git diff --check 通过。隔离静态构建浏览器使用4个来源/3个冻结圈子名，验证4→2→4筛选、双排序、原图查看/下载链接、循环详情、390px无横向溢出、空态及错误重试；page_errors=[]，桌面和移动端截图已目视。
 **复核入口**：artifacts/runtime/evidence-optimizations/{targeted-tests.log,build.log,check_ui.py,browser-report.json,vehicle-filter-desktop.png,vehicle-filter-mobile.png}。浏览器 API 为本地确定性样本，不代表真实平台采集；未执行全库测试、多Agent审查、平台重采、AI请求或生产发布。
-**下一步/边界**：按本条对应提交/PR完成Git收尾；服务器更新独立处理。回退只撤销本任务提交；旧包及原始PNG保留，中文命名缓存不改业务数据，随原批次目录备份/清理。无新依赖声明、迁移或接口。
+**整合/下一步**：收尾同步 main@ffbf97f 的汽车之家标签修改，业务代码无冲突，两处文档插入冲突保留双方内容。本任务代码、ZIP输入及截图组件未改变，复用已通过证据，不重复全量验证；按本条对应提交/PR完成Git收尾，服务器更新独立处理。回退只撤销本任务提交；旧包及原始PNG保留，中文命名缓存不改业务数据，随原批次目录备份/清理。无新依赖声明、迁移或接口。
+
+---
+
+## 2026-09-13 — 汽车之家数量列改名为在售与口碑量
+**身份/范围**：从同步后的 main@ccd202b 创建 codex/autohome-metric-labels；在当前提供本地服务的 H:/ThreadSnap-tactile-ui 单写手完成，不触及 H:/ThreadSnap 混合修改。
+**状态/实现**：✅ 汽车之家 `volume` 标签由口碑量变为“在售”，`review_article_count` 由评价篇数变为“口碑量”；共用前端标签覆盖排名/映射表和证据卡/弹窗，后端 `metric_label` 同步新生成的汇报/XLSX。字段键、顺序、数值、比较与其他平台名称保持不变，历史截图/TXT/XLSX不重写。
+**证据**：`node --experimental-strip-types --test frontend/tests/reputation-metrics.test.mjs` 2项通过；`python -m unittest tests.test_reputation.ReputationInspectionTest.test_three_platform_registry_mapping_validation_and_publish_denominator -v` 通过，真实生成三平台XLSX确认M1“汽车之家-在售”、N1“汽车之家-口碑量”。生产构建（含tsc）、定向Ruff、diff-check通过。真实本地批次RP-S-20260913-1F50逐项核对27行的两数量值，MONA03为54/278；证据卡和弹窗显示“在售”，全部81项结果前后JSON SHA256均为22085d58ae723c409e6c53c2d203013ba71e53566ec818d92524eb1bed50df3a。
+**入口/边界**：artifacts/runtime/autohome-metric-labels/{frontend-tests.log,xlsx-test.log,build.log,ui-report.json,ranking-labels.png}；沿用5173→8000和原本地数据库，不重新采集、不创建新批次、不重写历史文件。领域词汇、产品设计、技术路线与口碑链档已同步；按本条提交/PR收尾，服务器部署不在本次范围。
 
 ---
 
