@@ -363,6 +363,8 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual((28, 20), (sheet.max_row, sheet.max_column))
         self.assertEqual("懂车帝-口碑分", sheet["E1"].value)
         self.assertEqual("汽车之家-口碑分", sheet["K1"].value)
+        self.assertEqual("汽车之家-在售", sheet["M1"].value)
+        self.assertEqual("汽车之家-口碑量", sheet["N1"].value)
         self.assertEqual("易车-口碑分", sheet["P1"].value)
         self.assertEqual("易车-参与人数", sheet["R1"].value)
         self.assertEqual("易车-车主点评", sheet["S1"].value)

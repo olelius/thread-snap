@@ -21,8 +21,12 @@ METRIC_LABELS = {
 
 def metric_label(platform_code: str, key: str) -> str:
     """共用计数字段在不同平台保留各自业务名称。"""
-    if platform_code == "autohome" and key == "circle_content_count":
-        return "论坛帖子总数"
+    if platform_code == "autohome":
+        return {
+            "volume": "在售",
+            "review_article_count": "口碑量",
+            "circle_content_count": "论坛帖子总数",
+        }.get(key, METRIC_LABELS[key])
     if platform_code == "yiche" and key == "volume":
         return "参与人数"
     return METRIC_LABELS[key]
