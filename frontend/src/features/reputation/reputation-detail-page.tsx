@@ -93,7 +93,8 @@ export function ReputationDetailPage() {
       </Tabs>
       <div className='flex flex-wrap gap-2'>
         <DownloadButton href={reportDownload} icon={FileText}>TXT</DownloadButton>
-        <DownloadButton href={run.downloads?.xlsx} icon={FileSpreadsheet}>XLSX</DownloadButton>
+        <DownloadButton href={run.downloads?.xlsx ? `${run.downloads.xlsx}?layout=original_images` : undefined} icon={FileSpreadsheet}>原图 Excel</DownloadButton>
+        <DownloadButton href={run.downloads?.xlsx} icon={FileSpreadsheet}>存档 XLSX</DownloadButton>
         <DownloadButton href={run.downloads?.evidence_zip} icon={FileArchive}>证据 ZIP</DownloadButton>
       </div>
     </div>

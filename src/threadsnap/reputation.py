@@ -19,10 +19,14 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 from openpyxl import Workbook
+from openpyxl.comments import Comment
 from openpyxl.drawing.image import Image as WorksheetImage
+from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
-from PIL import Image, ImageDraw, ImageFont
+from openpyxl.utils.units import pixels_to_EMU, pixels_to_points
+from PIL import Image, ImageDraw
 from pydantic import BaseModel
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -88,6 +92,7 @@ GREEN_FILL = PatternFill("solid", fgColor="E2F0D9")
 RED_FILL = PatternFill("solid", fgColor="F4CCCC")
 NEUTRAL_FILL = PatternFill("solid", fgColor="F8FAFC")
 HEADER_FILL = PatternFill("solid", fgColor="E8EEF8")
+XLSX_LAYOUT_VERSION = "independent-original-images-v1"
 
 
 class SyntheticRunCreate(BaseModel):
@@ -2528,6 +2533,48 @@ class ReputationService:
                 )
             return Path(raw)
 
+    def get_original_images_xlsx(self, run_id: str) -> Path:
+        """显式生成原批次的独立原图版，不替换历史存档或读取关联补跑。"""
+
+        archived = self.get_file(run_id, "xlsx")
+        with self.sessions() as db:
+            run = db.get(ReputationRun, run_id)
+            if run.status not in {"success", "partial_success", "failed"}:
+                raise DomainError(
+                    "REPUTATION_REPORT_NOT_READY", "巡检尚未终态。", status_code=409
+                )
+            # 原存档是首次发布输入身份；布局升级只创建独立文件，不更新默认路径。
+            key = _text_hash([run.id, _sha256(archived), XLSX_LAYOUT_VERSION])
+            directory = self.settings.reputation_dir / run.id / "xlsx-originals"
+            path = directory / f"{run.number}-{XLSX_LAYOUT_VERSION}-{key[:16]}.xlsx"
+            if path.is_file():
+                return path
+            results = list(db.scalars(
+                select(ReputationResult)
+                .where(ReputationResult.run_id == run_id)
+                .order_by(ReputationResult.role_position, ReputationResult.vehicle_position)
+            ).all())
+            evidence = {
+                item.result_id: item
+                for item in db.scalars(
+                    select(ReputationEvidence).where(
+                        ReputationEvidence.result_id.in_([row.id for row in results])
+                    )
+                ).all()
+            }
+            directory.mkdir(parents=True, exist_ok=True)
+            temporary = directory / f".{uuid7()}.tmp.xlsx"
+            try:
+                self._create_xlsx(run, results, evidence, temporary)
+                # 同一输入并发首次下载时先发布者胜出，已发布文件的字节保持不变。
+                try:
+                    path.hardlink_to(temporary)
+                except FileExistsError:
+                    pass
+            finally:
+                temporary.unlink(missing_ok=True)
+            return path
+
     def get_evidence_file(self, evidence_id: str, kind: str) -> Path:
         with self.sessions() as db:
             evidence = db.get(ReputationEvidence, evidence_id)
@@ -3749,11 +3796,21 @@ class ReputationService:
         evidence_by_result: dict[str, ReputationEvidence],
         path: Path,
     ) -> None:
+        """从冻结结果生成固定表格；每份证据以原始字节独立嵌入。"""
+
         workbook = Workbook()
         sheet = workbook.active
         sheet.title = "口碑巡检"
         platform_codes = list(run.platform_codes or [PLATFORM_CODE])
         single_platform = len(platform_codes) == 1
+        image_codes = [
+            code for code in platform_codes
+            if any(
+                result.platform_code == code
+                and (result.evidence_required or result.id in evidence_by_result)
+                for result in results
+            )
+        ]
         headers = (
             ["日期", "角色", "车系", "车型"]
             + [
@@ -3764,6 +3821,7 @@ class ReputationService:
                 for key in REPUTATION_PLATFORMS[code].metric_keys
             ]
             + ["备注"]
+            + [f"{REPUTATION_PLATFORMS[code].display_name}-页面证据" for code in image_codes]
         )
         sheet.append(headers)
         for cell in sheet[1]:
@@ -3772,8 +3830,7 @@ class ReputationService:
             cell.alignment = Alignment(horizontal="center", vertical="center")
         vehicles = list({result.vehicle_id: result for result in results}.values())
         by_target = {(result.vehicle_id, result.platform_code): result for result in results}
-        preview_dir = path.parent / "xlsx-previews"
-        preview_manifest: list[dict[str, Any]] = []
+        note_column = len(headers) - len(image_codes)
         for row_index, vehicle in enumerate(vehicles, start=2):
             values = [
                 run.planned_date,
@@ -3781,6 +3838,8 @@ class ReputationService:
                 vehicle.series_name,
                 vehicle.vehicle_name,
             ]
+            images: dict[str, WorksheetImage] = {}
+            image_notes: dict[str, str] = {}
             for code in platform_codes:
                 result = by_target.get((vehicle.vehicle_id, code))
                 values.extend(
@@ -3799,7 +3858,26 @@ class ReputationService:
                 elif result.evidence_required and not evidence:
                     reason = result.error_message if result and result.error_message else "证据缺失"
                     missing.append(f"{REPUTATION_PLATFORMS[code].display_name}：{reason}")
+                if evidence:
+                    try:
+                        content = Path(evidence.metric_region_path).read_bytes()
+                        if hashlib.sha256(content).hexdigest() != evidence.metric_region_sha256:
+                            raise ValueError("证据校验值不一致")
+                        with Image.open(io.BytesIO(content)) as original:
+                            original.verify()
+                        images[code] = WorksheetImage(io.BytesIO(content))
+                    except (OSError, ValueError, SyntaxError):
+                        reason = "证据文件缺失、损坏或校验失败"
+                        image_notes[code] = reason
+                        missing.append(f"{REPUTATION_PLATFORMS[code].display_name}：{reason}")
+                elif code in image_codes:
+                    image_notes[code] = (
+                        "未取得执行结果" if result is None else
+                        (result.error_message or "证据缺失") if result.evidence_required
+                        else "本项未要求截图"
+                    )
             values.append("；".join(missing))
+            values.extend(image_notes.get(code, "") for code in image_codes)
             sheet.append(values)
             first_column = 5
             for code in platform_codes:
@@ -3816,25 +3894,36 @@ class ReputationService:
                     )
                     cell.alignment = Alignment(horizontal="center")
                 first_column += len(REPUTATION_PLATFORMS[code].metric_keys)
-            preview_path, preview_record = self._xlsx_preview(
-                vehicle.vehicle_id,
-                platform_codes,
-                by_target,
-                evidence_by_result,
-                preview_dir,
+            sheet.cell(row_index, note_column).alignment = Alignment(
+                vertical="top", wrap_text=True
             )
-            if preview_path:
-                preview = WorksheetImage(preview_path)
-                if single_platform:
-                    preview.width, preview.height = 294, 66
-                    sheet.row_dimensions[row_index].height = 52
-                else:
-                    preview.width, preview.height = 720, 135
-                    sheet.row_dimensions[row_index].height = 104
-                note_column = first_column
-                sheet.add_image(preview, f"{get_column_letter(note_column)}{row_index}")
-            if preview_record:
-                preview_manifest.append(preview_record)
+            row_height = 60.0
+            for offset, code in enumerate(image_codes, start=1):
+                column = note_column + offset
+                cell = sheet.cell(row_index, column)
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+                picture = images.get(code)
+                if picture is None:
+                    continue
+                evidence = evidence_by_result[by_target[(vehicle.vehicle_id, code)].id]
+                # 只缩放Excel绘图尺寸，媒体字节仍是原PNG；独立锚点与留白防止连体。
+                scale = min(1.0, 552 / picture.width, 480 / picture.height)
+                width, height = picture.width * scale, picture.height * scale
+                picture.anchor = OneCellAnchor(
+                    _from=AnchorMarker(
+                        col=column - 1, row=row_index - 1,
+                        colOff=pixels_to_EMU(12), rowOff=pixels_to_EMU(12),
+                    ),
+                    ext=XDRPositiveSize2D(pixels_to_EMU(width), pixels_to_EMU(height)),
+                )
+                sheet.add_image(picture)
+                cell.comment = Comment(
+                    f"证据ID：{evidence.id}\nSHA-256：{evidence.metric_region_sha256}"
+                    f"\n原始尺寸：{picture.width}×{picture.height} 像素\n独立原图，可单独复制或放大。",
+                    "ThreadSnap",
+                )
+                row_height = max(row_height, pixels_to_points(height + 24))
+            sheet.row_dimensions[row_index].height = row_height
         metric_widths = {
             "score": 12,
             "rank": 12,
@@ -3851,115 +3940,14 @@ class ReputationService:
                 for code in platform_codes
                 for key in REPUTATION_PLATFORMS[code].metric_keys
             ]
-            + [105 if not single_platform else 44]
+            + [32]
+            + [83] * len(image_codes)
         )
         for index, width in enumerate(widths, start=1):
             sheet.column_dimensions[get_column_letter(index)].width = width
         sheet.freeze_panes = "E2"
         sheet.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{len(vehicles) + 1}"
         workbook.save(path)
-        if preview_manifest:
-            (preview_dir / "manifest.json").write_text(
-                json.dumps(
-                    {
-                        "schema_version": "reputation-xlsx-preview-v1",
-                        "run_id": run.id,
-                        "items": preview_manifest,
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
-
-    @staticmethod
-    def _xlsx_preview(
-        vehicle_id: str,
-        platform_codes: list[str],
-        by_target: dict[tuple[str, str], ReputationResult],
-        evidence_by_result: dict[str, ReputationEvidence],
-        preview_dir: Path,
-    ) -> tuple[str | None, dict[str, Any] | None]:
-        """为多平台XLSX生成单张可追溯预览，独立证据字节保持不变。"""
-
-        sources: list[dict[str, Any]] = []
-        for code in platform_codes:
-            result = by_target.get((vehicle_id, code))
-            evidence = evidence_by_result.get(result.id) if result else None
-            sources.append(
-                {
-                    "platform_code": code,
-                    "platform_name": REPUTATION_PLATFORMS[code].display_name,
-                    "result_id": result.id if result else None,
-                    "evidence_id": evidence.id if evidence else None,
-                    "source_sha256": evidence.metric_region_sha256 if evidence else None,
-                    "source_path": evidence.metric_region_path if evidence else None,
-                    "evidence_required": result.evidence_required if result else True,
-                }
-            )
-        available = [source for source in sources if source["source_path"]]
-        if len(platform_codes) == 1:
-            return (str(available[0]["source_path"]), None) if available else (None, None)
-        if not available:
-            return None, None
-
-        input_hash = _text_hash(
-            [
-                {
-                    "platform_code": source["platform_code"],
-                    "source_sha256": source["source_sha256"],
-                    "evidence_required": source["evidence_required"],
-                }
-                for source in sources
-            ]
-        )
-        preview_dir.mkdir(parents=True, exist_ok=True)
-        preview_path = preview_dir / f"{vehicle_id}-{input_hash[:16]}.png"
-        if not preview_path.is_file():
-            tile_width, content_height, label_height = 320, 180, 28
-            canvas = Image.new(
-                "RGB", (tile_width * len(platform_codes), content_height + label_height), "white"
-            )
-            draw = ImageDraw.Draw(canvas)
-            try:
-                font = ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", 16)
-            except OSError:
-                font = ImageFont.load_default()
-            for index, source in enumerate(sources):
-                left = index * tile_width
-                draw.rectangle(
-                    (left, 0, left + tile_width - 1, label_height - 1),
-                    fill="#E8EEF8",
-                    outline="#CBD5E1",
-                )
-                draw.text((left + 10, 4), source["platform_name"], fill="#0F172A", font=font)
-                draw.rectangle(
-                    (left, label_height, left + tile_width - 1, label_height + content_height - 1),
-                    outline="#CBD5E1",
-                )
-                if source["source_path"]:
-                    with Image.open(source["source_path"]) as original:
-                        tile = original.convert("RGB")
-                        tile.thumbnail((tile_width - 12, content_height - 12), Image.Resampling.LANCZOS)
-                    x = left + (tile_width - tile.width) // 2
-                    y = label_height + (content_height - tile.height) // 2
-                    canvas.paste(tile, (x, y))
-                else:
-                    draw.text(
-                        (left + 94, label_height + 78),
-                        "未取得页面证据" if source["evidence_required"] else "本项未要求截图",
-                        fill="#B91C1C" if source["evidence_required"] else "#475569",
-                        font=font,
-                    )
-            canvas.save(preview_path, format="PNG", optimize=False)
-        record = {
-            "vehicle_id": vehicle_id,
-            "input_hash": input_hash,
-            "preview_path": str(preview_path),
-            "preview_sha256": _sha256(preview_path),
-            "sources": sources,
-        }
-        return str(preview_path), record
 
     @staticmethod
     def _run_dict(run: ReputationRun) -> dict[str, Any]:

@@ -18,6 +18,15 @@
 
 ---
 
+## 2026-09-13 — 修复口碑Excel图片连体与缩略模糊
+**身份/目标**：从同步后的 main@ccd202b 创建 codex/reputation-excel-original-images、独立工作树 H:/ThreadSnap-excel-original-images；原 H:/ThreadSnap 混合修改保持原样。取消缩略拼图，独立保留原图。
+**状态/实现**：✅ 取消320×180缩略及720×135拼图绘制；保留指标与备注，其后按平台分列嵌入原始PNG，552×480等比显示、四周12px留白、行高自适应，独立图片可复制/放大。文件哈希校验，缺图/损坏写文字，URL模式不造空图。新增显式“原图Excel”下载，按原批次/存档哈希/布局版本生成并复用独立文件；“存档XLSX”与历史文件、数据库不变，不纳入关联补跑。
+**最小验证**：按用户要求只跑3项定向unittest（tests.test_reputation_xlsx_images、原图下载幂等与历史保护、既有三平台81项/54证据），4.071秒通过；定向Ruff、前端build（含tsc）、git diff --check通过。首次build因旧工作树依赖缺少headlessui失败，改用package-lock相同的既有依赖后通过，未安装新依赖。
+**真实产物**：只读当前批次 RP-S-20260913-1F50（81项、27车型），导出28行22列、54张独立图片；54/54嵌入字节与原图SHA-256一致，既有指标、原存档及55个源文件哈希不变。Excel16实际打开识别54张图片，原生渲染U1:V3确认平台分列、比例与留白；浏览器实点“原图Excel”下载字节等于该已核验文件。XLSX SHA-256：8cd8ec51fb7a84ba99cb708a582ed63561305f9f6adcb2307906ebb94787a351。
+**入口/下一步**：artifacts/runtime/excel-original-images/{tests.log,build.log,real-export.json,native-excel.json,excel-original-images.png,download-entry.log,download-entry.png}；按本条对应提交与PR完成Git收尾。未部署/重启原服务、未重新采集；上线后从“原图Excel”取得修复版，已有本地下载不自动变化。回退撤销本功能提交，旧存档与原始证据仍可用。
+
+---
+
 ## 2026-09-11 — 批次表格导出筛选后的全部结果
 **身份/范围**：从已同步的 main@c1c8cfc 创建 codex/export-filtered-table，独立工作树 H:/ThreadSnap-export-filtered-table；原 H:/ThreadSnap 的混合修改保持原样。用户明确选择包含其他分页的全部筛选结果。
 **状态/实现**：✅ 开发与目标验收完成。“导出筛选结果”无需模板，GET posts/export 复用列表的标题、来源多选、可见状态、舆情、分析状态和排序查询，保持关联补提去重及批次隔离；固定十列 XLSX，保留来源/列表顺序/跨论坛、删除帖、人工或 AI 结果、上海时区、空值和数字零，文本不作为公式执行。原模板入口改名“按模板导出”，逻辑保持；无新依赖、迁移或持久导出记录。两类批次详情共用，零结果、请求错误、非终态、筛选更新及生成中禁用。1800px 起筛选与操作单行，较窄布局自然换行。
