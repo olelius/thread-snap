@@ -24,7 +24,7 @@ from .reputation_browser import (
     stable_measure,
 )
 
-ADAPTER_VERSION = "autohome-reputation-v3-comparison-rank"
+ADAPTER_VERSION = "autohome-reputation-v4-series-id-identity"
 VALIDATION_CONTRACT_VERSION = "autohome-reputation-mapping-v2"
 VIEWPORT = {"width": 1440, "height": 1600}
 
@@ -187,7 +187,7 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
               const right = Math.max(...boxes.map((box) => box.right)) + 20;
               const bottom = Math.max(...boxes.map((box) => box.bottom + scrollY)) + 36;
               return {
-                actual_name: name.textContent.trim().split('-').pop().trim(),
+                actual_name: name.textContent.trim(),
                 score: score ? (score.textContent.match(/口碑评分\s*([0-9.]+)/) || [])[1] || null : null,
                 rank: rank ? rank.textContent.trim() || null : null,
                 volume: null,
@@ -198,14 +198,15 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
             }
             """
             measurement, measurements = await stable_measure(page, script)
-            actual_name = str(result.get("seriesname") or measurement["actual_name"]).strip()
-            if (
-                target.platform_display_name.replace(" ", "").casefold()
-                != actual_name.replace(" ", "").casefold()
-            ):
+            # 名称只展示，厂家前缀或别名不作为失败条件；身份以稳定车系ID为准。
+            normalize_series_url(page.url, target.platform_vehicle_id)
+            actual_id = str(result.get("seriesid") or "").strip()
+            if actual_id != target.platform_vehicle_id.strip():
                 raise ReputationAdapterError(
-                    "REPUTATION_IDENTITY_MISMATCH", "汽车之家页面车型身份与冻结映射不一致。"
+                    "REPUTATION_IDENTITY_MISMATCH",
+                    f"汽车之家接口车系ID（{actual_id or '缺失'}）与映射ID（{target.platform_vehicle_id}）不一致。",
                 )
+            actual_name = str(result.get("seriesname") or measurement["actual_name"] or "").strip()
             rank, rank_scope = comparison_rank(result, target.platform_vehicle_id)
             score = str(result.get("average") or "").strip() or measurement.get("score")
             volume = str(result.get("averagenum") or "").strip() or None
@@ -231,6 +232,8 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
                 measurements=[
                     {
                         **item,
+                        "api_seriesid": result.get("seriesid"),
+                        "api_seriesname": result.get("seriesname"),
                         "api_levelrank": result.get("levelrank"),
                         "api_comparison_rank": rank,
                         "api_comparison_title": result.get("cmpSeriesTitle"),
