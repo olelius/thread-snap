@@ -18,6 +18,14 @@
 
 ---
 
+## 2026-09-14 — 汽车之家删除名称一致性拦截
+**身份/范围**：从同步后的origin/main@0ae8d4b创建codex/fix-autohome-name-identity、H:/ThreadSnap-autohome-name-identity。用户在实现途中明确要求撤掉名称比较，已撤销前缀兼容候选，最终仅保留映射ID/落地URL车系ID/接口seriesid一致性。平台展示名只显示，不要求名称相等；actual_name保留接口原始值。其他平台、ID配置、历史结果、发布范围不变。
+**依据/实现**：复用SSH保存的6条诊断：配置含厂家前缀，指标接口seriesid逐一与映射相同，HTTP200且均有评分；实际名称不含厂家。源码只改reputation_autohome.py，适配器版本v4-series-id-identity，mapping-v2继续兼容。DOM保留完整名称，避免把连字符型号截断；证据测量保留API原始seriesid/seriesname，明确ID异常时输出预期/实际ID。
+**最小检查**：2项定向unittest（0.039秒）通过，直接覆盖生产_visit的3种名称同ID放行及错误/缺失ID、URL错ID仍拒绝；定向Ruff与diff-check通过。不运行全库、前端构建、AI或独立审查。
+**入口/剩余**：H:/ThreadSnap-tactile-ui/artifacts/runtime/autohome-name-mismatch-20260914/name-comparison.json；本分支artifacts/runtime/autohome-identity/tests.log。提交合并后仅重建wheel、复用前端59文件/运行依赖，最小包更新远端；随后只更新截图6条失败映射验证，不全平台重验、不发布草稿或修改旧批次。
+
+---
+
 ## 2026-09-14 — 认证驱动启动避开uvloop fork后清理
 **身份/目标**：从fetch后的origin/main@0a4333c直接创建codex/fix-auth-driver-startup及H:/ThreadSnap-auth-driver-startup。优先恢复认证，不要求当前已停滞采集作为验证前置；原混合工作树和批次保留。
 **根因/实现**：复用13:34:44 PID792660的现有core，栈为uvloop fork→PyOS_AfterFork_Child→线程局部finalizer→curl线程池销毁→pthread_join段错误；驱动尚未exec，父服务/OOM正常。CLI显式固定loop=asyncio，使Linux使用标准Selector/子进程路径，Windows维持Proactor；认证/采集/会话协议不变，无依赖或数据库变化，不声称所有Linux启动均无fork。
