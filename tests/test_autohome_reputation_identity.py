@@ -69,6 +69,12 @@ class AutohomeIdentityTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual("捷途山海L7", result.actual_name)
                 self.assertEqual(7711, result.measurements[0]["api_seriesid"])
 
+    async def test_same_series_stopselling_page_is_supported(self):
+        result = await self.visit("厂家-展示名", 7711, "7711/stopselling")
+        self.assertEqual("https://k.autohome.com.cn/7711/stopselling", result.final_url)
+        with self.assertRaises(ReputationAdapterError):
+            await self.visit("厂家-展示名", 7397, "7397/stopselling")
+
     async def test_wrong_or_missing_id_and_wrong_url_are_still_rejected(self):
         for actual_id, final_id in ((7397, "7711"), (None, "7711"), (7711, "7397")):
             with self.subTest(actual_id=actual_id, final_id=final_id):

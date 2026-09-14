@@ -20,7 +20,8 @@
 
 ## 2026-09-14 — 汽车之家删除名称一致性拦截
 **身份/范围**：从同步后的origin/main@0ae8d4b创建codex/fix-autohome-name-identity、H:/ThreadSnap-autohome-name-identity。用户在实现途中明确要求撤掉名称比较，已撤销前缀兼容候选，最终仅保留映射ID/落地URL车系ID/接口seriesid一致性。平台展示名只显示，不要求名称相等；actual_name保留接口原始值。其他平台、ID配置、历史结果、发布范围不变。
-**依据/实现**：复用SSH保存的6条诊断：配置含厂家前缀，指标接口seriesid逐一与映射相同，HTTP200且均有评分；实际名称不含厂家。源码只改reputation_autohome.py，适配器版本v4-series-id-identity，mapping-v2继续兼容。DOM保留完整名称，避免把连字符型号截断；证据测量保留API原始seriesid/seriesname，明确ID异常时输出预期/实际ID。
+**依据/实现**：复用SSH保存的6条诊断：配置含厂家前缀，指标接口seriesid逐一与映射相同，HTTP200且均有评分；实际名称不含厂家。源码只改reputation_autohome.py，适配器版本v5-stopselling-identity，mapping-v2继续兼容。DOM保留完整名称，避免把连字符型号截断；证据测量保留API原始seriesid/seriesname，明确ID异常时输出预期/实际ID。
+**现场补充**：v4已部署后6项恢复5项；宋PLUS DM先布局不稳，自动重试落地/stopselling被原URL规则拦截。一次只读导航实证https://k.autohome.com.cn/5761/stopselling、HTTP200、标题/车系名仍宋PLUS新能源，故v5只支持该已确认子路径并保留原车系ID。其余5项已成功的证据不重复跑。
 **最小检查**：2项定向unittest（0.039秒）通过，直接覆盖生产_visit的3种名称同ID放行及错误/缺失ID、URL错ID仍拒绝；定向Ruff与diff-check通过。不运行全库、前端构建、AI或独立审查。
 **入口/剩余**：H:/ThreadSnap-tactile-ui/artifacts/runtime/autohome-name-mismatch-20260914/name-comparison.json；本分支artifacts/runtime/autohome-identity/tests.log。提交合并后仅重建wheel、复用前端59文件/运行依赖，最小包更新远端；随后只更新截图6条失败映射验证，不全平台重验、不发布草稿或修改旧批次。
 
