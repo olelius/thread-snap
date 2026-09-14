@@ -23,7 +23,9 @@
 **依据/实现**：复用SSH保存的6条诊断：配置含厂家前缀，指标接口seriesid逐一与映射相同，HTTP200且均有评分；实际名称不含厂家。源码只改reputation_autohome.py，适配器版本v5-stopselling-identity，mapping-v2继续兼容。DOM保留完整名称，避免把连字符型号截断；证据测量保留API原始seriesid/seriesname，明确ID异常时输出预期/实际ID。
 **现场补充**：v4已部署后6项恢复5项；宋PLUS DM先布局不稳，自动重试落地/stopselling被原URL规则拦截。一次只读导航实证https://k.autohome.com.cn/5761/stopselling、HTTP200、标题/车系名仍宋PLUS新能源，故v5只支持该已确认子路径并保留原车系ID。其余5项已成功的证据不重复跑。
 **最小检查**：2项定向unittest（0.039秒）通过，直接覆盖生产_visit的3种名称同ID放行及错误/缺失ID、URL错ID仍拒绝；定向Ruff与diff-check通过。不运行全库、前端构建、AI或独立审查。
-**入口/剩余**：H:/ThreadSnap-tactile-ui/artifacts/runtime/autohome-name-mismatch-20260914/name-comparison.json；本分支artifacts/runtime/autohome-identity/tests.log。提交合并后仅重建wheel、复用前端59文件/运行依赖，最小包更新远端；随后只更新截图6条失败映射验证，不全平台重验、不发布草稿或修改旧批次。
+**入口/剩余**：H:/ThreadSnap-tactile-ui/artifacts/runtime/autohome-name-mismatch-20260914/name-comparison.json；本分支artifacts/runtime/autohome-identity/tests.log。PR #306/#307均已合并，远端最终代码7c2cafe61b24838c89d4f963901e1667dfb2ee62；只重建wheel、复用前端59文件/运行依赖，数据库仍f3b6c9d2a804。最终包1188095字节，SHA256 270428a1f9bbf20425e8d53bfd6bc7cc173fc0823b82494ae0d49e5a4301048a。
+**更新完成**：首轮6项中5项成功；确认宋PLUS同车系停售页后仅重跑该1项并成功（01a09f39-d9b9-7376-adf4-d4426d99fd3c）。截图6条全部verified，评分/论坛数/新证据已生成，配置名称保留。原5项不重复验证，未触发全平台巡检、AI或草稿发布。27张历史/配置表在部署窗口哈希保持，映射更新经现有API产生新验证记录；旧失败尝试和旧批次留存。
+**部署证据/回退**：current=0.1.0-7c2cafe61b24、previous=0.1.0-84e579c52d32，最终切换27.606秒，三个服务active，临时隧道继续disabled；正式http://www.jingruigongguan.cn:61037/健康/首页/capabilities均200，v5能力已生效。H:/ThreadSnap-tactile-ui/artifacts/runtime/deploy-autohome-name-20260914/{deployment-summary.json,public-final.json,server-evidence/six-summary.json,server-evidence/song-summary.json}。单次停售分支测试0.017秒通过，其余未受影响证据复用。备份/var/lib/threadsnap/backups/minimal-release-upgrade/20260914-autohome-7c2cafe保留，已开放写入后回退仅切程序，不回写旧库。接下来用户刷新查看，其他旧失败或未知映射不自动批量执行。
 
 ---
 
