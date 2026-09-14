@@ -18,6 +18,15 @@
 
 ---
 
+## 2026-09-14 — 认证驱动启动避开uvloop fork后清理
+**身份/目标**：从fetch后的origin/main@0a4333c直接创建codex/fix-auth-driver-startup及H:/ThreadSnap-auth-driver-startup。优先恢复认证，不要求当前已停滞采集作为验证前置；原混合工作树和批次保留。
+**根因/实现**：复用13:34:44 PID792660的现有core，栈为uvloop fork→PyOS_AfterFork_Child→线程局部finalizer→curl线程池销毁→pthread_join段错误；驱动尚未exec，父服务/OOM正常。CLI显式固定loop=asyncio，使Linux使用标准Selector/子进程路径，Windows维持Proactor；认证/采集/会话协议不变，无依赖或数据库变化，不声称所有Linux启动均无fork。
+**目标机证据**：同一threadsnap用户/现有依赖/Wayland环境，回环HTTP预热4个curl线程，不访问平台或正式会话库。旧uvloop本次未复现崩溃，但记录4次子进程线程局部finalizer及1次Python after-fork；标准asyncio连续3次驱动/浏览器/输入/截图成功且这些回调0。进一步真实调用BrowserAuthManager._ensure_browser：三个平台身份均使用独立回环样本，全部active/ready、CDP输入正确且收到screencast帧，回调0；这证明共享启动链，不宣称完成真实平台登录。原core和本次实验一起支持避开已定位失效路径。
+**最小验证/入口**：CLI参数1项unittest通过，定向Ruff及diff-check通过，无全量测试/平台重采/AI调用。远端/var/tmp/threadsnap-auth-startup-20260914/{probe.py,probe_auth.py,uvloop-result.json,asyncio-result.json,auth-asyncio-result.json}；本地artifacts/runtime/auth-driver-startup/{entry-test.log,receipt.tar.gz}。源码仅共享CLI一处修改，技术路线和部署入口说明同步。
+**剩余/边界**：提交合并修复；已询问用户是否随后最小包部署并短暂重启后端恢复认证。未获切换答复前，正式服务/会话和历史批次保持；不自动补提。上线后真实平台账号登录由用户完成，平台访问状态与浏览器启动成功分别判断。
+
+---
+
 ## 2026-09-14 — 最小包更新远端至aa94343
 **状态/身份**：✅ 按用户要求更新服务并提供当前入口；fetch确认最新main@aa94343293ef25adad7c8f0d388925e692f4469f。SSH实查旧current=0.1.0-0911381da53c及实际进程cwd一致，七类业务任务无活动；只读检查后从冻结main制包，不使用旧H:/ThreadSnap实验分支。
 **包/执行**：最小包1187617字节，SHA256 078a55e5cfb780d43afb8f43b1d0dfe29e80bdd25fe2da1150d6a05c71b55968；只构建应用wheel和59项前端，36项部署/许可文件复用，22项运行依赖声明与138项已装包版本不变，无npm安装或服务器依赖安装。沿用reflink、双空闲门、Nginx先停/后端先起及restorecon PID标签修正，维护期关闭后台与外部写入。

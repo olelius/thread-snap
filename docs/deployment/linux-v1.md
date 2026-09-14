@@ -164,3 +164,7 @@ sudo bash /opt/threadsnap/current/deploy/restore-backup.sh \
 该路径只允许对 reflink 新 release 执行 `pip --no-index --no-deps --force-reinstall` 以替换 ThreadSnap 自身 wheel，前端直接替换为包内生产文件；不得运行 DNF、解析 wheelhouse、复制浏览器或模型。最终切换按以下顺序完成：停机前重查七类任务空闲，先停止 Nginx，再停止后端；停机后再次检查七类状态，确认没有预检后新入队或运行任务，再生成带完整性、Alembic 和 SHA-256 的 SQLite 备份；设置旧 release 为 `previous`、原子切换 `current`；依次启动并等待后端 `8000`、Nginx `8088`，完整验证窗口使用临时运行配置暂停调度与 Worker，并隔离外部请求和写入；执行完整 `deploy/verify.sh`、维护请求拦截探测及历史表校验后，恢复原运行配置与 Nginx，开放正常调度和入口，再单独验证公网。停机后空闲门未通过时保持旧 release 并恢复原服务；写入尚未开放时，备份后的迁移、切换、启动或验收失败同时恢复旧 release 和停机数据库。写入开放后，禁止用停机时的旧数据库备份覆盖当前数据库；无迁移的兼容更新可回退程序但保留新写入，其他情况停止自动回退并保留现场。
 
 最小包不是新的安装基线：服务器仍须保留最近一次已校验的完整离线包、既有补充运行时离线包、当前/上一 release 和数据库备份，用于新机安装、服务器依赖变化、部署脚本变化和运行时修复。每次最小升级脚本是绑定明确基线提交、目标提交、数据库版本和包哈希的一次性受审产物；前端清单变化须通过上述独立审计，不得静默跳过原兼容性门禁，项目尚未提供可跳过这些门禁的通用“快速升级”命令。
+
+### 认证驱动启动兼容性
+
+正式systemd沿用 `python -m threadsnap.cli serve`，CLI显式固定Uvicorn `loop="asyncio"`；排障手动通过uvicorn直接启动时同样指定 `--loop asyncio`。保持单应用进程，避免运行时自动选择uvloop后，在已持有curl线程资源的父进程fork清理阶段崩溃。原依赖可继续安装，无需卸载uvloop或curl。通过回环HTTP线程样本加真实Patchright/CDP画面和输入验证，平台登录不是此前置条件；上线后再由用户完成真实平台认证。

@@ -30,6 +30,7 @@
 第一版远程平台认证仍遵循内部验证边界：第一版前端只在受控内网开放，客户使用普通浏览器通过页面或弹窗操作服务器浏览器，不安装专用客户端。提取后端的 `/api/v1` 负责短期、一次性认证任务票据和画面/输入通道；浏览器进程、Profile、Session 和认证状态机由同一提取后端拥有。原始 CDP、VNC 或等价控制端口只监听回环地址或内部网络，不直接暴露给客户机。该入口不新增应用用户、角色或 MFA，安全边界仍由受控内网和部署权限承担。
 
 第一版认证入口依据 ADR 0014 采用 Patchright 服务器浏览器、进程内 `CDPSession` 与短期 WebSocket 中继：后端用 `Page.startScreencast` 输出 `1280 × 800`、JPEG 质量 85 的连续变化帧，逐帧确认并保持单帧背压；指针移动、按下、释放、拖动和滚轮通过 CDP 输入域发送，文本、组合键和粘贴继续由受控浏览器输入接口完成。前端不取得原始 CDP 地址；用户保存时只检查 storage state 结构，再加密持久化 Session 并关闭，不判断页面登录状态，也不调用采集器验证圈子、帖子或字段端点。KasmVNC、noVNC、WebRTC 媒体栈不是第一版依赖。公网部署只作为后续可选增强：届时复用客户现有身份系统和后端权限，增加敏感操作重新认证、HTTPS/WSS 网关、来源校验、连接限额、审计和 WAF 或等价保护；这些能力不进入第一版默认实现与验收。
+- 服务入口显式选择Uvicorn标准 `asyncio` 事件循环，Windows使用Proactor、Linux使用Selector，不依安装状态自动切换uvloop。原因是Linux多线程采集后，uvloop启动Patchright驱动时执行fork后的Python线程局部对象清理，曾在curl线程池析构中SIGSEGV；标准subprocess路径在本次目标机无preexec_fn的驱动调用中不执行该Python清理回调。不声称Linux完全不fork。认证画面、输入、Session与平台登录规则保持；用回环HTTP构造curl线程资源即可验证启动，无需先恢复平台采集。
 - 当前开发环境不是 Linux；日常编码、单元测试、访问冒烟和中等批量预筛以当前开发环境为准。
 - 目标部署环境已确认为 CentOS Stream 10（Coughlan）、x86_64、glibc 2.39；Python 3.11+、浏览器系统依赖、systemd、Weston 与 Nginx 已进入离线封装，CPU 型号与核心数仍须在最终主机复核。CentOS Stream 10 已移除 Xorg/Xvfb，因此完整 Chromium 通过 Weston 无头 Wayland 运行。
 - 候选方案在开发阶段必须使用同一台开发主机、相同网络出口和相同测试条件进行公平对比。
