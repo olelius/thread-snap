@@ -23,7 +23,9 @@
 **根因/实现**：复用13:34:44 PID792660的现有core，栈为uvloop fork→PyOS_AfterFork_Child→线程局部finalizer→curl线程池销毁→pthread_join段错误；驱动尚未exec，父服务/OOM正常。CLI显式固定loop=asyncio，使Linux使用标准Selector/子进程路径，Windows维持Proactor；认证/采集/会话协议不变，无依赖或数据库变化，不声称所有Linux启动均无fork。
 **目标机证据**：同一threadsnap用户/现有依赖/Wayland环境，回环HTTP预热4个curl线程，不访问平台或正式会话库。旧uvloop本次未复现崩溃，但记录4次子进程线程局部finalizer及1次Python after-fork；标准asyncio连续3次驱动/浏览器/输入/截图成功且这些回调0。进一步真实调用BrowserAuthManager._ensure_browser：三个平台身份均使用独立回环样本，全部active/ready、CDP输入正确且收到screencast帧，回调0；这证明共享启动链，不宣称完成真实平台登录。原core和本次实验一起支持避开已定位失效路径。
 **最小验证/入口**：CLI参数1项unittest通过，定向Ruff及diff-check通过，无全量测试/平台重采/AI调用。远端/var/tmp/threadsnap-auth-startup-20260914/{probe.py,probe_auth.py,uvloop-result.json,asyncio-result.json,auth-asyncio-result.json}；本地artifacts/runtime/auth-driver-startup/{entry-test.log,receipt.tar.gz}。源码仅共享CLI一处修改，技术路线和部署入口说明同步。
-**剩余/边界**：提交合并修复；已询问用户是否随后最小包部署并短暂重启后端恢复认证。未获切换答复前，正式服务/会话和历史批次保持；不自动补提。上线后真实平台账号登录由用户完成，平台访问状态与浏览器启动成功分别判断。
+**上线完成**：用户确认后，PR #304合入main的5b0de717bab63bd6a181b624d3104e65d68cb32f已最小包部署。current=0.1.0-5b0de717bab6、previous=0.1.0-aa94343293ef，实际进程PID912516/cwd一致，未映射uvloop；切换46.54秒。包1188181字节，SHA256 0e63d242fe926a6d8433af31041e1d53a83639059e33451a4bba4fcef9ecc3ec；只更新wheel，前端59文件/运行依赖逐字节或版本复用，数据库仍f3b6c9d2a804，27张历史/配置表全量哈希不变。
+**正式认证结果**：经已上线Nginx→API→WebSocket分别创建三平台真实认证入口，均收到browser_starting→ready→frame，任务active/ready、HTTP200且error_code为空；易车/汽车之家登录页和懂车帝实际页面首帧已保存。认证过程中无输入凭据、无保存Session，platform_sessions前后哈希相同。父服务运行正常，检查窗口未见新增segfault/OOM。原错误已消失不等同用户登录已完成；可刷新正式页面重新打开认证窗口继续登录，不自动补提历史批次。
+**运维/证据**：正式http://www.jingruigongguan.cn:61037/的health及首页200，首页与复用前端hash一致；临时cloudflared保持disabled/inactive。证据H:/ThreadSnap-tactile-ui/artifacts/runtime/deploy-auth-fix-20260914/{deployment-summary.json,public-health.json,server-evidence/auth-result.json,*-live-auth.jpg}；远端/var/tmp/threadsnap-auth-release-5b0de71-20260914。备份/var/lib/threadsnap/backups/minimal-release-upgrade/20260914-auth-5b0de71保留；无迁移回退仅切previous，已开放写入后不回写停机旧库。后续只有部署账本提交，应用源码仍5b0de71。
 
 ---
 
