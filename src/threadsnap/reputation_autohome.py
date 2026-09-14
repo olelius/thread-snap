@@ -24,7 +24,7 @@ from .reputation_browser import (
     stable_measure,
 )
 
-ADAPTER_VERSION = "autohome-reputation-v4-series-id-identity"
+ADAPTER_VERSION = "autohome-reputation-v5-stopselling-identity"
 VALIDATION_CONTRACT_VERSION = "autohome-reputation-mapping-v2"
 VIEWPORT = {"width": 1440, "height": 1600}
 
@@ -47,7 +47,9 @@ def comparison_rank(result: dict, series_id: str) -> tuple[str | None, str]:
         if isinstance(row, dict) and str(row.get("seriesId")) == str(series_id)
     ]
     return (matches[0] if len(matches) == 1 else None), scope
-SERIES_URL_RE = re.compile(r"^https://k\.autohome\.com\.cn/(?P<id>\d+)/?(?:\?.*)?$")
+SERIES_URL_RE = re.compile(
+    r"^https://k\.autohome\.com\.cn/(?P<id>\d+)(?P<section>/stopselling)?/?(?:\?.*)?$"
+)
 
 
 def normalize_series_url(url: str, expected_id: str | None = None) -> str:
@@ -64,7 +66,8 @@ def normalize_series_url(url: str, expected_id: str | None = None) -> str:
         raise ReputationAdapterError(
             "REPUTATION_ID_URL_MISMATCH", "页面URL中的车系ID与平台车型ID不一致。"
         )
-    return f"https://k.autohome.com.cn/{series_id}/"
+    section = match.group("section") or "/"
+    return f"https://k.autohome.com.cn/{series_id}{section}"
 
 
 class AutohomeReputationAdapter(BrowserReputationAdapter):

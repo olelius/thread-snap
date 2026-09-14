@@ -484,4 +484,4 @@ Linux PoC 运行器必须把每个候选放入独立进程组；候选入口退�
 
 - AI账户删除复用内部validation_status=deleted作为不可选占位状态，清除密钥、释放显示名，列表过滤且require_account拒绝使用；默认账户及规则/批次/分析引用受保护，引用检查与移除在同一SQLite写事务内，不追加数据库迁移。
 
-- 汽车之家口碑身份只核对映射platform_vehicle_id、最终口碑URL车系ID和指标接口seriesid；按用户决定删除名称相等判断，platform_display_name仅作为配置展示名。DOM测量保留完整页头文字，actual_name优先保留接口原始seriesname，名称变化不影响ID匹配。适配器v4记录此调整，mapping-v2合同和其他平台保持，未受影响映射不全量重验。
+- 汽车之家口碑身份只核对映射platform_vehicle_id、最终口碑URL车系ID和指标接口seriesid；按用户决定删除名称相等判断，platform_display_name仅作为配置展示名。DOM测量保留完整页头文字，actual_name优先保留接口原始seriesname，名称变化不影响ID匹配。同车系`/stopselling`为停售车型口碑页，允许该明确子路径并保留实际落地URL，仍核对原车系ID。适配器v5记录此调整，mapping-v2合同和其他平台保持，未受影响映射不全量重验。
