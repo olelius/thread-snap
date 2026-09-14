@@ -42,7 +42,11 @@ def main() -> None:
     )
     args = parser.parse_args()
     if args.command == "serve":
-        uvicorn.run("threadsnap.app:app", host=args.host, port=args.port, reload=False)
+        # Linux 多线程采集后，uvloop 的 fork 回调可能在清理继承的 curl 线程池时崩溃。
+        # 固定标准循环，让驱动使用无 Python fork 后清理的 subprocess 启动路径。
+        uvicorn.run(
+            "threadsnap.app:app", host=args.host, port=args.port, reload=False, loop="asyncio"
+        )
     elif args.command == "import-session":
         container = Container(get_settings())
         container.session_store.import_file(args.platform, args.file)
