@@ -1,3 +1,4 @@
+import { createUuid } from '@/lib/uuid'
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, CircleDot, FileText, Loader2, Plus, X } from 'lucide-react'
@@ -81,7 +82,7 @@ export function NewExtractionSheet() {
               ai_analysis_enabled: aiAnalysisEnabled,
               ai_account_id: aiAccountId,
               screenshot_enabled: Boolean(selectedPlatform?.capabilities.page_evidence) && screenshotEnabled,
-              idempotency_key: crypto.randomUUID(),
+              idempotency_key: createUuid(),
             }
           : {
               platform_code: platform,
@@ -92,7 +93,7 @@ export function NewExtractionSheet() {
               ai_analysis_enabled: aiAnalysisEnabled,
               ai_account_id: aiAccountId,
               screenshot_enabled: false,
-              idempotency_key: crypto.randomUUID(),
+              idempotency_key: createUuid(),
             }
       return api<Run>('/runs/manual', { method: 'POST', body: JSON.stringify(body) })
     },

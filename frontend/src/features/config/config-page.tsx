@@ -1,3 +1,4 @@
+import { createUuid } from '@/lib/uuid'
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { useBlocker, useNavigate, useSearch } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -344,7 +345,7 @@ function RulesPanel({ workspace }: { workspace: PlanWorkspace }) {
   const filteredRules = draft.rules.filter((rule) => !search || `${rule.name} ${rule.id} ${rule.circle_ids.map((id) => { const circle = allCircles.find((item) => item.id === id); return circle ? sourceName(circle) : '' }).join(' ')}`.toLocaleLowerCase('zh-CN').includes(search))
 
   function createRule() {
-    const rule: ExtractionPlan['rules'][number] = { id: crypto.randomUUID(), name: `新规则 ${draft!.rules.length + 1}`, version: 1, platform_quantities: {}, circle_ids: [], ai_analysis_enabled: true, ai_account_id: 1, screenshot_enabled: true, archived: false, updated_at: new Date().toISOString() }
+    const rule: ExtractionPlan['rules'][number] = { id: createUuid(), name: `新规则 ${draft!.rules.length + 1}`, version: 1, platform_quantities: {}, circle_ids: [], ai_analysis_enabled: true, ai_account_id: 1, screenshot_enabled: true, archived: false, updated_at: new Date().toISOString() }
     setSelectedRuleId(rule.id)
     setRuleSearch('')
     updateRules([...draft!.rules, rule])
@@ -459,7 +460,7 @@ function SchedulePanel({ workspace }: { workspace: PlanWorkspace }) {
   const updateNodes = (nodes: ExtractionPlan['nodes']) => setDraft({ ...draft, nodes })
   const createNode = () => {
     if (!savedRules.length) return
-    updateNodes([...draft.nodes, { id: crypto.randomUUID(), weekdays: [0, 1, 2, 3, 4], time: '09:00:00', enabled: false, rule_ids: [savedRules[0].id], updated_at: new Date().toISOString() }])
+    updateNodes([...draft.nodes, { id: createUuid(), weekdays: [0, 1, 2, 3, 4], time: '09:00:00', enabled: false, rule_ids: [savedRules[0].id], updated_at: new Date().toISOString() }])
   }
 
   return <div className='space-y-5'>
@@ -521,7 +522,7 @@ function RecurringSchedulePanel({ workspace }: { workspace: PlanWorkspace }) {
   const updateNode = (nodeId: string, values: Partial<ExtractionPlan['recurring_nodes'][number]>) => updateNodes(draft.recurring_nodes.map((node) => node.id === nodeId ? { ...node, ...values } : node))
   const createNode = () => {
     if (!savedRules.length) return
-    updateNodes([...draft.recurring_nodes, { id: crypto.randomUUID(), weekdays: [0, 1, 2, 3, 4], start_time: '09:00:00', end_time: '18:00:00', interval_minutes: 60, enabled: false, rule_ids: [savedRules[0].id], updated_at: new Date().toISOString() }])
+    updateNodes([...draft.recurring_nodes, { id: createUuid(), weekdays: [0, 1, 2, 3, 4], start_time: '09:00:00', end_time: '18:00:00', interval_minutes: 60, enabled: false, rule_ids: [savedRules[0].id], updated_at: new Date().toISOString() }])
   }
 
   return <div className='space-y-5'>

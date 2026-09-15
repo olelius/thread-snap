@@ -1,4 +1,11 @@
 # WORKLOG — 唯一任务账本
+## 2026-09-15 — 普通HTTP前端UUID兼容（整合子任务）
+**身份/范围**：从同步的origin/main@28f6f267创建fix/http-uuid-compat，独立H:/ThreadSnap-http-uuid；只修复前端UUID生成，统一任务文档和远端部署由主线程整合。
+**实现**：createUuid优先原生randomUUID，普通HTTP回退getRandomValues生成UUID v4；缺少随机数API明确报错，无Math.random和新依赖。frontend/src的6处直接调用全部替换，保留新建请求idempotency_key及补提Idempotency-Key。
+**证据**：node --experimental-strip-types --test frontend/tests/uuid.test.mjs一次4/4通过，覆盖原生接收者、回退1000值格式与唯一性、版本/变体位、缺失Crypto错误；npm --prefix frontend run check和git diff --check通过。真实HTTP http://192.168.2.6:5195 的Chromium isSecureContext=false、randomUUID=undefined、getRandomValues=function，实点补提按钮产生1次携合法UUID头的POST、页面错误0；API全部由确定性样本拦截，无平台访问/数据库写入。
+**入口/下一步**：artifacts/runtime/agents/http-uuid/{tests.log,typecheck.log,browser-result.json,check_plain_http.py,plain-http-retry.png}；截图保存的是成功响应后弹窗退场中间帧，请求结果以browser-result.json为准。5195临时Vite已结束。主线程整合后一次生产构建并完成真实组合路径/发布验收，不重复本子任务定向测试；未构建、未推送、未部署。
+
+---
 
 ## 2026-09-15 — 按已验证组合增量发布口碑范围
 **总目标**：允许已完成真实验证的车型平台组合先发布，未验证组合继续留在草稿，不阻断可发布组合。
