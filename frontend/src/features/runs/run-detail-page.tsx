@@ -1,3 +1,4 @@
+import { createUuid } from '@/lib/uuid'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -163,7 +164,7 @@ function RunDetail({ kind }: { kind: RunDetailKind }) {
     })
   }
 
-  const retry = useMutation({ mutationFn: () => api<Run>(`/runs/${runId}/retry`, { method: 'POST', headers: { 'Idempotency-Key': crypto.randomUUID() } }), onSuccess: async (value) => { await client.invalidateQueries({ queryKey: ['runs'] }); toast.success('失败项已重新提交', { description: `新批次 ${value.number}` }) }, onError: (error) => toast.error('重新提取失败', { description: errorMessage(error) }) })
+  const retry = useMutation({ mutationFn: () => api<Run>(`/runs/${runId}/retry`, { method: 'POST', headers: { 'Idempotency-Key': createUuid() } }), onSuccess: async (value) => { await client.invalidateQueries({ queryKey: ['runs'] }); toast.success('失败项已重新提交', { description: `新批次 ${value.number}` }) }, onError: (error) => toast.error('重新提取失败', { description: errorMessage(error) }) })
   const exportRun = useMutation({ mutationFn: (templateVersionId: string) => api<{ id: string }>(`/runs/${runId}/exports`, { method: 'POST', body: JSON.stringify({ template_version_id: templateVersionId }) }), onSuccess: (value) => { window.open(`/api/v1/exports/${value.id}/download`, '_blank', 'noopener'); toast.success('Excel 导出已生成') }, onError: (error) => toast.error('导出失败', { description: errorMessage(error) }) })
   // 与列表共用筛选和排序，不传分页参数；下载失败时保留当前表格上下文。
   const exportFiltered = useMutation({
