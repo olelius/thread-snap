@@ -851,7 +851,12 @@ class ReputationService:
                 for code in REPUTATION_PLATFORMS
                 if any(vehicle.get("mappings", {}).get(code) for vehicle in vehicles)
             ]
-            targets = [(vehicle, code) for vehicle in vehicles for code in platform_codes]
+            targets = [
+                (vehicle, code)
+                for vehicle in vehicles
+                for code in platform_codes
+                if vehicle.get("mappings", {}).get(code)
+            ]
             missing = [
                 {"vehicle_id": vehicle["id"], "platform_code": code}
                 for vehicle, code in targets
@@ -1230,7 +1235,7 @@ class ReputationService:
                 for code in platform_codes
                 if vehicle.get("mappings", {}).get(code)
             ]
-            expected_count = len(vehicles) * len(platform_codes)
+            expected_count = len(target_keys)
             platforms = {code: db.get(PlatformConfig, code) for code in platform_codes}
             if (
                 not target_keys
@@ -3561,7 +3566,8 @@ class ReputationService:
                 for row in ((published.snapshot or {}).get("vehicles", []) if published else [])
                 if row.get("enabled", True)
             ]
-        current_by_id = {str(row["id"]): row for row in vehicles}
+        publishable_vehicles = self._publishable_scope_vehicles(vehicles, platform_codes)
+        current_by_id = {str(row["id"]): row for row in publishable_vehicles}
         previous_by_id = {str(row["id"]): row for row in previous}
         added_ids = current_by_id.keys() - previous_by_id.keys()
         disabled_ids = previous_by_id.keys() - current_by_id.keys()
@@ -3605,8 +3611,7 @@ class ReputationService:
             for vehicle in vehicles
             for code in platform_codes
         )
-        verified_all = bool(expected_mapping_count) and verified == expected_mapping_count
-        can_publish = verified_all and has_changes
+        can_publish = bool(verified) and has_changes
         return {
             "revision": scope["revision"],
             "initial_publish": scope["published_version"] is None,
@@ -3616,6 +3621,9 @@ class ReputationService:
             "verified_mapping_count": verified,
             "expected_mapping_count": expected_mapping_count,
             "complete_mapping_count": complete_mapping_count,
+            "publishable_vehicle_count": len(publishable_vehicles),
+            "skipped_vehicle_count": len(vehicles) - len(publishable_vehicles),
+            "skipped_mapping_count": expected_mapping_count - verified,
             "platform_codes": platform_codes,
             "added_count": len(added_ids),
             "disabled_count": len(disabled_ids),
@@ -3627,11 +3635,27 @@ class ReputationService:
             "warning": (
                 None
                 if can_publish
-                else "当前范围没有待发布变更。"
-                if verified_all
-                else "真实页面验证尚未全部完成，当前不会开放发布。"
+                else "当前范围没有已验证的待发布组合。"
             ),
         }
+
+    @classmethod
+    def _publishable_scope_vehicles(
+        cls, vehicles: list[dict[str, Any]], platform_codes: list[str]
+    ) -> list[dict[str, Any]]:
+        """复制草稿并仅保留当前合同验证通过的车型平台组合。"""
+
+        publishable: list[dict[str, Any]] = []
+        for vehicle in vehicles:
+            clone = json.loads(json.dumps(vehicle, ensure_ascii=False))
+            clone["mappings"] = {
+                code: json.loads(json.dumps(vehicle.get("mappings", {}).get(code), ensure_ascii=False))
+                for code in platform_codes
+                if cls._mapping_is_verified(vehicle, code)
+            }
+            if clone["mappings"]:
+                publishable.append(clone)
+        return publishable
 
     @staticmethod
     def _mapping_is_verified(vehicle: dict[str, Any], platform_code: str) -> bool:
@@ -3656,7 +3680,7 @@ class ReputationService:
                 status_code=409,
             )
         if not preview["can_publish"]:
-            raise DomainError("REPUTATION_SCOPE_NOT_VERIFIED", "全部映射验证通过后才能发布。")
+            raise DomainError("REPUTATION_SCOPE_NOT_VERIFIED", "当前没有已验证的待发布车型平台组合。")
         if preview["initial_publish"] and not value.initial_review_acknowledged:
             raise DomainError("REPUTATION_INITIAL_REVIEW_REQUIRED", "请先确认首发全量复核。")
         with self.sessions.begin() as db:
@@ -3668,9 +3692,15 @@ class ReputationService:
                     status_code=409,
                 )
             next_version = (db.scalar(select(func.max(ReputationScopeVersion.version))) or 0) + 1
+            vehicles = [row for row in (draft.data or {}).get("vehicles", []) if row.get("enabled", True)]
+            platform_codes = [
+                code for code in REPUTATION_PLATFORMS
+                if any(row.get("mappings", {}).get(code) for row in vehicles)
+            ]
+            snapshot_vehicles = self._publishable_scope_vehicles(vehicles, platform_codes)
             version = ReputationScopeVersion(
                 version=next_version,
-                snapshot=json.loads(json.dumps(draft.data, ensure_ascii=False)),
+                snapshot={"schema_version": "reputation-scope-v1", "vehicles": snapshot_vehicles},
                 source_revision=draft.revision,
             )
             db.add(version)
