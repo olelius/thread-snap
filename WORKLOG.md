@@ -7,6 +7,14 @@
 
 ---
 
+## 2026-09-15 — 汽车之家首页异常固定三轮批次尾部重试（后端切片）
+**身份/范围**：从已同步origin/main@28f6f267创建fix/autohome-three-waves及独立工作树H:/ThreadSnap-autohome-three-waves；只修改共享Worker、汽车之家适配器与定向测试，前端/owner文档/整合发布由主线程负责。
+**实现**：详情最终为同站论坛根URL才分类PLATFORM_HOME_REDIRECT，首轮结束后最多追加3轮，只复访冻结失败URL。以同批所有平台最低活动轮次作为屏障；候选身份/位置、当前轮和独立来源单轮预算写checkpoint。网络与429优先在原轮恢复，认证及重启不增加首页轮次；成功不重采，终态解析错误不重试，旧终态历史不改写。
+**证据**：10项新定向用例通过，覆盖真实collect_circle/collect_urls→Worker→隔离SQLite的4次上限、轮次屏障、成功清零、跨论坛候选透传、网络/429/认证/自动刷新、中途崩溃续跑和来源预算；另原来源缺失首轮屏障、第二次终态、来源网络恢复3项通过。命令：PYTHONPATH=src python -m unittest tests.test_autohome_batch_retry -v；自动刷新及restart新增项按精确用例另跑，不重跑全库。早期夹具因未启用平台而创建前失败，修正后通过。artifacts/runtime/agents/three-waves/receipt.md与restart-source.log；定向Ruff、compileall及diff-check通过。
+**下一步/边界**：主线程整合前端并真实触发API组合验收后收尾部署；本切片未访问平台、未启动AI/截图、不引入依赖或迁移。回退仅撤销本任务代码；不覆盖已生成历史数据。
+
+---
+
 ## 2026-09-15 — 按已验证组合增量发布口碑范围
 **总目标**：允许已完成真实验证的车型平台组合先发布，未验证组合继续留在草稿，不阻断可发布组合。
 **状态**：⏳ 独立分支 `feat/partial-reputation-publish` 已完成后端发布快照、稀疏调度/真实验收计数、前端发布摘要和文档口径修改；定向后端与前端回归通过，待提交、合并和服务器最小更新。

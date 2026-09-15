@@ -11,7 +11,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from urllib.parse import parse_qs, unquote_plus, urljoin, urlsplit
 from zoneinfo import ZoneInfo
 
@@ -45,7 +45,7 @@ CAPTURE_ROWS_SCRIPT = """els => els.map((e,i) => {
                   width:r.width+marginLeft+marginRight,height:r.height}};
             })"""
 
-ADAPTER_VERSION = "autohome-club-v13-deleted-post-status"
+ADAPTER_VERSION = "autohome-club-v14-batch-home-retry"
 BASE_URL = "https://club.autohome.com.cn"
 LIST_API_URL = "https://club-open-api.autohome.com.cn/api/pc/bbs/index/getClubTopicList"
 VIDEO_MEDIA_URL = "https://p-vp.autohome.com.cn/api/gpi"
@@ -1005,6 +1005,17 @@ class AutohomeCollector:
             page_number += 1
         return rows, "达到配置的有效结果候选数量。"
 
+    @staticmethod
+    def _is_forum_home_response(response: Any) -> bool:
+        """仅识别详情请求最终落到同站论坛根路径，不猜测首页跳转的上游原因。"""
+
+        parsed = urlsplit(str(getattr(response, "url", "")))
+        return (
+            parsed.scheme in {"http", "https"}
+            and parsed.hostname == "club.autohome.com.cn"
+            and parsed.path in {"", "/"}
+        )
+
     def fetch_post(
         self, post_url: str, *, candidate: dict[str, Any] | None = None
     ) -> dict[str, Any] | None:
@@ -1012,6 +1023,12 @@ class AutohomeCollector:
 
         post_id, normalized_url = normalize_post_url(post_url)
         response = self._get(normalized_url)
+        if self._is_forum_home_response(response):
+            raise CollectorFailure(
+                "PLATFORM_HOME_REDIRECT",
+                "汽车之家详情请求被重定向到论坛首页。",
+                trigger_url=normalized_url,
+            )
         if int(response.status_code) == 404:
             return None
         if int(response.status_code) >= 400:
@@ -1357,6 +1374,7 @@ class AutohomeCollector:
         skip_post_ids: set[str] | None = None,
         on_progress: ProgressCallback | None = None,
         on_page_evidence: PageEvidenceCallback | None = None,
+        on_candidates: Callable[[list[dict[str, Any]]], None] | None = None,
     ) -> dict[str, Any]:
         """处理来源前N个固定候选；详情失败时不向后补位。"""
 
@@ -1441,6 +1459,9 @@ class AutohomeCollector:
             if selected_count >= target_count:
                 break
 
+        if on_candidates:
+            # 在第一个详情请求前持久化身份上下文，网络、认证或进程中断均不重读列表。
+            on_candidates(frozen_candidates)
         cursor = 0
         while cursor < len(frozen_candidates):
             batch_start = cursor
@@ -1514,9 +1535,13 @@ class AutohomeCollector:
         return {"records": records, "failures": failures, "stop_reason": stop_reason}
 
     def collect_urls(
-        self, urls: list[str], on_progress: ProgressCallback | None = None
+        self,
+        urls: list[str],
+        on_progress: ProgressCallback | None = None,
+        *,
+        candidates: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        """规范化、去重并逐条处理已知汽车之家帖子 URL。"""
+        """处理固定URL；来源恢复沿用冻结候选身份，独立URL导入保持原合同。"""
 
         records: list[dict[str, Any]] = []
         failures: list[dict[str, Any]] = []
@@ -1539,7 +1564,7 @@ class AutohomeCollector:
                 continue
             seen.add(post_id)
             try:
-                record = self.fetch_post(normalized)
+                record = self.fetch_post(normalized, candidate=(candidates or {}).get(normalized))
             except AuthenticationRequired as exc:
                 raise AuthenticationRequired(
                     exc.message,

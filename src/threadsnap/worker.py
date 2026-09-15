@@ -48,6 +48,12 @@ GEOMETRY_RETRYABLE_SOURCE_FAILURE_CODES = {
     "PAGE_EVIDENCE_IMAGE_SIZE_MISMATCH",
 }
 BATCH_RETRY_WAVE_KEY = "batch_retry_wave"
+HOMEPAGE_FAILURE_CODE = "PLATFORM_HOME_REDIRECT"
+HOMEPAGE_RETRY_ROUND_KEY = "homepage_retry_round"
+HOMEPAGE_PENDING_KEY = "homepage_pending_failures"
+HOMEPAGE_MAX_RETRY_ROUNDS = 3
+SOURCE_BATCH_RETRY_USED_KEY = "source_batch_retry_used"
+FROZEN_CANDIDATES_KEY = "frozen_candidates"
 INTERACTIVE_RECOVERY_CODES = {"PLATFORM_CAPTCHA_REQUIRED", "PLATFORM_CHALLENGE"}
 AUTH_RECOVERY_PROBE_KEY = "auth_recovery_probe"
 AUTH_RECOVERY_BLOCKED_KEY = "auth_recovery_blocked"
@@ -99,6 +105,22 @@ def _is_batch_retry_task(task: CircleTask) -> bool:
     """识别等待批次首轮收尾后再复访的来源任务。"""
 
     return bool((task.checkpoint or {}).get(BATCH_RETRY_WAVE_KEY))
+
+
+def _batch_retry_round(task: CircleTask) -> int:
+    """返回任务尚在执行的批次轮次；网络/认证暂停不推进轮次。"""
+
+    checkpoint = task.checkpoint or {}
+    return max(
+        int(checkpoint.get(HOMEPAGE_RETRY_ROUND_KEY) or 0),
+        1 if _is_batch_retry_task(task) else 0,
+    )
+
+
+def _unique_failures(failures: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """同一固定URL只保留当前错误，避免恢复累计成重复业务失败。"""
+
+    return list({str(failure.get("url")): failure for failure in failures}.values())
 
 
 class WorkerService:
@@ -459,52 +481,24 @@ class WorkerService:
             if not platform_queued:
                 return False
             head = platform_queued[0]
-            if _is_batch_retry_task(head):
-                run_tasks = list(
-                    db.scalars(
-                        select(CircleTask).where(CircleTask.run_id == head.run_id)
-                    )
-                )
-                first_wave_pending = any(
-                    task.status in {"queued", "running"} and not _is_batch_retry_task(task)
-                    for task in run_tasks
-                )
-                if first_wave_pending:
-                    # 同批次同平台后续首轮来源先完成；其他平台仍可并行推进。
-                    head = next(
-                        (
-                            task
-                            for task in platform_queued
-                            if task.run_id == head.run_id and not _is_batch_retry_task(task)
-                        ),
-                        None,
-                    )
-                    if head is None:
-                        return False
             run = db.get(ExtractionRun, head.run_id)
             platform = db.get(PlatformConfig, platform_code)
             if not run or not platform:
                 return False
-            queued_tasks = list(
-                db.scalars(
-                    select(CircleTask)
-                    .where(
-                        CircleTask.run_id == run.id,
-                        CircleTask.platform_code == platform_code,
-                        CircleTask.status == "queued",
-                    )
-                    .order_by(CircleTask.queue_sequence)
-                )
-            )
             run_tasks = list(db.scalars(select(CircleTask).where(CircleTask.run_id == run.id)))
-            first_wave_pending = any(
-                task.status in {"queued", "running"} and not _is_batch_retry_task(task)
-                for task in run_tasks
-            )
-            if first_wave_pending:
-                queued_tasks = [task for task in queued_tasks if not _is_batch_retry_task(task)]
-                if not queued_tasks:
-                    return False
+            active_tasks = [
+                task for task in run_tasks
+                if task.status in {"queued", "running", "waiting_for_auth"}
+            ]
+            # 所有平台共同通过每轮屏障；不越过本批次去执行同平台后续批次。
+            active_round = min(_batch_retry_round(task) for task in active_tasks)
+            queued_tasks = [
+                task for task in platform_queued
+                if task.run_id == run.id and _batch_retry_round(task) == active_round
+            ]
+            if not queued_tasks:
+                return False
+            head = queued_tasks[0]
             now = utc_now()
             auth_probe_tasks = [
                 task
@@ -681,7 +675,22 @@ class WorkerService:
                     str(key): int(value)
                     for key, value in dict(checkpoint.get("retry_source_indexes") or {}).items()
                 }
+            frozen_candidates = dict(checkpoint.get(FROZEN_CANDIDATES_KEY) or {})
             prior_terminal_failures = list(checkpoint.get("terminal_failures") or [])
+            pending_homepage_failures = list(checkpoint.get(HOMEPAGE_PENDING_KEY) or [])
+            homepage_round = int(checkpoint.get(HOMEPAGE_RETRY_ROUND_KEY) or 0)
+            if FROZEN_CANDIDATES_KEY in checkpoint:
+                known_url_task = True
+                known_urls = retry_urls
+                source_indexes = {
+                    url: int(candidate.get("source_position", candidate.get("order_index", 0)))
+                    for url, candidate in frozen_candidates.items()
+                }
+            skipped_urls = {
+                failure.get("url")
+                for failure in prior_terminal_failures + pending_homepage_failures
+            }
+            known_urls = [url for url in known_urls if url not in skipped_urls]
             screenshot_enabled = bool(snapshot.get("screenshot_enabled", True))
             persisted_post_ids = set(
                 db.scalars(
@@ -724,7 +733,37 @@ class WorkerService:
         pending_records: list[dict[str, Any]] = []
         reported_failures = 0
         flushed_failures = 0
-        progress_batch_size = 1 if target <= 20 else 10
+        # 汽车之家固定候选逐项落盘，使批次尾轮重启不重复请求已成功项。
+        progress_batch_size = 1 if platform_code == "autohome" or target <= 20 else 10
+
+        def freeze_candidates(candidates: list[dict[str, Any]]) -> None:
+            """在访问详情前冻结候选及位置，恢复与尾轮共用同一份身份输入。"""
+
+            nonlocal frozen_candidates, source_indexes, retry_urls, known_urls, known_url_task
+            frozen_candidates = {str(candidate["url"]): dict(candidate) for candidate in candidates}
+            source_indexes = {
+                url: int(candidate.get("source_position", candidate.get("order_index", 0)))
+                for url, candidate in frozen_candidates.items()
+            }
+            retry_urls = list(frozen_candidates)
+            known_urls = list(retry_urls)
+            known_url_task = True
+            with self.factory.begin() as db:
+                current = db.get(CircleTask, task_id)
+                state = dict(current.checkpoint or {})
+                state.update({
+                    FROZEN_CANDIDATES_KEY: frozen_candidates,
+                    "retry_urls": retry_urls,
+                    "retry_source_indexes": source_indexes,
+                })
+                current.checkpoint = state
+
+        def collect_known(active_collector: Collector) -> dict[str, Any]:
+            kwargs = {"on_progress": report_progress}
+            if frozen_candidates and "candidates" in signature(active_collector.collect_urls).parameters:
+                kwargs["candidates"] = frozen_candidates
+            return active_collector.collect_urls(known_urls, **kwargs)
+
         def flush_progress() -> None:
             nonlocal pending_records, flushed_failures
             if not pending_records and reported_failures == flushed_failures:
@@ -762,6 +801,24 @@ class WorkerService:
                 pending_records.append(record)
             if failure is not None:
                 reported_failures += 1
+                if platform_code == "autohome":
+                    # 响应已经发生，先保存本轮失败；进程中断后不把它当未请求URL再发一次。
+                    failure = dict(failure)
+                    failure["source_index"] = source_indexes.get(
+                        failure.get("url"), failure.get("source_index", 0)
+                    )
+                    if failure.get("code") not in RETRYABLE_ACCESS_FAILURE_CODES:
+                        key = (
+                            HOMEPAGE_PENDING_KEY
+                            if failure.get("code") == HOMEPAGE_FAILURE_CODE
+                            and homepage_round < HOMEPAGE_MAX_RETRY_ROUNDS
+                            else "terminal_failures"
+                        )
+                        with self.factory.begin() as db:
+                            current = db.get(CircleTask, task_id)
+                            state = dict(current.checkpoint or {})
+                            state[key] = _unique_failures(list(state.get(key) or []) + [failure])
+                            current.checkpoint = state
             if (
                 len(pending_records) + reported_failures - flushed_failures
                 >= progress_batch_size
@@ -775,32 +832,44 @@ class WorkerService:
             """把固定候选的瞬时网络错误转为原任务持久重试。"""
 
             current_failures = list(payload.get("failures") or [])
+            homepage = _unique_failures(pending_homepage_failures + [
+                failure for failure in current_failures
+                if platform_code == "autohome" and failure.get("code") == HOMEPAGE_FAILURE_CODE
+                and homepage_round < HOMEPAGE_MAX_RETRY_ROUNDS
+            ])
             retryable = [
-                failure
-                for failure in current_failures
+                failure for failure in current_failures
                 if failure.get("code") in RETRYABLE_ACCESS_FAILURE_CODES
             ]
-            retry_error_code = next(
-                (
-                    RATE_LIMIT_RETRYABLE_FAILURE_CODE
-                    for failure in retryable
-                    if failure.get("code") == RATE_LIMIT_RETRYABLE_FAILURE_CODE
-                ),
+            terminal = _unique_failures(prior_terminal_failures + [
+                failure for failure in current_failures
+                if failure.get("code") not in RETRYABLE_ACCESS_FAILURE_CODES
+                and failure not in homepage
+            ])
+            # 网络/429仍在当前轮恢复，首页失败先缓存在检查点，不抢占冷却。
+            retry_code = next(
+                (failure["code"] for failure in retryable
+                 if failure.get("code") == RATE_LIMIT_RETRYABLE_FAILURE_CODE),
                 NETWORK_RETRYABLE_FAILURE_CODE if retryable else None,
             )
-            terminal = prior_terminal_failures + [
-                failure
-                for failure in current_failures
-                if failure.get("code") not in RETRYABLE_ACCESS_FAILURE_CODES
-            ]
-            payload["failures"] = terminal + retryable
+            next_round = homepage_round
+            if not retryable and homepage:
+                retryable = homepage
+                homepage = []
+                retry_code = HOMEPAGE_FAILURE_CODE
+                next_round += 1
             return {
+                **payload,
                 "kind": "retry" if retryable else "done",
                 "validation": validation,
+                "failures": terminal + retryable + homepage,
                 "retry_failures": retryable,
-                "retry_error_code": retry_error_code,
+                "retry_error_code": retry_code,
                 "terminal_failures": terminal,
-                **payload,
+                **({
+                    HOMEPAGE_PENDING_KEY: homepage,
+                    HOMEPAGE_RETRY_ROUND_KEY: next_round,
+                } if platform_code == "autohome" else {}),
             }
 
         def collector_failure_result(exc: CollectorFailure) -> dict[str, Any]:
@@ -837,7 +906,9 @@ class WorkerService:
                     "validation": validation,
                 }
             if exc.code in BATCH_RETRYABLE_SOURCE_FAILURE_CODES:
-                previous_batch_retry = bool((checkpoint or {}).get(BATCH_RETRY_WAVE_KEY))
+                previous_batch_retry = bool(checkpoint.get(SOURCE_BATCH_RETRY_USED_KEY)) or (
+                    bool(checkpoint.get(BATCH_RETRY_WAVE_KEY)) and not homepage_round
+                )
                 if previous_batch_retry:
                     return {
                         "kind": "failed",
@@ -878,7 +949,7 @@ class WorkerService:
                 validation = collector.validate_circle(circle_url)
             remaining = max(0, target - len(persisted_post_ids))
             payload = (
-                collector.collect_urls(known_urls, on_progress=report_progress)
+                collect_known(collector)
                 if known_urls
                 else {
                     "records": [],
@@ -891,6 +962,8 @@ class WorkerService:
                     remaining,
                     skip_post_ids=completed_post_ids,
                     on_progress=report_progress,
+                    **({"on_candidates": freeze_candidates}
+                       if "on_candidates" in signature(collector.collect_circle).parameters else {}),
                     **(
                         {
                             "on_page_evidence": self.screenshot_service.capture_callback(task_id)
@@ -914,6 +987,21 @@ class WorkerService:
             return finalize_payload(payload)
         except AuthenticationRequired as exc:
             trigger_url = exc.trigger_url or circle_url
+            if platform_code == "autohome":
+                # 自动Session刷新也只恢复冻结剩余项，不能重新发现来源或再发已成功URL。
+                flush_progress()
+                with self.factory() as db:
+                    state = dict(db.get(CircleTask, task_id).checkpoint or {})
+                    prior_terminal_failures = list(state.get("terminal_failures") or [])
+                    pending_homepage_failures = list(state.get(HOMEPAGE_PENDING_KEY) or [])
+                    completed = set(db.scalars(select(PostSnapshot.url).where(
+                        PostSnapshot.circle_task_id == task_id
+                    )))
+                processed = completed | {
+                    failure.get("url")
+                    for failure in prior_terminal_failures + pending_homepage_failures
+                }
+                known_urls = [url for url in known_urls if url not in processed]
             if self._refresh_after_auth(platform_code, trigger_url, generation):
                 with self.factory() as db:
                     platform = db.get(PlatformConfig, platform_code)
@@ -924,7 +1012,7 @@ class WorkerService:
                     if needs_validation and validation is None:
                         validation = refreshed.validate_circle(circle_url)
                     payload = (
-                        refreshed.collect_urls(known_urls, on_progress=report_progress)
+                        collect_known(refreshed)
                         if known_urls
                         else {
                             "records": [],
@@ -937,6 +1025,8 @@ class WorkerService:
                             remaining,
                             skip_post_ids=completed_post_ids,
                             on_progress=report_progress,
+                            **({"on_candidates": freeze_candidates}
+                               if "on_candidates" in signature(refreshed.collect_circle).parameters else {}),
                             **(
                                 {
                                     "on_page_evidence": self.screenshot_service.capture_callback(
@@ -1081,9 +1171,20 @@ class WorkerService:
             "failed_urls": failures,
             "completed_post_ids": sorted(existing),
         }
-        for recovery_key in (AUTH_RECOVERY_PROBE_KEY, AUTH_RECOVERY_BLOCKED_KEY):
+        for recovery_key in (
+            AUTH_RECOVERY_PROBE_KEY, AUTH_RECOVERY_BLOCKED_KEY, BATCH_RETRY_WAVE_KEY,
+            HOMEPAGE_RETRY_ROUND_KEY, SOURCE_BATCH_RETRY_USED_KEY,
+            FROZEN_CANDIDATES_KEY, HOMEPAGE_PENDING_KEY,
+        ):
             if recovery_key in previous_checkpoint:
-                checkpoint[recovery_key] = bool(previous_checkpoint[recovery_key])
+                checkpoint[recovery_key] = previous_checkpoint[recovery_key]
+        for key in (HOMEPAGE_RETRY_ROUND_KEY, HOMEPAGE_PENDING_KEY):
+            if key in result:
+                checkpoint[key] = result[key]
+        if result["kind"] == "done":
+            checkpoint["terminal_failures"] = list(result.get("terminal_failures") or [])
+            if task.platform_code == "autohome":
+                checkpoint[HOMEPAGE_PENDING_KEY] = []
         if result["kind"] == "retry":
             retry_failures = list(result.get("retry_failures") or [])
             retry_error_code = str(
@@ -1140,7 +1241,11 @@ class WorkerService:
                 }
             )
             if retry_error_code in BATCH_RETRYABLE_SOURCE_FAILURE_CODES:
+                checkpoint[SOURCE_BATCH_RETRY_USED_KEY] = True
                 checkpoint[BATCH_RETRY_WAVE_KEY] = True
+            elif retry_error_code == HOMEPAGE_FAILURE_CODE:
+                checkpoint[BATCH_RETRY_WAVE_KEY] = True
+                checkpoint["retry_not_before"] = utc_now().isoformat()
             elif (
                 retry_error_code in GEOMETRY_RETRYABLE_SOURCE_FAILURE_CODES
                 and previous_checkpoint.get(BATCH_RETRY_WAVE_KEY)
@@ -1149,15 +1254,17 @@ class WorkerService:
                 checkpoint[BATCH_RETRY_WAVE_KEY] = True
             if retry_error_code == RATE_LIMIT_RETRYABLE_FAILURE_CODE:
                 checkpoint["rate_limit_completed_count"] = task.completed_count
-        elif result["kind"] == "auth" and result.get("retry_urls"):
-            checkpoint.update(
-                {
-                    "retry_urls": list(result.get("retry_urls") or []),
-                    "retry_source_indexes": dict(result.get("retry_source_indexes") or {}),
-                    "terminal_failures": list(result.get("terminal_failures") or []),
-                    "retry_attempt": int((task.checkpoint or {}).get("retry_attempt") or 0),
-                }
-            )
+        elif result["kind"] == "auth":
+            # 认证可能中断当前轮；已经收到的首页/终态错误及冻结范围均留在原轮。
+            checkpoint.update({
+                "retry_urls": list(result.get("retry_urls") or previous_checkpoint.get("retry_urls") or []),
+                "retry_source_indexes": dict(result.get("retry_source_indexes") or previous_checkpoint.get("retry_source_indexes") or {}),
+                "terminal_failures": _unique_failures(
+                    list(previous_checkpoint.get("terminal_failures") or [])
+                    + list(result.get("terminal_failures") or [])
+                ),
+                "retry_attempt": int(previous_checkpoint.get("retry_attempt") or 0),
+            })
         task.checkpoint = checkpoint
         if result["kind"] == "auth":
             task.status = "waiting_for_auth"
@@ -1176,6 +1283,10 @@ class WorkerService:
                 )
             elif checkpoint.get("retry_error_code") in GEOMETRY_RETRYABLE_SOURCE_FAILURE_CODES:
                 task.stop_reason = "页面布局稳定中，稍后自动续作；已保存页面和帖子保持不变。"
+            elif checkpoint.get("retry_error_code") == HOMEPAGE_FAILURE_CODE:
+                task.stop_reason = (
+                    f"上一轮批次完成后统一重试首页异常链接，第{checkpoint[HOMEPAGE_RETRY_ROUND_KEY]}/3轮。"
+                )
             elif checkpoint.get(BATCH_RETRY_WAVE_KEY):
                 task.stop_reason = "首轮批次完成后统一复访来源。"
             else:
