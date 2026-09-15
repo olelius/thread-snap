@@ -291,7 +291,23 @@ class ReputationInspectionTest(unittest.TestCase):
         self.assertEqual(200, preview.status_code, preview.text)
         self.assertEqual(81, preview.json()["expected_mapping_count"])
         self.assertEqual(54, preview.json()["verified_mapping_count"])
-        self.assertFalse(preview.json()["can_publish"])
+        self.assertTrue(preview.json()["can_publish"])
+        self.assertEqual(27, preview.json()["skipped_mapping_count"])
+        partial_published = self.client.post(
+            "/api/v1/reputation/scope/publish",
+            json={"revision": scope["revision"], "initial_review_acknowledged": True},
+        )
+        self.assertEqual(200, partial_published.status_code, partial_published.text)
+        with container.sessions() as db:
+            partial_version = db.get(
+                ReputationScopeVersion, partial_published.json()["published_version"]["id"]
+            )
+            partial_pairs = {
+                (vehicle["id"], platform)
+                for vehicle in partial_version.snapshot["vehicles"]
+                for platform in vehicle.get("mappings", {})
+            }
+        self.assertEqual(54, len(partial_pairs))
 
         container.session_store.import_state(
             "dongchedi",
