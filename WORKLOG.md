@@ -7,7 +7,7 @@
 **部署边界/回退**：远端实查current=e6630e204e86、schema=f3b6c9d2a804，七类业务任务空闲；沿用最小应用wheel+重建前端、reflink新release、双空闲门和原子current/previous切换。依赖、迁移、平台会话不改变，临时隧道继续禁用。停机快照仅作写入开放前回退；开放后只回退程序，不回写旧数据库。
 **组合验收**：干净提交b9b3486上npm ci和生产build（含tsc，2684模块）完成。真实普通HTTP（isSecureContext=false、randomUUID未开放）点击补提→真实API→隔离SQLite/正式Worker，3个有限HTTP响应样本分别第3次成功、第4次成功、第4次仍首页；实际尝试3/4/4，最终2成功/1失败，成功项不再请求。同幂等键返回同批次，页面错误0，截图已目视。临时18081实例已停止，无正式平台/AI调用。证据artifacts/runtime/http-uuid-three-waves/combined-result.json及combined-http-worker.png。
 **上线完成**：PR #313已合入main@df987c4dca6d，1,187,484字节最小包SHA256=56994c68805183e3a17569564e5af40ef1aaf0fb07abda872aa10c297d420d23。远端current=0.1.0-df987c4dca6d、previous=0.1.0-e6630e204e86；切换38.18秒，三服务active。27张历史/配置表计数与行哈希一致、DB仍f3b6c9d2a804，无依赖/会话/迁移变化。旧完整包、previous及停机备份保留。
-**目标机/公网证据**：实际安装代码经独立API/Worker/SQLite有限响应样本验证3/4/4次与2成功/1失败，临时18082实例已停止。正式HTTP公网页面加载新资源、实点补提携合法UUID且页面错误0（POST被截为样本，不操作生产批次）；health与平台版本返回200/v14，首页SHA与构建相同。证据统一artifacts/runtime/http-uuid-three-waves/{package-verification.json,combined-result.json,public-health.json,public-ui/browser-result.json,server-evidence/}；回执压缩包SHA256=8dc9f2bc7a23abbceedd17fd4c024a4ee0fee1c6ea34b9dff0b325f48f77ebfbe。旧静态部署依赖检查证据复用，未跑新650条、AI或历史重写。
+**目标机/公网证据**：实际安装代码经独立API/Worker/SQLite有限响应样本验证3/4/4次与2成功/1失败，临时18082实例已停止。正式HTTP公网页面加载新资源、实点补提携合法UUID且页面错误0（POST被截为样本，不操作生产批次）；health与平台版本返回200/v14，首页SHA与构建相同。证据统一artifacts/runtime/http-uuid-three-waves/{package-verification.json,combined-result.json,public-health.json,public-ui/browser-result.json,server-evidence/}；回执压缩包SHA256=8dc9f2bc7a23abbceedd17fd4c024a4e0fee1c6ea34b9dff0b325f48f77ebfbe。旧静态部署依赖检查证据复用，未跑新650条、AI或历史重写。
 **收尾/入口**：本条作为部署记录提交合并后，删除本次集成与两个切片分支、同步已有main工作树；旧实验与用户混合分支不清理。正式入口http://www.jingruigongguan.cn:61037/，刷新即可使用；历史失败批次仍由用户选择补提。
 
 ---
