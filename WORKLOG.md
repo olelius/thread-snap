@@ -5,13 +5,12 @@
 **证据**：node --experimental-strip-types --test frontend/tests/uuid.test.mjs一次4/4通过，覆盖原生接收者、回退1000值格式与唯一性、版本/变体位、缺失Crypto错误；npm --prefix frontend run check和git diff --check通过。真实HTTP http://192.168.2.6:5195 的Chromium isSecureContext=false、randomUUID=undefined、getRandomValues=function，实点补提按钮产生1次携合法UUID头的POST、页面错误0；API全部由确定性样本拦截，无平台访问/数据库写入。
 **入口/下一步**：artifacts/runtime/agents/http-uuid/{tests.log,typecheck.log,browser-result.json,check_plain_http.py,plain-http-retry.png}；截图保存的是成功响应后弹窗退场中间帧，请求结果以browser-result.json为准。5195临时Vite已结束。主线程整合后一次生产构建并完成真实组合路径/发布验收，不重复本子任务定向测试；未构建、未推送、未部署。
 
----
-
-## 2026-09-15 — 汽车之家首页异常固定三轮批次尾部重试（后端切片）
-**身份/范围**：从已同步origin/main@28f6f267创建fix/autohome-three-waves及独立工作树H:/ThreadSnap-autohome-three-waves；只修改共享Worker、汽车之家适配器与定向测试，前端/owner文档/整合发布由主线程负责。
-**实现**：详情最终为同站论坛根URL才分类PLATFORM_HOME_REDIRECT，首轮结束后最多追加3轮，只复访冻结失败URL。以同批所有平台最低活动轮次作为屏障；候选身份/位置、当前轮和独立来源单轮预算写checkpoint。网络与429优先在原轮恢复，认证及重启不增加首页轮次；成功不重采，终态解析错误不重试，旧终态历史不改写。
-**证据**：10项新定向用例通过，覆盖真实collect_circle/collect_urls→Worker→隔离SQLite的4次上限、轮次屏障、成功清零、跨论坛候选透传、网络/429/认证/自动刷新、中途崩溃续跑和来源预算；另原来源缺失首轮屏障、第二次终态、来源网络恢复3项通过。命令：PYTHONPATH=src python -m unittest tests.test_autohome_batch_retry -v；自动刷新及restart新增项按精确用例另跑，不重跑全库。早期夹具因未启用平台而创建前失败，修正后通过。artifacts/runtime/agents/three-waves/receipt.md与restart-source.log；定向Ruff、compileall及diff-check通过。
-**下一步/边界**：主线程整合前端并真实触发API组合验收后收尾部署；本切片未访问平台、未启动AI/截图、不引入依赖或迁移。回退仅撤销本任务代码；不覆盖已生成历史数据。
+## 2026-09-15 — HTTP前端UUID兼容与汽车之家3轮统一重试
+**目标/身份**：用户要求从最新main开分支开发、收尾合并并最小部署。fetch后的origin/main@28f6f267；集成分支fix/http-uuid-batch-retry（H:/ThreadSnap-http-retry-release），前后端切片分别独立worktree。旧H:/ThreadSnap-tactile-ui实验和H:/src/authlib混合修改完整保留。
+**实现**：6处UUID调用统一经crypto.randomUUID/getRandomValues的UUID v4函数，HTTP页面可正常生成业务ID/补提幂等键。汽车之家详情首页单独分类；首轮后仅重试未成功的冻结URL，最多追加3轮，所有来源通过上一轮屏障才开始下一轮。独立持久轮次/来源截图重试预算，保留候选身份和位置；网络/429/认证/重启不重置额度，已成功项不重采，恢复清空对应失败，旧历史不变。不把普通解析错误当首页，也不加入浏览器回退。
+**已有证据**：前端4项定向测试+tsc、真实非localhost HTTP浏览器实点补提（native随机UUID未开放、合法幂等键、页面错误0）；后端10项新增+3项恢复回归（真实Worker/隔离SQLite/有限平台响应）通过。静态检查通过；切片回执分别在H:/ThreadSnap-http-uuid与H:/ThreadSnap-autohome-three-waves的artifacts/runtime/agents下。
+**部署边界/回退**：远端实查current=e6630e204e86、schema=f3b6c9d2a804，七类业务任务空闲；沿用最小应用wheel+重建前端、reflink新release、双空闲门和原子current/previous切换。依赖、迁移、平台会话不改变，临时隧道继续禁用。停机快照仅作写入开放前回退；开放后只回退程序，不回写旧数据库。
+**精确下一步**：整合源码构建前端一次，通过普通HTTP真实页面→API→Worker三轮组合验收（平台响应为有限样本，不再跑650条）；随后PR合入main、绑定提交制最小包、部署与公网核验，最后删除本次开发分支。部署证据统一artifacts/runtime/http-uuid-three-waves/。
 
 ---
 
