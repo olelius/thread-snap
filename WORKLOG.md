@@ -3,7 +3,7 @@
 ## 2026-09-15 — 修复多平台失败项手动补提
 **目标/基线**：修复截图“一个补提只能包含一个平台”的旧限制，从fetch后的origin/main@1d1301d创建fix/multiplatform-failed-retry与独立H:/ThreadSnap-multiplatform-retry；旧实验及其他工作树保持原状。
 **实现**：RunService.retry的三种剩余内容分支各自保留platform_code；创建一个关联批次，每来源按自身平台入队。启用检查只覆盖真正snapshot所需平台，保留幂等、原位置、AI/截图账户配置和历史不变；非单纯移除校验。前端资源、Worker三轮逻辑、依赖与数据库均不改。
-**状态/下一步**：代码完成，正在补四项针对性API/Worker回归与真实HTTP界面的多平台补提组合验证；随后合入main，仅构建新应用wheel并复用已发布前端，最小更新远端。证据集中artifacts/runtime/multiplatform-retry/。
+**状态/下一步**：代码完成，4项新增针对性API/Worker回归通过（4.421秒）与3项原单平台补提回归通过（3.228秒），含两平台路由、三种剩余内容、历史不变、停用平台原子失败和幂等。接下来仅补真实HTTP界面多平台组合验证；随后合入main，仅构建应用wheel并复用前端，最小更新远端。证据集中artifacts/runtime/multiplatform-retry/；测试切片e32c36c记录可复核。
 **发布/回退边界**：SSH预检current=df987c4、七类任务空闲；沿用此前最小包/reflink/current-previous/双空闲门。保留原数据库/会话/历史记录；切换开放写入后仅回退程序，不恢复旧数据库；不自动补提用户历史批次或触发AI。
 
 ---
