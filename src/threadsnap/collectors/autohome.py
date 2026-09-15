@@ -1007,6 +1007,20 @@ class AutohomeCollector:
         return rows, "达到配置的有效结果候选数量。"
 
     @staticmethod
+    def _reuse_for_candidate(reused: dict[str, Any] | None, candidate: dict[str, Any]) -> dict[str, Any] | None:
+        """历史详情身份必须仍与本次候选一致；新发现删除标记时不复用旧内容。"""
+        if reused is None or any(candidate.get(flag) not in (None, 0) for flag in ("is_delete", "club_delete_flag")):
+            return None
+        raw = reused.get("raw_status") or {}
+        expected_id = candidate.get("canonical_bbs_id_hint") or candidate.get("bbs_id")
+        expected_type = candidate.get("canonical_bbs_type_hint") or candidate.get("bbs_type")
+        if expected_id is not None and raw.get("bbs_id") is not None and str(expected_id) != str(raw["bbs_id"]):
+            return None
+        if expected_type and raw.get("bbs_type") and expected_type != raw["bbs_type"]:
+            return None
+        return reused
+
+    @staticmethod
     def _is_forum_home_response(response: Any) -> bool:
         """仅识别详情请求最终落到同站论坛根路径，不猜测首页跳转的上游原因。"""
 
@@ -1472,10 +1486,11 @@ class AutohomeCollector:
 
             def fetch(value: dict[str, Any]) -> tuple[dict[str, Any], Any, Any]:
                 reused = (reuse_records or {}).get(str(value.get("post_id")))
+                reused = self._reuse_for_candidate(reused, value)
                 if reused is not None:
-                    return apply_reuse_record(
+                    return value, apply_reuse_record(
                         reused, url=value["url"], order_index=int(value["source_position"])
-                    ), None, None
+                    ), None
                 try:
                     return value, self.fetch_post(value["url"], candidate=value), None
                 except (AuthenticationRequired, CollectorFailure) as exc:
@@ -1571,7 +1586,9 @@ class AutohomeCollector:
             if post_id in seen:
                 continue
             seen.add(post_id)
-            reused = (reuse_records or {}).get(str(post_id))
+            reused = self._reuse_for_candidate(
+                (reuse_records or {}).get(str(post_id)), (candidates or {}).get(normalized) or {}
+            )
             if reused is not None:
                 record = apply_reuse_record(reused, url=normalized, order_index=source_index)
                 records.append(record)

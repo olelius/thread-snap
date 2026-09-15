@@ -481,7 +481,10 @@ function PostDetailContent({ runId, post, onCorrect }: { runId: string; post: Po
   const sentiment = post.is_deleted ? undefined : post.sentiment
   const manualActionName = post.sentiment_result ? '人工修正' : '人工判定'
   const forumIdentity = postForumIdentity(post)
+  const isReusedDetail = post.raw_status?.reuse_mode === 'cross_run_snapshot'
+  const sourceFetchedAt = typeof post.raw_status?.reuse_source_fetched_at === 'string' ? post.raw_status.reuse_source_fetched_at : undefined
   return <div className='space-y-6 p-6'>
+    {isReusedDetail && <div className='space-y-1.5 rounded-lg border bg-muted/20 px-4 py-3 text-xs'><div className='flex flex-wrap items-center gap-2'><Badge variant='outline' className='font-normal'>历史详情复用</Badge><span className='text-muted-foreground'>原始抓取时间：{sourceFetchedAt ? formatDate(sourceFetchedAt) : '未记录'}</span></div><p className='leading-5 text-muted-foreground'>正文、评论、评论数、点赞数及可见状态沿用历史快照，不是本批次实时采集值。</p></div>}
     <div className='grid gap-3 rounded-xl border bg-muted/20 p-4 sm:grid-cols-2'><Meta label='发现来源' value={[post.source_name || post.circle_name, post.list_order_name].filter(Boolean).join(' · ')} />{forumIdentity.crossForum && <Meta label='原始归属' value={`跨论坛聚合 · 论坛 ID ${forumIdentity.canonicalBbsId ?? '未知'}`} />}<Meta label='作者' value={post.author} /><Meta label='发布时间' value={formatDate(post.published_at)} /><Meta label='平台帖子 ID' value={post.platform_post_id} /></div>
     <section className='space-y-3 rounded-xl border p-4'>
       <div className='flex flex-wrap items-start justify-between gap-3'><div><div className='flex items-center gap-2'><BrainCircuit className='size-4 text-primary' /><h3 className='text-sm font-semibold'>舆情反馈</h3></div><div className='mt-2 flex flex-wrap gap-1.5'>{post.is_deleted || post.sentiment_result || post.analysis_status ? <SentimentCell post={post} /> : <Badge variant='outline'>未建立分析任务</Badge>}</div></div>{sentiment?.can_manual_correct && <Button variant='outline' size='sm' onClick={onCorrect}><PencilLine className='size-4' />{manualActionName}</Button>}</div>

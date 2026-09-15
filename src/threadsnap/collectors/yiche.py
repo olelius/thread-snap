@@ -1333,7 +1333,6 @@ class YicheCollector:
         on_progress: ProgressCallback | None = None,
         reuse_records: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        self._ensure_account_identity(urls[0] if urls else BASE_URL + "/")
         records: list[dict[str, Any]] = []
         failures: list[dict[str, str]] = []
         seen: set[str] = set()
@@ -1364,6 +1363,7 @@ class YicheCollector:
                     on_progress(record, None)
                 continue
             try:
+                self._ensure_account_identity(normalized_url)
                 record = self._fetch_post(normalized_url)
                 record["order_index"] = source_index
                 records.append(record)

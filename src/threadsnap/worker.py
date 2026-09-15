@@ -13,7 +13,7 @@ from urllib.parse import urlsplit
 
 from patchright.sync_api import sync_playwright
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from .browser_runtime import browser_launch_args
 from .collectors import AuthenticationRequired, Collector, CollectorFailure, get_platform_spec
@@ -787,6 +787,7 @@ class WorkerService:
                     and resolver is not None
                     and not record.get("video_urls")
                     and raw_status.get("video_id")
+                    and raw_status.get("reuse_mode") != "cross_run_snapshot"
                 ):
                     try:
                         record["video_urls"] = resolver(str(raw_status["video_id"]))
@@ -802,7 +803,7 @@ class WorkerService:
                         source_indexes.get(record.get("url"), record.get("order_index", 0))
                     )
                 raw_status = dict(record.get("raw_status") or {})
-                raw_status.setdefault("adapter_version", collector.adapter_version)
+                raw_status.setdefault("adapter_version", getattr(collector, "adapter_version", spec.adapter_version))
                 record["raw_status"] = raw_status
                 pending_records.append(record)
             if failure is not None:
@@ -1469,15 +1470,28 @@ class WorkerService:
 
         adapter_version = get_platform_spec(task.platform_code).adapter_version
         index: dict[str, dict[str, Any]] = {}
-        rows = db.scalars(
-            select(PostSnapshot)
+        # 先在数据库中选出每个帖子的最新快照，再加载对应评论，避免扫描/复制所有历史正文。
+        ranked = (
+            select(
+                PostSnapshot.id.label("snapshot_id"),
+                func.row_number().over(
+                    partition_by=PostSnapshot.platform_post_id,
+                    order_by=(PostSnapshot.created_at.desc(), PostSnapshot.id.desc()),
+                ).label("rank"),
+            )
             .join(CircleTask, CircleTask.id == PostSnapshot.circle_task_id)
             .where(
                 CircleTask.platform_code == task.platform_code,
                 CircleTask.run_id != task.run_id,
                 CircleTask.status.in_(("success", "partial_success")),
             )
-            .order_by(PostSnapshot.created_at.desc())
+            .subquery()
+        )
+        rows = db.scalars(
+            select(PostSnapshot)
+            .join(ranked, ranked.c.snapshot_id == PostSnapshot.id)
+            .where(ranked.c.rank == 1)
+            .options(selectinload(PostSnapshot.comments))
         )
         for previous in rows:
             key = str(previous.platform_post_id)
@@ -1507,11 +1521,10 @@ class WorkerService:
                     }
                     for item in previous.comments
                 ],
-                "_reuse_source_run_id": previous.run_id,
-                "_reuse_source_snapshot_id": previous.id,
-                "_reuse_source_fetched_at": previous.created_at.isoformat()
-                if previous.created_at
-                else None,
+                "_reuse_source_run_id": (previous.raw_status or {}).get("reuse_source_run_id") or previous.run_id,
+                "_reuse_source_snapshot_id": (previous.raw_status or {}).get("reuse_source_snapshot_id") or previous.id,
+                "_reuse_source_fetched_at": (previous.raw_status or {}).get("reuse_source_fetched_at")
+                or (previous.created_at.isoformat() if previous.created_at else None),
             }
         return index
 
@@ -1521,7 +1534,7 @@ class WorkerService:
 
         if post.visibility != "visible" or post.is_deleted:
             return False
-        if not (str(post.title or "").strip() or str(post.content or "").strip()):
+        if not (str(post.content or "").strip() or post.image_urls or post.video_urls):
             return False
         raw_status = post.raw_status if isinstance(post.raw_status, dict) else {}
         stored_adapter = str(raw_status.get("adapter_version") or "").strip()
@@ -1530,7 +1543,7 @@ class WorkerService:
         if stored_adapter and stored_adapter != adapter_version:
             return False
         response_class = raw_status.get("response_class")
-        return response_class in (None, "detail", "post_detail", "visible_detail")
+        return response_class in (None, "post", "detail", "post_detail", "visible_detail")
 
     def resume_platform(self, platform_code: str) -> None:
         """认证状态更新后先恢复原等待任务和验证任务。"""

@@ -245,7 +245,7 @@ class GlobalPostReuseTests(AppCase):
             ("deleted-post", "https://dongchedi.example.test/post/deleted"),
         ]
         self._old_run_with_posts(circle, [
-            {"platform_post_id": "empty-content", "url": candidates[0][1], "title": None, "content": None},
+            {"platform_post_id": "empty-content", "url": candidates[0][1], "title": "只有标题", "content": None, "image_urls": [], "video_urls": []},
             {"platform_post_id": "unknown-visible", "url": candidates[1][1], "visibility": "unknown"},
             {"platform_post_id": "deleted-post", "url": candidates[2][1], "raw_status": {"content_state": "deleted"}},
         ])
