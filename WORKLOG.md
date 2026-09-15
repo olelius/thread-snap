@@ -1,16 +1,12 @@
 # WORKLOG — 唯一任务账本
-## 2026-09-15 — 普通HTTP前端UUID兼容（整合子任务）
-**身份/范围**：从同步的origin/main@28f6f267创建fix/http-uuid-compat，独立H:/ThreadSnap-http-uuid；只修复前端UUID生成，统一任务文档和远端部署由主线程整合。
-**实现**：createUuid优先原生randomUUID，普通HTTP回退getRandomValues生成UUID v4；缺少随机数API明确报错，无Math.random和新依赖。frontend/src的6处直接调用全部替换，保留新建请求idempotency_key及补提Idempotency-Key。
-**证据**：node --experimental-strip-types --test frontend/tests/uuid.test.mjs一次4/4通过，覆盖原生接收者、回退1000值格式与唯一性、版本/变体位、缺失Crypto错误；npm --prefix frontend run check和git diff --check通过。真实HTTP http://192.168.2.6:5195 的Chromium isSecureContext=false、randomUUID=undefined、getRandomValues=function，实点补提按钮产生1次携合法UUID头的POST、页面错误0；API全部由确定性样本拦截，无平台访问/数据库写入。
-**入口/下一步**：artifacts/runtime/agents/http-uuid/{tests.log,typecheck.log,browser-result.json,check_plain_http.py,plain-http-retry.png}；截图保存的是成功响应后弹窗退场中间帧，请求结果以browser-result.json为准。5195临时Vite已结束。主线程整合后一次生产构建并完成真实组合路径/发布验收，不重复本子任务定向测试；未构建、未推送、未部署。
 
 ## 2026-09-15 — HTTP前端UUID兼容与汽车之家3轮统一重试
 **目标/身份**：用户要求从最新main开分支开发、收尾合并并最小部署。fetch后的origin/main@28f6f267；集成分支fix/http-uuid-batch-retry（H:/ThreadSnap-http-retry-release），前后端切片分别独立worktree。旧H:/ThreadSnap-tactile-ui实验和H:/src/authlib混合修改完整保留。
 **实现**：6处UUID调用统一经crypto.randomUUID/getRandomValues的UUID v4函数，HTTP页面可正常生成业务ID/补提幂等键。汽车之家详情首页单独分类；首轮后仅重试未成功的冻结URL，最多追加3轮，所有来源通过上一轮屏障才开始下一轮。独立持久轮次/来源截图重试预算，保留候选身份和位置；网络/429/认证/重启不重置额度，已成功项不重采，恢复清空对应失败，旧历史不变。不把普通解析错误当首页，也不加入浏览器回退。
 **已有证据**：前端4项定向测试+tsc、真实非localhost HTTP浏览器实点补提（native随机UUID未开放、合法幂等键、页面错误0）；后端10项新增+3项恢复回归（真实Worker/隔离SQLite/有限平台响应）通过。静态检查通过；切片回执分别在H:/ThreadSnap-http-uuid与H:/ThreadSnap-autohome-three-waves的artifacts/runtime/agents下。
 **部署边界/回退**：远端实查current=e6630e204e86、schema=f3b6c9d2a804，七类业务任务空闲；沿用最小应用wheel+重建前端、reflink新release、双空闲门和原子current/previous切换。依赖、迁移、平台会话不改变，临时隧道继续禁用。停机快照仅作写入开放前回退；开放后只回退程序，不回写旧数据库。
-**精确下一步**：整合源码构建前端一次，通过普通HTTP真实页面→API→Worker三轮组合验收（平台响应为有限样本，不再跑650条）；随后PR合入main、绑定提交制最小包、部署与公网核验，最后删除本次开发分支。部署证据统一artifacts/runtime/http-uuid-three-waves/。
+**组合验收**：干净提交b9b3486上npm ci和生产build（含tsc，2684模块）完成。真实普通HTTP（isSecureContext=false、randomUUID未开放）点击补提→真实API→隔离SQLite/正式Worker，3个有限HTTP响应样本分别第3次成功、第4次成功、第4次仍首页；实际尝试3/4/4，最终2成功/1失败，成功项不再请求。同幂等键返回同批次，页面错误0，截图已目视。临时18081实例已停止，无正式平台/AI调用。证据artifacts/runtime/http-uuid-three-waves/combined-result.json及combined-http-worker.png。
+**精确下一步**：PR合入main、绑定提交制最小包、部署与公网核验，最后删除本次开发分支。部署证据统一artifacts/runtime/http-uuid-three-waves/。
 
 ---
 
