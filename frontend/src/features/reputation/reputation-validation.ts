@@ -1,12 +1,13 @@
 import type { ReputationScopeVehicle } from '@/lib/types'
 
 /** 返回当前平台有完整映射且尚未验证的启用车型。 */
-export function reputationValidationTargetIds(vehicles: ReputationScopeVehicle[], platformCode: string): string[] {
+export function reputationValidationTargetIds(vehicles: ReputationScopeVehicle[], platformCode: string, currentContractVersion?: string): string[] {
   return vehicles
     .filter((vehicle) => {
       if (!vehicle.enabled) return false
       const mapping = vehicle.mappings[platformCode]
-      return Boolean(mapping && mapping.validation_status !== 'verified' && mapping.platform_vehicle_id.trim() && mapping.platform_url.trim() && mapping.platform_display_name.trim())
+      const contractStale = Boolean(currentContractVersion && mapping?.validation_contract_version && mapping.validation_contract_version !== currentContractVersion && !(platformCode === 'yiche' && mapping.validation_contract_version === 'yiche-native-app-mapping-v1'))
+      return Boolean(mapping && (mapping.validation_status !== 'verified' || contractStale) && mapping.platform_vehicle_id.trim() && mapping.platform_url.trim() && mapping.platform_display_name.trim())
     })
     .map((vehicle) => vehicle.id)
 }
