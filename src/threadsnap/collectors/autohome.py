@@ -25,6 +25,7 @@ from .base import (
     CollectorFailure,
     PageEvidenceCallback,
     ProgressCallback,
+    apply_reuse_record,
 )
 from .capture_geometry import (
     LIST_SCHEMA_VERSION,
@@ -1375,6 +1376,7 @@ class AutohomeCollector:
         on_progress: ProgressCallback | None = None,
         on_page_evidence: PageEvidenceCallback | None = None,
         on_candidates: Callable[[list[dict[str, Any]]], None] | None = None,
+        reuse_records: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """处理来源前N个固定候选；详情失败时不向后补位。"""
 
@@ -1469,6 +1471,11 @@ class AutohomeCollector:
             cursor += len(batch)
 
             def fetch(value: dict[str, Any]) -> tuple[dict[str, Any], Any, Any]:
+                reused = (reuse_records or {}).get(str(value.get("post_id")))
+                if reused is not None:
+                    return apply_reuse_record(
+                        reused, url=value["url"], order_index=int(value["source_position"])
+                    ), None, None
                 try:
                     return value, self.fetch_post(value["url"], candidate=value), None
                 except (AuthenticationRequired, CollectorFailure) as exc:
@@ -1540,6 +1547,7 @@ class AutohomeCollector:
         on_progress: ProgressCallback | None = None,
         *,
         candidates: dict[str, dict[str, Any]] | None = None,
+        reuse_records: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """处理固定URL；来源恢复沿用冻结候选身份，独立URL导入保持原合同。"""
 
@@ -1563,6 +1571,13 @@ class AutohomeCollector:
             if post_id in seen:
                 continue
             seen.add(post_id)
+            reused = (reuse_records or {}).get(str(post_id))
+            if reused is not None:
+                record = apply_reuse_record(reused, url=normalized, order_index=source_index)
+                records.append(record)
+                if on_progress:
+                    on_progress(record, None)
+                continue
             try:
                 record = self.fetch_post(normalized, candidate=(candidates or {}).get(normalized))
             except AuthenticationRequired as exc:

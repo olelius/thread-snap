@@ -720,6 +720,7 @@ class WorkerService:
                         unresolved_urls.append(url)
                 known_urls = unresolved_urls
             page_evidence_supported = _supports_page_evidence(collector)
+            reusable_records = self._reusable_record_index(db, task)
             if circle_id:
                 circle = db.get(Circle, circle_id)
                 needs_validation = bool(circle and circle.validation_status != "verified")
@@ -762,6 +763,8 @@ class WorkerService:
             kwargs = {"on_progress": report_progress}
             if frozen_candidates and "candidates" in signature(active_collector.collect_urls).parameters:
                 kwargs["candidates"] = frozen_candidates
+            if "reuse_records" in signature(active_collector.collect_urls).parameters:
+                kwargs["reuse_records"] = reusable_records
             return active_collector.collect_urls(known_urls, **kwargs)
 
         def flush_progress() -> None:
@@ -798,6 +801,9 @@ class WorkerService:
                     record["order_index"] = int(
                         source_indexes.get(record.get("url"), record.get("order_index", 0))
                     )
+                raw_status = dict(record.get("raw_status") or {})
+                raw_status.setdefault("adapter_version", collector.adapter_version)
+                record["raw_status"] = raw_status
                 pending_records.append(record)
             if failure is not None:
                 reported_failures += 1
@@ -962,6 +968,11 @@ class WorkerService:
                     remaining,
                     skip_post_ids=completed_post_ids,
                     on_progress=report_progress,
+                    **(
+                        {"reuse_records": reusable_records}
+                        if "reuse_records" in signature(collector.collect_circle).parameters
+                        else {}
+                    ),
                     **({"on_candidates": freeze_candidates}
                        if "on_candidates" in signature(collector.collect_circle).parameters else {}),
                     **(
@@ -1025,6 +1036,11 @@ class WorkerService:
                             remaining,
                             skip_post_ids=completed_post_ids,
                             on_progress=report_progress,
+                            **(
+                                {"reuse_records": reusable_records}
+                                if "reuse_records" in signature(refreshed.collect_circle).parameters
+                                else {}
+                            ),
                             **({"on_candidates": freeze_candidates}
                                if "on_candidates" in signature(refreshed.collect_circle).parameters else {}),
                             **(
@@ -1390,9 +1406,12 @@ class WorkerService:
             select(func.max(PostSnapshot.order_index)).where(PostSnapshot.circle_task_id == task.id)
         )
         next_order = (-1 if max_order is None else int(max_order)) + 1
+        adapter_version = get_platform_spec(task.platform_code).adapter_version
         for record in records:
             if record["platform_post_id"] in existing:
                 continue
+            raw_status = dict(record.get("raw_status") or {})
+            raw_status.setdefault("adapter_version", adapter_version)
             post = PostSnapshot(
                 run_id=task.run_id,
                 circle_task_id=task.id,
@@ -1408,7 +1427,7 @@ class WorkerService:
                 like_count=record.get("like_count"),
                 section=record.get("section"),
                 visibility=record.get("visibility", "unknown"),
-                raw_status=record.get("raw_status"),
+                raw_status=raw_status,
                 order_index=int(record.get("order_index", next_order)),
             )
             db.add(post)
@@ -1442,6 +1461,76 @@ class WorkerService:
                 )
             existing.add(record["platform_post_id"])
         return existing
+
+    def _reusable_record_index(
+        self, db: Session, task: CircleTask
+    ) -> dict[str, dict[str, Any]]:
+        """加载当前平台可复用的历史详情，供列表发现后在详情请求前命中。"""
+
+        adapter_version = get_platform_spec(task.platform_code).adapter_version
+        index: dict[str, dict[str, Any]] = {}
+        rows = db.scalars(
+            select(PostSnapshot)
+            .join(CircleTask, CircleTask.id == PostSnapshot.circle_task_id)
+            .where(
+                CircleTask.platform_code == task.platform_code,
+                CircleTask.run_id != task.run_id,
+                CircleTask.status.in_(("success", "partial_success")),
+            )
+            .order_by(PostSnapshot.created_at.desc())
+        )
+        for previous in rows:
+            key = str(previous.platform_post_id)
+            if key in index or not self._is_reusable_snapshot(previous, adapter_version):
+                continue
+            index[key] = {
+                "platform_post_id": key,
+                "url": previous.url,
+                "title": previous.title,
+                "author": previous.author,
+                "published_at": previous.published_at,
+                "content": previous.content,
+                "image_urls": list(previous.image_urls or []),
+                "video_urls": list(previous.video_urls or []),
+                "reply_count": previous.reply_count,
+                "like_count": previous.like_count,
+                "section": previous.section,
+                "visibility": previous.visibility,
+                "raw_status": dict(previous.raw_status or {}),
+                "comments": [
+                    {
+                        "platform_comment_id": item.platform_comment_id,
+                        "author": item.author,
+                        "content": item.content,
+                        "published_at": item.published_at,
+                        "like_count": item.like_count,
+                    }
+                    for item in previous.comments
+                ],
+                "_reuse_source_run_id": previous.run_id,
+                "_reuse_source_snapshot_id": previous.id,
+                "_reuse_source_fetched_at": previous.created_at.isoformat()
+                if previous.created_at
+                else None,
+            }
+        return index
+
+    @staticmethod
+    def _is_reusable_snapshot(post: PostSnapshot, adapter_version: str) -> bool:
+        """判断历史详情是否具备可跨批次复用的内容证明。"""
+
+        if post.visibility != "visible" or post.is_deleted:
+            return False
+        if not (str(post.title or "").strip() or str(post.content or "").strip()):
+            return False
+        raw_status = post.raw_status if isinstance(post.raw_status, dict) else {}
+        stored_adapter = str(raw_status.get("adapter_version") or "").strip()
+        # 历史版本尚未持久化 adapter_version 时，完整且可见的快照仍可安全复用；
+        # 已记录版本但发生漂移则拒绝，避免把旧解析合同误当作当前结果。
+        if stored_adapter and stored_adapter != adapter_version:
+            return False
+        response_class = raw_status.get("response_class")
+        return response_class in (None, "detail", "post_detail", "visible_detail")
 
     def resume_platform(self, platform_code: str) -> None:
         """认证状态更新后先恢复原等待任务和验证任务。"""

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Protocol, TypedDict
@@ -75,6 +76,27 @@ class PostRecord(TypedDict, total=False):
     order_index: int
 
 
+def apply_reuse_record(
+    record: dict[str, Any], *, url: str, order_index: int
+) -> dict[str, Any]:
+    """将历史详情映射为当前候选，并保留跨批次来源证明。"""
+
+    reused = deepcopy(record)
+    reused["url"] = url
+    reused["order_index"] = order_index
+    raw_status = dict(reused.get("raw_status") or {})
+    raw_status.update(
+        {
+            "reuse_source_run_id": reused.pop("_reuse_source_run_id", None),
+            "reuse_source_snapshot_id": reused.pop("_reuse_source_snapshot_id", None),
+            "reuse_source_fetched_at": reused.pop("_reuse_source_fetched_at", None),
+            "reuse_mode": "cross_run_snapshot",
+        }
+    )
+    reused["raw_status"] = raw_status
+    return reused
+
+
 class FailureRecord(TypedDict):
     """单个候选或输入 URL 的稳定失败记录。"""
 
@@ -129,10 +151,12 @@ class Collector(Protocol):
         skip_post_ids: set[str] | None = None,
         on_progress: ProgressCallback | None = None,
         on_page_evidence: PageEvidenceCallback | None = None,
+        reuse_records: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]: ...
 
     def collect_urls(
         self,
         urls: list[str],
         on_progress: ProgressCallback | None = None,
+        reuse_records: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]: ...

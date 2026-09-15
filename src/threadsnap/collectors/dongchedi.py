@@ -18,7 +18,7 @@ from lxml import html
 from patchright.sync_api import sync_playwright
 
 from ..scrapling_transport import ExecutionScopeKey, ScraplingHttpPool
-from .base import AuthenticationRequired, CircleSource, CollectorFailure
+from .base import AuthenticationRequired, CircleSource, CollectorFailure, apply_reuse_record
 from .capture_geometry import (
     LIST_SCHEMA_VERSION,
     capture_bound_screenshot,
@@ -748,6 +748,7 @@ class DongchediCollector:
         skip_post_ids: set[str] | None = None,
         on_progress: ProgressCallback | None = None,
         on_page_evidence: PageEvidenceCallback | None = None,
+        reuse_records: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         source = parse_circle_url(circle_url)
         records: list[dict[str, Any]] = []
@@ -824,6 +825,15 @@ class DongchediCollector:
 
                 def fetch_candidate(value: tuple[dict[str, Any], int]) -> tuple[Any, Any, int]:
                     candidate, source_index = value
+                    reused = (reuse_records or {}).get(str(candidate.get("post_id")))
+                    if reused is not None:
+                        return (
+                            apply_reuse_record(
+                                reused, url=candidate["url"], order_index=source_index
+                            ),
+                            None,
+                            source_index,
+                        )
                     try:
                         return self.fetch_post(candidate["url"]), None, source_index
                     except (AuthenticationRequired, CollectorFailure) as exc:
@@ -887,7 +897,11 @@ class DongchediCollector:
         return {"records": records, "failures": failures, "stop_reason": stop_reason}
 
     def collect_urls(
-        self, urls: list[str], on_progress: ProgressCallback | None = None
+        self,
+        urls: list[str],
+        on_progress: ProgressCallback | None = None,
+        *,
+        reuse_records: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         records: list[dict[str, Any]] = []
         failures: list[dict[str, Any]] = []
@@ -909,6 +923,13 @@ class DongchediCollector:
             if post_id in seen:
                 continue
             seen.add(post_id)
+            reused = (reuse_records or {}).get(str(post_id))
+            if reused is not None:
+                record = apply_reuse_record(reused, url=normalized, order_index=source_index)
+                records.append(record)
+                if on_progress:
+                    on_progress(record, None)
+                continue
             try:
                 record = self.fetch_post(normalized)
             except AuthenticationRequired as exc:
