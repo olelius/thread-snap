@@ -1588,6 +1588,8 @@ class RunService:
             return run_dict(db, run)
 
     def retry(self, run_id: str, key: str, scope: str) -> dict[str, Any]:
+        """从原批次未完成来源创建一个关联补提批次，保留每个来源的平台身份。"""
+
         with self.factory() as db:
             original = db.get(ExtractionRun, run_id)
             if not original:
@@ -1606,14 +1608,6 @@ class RunService:
                 )
             )
             selected = [task for task in tasks if task.status != "success"]
-            platform_codes = {task.platform_code for task in selected}
-            if len(platform_codes) != 1:
-                raise DomainError(
-                    "RUN_RETRY_PLATFORM_INVALID",
-                    "一次手动补提只能包含一个平台。",
-                    status_code=409,
-                )
-            platform_code = next(iter(platform_codes))
             snapshot = []
             for task in selected:
                 completed_rows = db.execute(
@@ -1643,6 +1637,7 @@ class RunService:
                 if failed_urls:
                     snapshot.append(
                         {
+                            "platform_code": task.platform_code,
                             "circle_id": task.circle_id,
                             "external_id": task.external_id,
                             "url": task.circle_url,
@@ -1671,6 +1666,7 @@ class RunService:
                     original_indexes = (task.config_snapshot or {}).get("source_indexes", {})
                     snapshot.append(
                         {
+                            "platform_code": task.platform_code,
                             "circle_id": task.circle_id,
                             "external_id": task.external_id,
                             "url": task.circle_url,
@@ -1702,6 +1698,7 @@ class RunService:
                     retry_config.pop("source_indexes", None)
                     snapshot.append(
                         {
+                            "platform_code": task.platform_code,
                             "circle_id": task.circle_id,
                             "external_id": task.external_id,
                             "url": task.circle_url,
@@ -1726,13 +1723,16 @@ class RunService:
                 result = run_dict(db, existing)
                 result.update({"already_submitted": True, "message": "该提取任务已提交。"})
                 return result
-            platform = db.get(PlatformConfig, platform_code)
-            if not platform or not platform.enabled:
-                raise DomainError(
-                    "PLATFORM_DISABLED",
-                    "平台重新启用后才能创建手动补提。",
-                    status_code=409,
-                )
+            # 只检查真正需要补提的来源；任一平台不可运行时整批不写入。
+            for platform_code in sorted({item["platform_code"] for item in snapshot}):
+                platform = db.get(PlatformConfig, platform_code)
+                if not platform or not platform.enabled:
+                    name = platform.display_name if platform else platform_code
+                    raise DomainError(
+                        "PLATFORM_DISABLED",
+                        f"{name}重新启用后才能创建手动补提。",
+                        status_code=409,
+                    )
             run = ExtractionRun(
                 number=self._number(db),
                 trigger_type="manual",
@@ -1751,7 +1751,7 @@ class RunService:
                 task = CircleTask(
                     run_id=run.id,
                     circle_id=item["circle_id"],
-                    platform_code=platform_code,
+                    platform_code=item["platform_code"],
                     external_id=item["external_id"],
                     circle_name=item["name"],
                     circle_url=item["url"],

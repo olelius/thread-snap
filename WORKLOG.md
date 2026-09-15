@@ -1,5 +1,14 @@
 # WORKLOG — 唯一任务账本
 
+## 2026-09-15 — 修复多平台失败项手动补提
+**目标/基线**：修复截图“一个补提只能包含一个平台”的旧限制，从fetch后的origin/main@1d1301d创建fix/multiplatform-failed-retry与独立H:/ThreadSnap-multiplatform-retry；旧实验及其他工作树保持原状。
+**实现**：RunService.retry的三种剩余内容分支各自保留platform_code；创建一个关联批次，每来源按自身平台入队。启用检查只覆盖真正snapshot所需平台，保留幂等、原位置、AI/截图账户配置和历史不变；非单纯移除校验。前端资源、Worker三轮逻辑、依赖与数据库均不改。
+**状态/下一步**：代码完成，4项新增针对性API/Worker回归通过（4.421秒）与3项原单平台补提回归通过（3.228秒），含两平台路由、三种剩余内容、历史不变、停用平台原子失败和幂等。接下来仅补真实HTTP界面多平台组合验证；随后合入main，仅构建应用wheel并复用前端，最小更新远端。证据集中artifacts/runtime/multiplatform-retry/；测试切片e32c36c记录可复核。
+**实际页面验收**：原三平台批次含3条成功/2条失败，通过普通HTTP页面真实点击补提，API返回一个关联批次和汽车之家/易车两个任务；正式Worker仅各访问1条失败URL，2/2成功、失败0，原run/task/post指纹不变，同幂等键返回同一批次、页面错误0。平台响应为隔离有限记录，不操作用户历史批次或AI。证据combined-result.json/multiplatform-http.png；18083临时实例已停止。
+**发布/回退边界**：SSH预检current=df987c4、七类任务空闲；沿用此前最小包/reflink/current-previous/双空闲门。保留原数据库/会话/历史记录；切换开放写入后仅回退程序，不恢复旧数据库；不自动补提用户历史批次或触发AI。
+
+---
+
 ## 2026-09-15 — HTTP前端UUID兼容与汽车之家3轮统一重试
 **目标/身份**：用户要求从最新main开分支开发、收尾合并并最小部署。fetch后的origin/main@28f6f267；集成分支fix/http-uuid-batch-retry（H:/ThreadSnap-http-retry-release），前后端切片分别独立worktree。旧H:/ThreadSnap-tactile-ui实验和H:/src/authlib混合修改完整保留。
 **实现**：6处UUID调用统一经crypto.randomUUID/getRandomValues的UUID v4函数，HTTP页面可正常生成业务ID/补提幂等键。汽车之家详情首页单独分类；首轮后仅重试未成功的冻结URL，最多追加3轮，所有来源通过上一轮屏障才开始下一轮。独立持久轮次/来源截图重试预算，保留候选身份和位置；网络/429/认证/重启不重置额度，已成功项不重采，恢复清空对应失败，旧历史不变。不把普通解析错误当首页，也不加入浏览器回退。
