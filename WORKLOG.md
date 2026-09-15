@@ -5,7 +5,9 @@
 **实现**：Worker 在详情请求前加载同平台历史索引，三平台候选和 URL 清单命中时跳过详情请求，复制正文/媒体/评论并写 `raw_status.reuse_source_*`来源信息；保留当前来源 URL、顺序、批次。visible、正文或媒体证明、非删除和响应合同通过才复用；缺少历史 adapter_version 按旧数据兼容，已记录版本漂移拒绝。
 **整合修正**：修正汽车之家复用返回值槽位和正常response_class=post、连续复用保留原始抓取时间；先按ID选最新历史再批量加载评论，最新删除/隐藏不回退更早可见记录。易车全命中URL清单不发身份请求；候选已显示删除或稳定论坛ID冲突时仍现场采集。详情新增历史复用与非实时字段提示。首版4bd3c1曾先行部署但尚未满足组合门，最终以补齐真实适配器与API验证后的新版本替换。
 **组合验收**：96项受影响回归、3平台真实采集器5项通过；实际HTTP API→Worker→三平台URL采集器，隔离旧数据上创建6个新批次全部成功、详情/身份请求0次，原始抓取时间与旧历史指纹不变、AI禁用。真实页面已目视历史复用/非实时标记，页面错误0。证据artifacts/runtime/global-reuse/{affected-tests.log,real-adapters.log,combined-result.json,reuse-details.png}。临时18085停止。
-**下一步**：修正后的功能与UI标记一并合入main，再最小部署替换先行版本4bd3c1；不重写用户历史，不触发真实平台/AI或650条压力轮次。
+**最终上线**：PR #319合入main@e5e0c310，最终远端current=0.1.0-e5e0c310491e、previous=0.1.0-4bd3c1cd27ba；28.338秒切换，三服务active，schema仍f3b6c9d2a804，27张历史/配置表哈希一致。最小包1,189,866字节，SHA256=ce2725be8a101c691fd9b69f7287ffcdcb087bb70897b068372a70bae63b6d1a；新增历史复用UI故重建前端，服务器依赖复用，无迁移。先行4bd版本已替换，不作为最终验收版本；另保留已知旧稳定a928439 release用于需要时回退，开放写入后不回写旧数据库。
+**目标机证据**：生产只读选三平台各一条真实旧快照，在独立SQLite与已安装代码正式Worker复用3/3成功、正文hash相同、详情/身份网络请求0；未写生产批次或发AI请求。公网health和首页200，首页hash与最终构建相同。证据artifacts/runtime/global-reuse/{combined-result.json,public-result.json,reuse-details.png,server-evidence/target-real-history-result.json}及artifacts/runtime/multiplatform-retry/package-result.json。回执SHA256=7ddc91c4ecb383286bc90385f47311bbb589760b390bdfe468b28cae1cb9d070
+**收尾**：提交此部署记录后合并并清理本次开发切片和集成分支，同步已有main工作树；旧实验脏工作区不动。正式入口http://www.jingruigongguan.cn:61037/。新批次默认复用符合条件的历史详情；页面明确沿用的正文/评论/点赞/状态非实时，旧结果不改写。
 
 
 
