@@ -8,6 +8,7 @@ import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
 import { ReputationRoleLabel } from '@/features/reputation/reputation-role-label'
 import { reputationMetricColumns } from '@/features/reputation/reputation-metrics'
+import { reputationMissingMappingIds, reputationValidationTargetIds } from '@/features/reputation/reputation-validation'
 import { api, errorMessage, formatDate, platformName } from '@/lib/api'
 import type { PageResult, ReputationCapabilities, ReputationMappingValidation, ReputationRun, ReputationSchedule, ReputationScope, ReputationScopeVehicle } from '@/lib/types'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -298,9 +299,9 @@ function ScopePanel({ query, platforms, adapterStatus, adapterMessage }: { query
     onError: (error) => toast.error('恢复车型失败', { description: errorMessage(error) }),
   })
   const validateMutation = useMutation({
-    mutationFn: () => api<ReputationMappingValidation>('/reputation/scope/mapping-validations', {
+    mutationFn: (vehicleIds?: string[]) => api<ReputationMappingValidation>('/reputation/scope/mapping-validations', {
       method: 'POST',
-      body: JSON.stringify({ revision: query.data?.revision, platform_code: platformCode }),
+      body: JSON.stringify({ revision: query.data?.revision, platform_code: platformCode, ...(vehicleIds ? { vehicle_ids: vehicleIds } : {}) }),
     }, 180_000),
     onSuccess: (value) => {
       refreshScopeState(value.scope)
@@ -333,7 +334,9 @@ function ScopePanel({ query, platforms, adapterStatus, adapterMessage }: { query
   const activeVehicles = scope.vehicles.filter((item) => item.enabled)
   const displayVehicles = [...scope.vehicles].sort((left, right) => Number(right.enabled) - Number(left.enabled))
   const verified = activeVehicles.filter((item) => item.mappings[platformCode]?.validation_status === 'verified').length
-  const pendingValidation = activeVehicles.length - verified
+  const validationTargetIds = reputationValidationTargetIds(activeVehicles, platformCode)
+  const missingMappingCount = reputationMissingMappingIds(activeVehicles, platformCode).length
+  const validationBlockedByMissingMapping = missingMappingCount > 0 && validationTargetIds.length === 0
   const canCreate = Object.entries(vehicleForm).every(([key, value]) => key === 'role' || value.trim())
   const vehicleFormChanged = !editTarget || JSON.stringify(vehicleForm) !== JSON.stringify(vehicleFormFrom(editTarget, platformCode))
   const canSaveVehicle = canCreate && vehicleFormChanged
@@ -354,7 +357,8 @@ function ScopePanel({ query, platforms, adapterStatus, adapterMessage }: { query
         </div>
         <div className='flex flex-wrap items-center justify-end gap-2'>
           <Select value={platformCode} onValueChange={(value) => { setPlatformCode(value); setPreview(undefined); setMappingText('') }}><SelectTrigger className='w-36'><SelectValue /></SelectTrigger><SelectContent>{platformOptions.map((item) => <SelectItem key={item.code} value={item.code}>{item.display_name}</SelectItem>)}</SelectContent></Select>
-          <Button variant='outline' size='sm' disabled={validateMutation.isPending || !activeVehicles.length} onClick={() => validateMutation.mutate()}>{validateMutation.isPending ? <Loader2 className='size-4 animate-spin' /> : <ScanSearch className='size-4' />}{validateMutation.isPending ? '正在验证…' : pendingValidation ? `验证待验证（${pendingValidation}）` : '重新验证全部'}</Button>
+          <Button variant='outline' size='sm' disabled={validateMutation.isPending || !activeVehicles.length || validationBlockedByMissingMapping} title={missingMappingCount ? `有 ${missingMappingCount} 项缺少${selectedPlatformName}映射，本次验证会跳过这些车型。` : undefined} onClick={() => validateMutation.mutate(validationTargetIds.length ? validationTargetIds : undefined)}>{validateMutation.isPending ? <Loader2 className='size-4 animate-spin' /> : <ScanSearch className='size-4' />}{validateMutation.isPending ? '正在验证…' : validationTargetIds.length ? `验证待验证（${validationTargetIds.length}）` : '重新验证全部'}</Button>
+          {missingMappingCount > 0 && <span className='text-xs text-amber-700 dark:text-amber-300'>缺少映射 {missingMappingCount} 项，本次跳过</span>}
           <Button variant='outline' size='sm' onClick={() => openVehicleDialog()}><Plus className='size-4' />新增车型</Button>
           <Button variant='outline' size='sm' onClick={() => setMappingOpen(true)}>批量粘贴映射</Button>
           <Button size='sm' disabled={publishDisabled} title={publishPreview?.warning} onClick={() => setPublishOpen(true)}><Rocket className='size-4' />发布变更</Button>
