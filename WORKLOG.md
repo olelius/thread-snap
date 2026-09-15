@@ -1,5 +1,12 @@
 # WORKLOG — 唯一任务账本
 
+## 2026-09-15 — 多平台失败项补提远端发布完成
+**状态**：✅ PR #315 已合入 `main@852dd19b92e5`，远端已更新到 `0.1.0-852dd19b92e5`，previous=`0.1.0-df987c4dca6d`。最小包1,187,601字节，SHA-256 `c3916cf8bf63e11028b37147241a0a7d37fda4ce56b217f0cb7d8db119cc107b`；仅更新后端 wheel，前端/依赖/迁移/Session复用。
+**目标机证据**：切换完成，三服务 active，内外健康检查、安装文件校验和应用导入通过；数据库仍`f3b6c9d2a804`，上一版本/current回退副本和备份保留，未触发生产补提、AI或截图。多平台补提的普通HTTP前端→API→Worker→隔离SQLite验收已通过：汽车之家和易车失败项进入同一关联批次，各访问1条并成功，原批次不变，同幂等键复用同一批次，页面错误0。证据 `artifacts/runtime/multiplatform-retry/{package-result.json,package-verification.json,combined-result.json,multiplatform-http.png}`。
+**入口/分支**：正式入口仍为 http://www.jingruigongguan.cn:61037/；本次功能分支已合入并删除，部署记录分支随后删除。历史失败批次仍由页面“重新提取失败项”触发，不自动补提。
+
+
+
 ## 2026-09-15 — 修复多平台失败项手动补提
 **目标/基线**：修复截图“一个补提只能包含一个平台”的旧限制，从fetch后的origin/main@1d1301d创建fix/multiplatform-failed-retry与独立H:/ThreadSnap-multiplatform-retry；旧实验及其他工作树保持原状。
 **实现**：RunService.retry的三种剩余内容分支各自保留platform_code；创建一个关联批次，每来源按自身平台入队。启用检查只覆盖真正snapshot所需平台，保留幂等、原位置、AI/截图账户配置和历史不变；非单纯移除校验。前端资源、Worker三轮逻辑、依赖与数据库均不改。
