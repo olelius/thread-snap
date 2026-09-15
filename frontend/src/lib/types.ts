@@ -369,6 +369,7 @@ export type ReputationScopeMapping = {
   platform_url: string
   platform_display_name: string
   validation_status: 'unverified' | 'verified' | 'failed'
+  validation_contract_version?: string
   validation_run_id?: string
   validation_attempt_id?: string
   validated_at?: string

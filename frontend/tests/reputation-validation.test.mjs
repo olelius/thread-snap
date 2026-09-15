@@ -17,6 +17,16 @@ test('其他平台或空字段不会被错误加入汽车之家验证目标', ()
   assert.deepEqual(reputationMissingMappingIds(vehicles, 'autohome'), ['other-platform'])
 })
 
+test('旧合同的已验证映射进入当前合同重新验证目标', () => {
+  const legacy = { ...mapping('verified'), validation_contract_version: 'yiche-reputation-mapping-v1' }
+  const legacyVehicle = vehicle('legacy', null)
+  legacyVehicle.mappings = { yiche: legacy }
+  const nativeVehicle = vehicle('native', null)
+  nativeVehicle.mappings = { yiche: { ...legacy, validation_contract_version: 'yiche-native-app-mapping-v1' } }
+  assert.deepEqual(reputationValidationTargetIds([legacyVehicle], 'yiche', 'yiche-reputation-mapping-v2'), ['legacy'])
+  assert.deepEqual(reputationValidationTargetIds([nativeVehicle], 'yiche', 'yiche-reputation-mapping-v2'), [])
+})
+
 test('已验证项不参与待验证计数，缺失映射单独报告', () => {
   const vehicles = [vehicle('verified', mapping('verified')), vehicle('failed', mapping()), vehicle('missing', null)]
   assert.equal(reputationValidationTargetIds(vehicles, 'autohome').length, 1)

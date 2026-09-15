@@ -240,7 +240,8 @@ function ScopePanel({ query, platforms, adapterStatus, adapterMessage }: { query
   const [platformCode, setPlatformCode] = useState('dongchedi')
   const platformOptions = platforms?.length ? platforms : [{ code: 'dongchedi', display_name: '懂车帝', adapter_version: '', validation_contract_version: '' }]
   const metricColumns = reputationMetricColumns(platformCode, platforms ? { reputation_platforms: platforms } : undefined)
-  const selectedPlatformName = platformOptions.find((item) => item.code === platformCode)?.display_name ?? platformName(platformCode)
+  const selectedPlatform = platformOptions.find((item) => item.code === platformCode)
+  const selectedPlatformName = selectedPlatform?.display_name ?? platformName(platformCode)
   const urlOnly = platforms?.find((item) => item.code === platformCode)?.evidence_mode === 'url_only'
   const [preview, setPreview] = useState<{ valid: boolean; changed_count: number; unchanged_count: number; errors: Array<{ row: string; reason: string }> }>()
   const publishPreviewQuery = useQuery({
@@ -337,7 +338,7 @@ function ScopePanel({ query, platforms, adapterStatus, adapterMessage }: { query
   const activeVehicles = scope.vehicles.filter((item) => item.enabled)
   const displayVehicles = [...scope.vehicles].sort((left, right) => Number(right.enabled) - Number(left.enabled))
   const verified = activeVehicles.filter((item) => item.mappings[platformCode]?.validation_status === 'verified').length
-  const validationTargetIds = reputationValidationTargetIds(activeVehicles, platformCode)
+  const validationTargetIds = reputationValidationTargetIds(activeVehicles, platformCode, selectedPlatform?.validation_contract_version)
   const missingMappingCount = reputationMissingMappingIds(activeVehicles, platformCode).length
   const validationBlockedByMissingMapping = missingMappingCount > 0 && validationTargetIds.length === 0
   const canCreate = Object.entries(vehicleForm).every(([key, value]) => key === 'role' || value.trim())
