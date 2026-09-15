@@ -32,6 +32,7 @@ from .base import (
     CircleSource,
     CollectorFailure,
     PageEvidenceCallback,
+    apply_reuse_record,
 )
 from .capture_geometry import (
     LIST_SCHEMA_VERSION,
@@ -1217,6 +1218,7 @@ class YicheCollector:
         skip_post_ids: set[str] | None = None,
         on_progress: ProgressCallback | None = None,
         on_page_evidence: PageEvidenceCallback | None = None,
+        reuse_records: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         self._ensure_account_identity(circle_url)
         source = parse_circle_url(circle_url)
@@ -1278,6 +1280,14 @@ class YicheCollector:
                     continue
                 selected_count += 1
                 url = str(row["url"])
+                reused = (reuse_records or {}).get(post_id)
+                if reused is not None:
+                    record = apply_reuse_record(reused, url=url, order_index=index)
+                    records.append(record)
+                    seen.add(post_id)
+                    if on_progress:
+                        on_progress(record, None)
+                    continue
                 try:
                     record = self._fetch_post(url, list_row=row)
                     record["order_index"] = index
@@ -1317,9 +1327,12 @@ class YicheCollector:
         return {"records": records, "failures": failures, "stop_reason": stop_reason}
 
     def collect_urls(
-        self, urls: list[str], *, on_progress: ProgressCallback | None = None
+        self,
+        urls: list[str],
+        *,
+        on_progress: ProgressCallback | None = None,
+        reuse_records: dict[str, dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        self._ensure_account_identity(urls[0] if urls else BASE_URL + "/")
         records: list[dict[str, Any]] = []
         failures: list[dict[str, str]] = []
         seen: set[str] = set()
@@ -1340,7 +1353,17 @@ class YicheCollector:
             if post_id in seen:
                 continue
             seen.add(post_id)
+            reused = (reuse_records or {}).get(post_id)
+            if reused is not None:
+                record = apply_reuse_record(
+                    reused, url=normalized_url, order_index=source_index
+                )
+                records.append(record)
+                if on_progress:
+                    on_progress(record, None)
+                continue
             try:
+                self._ensure_account_identity(normalized_url)
                 record = self._fetch_post(normalized_url)
                 record["order_index"] = source_index
                 records.append(record)
