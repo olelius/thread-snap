@@ -19,8 +19,12 @@ from .reputation_adapter import (
 )
 from .reputation_browser import (
     BrowserReputationAdapter,
+    attempt_stage,
     capture_region,
+    check_access_response,
+    close_context,
     elapsed_ms,
+    remaining_timeout,
     stable_measure,
 )
 
@@ -138,11 +142,12 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
 
     async def _forum_count(self, context, target, started):
         """复用当前会话追加一次论坛HTML请求，使用执行项剩余时限。"""
-        remaining = self.timeout_seconds - (monotonic() - started)
+        remaining = remaining_timeout(self.timeout_seconds - (monotonic() - started))
         if remaining <= 0:
             raise ReputationAdapterError("REPUTATION_ITEM_TIMEOUT", "口碑执行项已达到采集时限。")
         url = f"https://club.autohome.com.cn/bbs/forum-c-{target.platform_vehicle_id}-1.html?sort=topic"
         response = await context.request.get(url, timeout=remaining * 1000)
+        check_access_response(response)
         if not response.ok:
             raise ReputationAdapterError("REPUTATION_FORUM_HTTP_ERROR", f"汽车之家论坛返回HTTP {response.status}。", retryable=response.status >= 500 or response.status == 429)
         raw, proof = self.parse_forum_count(await response.body(), response.url, target)
@@ -151,22 +156,30 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
     async def _visit(self, browser, target: ReputationMappingTarget, output_dir: Path):
         started = monotonic()
         context = await browser.new_context(storage_state=self.storage_state, viewport=VIEWPORT)
-        page = await context.new_page()
-        page.set_default_timeout(self.timeout_seconds * 1000)
         try:
+            attempt_stage("创建页面")
+            page = await context.new_page()
+            page.set_default_timeout(self.timeout_seconds * 1000)
             expected_url = normalize_series_url(target.platform_url, target.platform_vehicle_id)
+            attempt_stage("页面导航")
             response = await page.goto(expected_url, wait_until="domcontentloaded")
+            check_access_response(response)
             if response is None or response.status >= 400:
                 raise ReputationAdapterError(
                     "REPUTATION_PAGE_UNAVAILABLE", "汽车之家口碑页访问异常。", retryable=True
                 )
+            attempt_stage("等待车型标题")
             await page.wait_for_selector('div[class*="header_toolbar__car__name"]')
             api_url = (
                 "https://koubeiipv6.app.autohome.com.cn/pc/series/list"
                 f"?pm=3&seriesId={target.platform_vehicle_id}&pageIndex=1&pageSize=20"
                 "&yearid=0&ge=0&seriesSummaryKey=0&order=0"
             )
-            api_response = await context.request.get(api_url)
+            attempt_stage("读取口碑指标接口")
+            api_response = await context.request.get(
+                api_url, timeout=remaining_timeout(self.timeout_seconds) * 1000
+            )
+            check_access_response(api_response)
             if not api_response.ok:
                 raise ReputationAdapterError(
                     "REPUTATION_METRICS_MISSING", "汽车之家口碑指标接口访问异常。", retryable=True
@@ -200,6 +213,7 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
               };
             }
             """
+            attempt_stage("测量页面指标")
             measurement, measurements = await stable_measure(page, script)
             # 名称只展示，厂家前缀或别名不作为失败条件；身份以稳定车系ID为准。
             normalize_series_url(page.url, target.platform_vehicle_id)
@@ -216,8 +230,10 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
             review_count = str(result.get("rowcount") or "").strip() or None
             forum_raw, forum_url, forum_proof = None, None, None
             if self.include_circle_content_count:
+                attempt_stage("读取论坛帖子总数")
                 forum_raw, forum_url, forum_proof = await self._forum_count(context, target, started)
             path = output_dir / f"{target.vehicle_id}-metric.png"
+            attempt_stage("截取指标证据")
             width, height, digest = await capture_region(page, path, measurement["rect"])
             final_url = normalize_series_url(page.url, target.platform_vehicle_id)
             return ReputationPageResult(
@@ -262,7 +278,7 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
                 circle_content_count_measurement=forum_proof,
             )
         finally:
-            await context.close()
+            await close_context(context)
 
 
 def final_url_series_id(url: str) -> str | None:

@@ -14,7 +14,15 @@ from .reputation_adapter import (
     ReputationMappingTarget,
     ReputationPageResult,
 )
-from .reputation_browser import BrowserReputationAdapter, elapsed_ms, stable_measure
+from .reputation_browser import (
+    BrowserReputationAdapter,
+    attempt_stage,
+    check_access_response,
+    close_context,
+    elapsed_ms,
+    remaining_timeout,
+    stable_measure,
+)
 
 ADAPTER_VERSION = "yiche-reputation-url-v3-mobile-metrics"
 VALIDATION_CONTRACT_VERSION = "yiche-reputation-mapping-v2"
@@ -92,11 +100,12 @@ class YicheReputationAdapter(BrowserReputationAdapter):
     async def _visit(self, browser, target: ReputationMappingTarget, output_dir: Path):
         started = monotonic()
         context = await browser.new_context(storage_state=self.storage_state, viewport=VIEWPORT)
-        page = await context.new_page()
-        page.set_default_timeout(self.timeout_seconds * 1000)
+        response_tasks: list[asyncio.Task] = []
         try:
+            attempt_stage("创建页面")
+            page = await context.new_page()
+            page.set_default_timeout(self.timeout_seconds * 1000)
             captured: dict[str, dict] = {}
-            response_tasks: list[asyncio.Task] = []
 
             async def capture(response) -> None:
                 if "/point_comment/tags?" in response.url and response.status == 200:
@@ -107,11 +116,14 @@ class YicheReputationAdapter(BrowserReputationAdapter):
                 lambda response: response_tasks.append(asyncio.create_task(capture(response))),
             )
             expected_url = normalize_series_url(target.platform_url, target.platform_vehicle_id)
+            attempt_stage("页面导航")
             response = await page.goto(expected_url, wait_until="domcontentloaded")
+            check_access_response(response)
             if response is None or response.status >= 400:
                 raise ReputationAdapterError(
                     "REPUTATION_PAGE_UNAVAILABLE", "易车点评页访问异常。", retryable=True
                 )
+            attempt_stage("等待车型标题与点评响应")
             await page.wait_for_selector(".middle-nav-box .container")
             for _ in range(40):
                 if "tags" in captured:
@@ -140,12 +152,18 @@ class YicheReputationAdapter(BrowserReputationAdapter):
             mobile_payloads: dict[str, object] = {}
             mobile_errors: dict[str, str] = {}
             for name, url in (("rank", rank_url), ("owner_review", owner_review_url)):
+                attempt_stage(f"读取移动端{name}指标")
                 try:
-                    api_response = await context.request.get(url)
+                    api_response = await context.request.get(
+                        url, timeout=remaining_timeout(self.timeout_seconds) * 1000
+                    )
+                    check_access_response(api_response)
                     if api_response.status == 200:
                         mobile_payloads[name] = await api_response.json()
                     else:
                         mobile_errors[name] = f"HTTP {api_response.status}"
+                except ReputationAdapterError:
+                    raise
                 except Exception as error:
                     mobile_errors[name] = f"{type(error).__name__}: {error}"
             script = """
@@ -178,6 +196,7 @@ class YicheReputationAdapter(BrowserReputationAdapter):
               };
             }
             """
+            attempt_stage("测量页面指标")
             measurement, measurements = await stable_measure(page, script)
             actual_name = str(measurement["actual_name"] or "").strip()
             expected_name = target.platform_display_name.replace(" ", "").casefold()
@@ -239,7 +258,12 @@ class YicheReputationAdapter(BrowserReputationAdapter):
                 owner_review_count_url=owner_review_url,
             )
         finally:
-            await context.close()
+            for task in response_tasks:
+                if not task.done():
+                    task.cancel()
+            if response_tasks:
+                await asyncio.gather(*response_tasks, return_exceptions=True)
+            await close_context(context)
 
 
 def final_url_slug(url: str) -> str | None:

@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import threading
 from abc import ABC, abstractmethod
+from contextlib import asynccontextmanager, suppress
+from contextvars import ContextVar
 from pathlib import Path
 from time import monotonic
 from typing import Any, Callable
 
 from patchright.async_api import Browser, async_playwright
+from patchright.async_api import TimeoutError as BrowserTimeoutError
 
 from .browser_runtime import browser_launch_args
 from .reputation_adapter import (
@@ -18,6 +22,98 @@ from .reputation_adapter import (
     ReputationMappingTarget,
     ReputationPageResult,
 )
+
+_attempt_deadline: ContextVar[float | None] = ContextVar("reputation_attempt_deadline", default=None)
+_attempt_stage: ContextVar[str] = ContextVar("reputation_attempt_stage", default="访问页面")
+
+
+def attempt_stage(stage: str) -> None:
+    """记录当前协程的采集阶段，供超时诊断使用，不在并发执行项之间共享。"""
+
+    _attempt_stage.set(stage)
+
+
+def check_access_response(response) -> None:
+    """明确的认证或限流响应要求先恢复访问条件，不反复请求。"""
+
+    if response is None:
+        return
+    status = getattr(response, "status", getattr(response, "status_code", None))
+    if status in {401, 403}:
+        raise ReputationAdapterError("AUTH_REQUIRED", "平台要求先恢复认证或访问权限。")
+    if status == 429:
+        raise ReputationAdapterError("PLATFORM_RATE_LIMITED", "平台请求频率受限，请冷却后补跑。")
+
+
+def remaining_timeout(default_seconds: float) -> float:
+    """返回当前执行项剩余预算；同步 HTTP 线程继承调用方的截止时间。"""
+
+    deadline = _attempt_deadline.get()
+    remaining = default_seconds if deadline is None else min(default_seconds, deadline - monotonic())
+    if remaining <= 0:
+        raise ReputationAdapterError(
+            "REPUTATION_ITEM_TIMEOUT", "口碑执行项已达到采集时限。", retryable=True
+        )
+    return remaining
+
+
+@asynccontextmanager
+async def attempt_timeout(timeout_seconds: float):
+    """取得执行槽位后启动整项预算；导航、指标请求和截图共享一个截止时间。"""
+
+    token = _attempt_deadline.set(monotonic() + timeout_seconds)
+    stage_token = _attempt_stage.set("创建页面上下文")
+    timer = asyncio.timeout(timeout_seconds)
+    try:
+        async with timer:
+            yield
+    except (TimeoutError, BrowserTimeoutError) as error:
+        raise ReputationAdapterError(
+            "REPUTATION_ITEM_TIMEOUT",
+            f"口碑执行项在{_attempt_stage.get()}阶段超时（本次采集预算{timeout_seconds:g}秒）。",
+            retryable=True,
+        ) from error
+    finally:
+        _attempt_deadline.reset(token)
+        _attempt_stage.reset(stage_token)
+
+
+async def acquire_global_slot(limiter: threading.Semaphore | None) -> None:
+    """可取消地等候跨线程共享槽位，避免后台阻塞 acquire 在取消后偷偷占用容量。"""
+
+    if limiter is not None:
+        while not limiter.acquire(blocking=False):
+            await asyncio.sleep(0.05)
+
+
+async def bounded_http_thread(function, *args, **kwargs):
+    """取消时先收拢已开始的有界 HTTP 请求，再允许调用方释放全局槽位。"""
+
+    task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # HTTP 本身使用 remaining_timeout，退出不会额外获得一份完整单项预算。
+        # 单项和批次截止可能连续取消；始终保留槽位直到已开始的线程请求真正退出。
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        with suppress(Exception):
+            task.result()
+        raise
+
+
+async def close_context(context) -> None:
+    """取消或错误后有界回收上下文，清理失败不覆盖原始业务错误。"""
+
+    try:
+        await asyncio.wait_for(context.close(), timeout=3)
+    except Exception:
+        logging.getLogger(__name__).warning("口碑页面上下文有界回收失败。", exc_info=True)
 
 
 def sha256(path: Path) -> str:
@@ -50,7 +146,7 @@ class BrowserReputationAdapter(ABC):
         self.storage_state = storage_state
         self.concurrency = max(1, min(int(concurrency), 8))
         self.headless = headless
-        self.timeout_seconds = max(1, int(timeout_seconds))
+        self.timeout_seconds = max(0.001, float(timeout_seconds))
         self.batch_timeout_seconds = max(1, int(batch_timeout_seconds))
         self.evidence_policy = evidence_policy
         self.global_limiter = global_limiter
@@ -58,8 +154,7 @@ class BrowserReputationAdapter(ABC):
     async def _acquire_global_slot(self) -> None:
         """跨平台共享正式巡检页面并发槽位，避免线程事件循环各自放大并发。"""
 
-        if self.global_limiter is not None:
-            await asyncio.to_thread(self.global_limiter.acquire)
+        await acquire_global_slot(self.global_limiter)
 
     def _release_global_slot(self) -> None:
         if self.global_limiter is not None:
@@ -100,9 +195,10 @@ class BrowserReputationAdapter(ABC):
                 async with semaphore:
                     await self._acquire_global_slot()
                     try:
-                        result: ReputationPageResult | Exception = await self._visit(
-                            browser, target, output_dir
-                        )
+                        async with attempt_timeout(self.timeout_seconds):
+                            result: ReputationPageResult | Exception = await self._visit(
+                                browser, target, output_dir
+                            )
                     except Exception as error:  # 单项错误必须留在本批次结果中
                         result = error
                     finally:
