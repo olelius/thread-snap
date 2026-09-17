@@ -95,7 +95,9 @@ class OfficialFakeAdapter:
         output_dir.mkdir(parents=True)
         values = []
         for index, target in enumerate(targets):
-            if target.vehicle_id in self.retry_once and self.validation_calls == 1:
+            if target.vehicle_id in self.retry_once and self.validation_calls == 1 and any(
+                path.name.startswith("attempt-1") for path in (output_dir, *output_dir.parents)
+            ):
                 result = ReputationAdapterError(
                     "REPUTATION_PAGE_FIXTURE_RETRY",
                     "确定性正式巡检暂时失败。",

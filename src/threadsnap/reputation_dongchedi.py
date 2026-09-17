@@ -30,6 +30,15 @@ from .reputation_adapter import (
     ReputationMappingTarget,
     ReputationPageResult,
 )
+from .reputation_browser import (
+    acquire_global_slot,
+    attempt_stage,
+    attempt_timeout,
+    bounded_http_thread,
+    check_access_response,
+    close_context,
+    remaining_timeout,
+)
 from .scrapling_transport import ExecutionScopeKey, ScraplingHttpPool
 
 logger = logging.getLogger(__name__)
@@ -262,7 +271,7 @@ class DongchediReputationAdapter:
         url = normalize_circle_url(
             f"https://www.dongchedi.com/community/{target.platform_vehicle_id}/dongtai-release"
         )[1]
-        remaining = (
+        remaining = remaining_timeout(
             self.timeout_seconds
             if timeout_seconds is None
             else min(self.timeout_seconds, timeout_seconds)
@@ -301,8 +310,7 @@ class DongchediReputationAdapter:
         self.http.close()
 
     async def _acquire_global_slot(self) -> None:
-        if self.global_limiter is not None:
-            await asyncio.to_thread(self.global_limiter.acquire)
+        await acquire_global_slot(self.global_limiter)
 
     def _release_global_slot(self) -> None:
         if self.global_limiter is not None:
@@ -360,7 +368,7 @@ class DongchediReputationAdapter:
                 NEGATIVE_RATE_API_URL,
                 params=params,
                 headers=NEGATIVE_RATE_HEADERS,
-                timeout=self.timeout_seconds,
+                timeout=remaining_timeout(self.timeout_seconds),
             )
         except Exception as error:
             raise ReputationAdapterError(
@@ -369,6 +377,7 @@ class DongchediReputationAdapter:
                 retryable=True,
             ) from error
         source_url = str(response.url)
+        check_access_response(response)
         if response.status_code >= 500 or response.status_code == 429:
             raise ReputationAdapterError(
                 "REPUTATION_NEGATIVE_RATE_SERVER_ERROR",
@@ -653,6 +662,7 @@ class DongchediReputationAdapter:
         started = time.monotonic()
         context: BrowserContext | None = None
         stage = "创建页面上下文"
+        attempt_stage(stage)
         try:
             context = await browser.new_context(
                 storage_state=self.storage_state,
@@ -661,14 +671,17 @@ class DongchediReputationAdapter:
                 locale="zh-CN",
             )
             stage = "创建页面"
+            attempt_stage(stage)
             page = await context.new_page()
             page.set_default_timeout(self.timeout_seconds * 1000)
             stage = "页面导航"
+            attempt_stage(stage)
             response = await page.goto(
                 target.platform_url,
                 wait_until="domcontentloaded",
                 timeout=self.timeout_seconds * 1000,
             )
+            check_access_response(response)
             if "/login-required" in page.url:
                 raise ReputationAdapterError("AUTH_REQUIRED", "懂车帝共享Session需要更新。")
             if response and response.status >= 500:
@@ -678,14 +691,17 @@ class DongchediReputationAdapter:
                     retryable=True,
                 )
             stage = "等待车型标题"
+            attempt_stage(stage)
             await page.locator("h1:visible").first.wait_for(state="visible", timeout=15_000)
             if "/login-required" in page.url:
                 raise ReputationAdapterError("AUTH_REQUIRED", "懂车帝共享Session需要更新。")
             await page.wait_for_timeout(1800)
             stage = "冻结页面布局"
+            attempt_stage(stage)
             await self._freeze_layout(page)
             measurements: list[dict[str, Any]] = []
             stage = "测量页面指标"
+            attempt_stage(stage)
             for _ in range(3):
                 measurements.append(await self._measure(page))
                 await page.wait_for_timeout(350)
@@ -726,12 +742,13 @@ class DongchediReputationAdapter:
             negative_rate_positive_count: int | None = None
             negative_rate_negative_count: int | None = None
             if self.include_negative_rate:
+                attempt_stage("读取差评率接口")
                 (
                     negative_rate_raw,
                     negative_rate_url,
                     negative_rate_positive_count,
                     negative_rate_negative_count,
-                ) = await asyncio.to_thread(self._visit_negative_rate, target)
+                ) = await bounded_http_thread(self._visit_negative_rate, target)
             reputation_not_available = self._confirmed_no_reputation_data(
                 score_raw=str(score_raw) if score_raw is not None else None,
                 rank_raw=str(rank_raw) if rank_raw is not None else None,
@@ -749,7 +766,8 @@ class DongchediReputationAdapter:
                 review_article_count_url = page.url
             circle_raw, circle_url, circle_measurement = None, None, None
             if self.include_circle_content_count:
-                circle_raw, circle_url, circle_measurement = await asyncio.to_thread(
+                attempt_stage("读取圈内内容数")
+                circle_raw, circle_url, circle_measurement = await bounded_http_thread(
                     self._visit_circle_content,
                     target,
                     timeout_seconds=self.timeout_seconds - (time.monotonic() - started),
@@ -780,6 +798,7 @@ class DongchediReputationAdapter:
                     )
                 metric_path = target_dir / "region.png"
                 stage = "截取指标证据"
+                attempt_stage(stage)
                 await page.screenshot(
                     path=str(metric_path),
                     clip=metric_rect,
@@ -826,19 +845,7 @@ class DongchediReputationAdapter:
             raise self._browser_runtime_error(target, stage, error) from error
         finally:
             if context is not None:
-                try:
-                    await context.close()
-                except PlaywrightError as error:
-                    # 结果或原始异常已经确定时，关闭上下文失败只记运维诊断，不能覆盖业务结果。
-                    logger.warning(
-                        "口碑页面上下文关闭失败：vehicle_id=%s platform_vehicle_id=%s "
-                        "type=%s detail=%s",
-                        target.vehicle_id,
-                        target.platform_vehicle_id,
-                        type(error).__name__,
-                        str(error),
-                        exc_info=(type(error), error, error.__traceback__),
-                    )
+                await close_context(context)
 
     @staticmethod
     def _node_text(node: Any) -> str:
@@ -1020,7 +1027,7 @@ class DongchediReputationAdapter:
         try:
             response = self._http_session().get(
                 target.platform_url,
-                timeout=self.timeout_seconds,
+                timeout=remaining_timeout(self.timeout_seconds),
                 allow_redirects=True,
             )
         except Exception as error:
@@ -1142,12 +1149,13 @@ class DongchediReputationAdapter:
                             )
                         else:
                             try:
-                                result = await self._visit(
-                                    browser,
-                                    target,
-                                    output_dir,
-                                    force_capture=force_capture,
-                                )
+                                async with attempt_timeout(self.timeout_seconds):
+                                    result = await self._visit(
+                                        browser,
+                                        target,
+                                        output_dir,
+                                        force_capture=force_capture,
+                                    )
                             except Exception as error:
                                 if (
                                     isinstance(error, ReputationAdapterError)
@@ -1209,7 +1217,8 @@ class DongchediReputationAdapter:
                     if auth_failed.is_set():
                         return ReputationAdapterError("AUTH_REQUIRED", "懂车帝共享Session需要更新。")
                     try:
-                        return await asyncio.to_thread(self._visit_http, target)
+                        async with attempt_timeout(self.timeout_seconds):
+                            return await bounded_http_thread(self._visit_http, target)
                     except Exception as error:
                         if isinstance(error, ReputationAdapterError) and error.code == "AUTH_REQUIRED":
                             auth_failed.set()

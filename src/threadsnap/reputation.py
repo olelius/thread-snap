@@ -74,6 +74,9 @@ INSPECTION_TIME_TEXT = INSPECTION_TIME.isoformat()
 # 正式口碑巡检及其失败项补跑使用独立、固定的页面并发，避免帖子提取配置
 # 调整后在计划时点突然打开更多浏览器窗口。
 REPUTATION_RUN_CONCURRENCY = 2
+REPUTATION_ITEM_TIMEOUT_SECONDS = 30
+REPUTATION_MAX_ATTEMPTS = 4
+REPUTATION_BATCH_TIMEOUT_SECONDS = 45 * 60
 SCENARIOS: dict[str, dict[str, str]] = {
     "baseline_initialization": {
         "name": "基线初始化",
@@ -525,7 +528,9 @@ class ReputationService:
                     )
                 ).all()
             )
-            results = self._results_in_scope_order(db, run, list(results))
+            results = self._results_in_scope_order(
+                db, run, [row for row in results if row.status != "retry_pending"]
+            )
             evidence_by_result = {
                 item.result_id: item
                 for item in db.scalars(
@@ -608,6 +613,8 @@ class ReputationService:
         status_priority = {"failed": 0, "partial_success": 1, "success": 2}
         selected: dict[str, ReputationResult] = {}
         for result in candidates:
+            if result.status == "retry_pending":
+                continue
             key = f"{result.vehicle_id}|{result.platform_code}"
             current = selected.get(key)
             priority = (
@@ -1542,6 +1549,8 @@ class ReputationService:
         result: ReputationPageResult | Exception,
         attempt_count: int,
         required_count: int,
+        *,
+        pending_retry: bool = False,
     ) -> dict[str, int]:
         """幂等提交一个车型终态，并在事务完成后发布权威进度。"""
 
@@ -1593,6 +1602,13 @@ class ReputationService:
                 error_code = parsed["code"]
                 error_message = parsed["message"]
                 duration_ms = None
+                if row is not None and row.status == "retry_pending" and any(
+                    metric.get("value") is not None
+                    for metric in row.metrics.values() if isinstance(metric, dict)
+                ):
+                    # 恢复重试也保留此前同次完整采集得到的可靠指标，不跨尝试拼接。
+                    metrics = row.metrics
+                    row_status = "partial_success"
 
             values = {
                 "run_id": run_id,
@@ -1604,7 +1620,7 @@ class ReputationService:
                 "vehicle_position": int(vehicle["role_order"]),
                 "platform_code": platform_code,
                 "platform_name": REPUTATION_PLATFORMS[platform_code].display_name,
-                "status": row_status,
+                "status": "retry_pending" if pending_retry else row_status,
                 "metrics": metrics,
                 "evidence_required": evidence_required,
                 "mapping_snapshot": vehicle.get("mappings", {}).get(platform_code) or {},
@@ -1678,7 +1694,7 @@ class ReputationService:
             "required_evidence_count": required_count,
             "complete_evidence_count": complete_evidence,
         }
-        if self.event_publisher:
+        if self.event_publisher and not pending_retry:
             self.event_publisher(
                 "reputation.run.changed",
                 run_id,
@@ -1708,7 +1724,8 @@ class ReputationService:
                 run.finished_at = started
                 return self.get_run(run_id)
             run.status = "running"
-            run.started_at = started
+            run.started_at = run.started_at or started
+            original_started_at = run.started_at
             run.error_message = None
             # 防御旧的排队数据或异常写入；终态历史批次会在上方直接返回，不会被改写。
             run.concurrency = REPUTATION_RUN_CONCURRENCY
@@ -1716,14 +1733,13 @@ class ReputationService:
             target_keys = set(run.target_keys)
             baseline_snapshot = json.loads(json.dumps(run.baseline_snapshot, ensure_ascii=False))
             concurrency = REPUTATION_RUN_CONCURRENCY
-            run_type = run.run_type
-            schedule_type = run.schedule_type
 
         vehicles = {
             item["id"]: item for item in snapshot.get("vehicles", []) if item.get("enabled", True)
         }
         targets: list[ReputationMappingTarget] = []
         target_platform_codes: list[str] = []
+        invalid_targets: dict[int, ReputationAdapterError] = {}
         for vehicle in vehicles.values():
             for platform_code in run.platform_codes:
                 key = f"{vehicle['id']}|{platform_code}"
@@ -1733,13 +1749,18 @@ class ReputationService:
                 if not mapping:
                     continue
                 spec = self._platform_spec(platform_code)
+                try:
+                    normalized_url = spec.normalize_url(
+                        str(mapping["platform_url"]), str(mapping["platform_vehicle_id"])
+                    )
+                except ReputationAdapterError as error:
+                    invalid_targets[len(targets)] = error
+                    normalized_url = str(mapping.get("platform_url") or "")
                 targets.append(
                     ReputationMappingTarget(
                         vehicle_id=vehicle["id"],
                         platform_vehicle_id=str(mapping["platform_vehicle_id"]),
-                        platform_url=spec.normalize_url(
-                            str(mapping["platform_url"]), str(mapping["platform_vehicle_id"])
-                        ),
+                        platform_url=normalized_url,
                         platform_display_name=str(mapping["platform_display_name"]),
                         mapping_hash=_mapping_hash(vehicle["id"], mapping, platform_code),
                     )
@@ -1753,185 +1774,181 @@ class ReputationService:
             run = db.get(ReputationRun, run_id)
             if not run:
                 raise RuntimeError("口碑巡检批次在执行期间丢失")
-            db.execute(
-                delete(ReputationEvidence).where(
-                    ReputationEvidence.result_id.in_(
-                        select(ReputationResult.id).where(ReputationResult.run_id == run_id)
-                    )
-                )
-            )
-            db.execute(delete(ReputationResult).where(ReputationResult.run_id == run_id))
-            run.completed_count = 0
-            run.failed_count = 0
+            saved = db.scalars(
+                select(ReputationResult).where(ReputationResult.run_id == run_id)
+            ).all()
+            saved_by_key = {f"{row.vehicle_id}|{row.platform_code}": row for row in saved}
             run.required_evidence_count = required_count
-            run.complete_evidence_count = 0
         if self.event_publisher:
             self.event_publisher(
-                "reputation.run.changed",
-                run_id,
-                status="running",
-                completed_count=0,
-                failed_count=0,
+                "reputation.run.changed", run_id, status="running",
+                completed_count=run.completed_count, failed_count=run.failed_count,
                 required_evidence_count=required_count,
-                complete_evidence_count=0,
+                complete_evidence_count=run.complete_evidence_count,
             )
 
         root = self.settings.reputation_dir / run_id / "collection"
         root.mkdir(parents=True, exist_ok=True)
+        # 只保存有明确外部修复前置条件的排除集合，其余失败均进入统一轮次。
+        def recoverable(result: ReputationPageResult | Exception) -> bool:
+            if isinstance(result, ReputationPageResult):
+                return True  # 可靠指标但必需证据缺失，也需要重新完整采集。
+            code = getattr(result, "code", "")
+            return code not in {
+                "AUTH_REQUIRED", "PLATFORM_CAPTCHA_REQUIRED", "PLATFORM_CHALLENGE",
+                "PLATFORM_RATE_LIMITED", "REPUTATION_RATE_LIMITED",
+                "REPUTATION_URL_INVALID", "REPUTATION_ID_URL_MISMATCH",
+                "REPUTATION_IDENTITY_MISMATCH", "REPUTATION_IDENTITY_NAME_MISMATCH",
+                "REPUTATION_FORUM_IDENTITY_MISMATCH", "REPUTATION_CIRCLE_IDENTITY_MISMATCH",
+                "REPUTATION_NEGATIVE_RATE_IDENTITY_MISMATCH", "REPUTATION_BATCH_TIMEOUT",
+            }
+
+        def complete(index: int, result: ReputationPageResult | Exception) -> bool:
+            if not isinstance(result, ReputationPageResult):
+                return False
+            if not REPUTATION_PLATFORMS[target_platform_codes[index]].requires_evidence:
+                return True
+            path = result.metric_region_path
+            return bool(path and path.is_file() and result.metric_region_sha256
+                        and _sha256(path) == result.metric_region_sha256)
+
         persisted_indexes: set[int] = set()
+        attempt_counts = [0 for _ in targets]
+        final_results: dict[int, ReputationPageResult | Exception] = {}
+        best_partial: dict[int, ReputationPageResult] = {}
+        for index, target in enumerate(targets):
+            key = f"{target.vehicle_id}|{target_platform_codes[index]}"
+            previous = saved_by_key.get(key)
+            if previous:
+                attempt_counts[index] = previous.attempt_count
+                if previous.status != "retry_pending":
+                    persisted_indexes.add(index)
+                else:
+                    final_results[index] = ReputationAdapterError(
+                        previous.error_code or "REPUTATION_INTERRUPTED",
+                        previous.error_message or "上次采集尚待恢复。",
+                    )
 
-        def persist(index: int, result: ReputationPageResult | Exception, attempt: int) -> None:
-            target = targets[index]
-            platform_code = target_platform_codes[index]
-            key = f"{target.vehicle_id}|{platform_code}"
-            self._persist_official_result(
-                run_id,
-                platform_code,
-                target,
-                vehicles[target.vehicle_id],
-                baseline_snapshot.get(key),
-                result,
-                attempt,
-                required_count,
-            )
-            with persisted_indexes_lock:
-                persisted_indexes.add(index)
-
-        deadline = monotonic() + 45 * 60
-        final_results: list[ReputationPageResult | Exception] = [
-            ReputationAdapterError("REPUTATION_NOT_STARTED", "口碑平台项尚未执行。")
-            for _ in targets
-        ]
-        attempt_counts = [1 for _ in targets]
-        persisted_indexes_lock = threading.Lock()
+        # 将已完成的轮次/失败记入既有结果表，成功结果保持不可变；重启不清零。
+        deadline = monotonic() + max(0, REPUTATION_BATCH_TIMEOUT_SECONDS - (
+            started - original_started_at
+        ).total_seconds())
         global_limiter = threading.BoundedSemaphore(REPUTATION_RUN_CONCURRENCY)
+        persisted_lock = threading.Lock()
 
-        def execute_platform(platform_code: str) -> None:
-            indexes = [
-                index for index, code in enumerate(target_platform_codes) if code == platform_code
-            ]
+        def persist(index: int, result: ReputationPageResult | Exception, *, pending: bool) -> None:
+            target = targets[index]
+            code = target_platform_codes[index]
+            self._persist_official_result(
+                run_id, code, target, vehicles[target.vehicle_id],
+                baseline_snapshot.get(f"{target.vehicle_id}|{code}"),
+                result, attempt_counts[index], required_count, pending_retry=pending,
+            )
+            if not pending:
+                with persisted_lock:
+                    persisted_indexes.add(index)
+
+        for index, error in invalid_targets.items():
+            if index not in persisted_indexes:
+                persist(index, error, pending=False)
+
+        def execute_platform(platform_code: str, indexes: list[int]) -> None:
             if not indexes:
                 return
             spec = self._platform_spec(platform_code)
-            storage_state = (
-                self.session_store.get_state(platform_code) if self.session_store else None
-            )
-            if spec.requires_session and not storage_state:
-                for index in indexes:
-                    final_results[index] = ReputationAdapterError(
-                        "AUTH_REQUIRED", f"{spec.display_name}共享Session需要更新。"
-                    )
-                return
-            remaining = int(deadline - monotonic())
-            if remaining <= 0:
-                for index in indexes:
-                    final_results[index] = ReputationAdapterError(
-                        "REPUTATION_BATCH_TIMEOUT", "口碑巡检达到45分钟批次上限。"
-                    )
-                return
+            adapter = None
+            seen: set[int] = set()
+            folder = root / platform_code / f"attempt-{attempt_counts[indexes[0]] + 1}-{uuid7()}"
+            folder.mkdir(parents=True)
 
-            def evidence_policy(
-                target: ReputationMappingTarget, measurement: dict[str, Any]
-            ) -> bool:
-                vehicle = vehicles[target.vehicle_id]
-                baseline = baseline_snapshot.get(f"{target.vehicle_id}|{platform_code}")
-                metrics = {
-                    "score": self._official_metric(
-                        measurement.get("score_raw") or measurement.get("score"),
-                        (baseline or {}).get("metrics", {}).get("score"),
-                    ),
-                    "rank": self._official_metric(
-                        measurement.get("rank_raw") or measurement.get("rank"),
-                        (baseline or {}).get("metrics", {}).get("rank"),
-                        inverse=True,
-                        scope=str(measurement.get("rank_scope") or "同级车评分"),
-                    ),
+            def accept(local_index: int, _target, result) -> None:
+                index = indexes[local_index]
+                if index in seen:
+                    return
+                seen.add(index)
+                attempt_counts[index] += 1
+                final_results[index] = result
+                success = complete(index, result)
+                if isinstance(result, ReputationPageResult) and not success:
+                    best_partial[index] = result
+                pending = (not success and recoverable(result)
+                           and attempt_counts[index] < REPUTATION_MAX_ATTEMPTS
+                           and monotonic() < deadline)
+                # 不落库原始异常正文（可能含URL参数/凭证）；保留类型和稳定分类。
+                audit = {
+                    "vehicle_id": targets[index].vehicle_id, "platform_code": platform_code,
+                    "attempt": attempt_counts[index], "complete": success, "will_retry": pending,
+                    "error": self._validation_error(result) if isinstance(result, Exception) else None,
+                    "exception_type": type(result).__name__ if isinstance(result, Exception) else None,
                 }
-                return spec.requires_evidence and self._needs_evidence(
-                    run_type, schedule_type, vehicle["role"], metrics
+                (folder / f"result-{local_index}.json").write_text(
+                    json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8"
                 )
+                # 同一项曾有可靠指标但缺截图时，不以之后的请求失败抹掉已取得指标。
+                stored = best_partial.get(index, result) if not success else result
+                persist(index, stored, pending=pending)
 
-            factory = (
-                self.adapter_factory
-                if platform_code == PLATFORM_CODE
-                else self.adapter_factories[platform_code]
-            )
-            adapter = factory(
-                storage_state,
-                concurrency=concurrency,
-                headless=self.settings.auth_browser_headless,
-                timeout_seconds=90,
-                batch_timeout_seconds=remaining,
-                evidence_policy=evidence_policy,
-                prefer_http_first=False,
-                include_review_article_count=True,
-                include_negative_rate=True,
-                include_circle_content_count="circle_content_count" in spec.metric_keys,
-                global_limiter=global_limiter,
-            )
-            group_targets = [targets[index] for index in indexes]
             try:
-                first = adapter.validate_sync(
-                    group_targets,
-                    root / platform_code / f"attempt-1-{uuid7()}",
-                    on_result=lambda index, _target, result: (
-                        None
-                        if isinstance(result, ReputationAdapterError) and result.retryable
-                        else persist(indexes[index], result, 1)
-                    ),
+                storage_state = self.session_store.get_state(platform_code) if self.session_store else None
+                if spec.requires_session and not storage_state:
+                    raise ReputationAdapterError("AUTH_REQUIRED", f"{spec.display_name}共享Session需要更新。")
+                remaining = max(0, deadline - monotonic())
+                if remaining <= 0:
+                    raise ReputationAdapterError("REPUTATION_BATCH_TIMEOUT", "口碑巡检达到45分钟批次上限。")
+                factory = self.adapter_factory if platform_code == PLATFORM_CODE else self.adapter_factories[platform_code]
+                adapter = factory(
+                    storage_state, concurrency=concurrency, headless=self.settings.auth_browser_headless,
+                    timeout_seconds=min(REPUTATION_ITEM_TIMEOUT_SECONDS, max(1, int(remaining))),
+                    batch_timeout_seconds=max(1, int(remaining)),
+                    evidence_policy=lambda *_args: spec.requires_evidence,
+                    prefer_http_first=False, include_review_article_count=True,
+                    include_negative_rate=True, include_circle_content_count="circle_content_count" in spec.metric_keys,
+                    global_limiter=global_limiter,
                 )
-                retry_indexes = [
-                    index
-                    for index, result in enumerate(first)
-                    if isinstance(result, ReputationAdapterError) and result.retryable
-                ]
-                remaining = int(deadline - monotonic())
-                if retry_indexes and remaining > 0:
-                    adapter.batch_timeout_seconds = remaining
-                    retried = adapter.validate_sync(
-                        [group_targets[index] for index in retry_indexes],
-                        root / platform_code / f"attempt-2-{uuid7()}",
-                        on_result=lambda index, _target, result: persist(
-                            indexes[retry_indexes[index]], result, 2
-                        ),
-                    )
-                elif retry_indexes:
-                    retried = [
-                        ReputationAdapterError(
-                            "REPUTATION_BATCH_TIMEOUT",
-                            "口碑巡检达到45分钟批次上限，未完成项已停止。",
-                        )
-                        for _ in retry_indexes
-                    ]
-                else:
-                    retried = []
-                retry_results = dict(zip(retry_indexes, retried, strict=True))
-                group_results = [
-                    retry_results.get(index, result) for index, result in enumerate(first)
-                ]
-                for local_index, global_index in enumerate(indexes):
-                    final_results[global_index] = group_results[local_index]
-                    attempt_counts[global_index] = 2 if local_index in retry_results else 1
+                group = [targets[index] for index in indexes]
+                # 适配器负责创建独立尝试目录；回执目录分开放置。
+                values = adapter.validate_sync(group, folder / "collection", on_result=accept)
+                if len(values) != len(group):
+                    raise RuntimeError("巡检适配器返回目标数量不一致")
+                for local_index, value in enumerate(values):
+                    accept(local_index, group[local_index], value)
             except Exception as error:
-                for index in indexes:
-                    final_results[index] = error
+                # 适配器初始化/浏览器启动/单平台退出异常也参与下一轮，不覆盖已回调成功项。
+                for local_index, index in enumerate(indexes):
+                    if index not in seen:
+                        accept(local_index, targets[index], error)
             finally:
                 close = getattr(adapter, "close", None)
                 if callable(close):
-                    close()
+                    try:
+                        close()
+                    except Exception as error:
+                        # 采集回执已确定，关闭失败不覆盖成功项或阻断其他平台下一轮。
+                        (folder / "cleanup-error.json").write_text(
+                            json.dumps({"exception_type": type(error).__name__}), encoding="utf-8"
+                        )
 
         with ThreadPoolExecutor(max_workers=max(1, len(run.platform_codes))) as pool:
-            futures = [
-                pool.submit(execute_platform, platform_code) for platform_code in run.platform_codes
-            ]
-            for future in futures:
-                future.result()
-
-        for index, (result, attempt_count) in enumerate(
-            zip(final_results, attempt_counts, strict=True)
-        ):
-            if index not in persisted_indexes:
-                persist(index, result, attempt_count)
+            while len(persisted_indexes) < len(targets):
+                pending = [i for i in range(len(targets)) if i not in persisted_indexes]
+                for index in list(pending):
+                    if monotonic() >= deadline or attempt_counts[index] >= REPUTATION_MAX_ATTEMPTS:
+                        result = final_results.get(index) or ReputationAdapterError(
+                            "REPUTATION_BATCH_TIMEOUT", "口碑巡检达到45分钟批次上限。"
+                        )
+                        persist(index, best_partial.get(index, result), pending=False)
+                pending = [i for i in pending if i not in persisted_indexes]
+                if not pending:
+                    break
+                # 所有平台必须完成当前最早一轮，才允许任何平台领取下一轮失败集合。
+                round_index = min(attempt_counts[i] for i in pending)
+                wave = [i for i in pending if attempt_counts[i] == round_index]
+                futures = [
+                    pool.submit(execute_platform, code, [i for i in wave if target_platform_codes[i] == code])
+                    for code in run.platform_codes
+                ]
+                for future in futures:
+                    future.result()
 
         finished = datetime.now(timezone.utc)
         with self.sessions.begin() as db:
@@ -3378,6 +3395,11 @@ class ReputationService:
     def _validation_error(error: Exception) -> dict[str, str]:
         if isinstance(error, ReputationAdapterError):
             return {"code": error.code, "message": error.message}
+        if type(error).__name__ == "TimeoutError":
+            return {
+                "code": "REPUTATION_ITEM_TIMEOUT",
+                "message": "口碑采集发生超时；该异常未提供具体阶段。",
+            }
         return {
             "code": "REPUTATION_VALIDATION_INTERNAL_ERROR",
             "message": f"真实页面验证异常：{type(error).__name__}",
