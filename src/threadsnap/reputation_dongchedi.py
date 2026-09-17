@@ -19,7 +19,6 @@ from urllib.parse import urlsplit
 from lxml import etree, html
 from patchright.async_api import Browser, BrowserContext, Page, async_playwright
 from patchright.async_api import Error as PlaywrightError
-from PIL import Image
 
 from .browser_runtime import browser_launch_args
 from .collectors.base import CollectorFailure
@@ -35,9 +34,13 @@ from .reputation_browser import (
     attempt_stage,
     attempt_timeout,
     bounded_http_thread,
+    capture_region,
     check_access_response,
     close_context,
+    evidence_failure,
+    record_measurements,
     remaining_timeout,
+    settle_measure,
 )
 from .scrapling_transport import ExecutionScopeKey, ScraplingHttpPool
 
@@ -593,30 +596,6 @@ class DongchediReputationAdapter:
         )
 
     @staticmethod
-    def _stable_key(value: dict[str, Any]) -> tuple[Any, ...]:
-        def rounded_box(name: str) -> tuple[float, ...] | None:
-            box = value.get(name)
-            if not isinstance(box, dict):
-                return None
-            return tuple(round(float(box[key]), 1) for key in ("x", "y", "width", "height"))
-
-        return (
-            value.get("actual_name"),
-            value.get("score_raw"),
-            value.get("rank_raw"),
-            value.get("volume_raw"),
-            value.get("review_article_count_raw"),
-            value.get("review_article_count_invalid"),
-            value.get("reputation_not_available"),
-            value.get("rank_scope"),
-            rounded_box("heading_box"),
-            rounded_box("score_box"),
-            rounded_box("volume_box"),
-            rounded_box("rank_box"),
-            rounded_box("availability_box"),
-        )
-
-    @staticmethod
     async def _freeze_layout(page: Page) -> None:
         await page.add_style_tag(
             content=(
@@ -699,19 +678,33 @@ class DongchediReputationAdapter:
             stage = "冻结页面布局"
             attempt_stage(stage)
             await self._freeze_layout(page)
-            measurements: list[dict[str, Any]] = []
             stage = "测量页面指标"
             attempt_stage(stage)
-            for _ in range(3):
-                measurements.append(await self._measure(page))
-                await page.wait_for_timeout(350)
-            if len({self._stable_key(item) for item in measurements}) != 1:
-                raise ReputationAdapterError(
-                    "REPUTATION_PAGE_UNSTABLE",
-                    "车型身份、指标文字或页面边界连续三次测量不一致。",
-                    retryable=True,
+            evidence_error = None
+            content_keys = ("actual_name", "score_raw", "rank_raw", "volume_raw",
+                            "review_article_count_raw", "review_article_count_invalid",
+                            "reputation_not_available", "rank_scope")
+
+            async def sample():
+                value = await self._measure(page)
+                try:
+                    value["rect"] = _metric_rect(value)
+                except ReputationAdapterError:
+                    value["rect"] = None
+                return value
+            try:
+                current, measurements = await settle_measure(
+                    sample, content_keys=content_keys,
                 )
-            current = measurements[-1]
+            except ReputationAdapterError as error:
+                record_measurements(output_dir, target, getattr(error, "measurements", []), error)
+                if not getattr(error, "metrics_stable", False):
+                    raise
+                measurements = error.measurements
+                current = measurements[-1]
+                evidence_error = error
+            else:
+                record_measurements(output_dir, target, measurements)
             actual_name = str(current.get("actual_name") or "").strip()
             if not actual_name:
                 raise ReputationAdapterError(
@@ -734,7 +727,7 @@ class DongchediReputationAdapter:
                     "REPUTATION_METRIC_CONTRACT",
                     "口碑分与同级排名的可用状态不一致。",
                 )
-            metric_rect = _metric_rect(current)
+            metric_rect = current.get("rect") or {}
             review_article_count_raw = current.get("review_article_count_raw")
             review_article_count_url: str | None = None
             negative_rate_raw: str | None = None
@@ -779,38 +772,34 @@ class DongchediReputationAdapter:
             )
             metric_path: Path | None = None
             digest: str | None = None
-            width = int(round(metric_rect["width"]))
-            height = int(round(metric_rect["height"]))
-            if capture:
+            width, height = 0, 0
+            if capture and evidence_error is None:
                 target_dir = output_dir / target.vehicle_id
                 target_dir.mkdir(parents=True, exist_ok=False)
-                document_width = float(current.get("document_width") or 0)
-                document_height = float(current.get("document_height") or 0)
-                if (
-                    metric_rect["x"] < 0
-                    or metric_rect["y"] < 0
-                    or metric_rect["x"] + metric_rect["width"] > document_width
-                    or metric_rect["y"] + metric_rect["height"] > document_height
-                ):
-                    raise ReputationAdapterError(
-                        "REPUTATION_EVIDENCE_REGION_INVALID",
-                        "指标区域超出页面边界。",
-                    )
                 metric_path = target_dir / "region.png"
                 stage = "截取指标证据"
                 attempt_stage(stage)
-                await page.screenshot(
-                    path=str(metric_path),
-                    clip=metric_rect,
-                    animations="disabled",
-                )
-                with Image.open(metric_path) as source:
-                    width, height = source.size
-                if not metric_path.is_file():
-                    raise ReputationAdapterError(
-                        "REPUTATION_EVIDENCE_WRITE_FAILED", "真实页面证据写入失败。"
-                    )
-                digest = _sha256(metric_path)
+                try:
+                    # 差评率/圈子请求之后再确认同页布局，避免使用请求前的过时裁剪框。
+                    final_measurement, final_samples = await settle_measure(sample, content_keys=content_keys)
+                    if any(final_measurement.get(key) != current.get(key) for key in content_keys):
+                        error = ReputationAdapterError(
+                            "REPUTATION_PAGE_UNSTABLE", "数据取得后页面内容发生变化，本次不生成错时证据。",
+                            retryable=True,
+                        )
+                        error.measurements = final_samples
+                        raise error
+                    metric_rect = final_measurement["rect"]
+                    measurements = final_samples
+                    record_measurements(output_dir, target, measurements)
+                    width, height, digest = await capture_region(page, metric_path, metric_rect)
+                except Exception as error:
+                    evidence_error = evidence_failure(error)
+                    record_measurements(output_dir, target, getattr(error, "measurements", measurements), evidence_error)
+                    metric_path = None
+                    digest = None
+            if not capture:
+                evidence_error = None
             return ReputationPageResult(
                 vehicle_id=target.vehicle_id,
                 platform_vehicle_id=target.platform_vehicle_id,
@@ -840,6 +829,8 @@ class DongchediReputationAdapter:
                 circle_content_count_raw=circle_raw,
                 circle_content_count_url=circle_url,
                 circle_content_count_measurement=circle_measurement,
+                evidence_error_code=evidence_error.code if evidence_error else None,
+                evidence_error_message=evidence_error.message if evidence_error else None,
             )
         except PlaywrightError as error:
             raise self._browser_runtime_error(target, stage, error) from error

@@ -62,6 +62,9 @@ class ReputationPageResult:
     circle_content_count_measurement: dict[str, Any] | None = None
     owner_review_count_raw: str | None = None
     owner_review_count_url: str | None = None
+    # 仅身份/指标已确认后的截图问题，不影响同次可靠指标保存。
+    evidence_error_code: str | None = None
+    evidence_error_message: str | None = None
 
 
 class ReputationAdapter(Protocol):
