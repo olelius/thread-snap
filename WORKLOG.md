@@ -1,5 +1,14 @@
 # WORKLOG — 唯一任务账本
 
+## 2026-09-18 — 口碑稳定性与统一失败重试最小更新上线
+**目标/状态**：按用户要求部署已合并至PR #322的口碑修复；远端已从`e5e0c310491e`切换至`756753f8f575`。本条仅记录部署，应用源码不再变更；旧混合工作树保持原状。
+**载荷/安装**：最小包1,196,842字节、SHA256 `d283bdc6c5e1066c8ddf356e7793b4367ad84c40553143f27dafcaa9f65aba24`；仅重建应用wheel，83项包内源码与目标提交一致，前端59文件及部署/依赖/迁移输入复用。外层脚本语法与校验通过，内包97/97校验且无遗漏；安装服务`threadsnap-layout-deploy-756753f8f575`退出0、`ACTIVATION_PASSED`，复用138项已安装依赖，无迁移。
+**目标机证据**：七类任务切换前后空闲，维护窗口32.589秒；current=`0.1.0-756753f8f575`、previous=`0.1.0-e5e0c310491e`。三服务active，8000/8088健康、`deploy/verify.sh --quick`和公网health/首页200通过，公网首页hash与载荷一致；六个变更模块安装字节与wheel完全一致。SQLite完整性/外键检查通过，schema仍`f3b6c9d2a804`，27张历史/配置表行数及哈希一致；后台调度及原Nginx配置已恢复。未重跑全库回归、未发起生产巡检/AI或重写历史；未变化的浏览器/模型完整运行时验证沿用此前证据。
+**证据/回退**：`H:/ThreadSnap/artifacts/runtime/deploy-layout-20260918/`保存`package-result.json`、`package-verification.json`、`final_probe.stdout.json`、`public-verification.json`及`deployment-evidence.tar.gz`（SHA256 `07ccdcf52da4b8ff11fe81f56d12eb7b311a86b44e91f8d38af823bc901d7a02`）。远端备份`/var/lib/threadsnap/backups/minimal-release-upgrade/20260918-layout-756753f8f575`保留；开放写入后仅回退程序，保留新数据。
+**收尾/边界**：提交合并本条部署记录并清理记录分支，源工作树同步main；历史失败批次不自动补跑。用户已明确要求更新成功后直接关闭本机，完成记录及连接收尾后执行，不影响远端独立服务。
+
+---
+
 ## 2026-09-17 — 口碑页面稳定性有界等待与证据失败分离
 **目标/基线**：用户确认保留关键校验、弱化僵硬布局比较，并要求独立分支。从origin/main@d9d4e83建立fix/reputation-layout-settle及独立工作树；旧混合改动不动。
 **实施口径**：同页3秒滚动3次稳定窗口、几何边缘1 CSS像素容差（非逐次累积漂移），身份与核心数值严格一致；可靠指标与截图错误分别保存，证据失败继续统一重试；URL-only不验证截图几何。不新增配置/表/依赖、不修改历史证据。
@@ -4243,4 +4252,3 @@
 - [x] 完成 UTF-8、引用路径、ADR 状态、PoC 忽略规则和 `git diff --check` 检查。
 
 **下一步**：由本条上方的新任务接管，不再维护第二份当前进度文档。
-
