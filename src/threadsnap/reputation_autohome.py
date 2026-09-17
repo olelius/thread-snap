@@ -24,6 +24,8 @@ from .reputation_browser import (
     check_access_response,
     close_context,
     elapsed_ms,
+    evidence_failure,
+    record_measurements,
     remaining_timeout,
     stable_measure,
 )
@@ -190,6 +192,18 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
                 raise ReputationAdapterError(
                     "REPUTATION_METRICS_MISSING", "汽车之家口碑指标接口缺少结果。", retryable=True
                 )
+            # 先确认API与落地页身份，只有可靠数据才允许与截图失败分离。
+            normalize_series_url(page.url, target.platform_vehicle_id)
+            actual_id = str(result.get("seriesid") or "").strip()
+            if actual_id != target.platform_vehicle_id.strip():
+                raise ReputationAdapterError(
+                    "REPUTATION_IDENTITY_MISMATCH",
+                    f"汽车之家接口车系ID（{actual_id or '缺失'}）与映射ID（{target.platform_vehicle_id}）不一致。",
+                )
+            forum_raw, forum_url, forum_proof = None, None, None
+            if self.include_circle_content_count:
+                attempt_stage("读取论坛帖子总数")
+                forum_raw, forum_url, forum_proof = await self._forum_count(context, target, started)
             script = """
             () => {
               const name = document.querySelector('div[class*="header_toolbar__car__name"]');
@@ -205,7 +219,7 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
               return {
                 actual_name: name.textContent.trim(),
                 score: score ? (score.textContent.match(/口碑评分\s*([0-9.]+)/) || [])[1] || null : null,
-                rank: rank ? rank.textContent.trim() || null : null,
+                rank: null,
                 volume: null,
                 rect: {x: left, y: top, width: right-left, height: bottom-top},
                 document_width: document.documentElement.scrollWidth,
@@ -214,27 +228,36 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
             }
             """
             attempt_stage("测量页面指标")
-            measurement, measurements = await stable_measure(page, script)
-            # 名称只展示，厂家前缀或别名不作为失败条件；身份以稳定车系ID为准。
-            normalize_series_url(page.url, target.platform_vehicle_id)
-            actual_id = str(result.get("seriesid") or "").strip()
-            if actual_id != target.platform_vehicle_id.strip():
-                raise ReputationAdapterError(
-                    "REPUTATION_IDENTITY_MISMATCH",
-                    f"汽车之家接口车系ID（{actual_id or '缺失'}）与映射ID（{target.platform_vehicle_id}）不一致。",
-                )
+            evidence_error = None
+            try:
+                measurement, measurements = await stable_measure(page, script)
+            except ReputationAdapterError as error:
+                record_measurements(output_dir, target, getattr(error, "measurements", []), error)
+                if not getattr(error, "metrics_stable", False):
+                    raise
+                measurements = error.measurements
+                measurement = measurements[-1]
+                evidence_error = error
+            else:
+                record_measurements(output_dir, target, measurements)
+
+            # 名称只展示；不能用不稳定截图冒充本次成功证据。
             actual_name = str(result.get("seriesname") or measurement["actual_name"] or "").strip()
             rank, rank_scope = comparison_rank(result, target.platform_vehicle_id)
             score = str(result.get("average") or "").strip() or measurement.get("score")
             volume = str(result.get("averagenum") or "").strip() or None
             review_count = str(result.get("rowcount") or "").strip() or None
-            forum_raw, forum_url, forum_proof = None, None, None
-            if self.include_circle_content_count:
-                attempt_stage("读取论坛帖子总数")
-                forum_raw, forum_url, forum_proof = await self._forum_count(context, target, started)
             path = output_dir / f"{target.vehicle_id}-metric.png"
             attempt_stage("截取指标证据")
-            width, height, digest = await capture_region(page, path, measurement["rect"])
+            width, height, digest = 0, 0, None
+            if evidence_error is None:
+                try:
+                    width, height, digest = await capture_region(page, path, measurement["rect"])
+                except Exception as error:
+                    evidence_error = evidence_failure(error)
+                    record_measurements(output_dir, target, measurements, evidence_error)
+            if evidence_error is not None:
+                path = None
             final_url = normalize_series_url(page.url, target.platform_vehicle_id)
             return ReputationPageResult(
                 vehicle_id=target.vehicle_id,
@@ -276,6 +299,8 @@ class AutohomeReputationAdapter(BrowserReputationAdapter):
                 circle_content_count_raw=forum_raw,
                 circle_content_count_url=forum_url,
                 circle_content_count_measurement=forum_proof,
+                evidence_error_code=evidence_error.code if evidence_error else None,
+                evidence_error_message=evidence_error.message if evidence_error else None,
             )
         finally:
             await close_context(context)

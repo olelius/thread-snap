@@ -1587,8 +1587,8 @@ class ReputationService:
                 error_message = None
                 if evidence_required and not has_evidence:
                     row_status = "partial_success"
-                    error_code = "REPUTATION_EVIDENCE_MISSING"
-                    error_message = f"{error_message or ''}本项必需页面证据缺失。"
+                    error_code = result.evidence_error_code or "REPUTATION_EVIDENCE_MISSING"
+                    error_message = result.evidence_error_message or "本项必需页面证据缺失。"
                 duration_ms = result.duration_ms
             else:
                 metrics = {
@@ -1878,8 +1878,11 @@ class ReputationService:
                 audit = {
                     "vehicle_id": targets[index].vehicle_id, "platform_code": platform_code,
                     "attempt": attempt_counts[index], "complete": success, "will_retry": pending,
-                    "error": self._validation_error(result) if isinstance(result, Exception) else None,
+                    "error": self._validation_error(result) if (
+                        isinstance(result, Exception) or result.evidence_error_code
+                    ) else None,
                     "exception_type": type(result).__name__ if isinstance(result, Exception) else None,
+                    "measurements": getattr(result, "measurements", []),
                 }
                 (folder / f"result-{local_index}.json").write_text(
                     json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -3279,7 +3282,8 @@ class ReputationService:
             retry_indexes = [
                 index
                 for index, result in enumerate(first)
-                if isinstance(result, ReputationAdapterError) and result.retryable
+                if (isinstance(result, ReputationAdapterError) and result.retryable)
+                or (isinstance(result, ReputationPageResult) and result.evidence_error_code)
             ]
             retry_results: dict[int, ReputationPageResult | Exception] = {}
             if retry_indexes:
@@ -3306,7 +3310,10 @@ class ReputationService:
                 close()
         final_results = [retry_results.get(index, result) for index, result in enumerate(first)]
         finished = datetime.now(timezone.utc)
-        succeeded = sum(isinstance(item, ReputationPageResult) for item in final_results)
+        succeeded = sum(
+            isinstance(item, ReputationPageResult) and not item.evidence_error_code
+            for item in final_results
+        )
         with self.sessions.begin() as db:
             run = db.get(ReputationMappingValidationRun, run_id)
             if not run:
@@ -3332,7 +3339,7 @@ class ReputationService:
                 mapping = current_by_id[target.vehicle_id]["mappings"][spec.code]
                 if _mapping_hash(target.vehicle_id, mapping, spec.code) != target.mapping_hash:
                     continue
-                if isinstance(final_result, ReputationPageResult):
+                if isinstance(final_result, ReputationPageResult) and not final_result.evidence_error_code:
                     final_attempt_number = 2 if index in retry_results else 1
                     mapping.update(
                         {
@@ -3392,7 +3399,12 @@ class ReputationService:
         return self.get_mapping_validation(run_id)
 
     @staticmethod
-    def _validation_error(error: Exception) -> dict[str, str]:
+    def _validation_error(error: Exception | ReputationPageResult) -> dict[str, str]:
+        if isinstance(error, ReputationPageResult):
+            return {
+                "code": error.evidence_error_code or "REPUTATION_EVIDENCE_MISSING",
+                "message": error.evidence_error_message or "本项必需页面证据缺失。",
+            }
         if isinstance(error, ReputationAdapterError):
             return {"code": error.code, "message": error.message}
         if type(error).__name__ == "TimeoutError":
@@ -3423,7 +3435,9 @@ class ReputationService:
                 mapping_hash=target.mapping_hash,
                 contract_version=spec.validation_contract_version,
                 adapter_version=spec.adapter_version,
-                status="success",
+                status="failed" if result.evidence_error_code else "success",
+                error_code=result.evidence_error_code,
+                error_message=result.evidence_error_message,
                 actual_name=result.actual_name,
                 final_url=result.final_url,
                 metrics={
@@ -3450,7 +3464,8 @@ class ReputationService:
                 gate_results={
                     "identity": "passed",
                     "metrics": "passed",
-                    "evidence": "passed" if spec.requires_evidence else "not_required",
+                    "evidence": ("failed" if result.evidence_error_code else "passed")
+                    if spec.requires_evidence else "not_required",
                     "measurements": result.measurements,
                     "metric_rect": result.metric_rect,
                     "viewport": spec.viewport,
@@ -3487,7 +3502,7 @@ class ReputationService:
             adapter_version=spec.adapter_version,
             status="failed",
             metrics={},
-            gate_results={},
+            gate_results={"measurements": getattr(result, "measurements", [])},
             error_code=error["code"],
             error_message=error["message"],
             finished_at=finished,

@@ -20,6 +20,7 @@ from .reputation_browser import (
     check_access_response,
     close_context,
     elapsed_ms,
+    record_measurements,
     remaining_timeout,
     stable_measure,
 )
@@ -197,7 +198,12 @@ class YicheReputationAdapter(BrowserReputationAdapter):
             }
             """
             attempt_stage("测量页面指标")
-            measurement, measurements = await stable_measure(page, script)
+            try:
+                measurement, measurements = await stable_measure(page, script, geometry_required=False)
+            except ReputationAdapterError as error:
+                record_measurements(output_dir, target, getattr(error, "measurements", []), error)
+                raise
+            record_measurements(output_dir, target, measurements)
             actual_name = str(measurement["actual_name"] or "").strip()
             expected_name = target.platform_display_name.replace(" ", "").casefold()
             actual_key = actual_name.replace(" ", "").casefold()

@@ -187,19 +187,25 @@ class DongchediOptionalMetricTests(unittest.IsolatedAsyncioTestCase):
         context.close.assert_awaited_once()
 
     async def test_browser_structure_identity_and_evidence_failures_remain_errors(self):
-        """解析错误、错误车型、截图区域缺失/越界继续执行既有失败门禁。"""
+        """身份/数据错误仍失败；仅截图区域失效时保留可靠指标并禁用证据。"""
 
         cases = (
             ({"review_article_count_invalid": True}, "REPUTATION_REVIEW_ARTICLE_COUNT_INVALID"),
             ({"actual_name": "另一车型"}, "REPUTATION_IDENTITY_NAME_MISMATCH"),
-            ({"heading_box": None}, "REPUTATION_EVIDENCE_REGION_MISSING"),
-            ({"document_height": 1}, "REPUTATION_EVIDENCE_REGION_INVALID"),
+            ({"heading_box": None}, "REPUTATION_PAGE_UNSTABLE"),
+            ({"document_height": 1}, "REPUTATION_PAGE_UNSTABLE"),
         )
         for overrides, code in cases:
             with self.subTest(code=code), tempfile.TemporaryDirectory() as temporary:
                 browser, page, context = self._browser(**overrides)
-                with self.assertRaises(ReputationAdapterError) as raised:
-                    await self.adapter._visit(browser, self.target, Path(temporary))
-                self.assertEqual(code, raised.exception.code)
+                if code == "REPUTATION_PAGE_UNSTABLE":
+                    result = await self.adapter._visit(browser, self.target, Path(temporary))
+                    self.assertEqual(code, result.evidence_error_code)
+                    self.assertEqual("3.90", result.score_raw)
+                    self.assertIsNone(result.metric_region_path)
+                else:
+                    with self.assertRaises(ReputationAdapterError) as raised:
+                        await self.adapter._visit(browser, self.target, Path(temporary))
+                    self.assertEqual(code, raised.exception.code)
                 page.screenshot.assert_not_awaited()
                 context.close.assert_awaited_once()
