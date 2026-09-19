@@ -369,6 +369,8 @@ export type ReputationScopeMapping = {
   platform_url: string
   platform_display_name: string
   validation_status: 'unverified' | 'verified' | 'failed'
+  /** 服务端对当前映射哈希与验证合同的只读判断；旧服务可能尚未返回。 */
+  validation_current?: boolean
   validation_contract_version?: string
   validation_run_id?: string
   validation_attempt_id?: string

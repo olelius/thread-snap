@@ -1,5 +1,14 @@
 # WORKLOG — 唯一任务账本
 
+## 2026-09-19 — 精简车型映射表与验证有效性展示
+**目标/基线**：从fetch后的`origin/main@3809c78`建立`codex/fix-mapping-basics`及独立工作树`H:/ThreadSnap-mapping-basics`；只处理映射页基础信息与验证展示，旧混合工作树不动。
+**实现/状态**：开发与必要验收完成。移除映射表全部业务指标及默认内部ID列，保留角色/顺序、车系、车型、项目组、平台名、验证状态、最近通过时间、证据/页面/操作；编辑弹窗保留只读内部ID供批量粘贴。范围接口深拷贝响应追加`validation_current`，复用既有发布门核对合同/哈希；前端行状态、计数和验证目标共享判断，旧/缺合同或哈希漂移显示需重验，不再仅凭历史verified标签显示通过。未改变实际验证、发布筛选、巡检指标、依赖或存储结构。
+**验证证据**：`node --experimental-strip-types --test frontend/tests/reputation-validation.test.mjs`6项通过；后端单项`test_scope_current_validation_is_read_only_and_uses_publish_gate`覆盖8类映射有效性，真实API及隔离SQLite验证返回投影且草稿/revision/原成功时间/指标不变，1.139秒通过。`npm ci --no-audit --no-fund`与`npm run build`（含TypeScript）通过；受影响Python Ruff与`git diff --check`通过。未跑全库回归或重复审查。
+**界面组合证据**：生产构建→真实HTTP/API→独立SQLite在18089运行，三平台各8行×10列、五种验证状态及停用状态已核对；验证按钮仅提交4个可验证目标（采集POST仅截获参数，不访问平台），编辑真实PATCH保存后立即显示待验证并清空成功时间。两份PNG已目视检查、页面错误0；最初定位器把状态和错误说明一起比较的断言已改为仅匹配徽标。证据在`artifacts/runtime/mapping-basics/{backend-check.log,frontend-check.log,build.log,ui-result.json,mapping-basics.png,mapping-edit.png}`；子任务只读合同回执在`H:/ThreadSnap/artifacts/runtime/mapping-basics-20260919/status-contract-receipt.md`。
+**下一步/边界**：仅剩本提交PR合并与分支清理，同步已有main工作树。临时实例在收尾时停止；本轮不部署远端、不重采或回写历史、不重命名巡检指标、不关机。回退本提交即可，无数据库迁移。
+
+---
+
 ## 2026-09-18 — 口碑稳定性与统一失败重试最小更新上线
 **目标/状态**：按用户要求部署已合并至PR #322的口碑修复；远端已从`e5e0c310491e`切换至`756753f8f575`。本条仅记录部署，应用源码不再变更；旧混合工作树保持原状。
 **载荷/安装**：最小包1,196,842字节、SHA256 `d283bdc6c5e1066c8ddf356e7793b4367ad84c40553143f27dafcaa9f65aba24`；仅重建应用wheel，83项包内源码与目标提交一致，前端59文件及部署/依赖/迁移输入复用。外层脚本语法与校验通过，内包97/97校验且无遗漏；安装服务`threadsnap-layout-deploy-756753f8f575`退出0、`ACTIVATION_PASSED`，复用138项已安装依赖，无迁移。
