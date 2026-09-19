@@ -1,5 +1,15 @@
 # WORKLOG — 唯一任务账本
 
+## 2026-09-19 — 车型映射精简页最小更新上线
+**目标/状态**：按用户要求将PR #324的`main@1b3d799c235b`更新远端；已从`756753f8f575`切换至目标版本。应用源码不再修改，独立`codex/docs-deploy-mapping-20260919`仅保存本次部署记录。
+**载荷/安装**：最小包1,197,024字节，SHA256 `ea6c937294ca403f36e2902fea9d901ba760972d86509d3072722d27da988f21`。只重建应用wheel（83源文件与目标一致），复用先前已验收且frontend tree与目标一致的59个新前端文件；相对服务器前端有变化，明确记录`frontend_source_unchanged=false`。10项依赖/部署/迁移/许可证输入未变，复用138项运行依赖。内包98/98、外包3/3校验及安装器语法通过；未重复npm构建、业务验收或全库回归。
+**切换/保全**：安装单元`threadsnap-mapping-deploy-1b3d799c235b`退出0并输出`ACTIVATION_PASSED`；七类任务双空闲门通过，维护窗口50.901秒。current=`0.1.0-1b3d799c235b`、previous=`0.1.0-756753f8f575`，三服务active，双健康与`deploy/verify.sh --quick`通过；SQLite完整性/外键检查通过，schema仍`f3b6c9d2a804`，27张历史/配置表行数及哈希一致。后台调度和原入口配置恢复，旧运行时验证证据复用。
+**真实线上验收**：安装模块字节与wheel一致；范围revision111，52款启用车型，131条映射的`validation_current`与既有发布门逐条一致（懂车帝52、汽车之家52、易车27当前有效）。公网health/首页200，首页SHA与新载荷一致；实际浏览器映射表52行10列，无指标列和默认内部ID列，懂车帝52行均验证通过，页面错误0，PNG已目视且无测试样本。仅只读GET，未发起验证、发布、巡检或AI任务。
+**证据/回退**：`H:/ThreadSnap/artifacts/runtime/deploy-mapping-20260919/`保存`package-result.json`、`package-verification.json`、`final_probe.stdout.json`、`public-verification.json`、`public-mapping.png`和`deployment-evidence.tar.gz`（SHA256 `c7d95da4c5f3b34cc6e886eae00e00262e19ed17884d248be4eab207000c62bd`）。备份`/var/lib/threadsnap/backups/minimal-release-upgrade/20260919-mapping-1b3d799c235b`保留；开放写入后只回退程序，保留新数据。
+**收尾/边界**：提交合并本部署记录并清理记录分支、同步本地main；用户刷新正式入口即可查看。本机刚启动的main服务保持运行，本次不关机；不把部署自动解释为发布配置范围。
+
+---
+
 ## 2026-09-19 — 精简车型映射表与验证有效性展示
 **目标/基线**：从fetch后的`origin/main@3809c78`建立`codex/fix-mapping-basics`及独立工作树`H:/ThreadSnap-mapping-basics`；只处理映射页基础信息与验证展示，旧混合工作树不动。
 **实现/状态**：开发与必要验收完成。移除映射表全部业务指标及默认内部ID列，保留角色/顺序、车系、车型、项目组、平台名、验证状态、最近通过时间、证据/页面/操作；编辑弹窗保留只读内部ID供批量粘贴。范围接口深拷贝响应追加`validation_current`，复用既有发布门核对合同/哈希；前端行状态、计数和验证目标共享判断，旧/缺合同或哈希漂移显示需重验，不再仅凭历史verified标签显示通过。未改变实际验证、发布筛选、巡检指标、依赖或存储结构。
