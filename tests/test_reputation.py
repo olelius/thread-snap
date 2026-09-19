@@ -39,6 +39,7 @@ from threadsnap.models import (
     ReputationScopeVersion,
     ReputationTombstone,
 )
+from threadsnap.reputation import _mapping_hash
 from threadsnap.reputation_autohome import normalize_series_url as normalize_autohome_url
 from threadsnap.reputation_dongchedi import (
     DongchediReputationAdapter,
@@ -48,6 +49,7 @@ from threadsnap.reputation_dongchedi import (
     _metric_rect,
     normalize_series_url,
 )
+from threadsnap.reputation_registry import REPUTATION_PLATFORMS
 from threadsnap.reputation_scheduler import ReputationCoordinator
 from threadsnap.reputation_yiche import normalize_series_url as normalize_yiche_url
 
@@ -709,6 +711,55 @@ class ReputationInspectionTest(unittest.TestCase):
         with service.sessions() as db:
             self.assertEqual(db.get(ReputationRun, run["id"]).evidence_zip_path, str(legacy_path))
         self.assertEqual(response.content, self.client.get(run["downloads"]["evidence_zip"]).content)
+
+    def test_scope_current_validation_is_read_only_and_uses_publish_gate(self) -> None:
+        """范围响应识别合同/哈希失效，同时保留原草稿、成功时间与指标快照。"""
+        service = self.client.app.state.container.reputation
+        vehicles = []
+        expected = [True, False, False, False, False, False, True, False]
+        for index, name in enumerate((
+            "current", "old-contract", "missing-contract", "changed-hash",
+            "failed", "pending", "yiche-legacy", "unknown-platform",
+        )):
+            code = "yiche" if name == "yiche-legacy" else "dongchedi"
+            if name == "unknown-platform":
+                code = "unknown-platform"
+            mapping = {
+                "platform_vehicle_id": str(10000 + index),
+                "platform_url": f"https://example.test/series/{index}",
+                "platform_display_name": name,
+                "validation_status": "verified",
+                "validation_contract_version": REPUTATION_PLATFORMS["dongchedi"].validation_contract_version,
+                "validated_at": "2026-09-16T09:16:02+08:00",
+                "latest_metrics": {"score": "4.00"},
+            }
+            mapping["validated_mapping_hash"] = _mapping_hash(name, mapping, code)
+            if name == "old-contract":
+                mapping["validation_contract_version"] = "old-contract"
+            elif name == "missing-contract":
+                mapping.pop("validation_contract_version")
+            elif name == "changed-hash":
+                mapping["platform_display_name"] = "新名称"
+            elif name in {"failed", "pending"}:
+                mapping["validation_status"] = "failed" if name == "failed" else "unverified"
+            elif name == "yiche-legacy":
+                mapping["validation_contract_version"] = "yiche-native-app-mapping-v1"
+            vehicles.append({"id": name, "vehicle_name": name, "mappings": {code: mapping}})
+        original = {"vehicles": vehicles}
+        with service.sessions.begin() as db:
+            db.add(ReputationScopeDraft(id="current", revision=7, data=original))
+        response = self.client.get("/api/v1/reputation/scope")
+        self.assertEqual(response.status_code, 200, response.text)
+        for vehicle, valid in zip(response.json()["vehicles"], expected, strict=True):
+            mapping = next(iter(vehicle["mappings"].values()))
+            with self.subTest(vehicle=vehicle["id"]):
+                self.assertEqual(mapping["validation_current"], valid)
+                self.assertEqual(mapping["validated_at"], "2026-09-16T09:16:02+08:00")
+                self.assertEqual(mapping["latest_metrics"], {"score": "4.00"})
+        with service.sessions() as db:
+            draft = db.get(ReputationScopeDraft, "current")
+            self.assertEqual(draft.data, original)
+            self.assertEqual(draft.revision, 7)
 
     def test_scope_initialization_and_atomic_mapping_preview(self) -> None:
         csv_path = self.root / "scope.csv"

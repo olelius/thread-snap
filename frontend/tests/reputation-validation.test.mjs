@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { reputationMissingMappingIds, reputationValidationTargetIds } from '../src/features/reputation/reputation-validation.ts'
+import { reputationMappingStatus, reputationMissingMappingIds, reputationValidationTargetIds } from '../src/features/reputation/reputation-validation.ts'
 
 const vehicle = (id, mapping, enabled = true) => ({ id, enabled, mappings: mapping ? { autohome: mapping } : {}, series_name: '车系', vehicle_name: id, project_group: '项目组', role: 'focus', role_order: 1, removal_mode: 'delete' })
 const mapping = (status = 'failed') => ({ platform_vehicle_id: '1', platform_url: 'https://k.autohome.com.cn/1/', platform_display_name: '车型', validation_status: status })
@@ -31,4 +31,23 @@ test('已验证项不参与待验证计数，缺失映射单独报告', () => {
   const vehicles = [vehicle('verified', mapping('verified')), vehicle('failed', mapping()), vehicle('missing', null)]
   assert.equal(reputationValidationTargetIds(vehicles, 'autohome').length, 1)
   assert.equal(reputationMissingMappingIds(vehicles, 'autohome').length, 1)
+})
+
+test('当前验证状态覆盖缺映射、待验证、失败、有效与需重验五态', () => {
+  assert.equal(reputationMappingStatus(undefined, 'autohome', 'v2'), 'missing')
+  assert.equal(reputationMappingStatus(mapping('unverified'), 'autohome', 'v2'), 'unverified')
+  assert.equal(reputationMappingStatus(mapping('failed'), 'autohome', 'v2'), 'failed')
+  assert.equal(reputationMappingStatus({ ...mapping('verified'), validation_current: true }, 'autohome', 'v2'), 'verified')
+  assert.equal(reputationMappingStatus({ ...mapping('verified'), validation_current: false, validation_contract_version: 'v2' }, 'autohome', 'v2'), 'stale')
+  assert.equal(reputationMappingStatus({ ...mapping('verified'), platform_url: '', validation_current: true }, 'autohome', 'v2'), 'missing')
+})
+
+test('服务器有效性优先，缺少合同的旧验证进入重新验证而非持续显示通过', () => {
+  const current = { ...mapping('verified'), validation_current: true, validation_contract_version: 'v3' }
+  const stale = { ...mapping('verified'), validation_current: false, validation_contract_version: 'v2' }
+  const noContract = mapping('verified')
+  assert.equal(reputationMappingStatus(current, 'autohome', 'v2'), 'verified')
+  assert.equal(reputationMappingStatus(noContract, 'autohome', 'v2'), 'stale')
+  assert.deepEqual(reputationValidationTargetIds([vehicle('current', current), vehicle('stale', stale), vehicle('no-contract', noContract), vehicle('disabled', stale, false)], 'autohome', 'v2'), ['stale', 'no-contract'])
+  assert.equal(stale.validation_status, 'verified')
 })

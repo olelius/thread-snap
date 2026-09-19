@@ -2758,6 +2758,12 @@ class ReputationService:
                 vehicle["removal_mode"] = (
                     "disable" if vehicle.get("id") in referenced_ids else "delete"
                 )
+                # 仅装饰深拷贝响应，当前有效性复用发布门，不改写历史验证状态。
+                for code, mapping in vehicle.get("mappings", {}).items():
+                    mapping["validation_current"] = (
+                        code in REPUTATION_PLATFORMS
+                        and self._mapping_is_verified(vehicle, code)
+                    )
             return {
                 "initialized": True,
                 "revision": draft.revision,
