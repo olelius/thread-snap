@@ -3441,6 +3441,16 @@ class QueueAndRetryTests(AppCase):
     def test_page_evidence_missing_retries_after_batch_first_wave(self) -> None:
         """来源列表响应偶发缺失时，等同批首轮来源结束后统一复访一次。"""
 
+        self._assert_page_evidence_retries_after_first_wave("PAGE_EVIDENCE_LIST_RESPONSE_MISSING")
+
+    def test_page_media_incomplete_retries_after_batch_first_wave(self) -> None:
+        """媒体未就绪复用来源尾部复访，成功来源不重复访问。"""
+
+        self._assert_page_evidence_retries_after_first_wave("PAGE_EVIDENCE_MEDIA_INCOMPLETE")
+
+    def _assert_page_evidence_retries_after_first_wave(self, failure_code: str) -> None:
+        """在真实Worker/SQLite中核对首轮屏障、相同URL复访与API终态。"""
+
         first = self.save_verified_circle(external_id="batch-first", name="批次首来源")
         second = self.save_verified_circle(external_id="batch-second", name="批次次来源")
         # 并发随批次创建冻结；串行顺序测试必须在生成快照前设置，而非修改运行中平台配置。
@@ -3471,7 +3481,7 @@ class QueueAndRetryTests(AppCase):
                 if len(calls) == 1:
                     first_attempt_url = url
                     raise CollectorFailure(
-                        "PAGE_EVIDENCE_LIST_RESPONSE_MISSING", "来源列表响应暂时缺失。"
+                        failure_code, "来源页面证据暂未就绪。"
                     )
                 record = sample_record(f"batch-{len(calls)}")
                 if on_progress:
@@ -3496,7 +3506,7 @@ class QueueAndRetryTests(AppCase):
             ]
 
         self.assertTrue(self.container.worker.process_once())
-        first_wave = self.container.runs.get_run(run["id"])
+        first_wave = self.client.get(f"/api/v1/runs/{run['id']}").json()
         self.assertEqual("running", first_wave["status"])
         self.assertEqual(initial_order, calls)
         with self.container.sessions() as db:
@@ -3526,10 +3536,31 @@ class QueueAndRetryTests(AppCase):
 
         self.assertTrue(self.container.worker.process_once())
         self.assertEqual(initial_order + [first_attempt_url], calls)
-        self.assertEqual("success", self.container.runs.get_run(run["id"])["status"])
+        self.assertEqual("success", self.client.get(f"/api/v1/runs/{run['id']}").json()["status"])
 
     def test_page_evidence_missing_after_batch_retry_becomes_source_failure(self) -> None:
         """统一复访仍缺少列表响应时才形成来源终态失败。"""
+
+        self._assert_page_evidence_retry_exhausted(
+            ("PAGE_EVIDENCE_LIST_RESPONSE_MISSING", "PAGE_EVIDENCE_LIST_RESPONSE_MISSING")
+        )
+
+    def test_page_media_incomplete_retry_exhausted_becomes_source_failure(self) -> None:
+        """持续媒体错误最多执行两次，复访失败后保留明确错误。"""
+
+        self._assert_page_evidence_retry_exhausted(
+            ("PAGE_EVIDENCE_MEDIA_INCOMPLETE", "PAGE_EVIDENCE_MEDIA_INCOMPLETE")
+        )
+
+    def test_page_media_and_missing_response_share_one_source_retry(self) -> None:
+        """媒体错误改为列表响应缺失也不增加第二份来源复访额度。"""
+
+        self._assert_page_evidence_retry_exhausted(
+            ("PAGE_EVIDENCE_MEDIA_INCOMPLETE", "PAGE_EVIDENCE_LIST_RESPONSE_MISSING")
+        )
+
+    def _assert_page_evidence_retry_exhausted(self, failure_codes: tuple[str, str]) -> None:
+        """通过真实持久队列验证一次来源复访后终态收口，不再次入队。"""
 
         circle = self.save_verified_circle(external_id="batch-always-missing", name="持续缺失来源")
         run = self.container.runs.create_manual(
@@ -3551,7 +3582,7 @@ class QueueAndRetryTests(AppCase):
             ) -> dict:
                 nonlocal calls
                 calls += 1
-                raise CollectorFailure("PAGE_EVIDENCE_LIST_RESPONSE_MISSING", "来源列表响应暂时缺失。")
+                raise CollectorFailure(failure_codes[min(calls - 1, 1)], "来源页面证据暂未就绪。")
 
         collector = AlwaysMissingCollector()
         self.container.worker._collector = lambda *_args: collector  # type: ignore[method-assign]
@@ -3565,10 +3596,12 @@ class QueueAndRetryTests(AppCase):
             task.checkpoint = checkpoint
 
         self.assertTrue(self.container.worker.process_once())
-        finished = self.container.runs.get_run(run["id"])
+        finished = self.client.get(f"/api/v1/runs/{run['id']}").json()
         self.assertEqual(2, calls)
         self.assertEqual("failed", finished["status"])
-        self.assertEqual("PAGE_EVIDENCE_LIST_RESPONSE_MISSING", finished["tasks"][0]["error_code"])
+        self.assertEqual(failure_codes[-1], finished["tasks"][0]["error_code"])
+        self.assertFalse(self.container.worker.process_once())
+        self.assertEqual(2, calls)
 
     def test_interactive_platform_control_waits_and_auth_opens_trigger_url(self) -> None:
         """验证码或访问验证应暂停原任务，并把人工入口定位到原始触发 URL。"""

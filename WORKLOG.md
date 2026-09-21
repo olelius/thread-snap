@@ -1,5 +1,13 @@
 # WORKLOG — 唯一任务账本
 
+## 2026-09-21 — 媒体未就绪接入既有来源复访
+**目标/基线**：按用户“先补这个重试、保持当前逻辑”的最小范围，从fetch后的`origin/main@53e1023`建立独立`codex/fix-media-source-retry`与`H:/ThreadSnap-media-source-retry`；其它混合修改不动。
+**实现/状态**：开发和定向验收完成。业务代码仅把`PAGE_EVIDENCE_MEDIA_INCOMPLETE`加入`BATCH_RETRYABLE_SOURCE_FAILURE_CODES`，与列表响应缺失共用首轮结束后一次来源复访额度；持续失败或错误码切换后仍失败按原路径收口。网络、限流、几何、认证、首页轮次、间隔和并发不变，媒体/身份/证据门禁不放宽。
+**验证证据**：`python -m unittest`定向执行3项媒体用例及2项既有列表响应复访用例，5/5通过、5.692秒。真实Worker→独立SQLite→GET API覆盖首轮其它来源先完成、仅原失败URL再访问、成功来源只处理一次、持续失败总共2次、跨错误码共享额度；平台异常使用有限夹具，不访问真实平台。受影响Python Ruff与`git diff --check`通过；完整命令及输出见`artifacts/runtime/media-source-retry/{verification-receipt.json,targeted-tests.log}`。
+**下一步/边界**：仅剩提交、PR合并和分支清理。不部署远端、不重跑历史批次、不修界面补提标记或其它重试缺口、不跑全库回归。无依赖/迁移/前端变更，回退本提交即可。
+
+---
+
 ## 2026-09-19 — 车型映射精简页最小更新上线
 **目标/状态**：按用户要求将PR #324的`main@1b3d799c235b`更新远端；已从`756753f8f575`切换至目标版本。应用源码不再修改，独立`codex/docs-deploy-mapping-20260919`仅保存本次部署记录。
 **载荷/安装**：最小包1,197,024字节，SHA256 `ea6c937294ca403f36e2902fea9d901ba760972d86509d3072722d27da988f21`。只重建应用wheel（83源文件与目标一致），复用先前已验收且frontend tree与目标一致的59个新前端文件；相对服务器前端有变化，明确记录`frontend_source_unchanged=false`。10项依赖/部署/迁移/许可证输入未变，复用138项运行依赖。内包98/98、外包3/3校验及安装器语法通过；未重复npm构建、业务验收或全库回归。
