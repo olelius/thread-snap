@@ -1,5 +1,14 @@
 # WORKLOG — 唯一任务账本
 
+## 2026-09-21 — 提取进度刷新背压与列表批量查询
+**目标/基线**：从fetch后的`origin/main@b72bb5d`建立`codex/fix-runs-refresh`及独立工作树；前端/后端切片各自独立worktree，主线程统一文档、整合和组合验收。处理已定位的SSE整页请求放大及列表N+1，不改变Worker逐条持久化、重试、连接池、数据库结构或API返回合同。
+**实施/状态**：开发与必要验收完成。EventBridge合并高频run.changed为约1秒一轮，查询在途只记一次待刷新、结束后补取，事件桥卸载清理订阅/定时器；列表/详情/posts/dashboard透传AbortSignal，保留版本查询键、3秒/60秒轮询及即时恢复，手动刷新复用在途请求。后端列表窄列读取一次任务、按父链层次批量找截图根、一次批量取得成果组，不读checkpoint或逐批次重查；详情仅复用原摘要纯汇总部分。
+**切片证据**：前端5项定向用例通过，随后仅强化取消用例并重验该1项；后端6项定向+3项既有API通过，含完整结果等价、筛选/分页/空态/页外关联父链、异常连接归还和禁止读取checkpoint。50行普通夹具6条SQL、两层页外祖先7条；切片检查未在主线程重复执行。回执分别位于`H:/ThreadSnap-runs-refresh-core/artifacts/runtime/runs-refresh-core/receipt.md`与`H:/ThreadSnap-runs-query-core/artifacts/runtime/runs-query-core/receipt.md`。
+**整合证据**：同一份本地真实SQLite一致性副本（SHA256 `9acb296f2d8f8ecae00bb6a6596b5880a4aad47f3a27741f5aaca174c939d87b`）50行查询137→6条SQL，返回完整JSON哈希一致、checkpoint不再读取、结束时连接占用0；单次耗时0.0715→0.0402秒仅作本地样本，不替代远端繁忙时延。一次生产build（含TypeScript）通过，Ruff/diff-check通过。实际浏览器→HTTP/SSE→Worker逐条落盘→隔离SQLite，40次进度更新在模拟1.2秒慢返回下仅5次列表GET、客户端和服务端最大在途均1、连接峰值2/结束0、40帖子完整入库，看到中间进度和40/40成功终态，页面/网络错误0；首轮验收脚本仅因空格定位断言停止在启动前，修正定位后完成组合检查。过程图与JSON在`artifacts/runtime/runs-refresh/{baseline-profile.json,fixed-profile.json,live-result.json,live-progress.png,live-terminal.png,build.log}`。
+**下一步/边界**：只剩本次PR提交合并与分支清理；临时18091验收实例关闭，不访问平台、不重采历史、不跑全库回归。用户“先别更新”对远端继续有效，本次不部署/重启远端、不扩大连接池、不补提失败批次；此前已切换的媒体修复b72bb5d及其暂停的记录分支保持原状。本次无迁移，回退代码即可。
+
+---
+
 ## 2026-09-21 — 媒体未就绪接入既有来源复访
 **目标/基线**：按用户“先补这个重试、保持当前逻辑”的最小范围，从fetch后的`origin/main@53e1023`建立独立`codex/fix-media-source-retry`与`H:/ThreadSnap-media-source-retry`；其它混合修改不动。
 **实现/状态**：开发和定向验收完成。业务代码仅把`PAGE_EVIDENCE_MEDIA_INCOMPLETE`加入`BATCH_RETRYABLE_SOURCE_FAILURE_CODES`，与列表响应缺失共用首轮结束后一次来源复访额度；持续失败或错误码切换后仍失败按原路径收口。网络、限流、几何、认证、首页轮次、间隔和并发不变，媒体/身份/证据门禁不放宽。

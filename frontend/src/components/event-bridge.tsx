@@ -1,60 +1,59 @@
 import { useEffect } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
+import { createEventRefresh } from '@/lib/event-refresh'
 
 export function EventBridge() {
   const client = useQueryClient()
   useEffect(() => {
+    const refresh = createEventRefresh(client)
     const source = new EventSource('/api/v1/events')
     const setConnection = (connected: boolean) => {
       document.documentElement.dataset.backendConnected = String(connected)
       window.dispatchEvent(new CustomEvent('threadsnap:connection', { detail: connected }))
     }
-    source.onopen = () => { setConnection(true); client.invalidateQueries({ queryKey: ['dashboard'] }) }
+    source.onopen = () => { setConnection(true); refresh.invalidate(undefined, true) }
     source.onerror = () => setConnection(false)
-    const refreshRuns = () => client.invalidateQueries({ queryKey: ['runs'] })
     source.addEventListener('run.changed', (event) => {
-      refreshRuns()
+      refresh.invalidate(['runs'])
+      refresh.invalidate(['dashboard'])
       const payload = JSON.parse((event as MessageEvent).data) as { resource_id?: string }
       if (payload.resource_id) {
-        client.invalidateQueries({ queryKey: ['run', payload.resource_id] })
-        client.invalidateQueries({ queryKey: ['posts', payload.resource_id] })
+        refresh.invalidate(['run', payload.resource_id])
+        refresh.invalidate(['posts', payload.resource_id])
       }
     })
-    source.addEventListener('run.deleted', refreshRuns)
-    source.addEventListener('platform.changed', () => client.invalidateQueries({ queryKey: ['platforms'] }))
-    source.addEventListener('circles.changed', () => client.invalidateQueries({ queryKey: ['vehicles'] }))
-    source.addEventListener('validation.changed', () => client.invalidateQueries({ queryKey: ['vehicles'] }))
+    source.addEventListener('run.deleted', () => { refresh.invalidate(['runs'], true); refresh.invalidate(['dashboard'], true) })
+    source.addEventListener('platform.changed', () => refresh.invalidate(['platforms'], true))
+    source.addEventListener('circles.changed', () => refresh.invalidate(['vehicles'], true))
+    source.addEventListener('validation.changed', () => refresh.invalidate(['vehicles'], true))
     source.addEventListener('session.changed', (event) => {
       const payload = JSON.parse((event as MessageEvent).data) as { resource_id?: string }
-      if (payload.resource_id) client.invalidateQueries({ queryKey: ['session', payload.resource_id] })
-      client.invalidateQueries({ queryKey: ['runs'] })
+      if (payload.resource_id) refresh.invalidate(['session', payload.resource_id], true)
+      refresh.invalidate(['runs'], true)
     })
-    source.addEventListener('extraction-plan.changed', () => client.invalidateQueries({ queryKey: ['extraction-plan'] }))
-    source.addEventListener('sentiment.config.changed', () => { client.invalidateQueries({ queryKey: ['sentiment-config'] }); client.invalidateQueries({ queryKey: ['sentiment-accounts'] }) })
+    source.addEventListener('extraction-plan.changed', () => refresh.invalidate(['extraction-plan'], true))
+    source.addEventListener('sentiment.config.changed', () => { refresh.invalidate(['sentiment-config'], true); refresh.invalidate(['sentiment-accounts'], true) })
     source.addEventListener('sentiment.changed', () => {
-      client.invalidateQueries({ queryKey: ['posts'] })
-      client.invalidateQueries({ queryKey: ['post'] })
+      refresh.invalidate(['posts'], true)
+      refresh.invalidate(['post'], true)
     })
     source.addEventListener('reputation.run.changed', (event) => {
-      client.invalidateQueries({ queryKey: ['reputation-runs'] })
+      refresh.invalidate(['reputation-runs'], true)
+      refresh.invalidate(['dashboard'], true)
       const payload = JSON.parse((event as MessageEvent).data) as { resource_id?: string }
       if (payload.resource_id) {
-        client.invalidateQueries({ queryKey: ['reputation-run', payload.resource_id] })
+        refresh.invalidate(['reputation-run', payload.resource_id], true)
       }
     })
     source.addEventListener('reputation.scope.changed', () => {
-      client.invalidateQueries({ queryKey: ['reputation-scope'] })
+      refresh.invalidate(['reputation-scope'], true)
     })
-    // 首页统计不依赖列表分页键，只有相关事务提交/重连才使其失效。
-    const refreshDashboard = () => client.invalidateQueries({ queryKey: ['dashboard'] })
-    for (const type of ['run.changed', 'run.deleted', 'reputation.run.changed']) {
-      source.addEventListener(type, refreshDashboard)
-    }
-    const refreshAll = () => client.invalidateQueries()
+    const refreshAll = () => refresh.invalidate(undefined, true)
     window.addEventListener('online', refreshAll)
     window.addEventListener('focus', refreshAll)
     return () => {
       setConnection(false)
+      refresh.dispose()
       source.close()
       window.removeEventListener('online', refreshAll)
       window.removeEventListener('focus', refreshAll)

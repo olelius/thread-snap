@@ -65,7 +65,7 @@ function RunListPage({ kind }: { kind: RunListKind }) {
   const offset = ((search.page ?? 1) - 1) * (search.pageSize ?? 50)
   const query = useQuery({
     queryKey: ['runs', kind, { ...search, number: debouncedNumber }],
-    queryFn: () => api<PageResult<Run>>(`/runs${queryString({
+    queryFn: ({ signal }) => api<PageResult<Run>>(`/runs${queryString({
       offset,
       limit: search.pageSize,
       number: debouncedNumber,
@@ -74,7 +74,7 @@ function RunListPage({ kind }: { kind: RunListKind }) {
       list_order: search.listOrder,
       created_from: search.from ? shanghaiDayBoundary(search.from) : undefined,
       created_to: search.to ? shanghaiDayBoundary(search.to, true) : undefined,
-    })}`, undefined, 20_000),
+    })}`, { signal }, 20_000),
     refetchInterval: (current) => current.state.data?.items.some(isActiveRun) ? 3_000 : 60_000,
   })
 
@@ -121,7 +121,7 @@ function RunListPage({ kind }: { kind: RunListKind }) {
             <Select value={search.listOrder ?? 'all'} onValueChange={(value) => patch({ listOrder: value === 'all' ? undefined : value as SearchState['listOrder'], page: 1 })}><SelectTrigger><SelectValue placeholder='全部列表类型' /></SelectTrigger><SelectContent><SelectItem value='all'>全部列表类型</SelectItem><SelectItem value='latest_reply'>最新回复</SelectItem><SelectItem value='latest_publish'>最新发布</SelectItem></SelectContent></Select>
             <Input type='date' value={search.from ?? ''} onChange={(event) => patch({ from: event.target.value || undefined, page: 1 })} aria-label='开始日期' />
             <Input type='date' value={search.to ?? ''} onChange={(event) => patch({ to: event.target.value || undefined, page: 1 })} aria-label='结束日期' />
-            <div className='flex gap-1'><Button variant='outline' size='icon' onClick={() => query.refetch()} aria-label='刷新列表'><RefreshCw className={`size-4 ${query.isFetching ? 'animate-spin' : ''}`} /></Button><Button variant='ghost' size='icon' onClick={() => navigate({ to: listPath, search: emptyRunsSearch, replace: true, resetScroll: false })} aria-label='重置筛选'><FilterX className='size-4' /></Button></div>
+            <div className='flex gap-1'><Button variant='outline' size='icon' onClick={() => query.refetch({ cancelRefetch: false })} aria-label='刷新列表'><RefreshCw className={`size-4 ${query.isFetching ? 'animate-spin' : ''}`} /></Button><Button variant='ghost' size='icon' onClick={() => navigate({ to: listPath, search: emptyRunsSearch, replace: true, resetScroll: false })} aria-label='重置筛选'><FilterX className='size-4' /></Button></div>
           </CardContent>
         </Card>
       </div>
@@ -130,7 +130,7 @@ function RunListPage({ kind }: { kind: RunListKind }) {
           <Table className='min-w-[1050px]'>
             <TableHeader>{table.getHeaderGroups().map((group) => <TableRow key={group.id} className='bg-muted/35'>{group.headers.map((header) => <TableHead key={header.id}>{flexRender(header.column.columnDef.header, header.getContext())}</TableHead>)}</TableRow>)}</TableHeader>
             <TableBody>
-              {query.isLoading ? Array.from({ length: 6 }).map((_, index) => <TableRow key={index}>{columns.map((_, cell) => <TableCell key={cell}><Skeleton className='h-7 w-full' /></TableCell>)}</TableRow>) : query.isError ? <TableRow><TableCell colSpan={columns.length} className='h-56 text-center'><CircleAlert className='mx-auto mb-2 size-5 text-destructive' /><div className='text-sm font-medium'>{recurring ? '循环计划列表加载失败' : '提取列表加载失败'}</div><div className='mt-1 text-xs text-muted-foreground'>{errorMessage(query.error)}</div><Button className='mt-3' variant='outline' size='sm' onClick={() => query.refetch()}><RefreshCw className='size-4' />重新加载</Button></TableCell></TableRow> : table.getRowModel().rows.length ? table.getRowModel().rows.map((row) => <TableRow key={row.id} tabIndex={0} className={`cursor-pointer transition-colors hover:bg-primary/[0.035] focus-visible:bg-primary/[0.06] focus-visible:outline-none ${row.original.id === highlightedRunId ? 'run-row-highlight' : ''}`} onClick={() => navigate({ to: detailPath, params: { runId: row.original.id }, search: emptyDetailSearch })} onKeyDown={(event) => { if (event.key === 'Enter') navigate({ to: detailPath, params: { runId: row.original.id }, search: emptyDetailSearch }) }}>{row.getVisibleCells().map((cell) => <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>)}</TableRow>) : <TableRow><TableCell colSpan={columns.length} className='h-56 text-center'><div className='text-sm font-medium'>{recurring ? '还没有循环计划批次' : '没有匹配的提取批次'}</div><div className='mt-1 text-xs text-muted-foreground'>{recurring ? '循环计划触发后，批次会显示在这里。' : '调整筛选条件或创建新的提取任务。'}</div></TableCell></TableRow>}
+              {query.isLoading ? Array.from({ length: 6 }).map((_, index) => <TableRow key={index}>{columns.map((_, cell) => <TableCell key={cell}><Skeleton className='h-7 w-full' /></TableCell>)}</TableRow>) : query.isError ? <TableRow><TableCell colSpan={columns.length} className='h-56 text-center'><CircleAlert className='mx-auto mb-2 size-5 text-destructive' /><div className='text-sm font-medium'>{recurring ? '循环计划列表加载失败' : '提取列表加载失败'}</div><div className='mt-1 text-xs text-muted-foreground'>{errorMessage(query.error)}</div><Button className='mt-3' variant='outline' size='sm' onClick={() => query.refetch({ cancelRefetch: false })}><RefreshCw className='size-4' />重新加载</Button></TableCell></TableRow> : table.getRowModel().rows.length ? table.getRowModel().rows.map((row) => <TableRow key={row.id} tabIndex={0} className={`cursor-pointer transition-colors hover:bg-primary/[0.035] focus-visible:bg-primary/[0.06] focus-visible:outline-none ${row.original.id === highlightedRunId ? 'run-row-highlight' : ''}`} onClick={() => navigate({ to: detailPath, params: { runId: row.original.id }, search: emptyDetailSearch })} onKeyDown={(event) => { if (event.key === 'Enter') navigate({ to: detailPath, params: { runId: row.original.id }, search: emptyDetailSearch }) }}>{row.getVisibleCells().map((cell) => <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>)}</TableRow>) : <TableRow><TableCell colSpan={columns.length} className='h-56 text-center'><div className='text-sm font-medium'>{recurring ? '还没有循环计划批次' : '没有匹配的提取批次'}</div><div className='mt-1 text-xs text-muted-foreground'>{recurring ? '循环计划触发后，批次会显示在这里。' : '调整筛选条件或创建新的提取任务。'}</div></TableCell></TableRow>}
             </TableBody>
           </Table>
         </div>
