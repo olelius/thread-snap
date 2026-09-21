@@ -1,5 +1,14 @@
 # WORKLOG — 唯一任务账本
 
+## 2026-09-21 — 实时刷新与列表查询最小更新上线
+**目标/基线**：用户在本地真实批次结束后明确要求“更新到服务器”，本轮恢复部署授权；从fetch后的`origin/main@c00863a`建立独立记录分支`codex/docs-deploy-runs-refresh-20260921`。只部署已合并PR #327的后端列表批量查询与前端刷新背压，包含远端已有的媒体复访修复；旧混合修改及暂停的媒体部署记录分支保持原状。
+**已有验收/状态**：本地原远端批次`20260921-123511-001`的33项冻结来源配置逐项一致，修复版新建独立`LOCAL-20260921-133355`真实采集33/33来源成功、1352条入库、来源错误0；原失败艾瑞泽8为50/50。38条差额是易车某来源仅有12条、正常耗尽。实际50行列表146次请求均200、每次6条SQL、最大在途1、中位47ms/P95 125ms、连接峰值8/结束0；未发起新的AI调用，11项AI及其关联截图汇总待选，故不外推新增AI并发负载。记录`H:/ThreadSnap/artifacts/runtime/local-remote-batch-20260921/20260921-132723/report.md`。复用这些证据及已通过的定向测试/构建，不重跑全库或整批。
+**载荷/安装完成**：最小包1,200,524字节、SHA256 `85201a2b59d0b1e862000650a29f66e4f90dee17bd5a097f95f2c1485347bf10`；仅更新应用wheel和已验收的59项新前端，83项包内源码与目标一致、10项稳定输入未变，内98/98及外3/3校验通过。运行依赖原样复用，无迁移。七类任务双空闲门通过，安装单元`threadsnap-runs-refresh-deploy-c00863a7a38e`退出0并输出`ACTIVATION_PASSED`；维护窗口48.804秒，current=`c00863a7a38e`、previous=`b72bb5dbbd17`，三服务active、8000/8088健康、`deploy/verify.sh --quick`通过，27张历史/配置表行数与哈希一致、SQLite完整性/外键检查通过，schema仍`f3b6c9d2a804`。原后台调度与入口配置恢复。
+**上线证据**：安装的73项Python模块逐字节匹配wheel，59项前端匹配manifest；同一空闲窗口50行列表单次1.160383→0.295656秒、完整JSON哈希一致。真实公网浏览器首屏50行/总157批次，列表GET200约0.156秒，新首页字节与载荷一致，页面/网络错误0、PNG已目视；这些单次数据不外推繁忙时延。证据目录`H:/ThreadSnap/artifacts/runtime/deploy-runs-refresh-20260921/`含`package-verification.json`、`final_probe.stdout.json`、`public-verification.json`、`public-runs.png`与`deployment-evidence.tar.gz`（SHA256 `5b32ecd79521d44d3ce8427b77eeaf34a07c7b87fa715235afa75254b4cb35f2`）。备份`/var/lib/threadsnap/backups/minimal-release-upgrade/20260921-runs-refresh-c00863a7a38e`已保留。剩余仅此记录PR收尾、同步main及清理本轮记录分支。
+**边界/回退**：不补提或改写历史、不扩大连接池、不重装依赖；保留current/previous、离线包及SQLite备份。开放写入前失败走安装器恢复；开放后无迁移只回退程序、保留新数据。本轮不关机，本地只读预览保持可用。
+
+---
+
 ## 2026-09-21 — 提取进度刷新背压与列表批量查询
 **目标/基线**：从fetch后的`origin/main@b72bb5d`建立`codex/fix-runs-refresh`及独立工作树；前端/后端切片各自独立worktree，主线程统一文档、整合和组合验收。处理已定位的SSE整页请求放大及列表N+1，不改变Worker逐条持久化、重试、连接池、数据库结构或API返回合同。
 **实施/状态**：开发与必要验收完成。EventBridge合并高频run.changed为约1秒一轮，查询在途只记一次待刷新、结束后补取，事件桥卸载清理订阅/定时器；列表/详情/posts/dashboard透传AbortSignal，保留版本查询键、3秒/60秒轮询及即时恢复，手动刷新复用在途请求。后端列表窄列读取一次任务、按父链层次批量找截图根、一次批量取得成果组，不读checkpoint或逐批次重查；详情仅复用原摘要纯汇总部分。
