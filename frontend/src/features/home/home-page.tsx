@@ -39,7 +39,7 @@ export function HomePage() {
   const [selection, setSelection] = useState<string>()
   const query = useQuery({
     queryKey: ['dashboard'],
-    queryFn: () => api<Dashboard>('/dashboard', undefined, 20_000),
+    queryFn: ({ signal }) => api<Dashboard>('/dashboard', { signal }, 20_000),
     refetchInterval: ({ state }) => state.data?.categories.some((category) => category.active > 0) ? 3_000 : 60_000,
   })
   const category = query.data?.categories.find((item) => item.key === kind)
@@ -56,9 +56,9 @@ export function HomePage() {
     <div className='home-page'>
       <header className='home-heading'>
         <div><span className='home-eyebrow'><Sparkles size={14} /> THREADSNAP · 首页</span><h1>让每一次快照，<span>井然有序。</span></h1><p>看全局进展，处理待关注批次，再轻盈地回到工作中。</p></div>
-        <div className='home-heading-actions'><span className='home-date'><Clock3 size={14} />{query.data?.date ?? '正在读取日期'} · 上海时间</span><div><Button variant='outline' size='icon' aria-label='刷新首页' onClick={() => query.refetch()} disabled={query.isFetching}><RefreshCw className={`size-4 ${query.isFetching ? 'animate-spin' : ''}`} /></Button><NewExtractionSheet /></div></div>
+        <div className='home-heading-actions'><span className='home-date'><Clock3 size={14} />{query.data?.date ?? '正在读取日期'} · 上海时间</span><div><Button variant='outline' size='icon' aria-label='刷新首页' onClick={() => query.refetch({ cancelRefetch: false })} disabled={query.isFetching}><RefreshCw className={`size-4 ${query.isFetching ? 'animate-spin' : ''}`} /></Button><NewExtractionSheet /></div></div>
       </header>
-      {query.isError && <div role='alert' className='home-error'><CircleAlert size={18} /><div><strong>首页数据暂未取得</strong><p>{errorMessage(query.error)}{query.data ? ' 当前仍展示上次成功读取的摘要，统计以刷新成功为准。' : ''}</p></div><Button variant='outline' onClick={() => query.refetch()}>重试</Button></div>}
+      {query.isError && <div role='alert' className='home-error'><CircleAlert size={18} /><div><strong>首页数据暂未取得</strong><p>{errorMessage(query.error)}{query.data ? ' 当前仍展示上次成功读取的摘要，统计以刷新成功为准。' : ''}</p></div><Button variant='outline' onClick={() => query.refetch({ cancelRefetch: false })}>重试</Button></div>}
 
       <section className='home-metrics' aria-label='全局批次统计'>
         {kinds.map(({ key, label, description, icon: Icon }, index) => {

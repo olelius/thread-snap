@@ -76,33 +76,33 @@ function RunDetail({ kind }: { kind: RunDetailKind }) {
   const selectedSourceKeys = (search.sources ?? '').split(',').filter(Boolean)
   const run = useQuery({
     queryKey: ['run', runId],
-    queryFn: () => api<Run>(`/runs/${runId}`, undefined, 20_000),
+    queryFn: ({ signal }) => api<Run>(`/runs/${runId}`, { signal }, 20_000),
     refetchInterval: (current) => isActiveRun(current.state.data) ? 3_000 : 60_000,
   })
   const postQueryValues = { title: debouncedTitle, source_key: selectedSourceKeys, visibility: search.visibility, sentiment_result: search.sentiment, analysis_status: search.analysisStatus, sort_by: search.sort, sort_direction: search.direction }
   const posts = useQuery({
     queryKey: ['posts', runId, run.data?.summary_version ?? 0, { page: search.page, pageSize: search.pageSize, ...postQueryValues }],
-    queryFn: () => api<PageResult<Post>>(`/runs/${runId}/posts${queryString({ offset: ((search.page ?? 1) - 1) * (search.pageSize ?? 50), limit: search.pageSize, ...postQueryValues })}`, undefined, 20_000),
+    queryFn: ({ signal }) => api<PageResult<Post>>(`/runs/${runId}/posts${queryString({ offset: ((search.page ?? 1) - 1) * (search.pageSize ?? 50), limit: search.pageSize, ...postQueryValues })}`, { signal }, 20_000),
     placeholderData: keepPreviousData,
     refetchInterval: (current) => isActiveRun(run.data) || current.state.data?.items.some((post) => ['analysis_queued', 'analysis_running'].includes(post.analysis_status ?? '')) ? 3_000 : false,
   })
   const screenshots = useQuery({
     queryKey: ['run-screenshots', runId, run.data?.summary_version ?? 0],
-    queryFn: () => api<{ items: ScreenshotGroup[] }>(`/runs/${runId}/screenshots`, undefined, 20_000),
+    queryFn: ({ signal }) => api<{ items: ScreenshotGroup[] }>(`/runs/${runId}/screenshots`, { signal }, 20_000),
     enabled: search.view === 'screenshots',
     refetchInterval: (current) => current.state.data?.items.some((item) => ['evidence_pending', 'evidence_running', 'waiting_for_sentiment', 'rendering'].includes(item.status)) ? 3_000 : false,
   })
   const templates = useQuery({ queryKey: ['templates'], queryFn: () => api<Template[]>('/templates') })
   const detail = useQuery({
     queryKey: ['post', runId, search.post],
-    queryFn: () => api<Post>(`/runs/${runId}/posts/${search.post}`),
+    queryFn: ({ signal }) => api<Post>(`/runs/${runId}/posts/${search.post}`, { signal }),
     enabled: Boolean(search.post),
     placeholderData: keepPreviousData,
     refetchInterval: (current) => ['analysis_queued', 'analysis_running'].includes(current.state.data?.analysis_status ?? '') ? 3_000 : false,
   })
   const navigation = useQuery({
     queryKey: ['post-navigation', runId, search.post, postQueryValues],
-    queryFn: () => api<PostNavigation>(`/runs/${runId}/posts/${search.post}/navigation${queryString(postQueryValues)}`),
+    queryFn: ({ signal }) => api<PostNavigation>(`/runs/${runId}/posts/${search.post}/navigation${queryString(postQueryValues)}`, { signal }),
     enabled: Boolean(search.post),
     placeholderData: keepPreviousData,
   })
@@ -271,7 +271,7 @@ function RunDetail({ kind }: { kind: RunDetailKind }) {
           title={run.data ? `批次 ${run.data.number}` : '批次链接详情'}
           description='结果按原始来源位置稳定合并；搜索、筛选、排序和分页均由后端对完整结果集执行。'
           actions={<>
-            <Button variant='outline' size='sm' onClick={() => { run.refetch(); posts.refetch() }}><RefreshCw className={`size-4 ${run.isFetching || posts.isFetching ? 'animate-spin' : ''}`} />刷新</Button>
+            <Button variant='outline' size='sm' onClick={() => { run.refetch({ cancelRefetch: false }); posts.refetch({ cancelRefetch: false }) }}><RefreshCw className={`size-4 ${run.isFetching || posts.isFetching ? 'animate-spin' : ''}`} />刷新</Button>
             {run.data?.tasks?.length ? <Button variant='outline' size='sm' onClick={() => setTasksOpen(true)}><ListTree className='size-4' />来源任务 <span className='text-xs text-muted-foreground'>{run.data.tasks.length}</span></Button> : null}
             {run.data?.status === 'waiting_for_auth' && <><Button variant='outline' size='sm' onClick={() => setAuthOpen(true)}><KeyRound className='size-4' />处理会话</Button><AlertDialog><AlertDialogTrigger asChild><Button variant='outline' size='sm'><CircleStop className='size-4' />结束本次提取</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>结束本次提取？</AlertDialogTitle><AlertDialogDescription>已有结果将保留，批次按实际结果结束并释放平台队列；之后仍可重新提取失败项。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => endAuthWait.mutate()}>确认结束</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></>}
             {canRetry && <AlertDialog><AlertDialogTrigger asChild><Button variant='outline' size='sm'>重新提取失败项</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>重新提取失败项？</AlertDialogTitle><AlertDialogDescription>系统会保留原批次快照，只把失败 URL 创建为关联补提批次。</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => retry.mutate()}>确认重新提取</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}
@@ -291,13 +291,13 @@ function RunDetail({ kind }: { kind: RunDetailKind }) {
         {search.view !== 'screenshots' && <Card className='border-border/70 bg-card/88 py-0'><CardContent className='grid gap-2 p-3 [&>[data-slot=select-trigger]]:w-full [&>[data-slot=select-trigger]]:min-w-0 [&>[data-slot=select-trigger]]:gap-1 [&>[data-slot=select-trigger]]:px-2 md:grid-cols-2 xl:grid-cols-4 2xl:grid-cols-[minmax(180px,1fr)_190px_125px_130px_130px_100px_88px] [@media(min-width:1800px)]:grid-cols-[minmax(180px,360px)_210px_125px_130px_130px_100px_88px_minmax(0,1fr)_max-content]'><Input placeholder='搜索帖子标题' aria-label='搜索帖子标题' value={search.title ?? ''} onChange={(event) => patch({ title: event.target.value || undefined, page: 1 })} /><SourceMultiSelect options={posts.data?.source_options ?? []} values={selectedSourceKeys} onChange={(values) => patch({ sources: values.length ? values.join(',') : undefined, page: 1 })} /><Select value={search.visibility ?? 'all'} onValueChange={(value) => patch({ visibility: value === 'all' ? undefined : value as SearchState['visibility'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部可见状态</SelectItem><SelectItem value='visible'>可见</SelectItem><SelectItem value='hidden'>不可见</SelectItem><SelectItem value='unknown'>未知</SelectItem></SelectContent></Select><Select value={search.sentiment ?? 'all'} onValueChange={(value) => patch({ sentiment: value === 'all' ? undefined : value as SentimentResult, page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部舆情结果</SelectItem><SelectItem value='negative'>负面</SelectItem><SelectItem value='non_negative'>非负面</SelectItem><SelectItem value='unrelated'>不相关</SelectItem></SelectContent></Select><Select value={search.analysisStatus ?? 'all'} onValueChange={(value) => patch({ analysisStatus: value === 'all' ? undefined : value as AnalysisStatus, page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='all'>全部分析状态</SelectItem>{Object.entries(analysisStatusNames).map(([value, label]) => <SelectItem key={value} value={value}>{label}</SelectItem>)}</SelectContent></Select><Select value={search.sort} onValueChange={(value) => patch({ sort: value as SearchState['sort'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='source'>来源顺序</SelectItem><SelectItem value='published_at'>发布时间</SelectItem><SelectItem value='reply_count'>评论数</SelectItem><SelectItem value='like_count'>点赞数</SelectItem></SelectContent></Select><Select value={search.direction} onValueChange={(value) => patch({ direction: value as SearchState['direction'], page: 1 })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value='asc'>正序</SelectItem><SelectItem value='desc'>倒序</SelectItem></SelectContent></Select><div className='col-span-full flex min-w-0 flex-wrap items-center justify-end gap-2 [@media(min-width:1800px)]:col-span-1 [@media(min-width:1800px)]:col-start-9'><Button className='shrink-0' variant='outline' onClick={copyAll}><Copy className='size-4' />复制全部</Button><Button className='shrink-0' variant='outline' disabled={!canDelete || !posts.data?.total || posts.isFetching || posts.isError || search.title !== debouncedTitle || exportFiltered.isPending} aria-busy={exportFiltered.isPending} title={canDelete ? '导出当前筛选的全部结果（包含其他分页），保留当前排序，无需模板' : '批次结束后可导出筛选结果'} onClick={() => exportFiltered.mutate()}>{exportFiltered.isPending ? <LoaderCircle className='size-4 animate-spin motion-reduce:animate-none' /> : <Download className='size-4' />}{exportFiltered.isPending ? '正在导出…' : '导出筛选结果'}</Button><Select onValueChange={(value) => exportRun.mutate(value)} disabled={!templates.data?.length || exportRun.isPending}><SelectTrigger className='w-36'><Download className='size-4' /><SelectValue placeholder={templates.data?.length ? '按模板导出' : '暂无模板'} /></SelectTrigger><SelectContent>{templates.data?.map((item) => item.versions[0] && <SelectItem key={item.versions[0].version_id} value={item.versions[0].version_id}>{item.name}</SelectItem>)}</SelectContent></Select></div></CardContent></Card>}
       </div>
       <div className='min-h-[360px] flex-1 xl:min-h-0'>
-        {search.view === 'screenshots' ? <ScreenshotPanel key={runId} groups={screenshots.data?.items} loading={screenshots.isLoading} error={screenshots.error} onRetry={() => screenshots.refetch()} /> :
+        {search.view === 'screenshots' ? <ScreenshotPanel key={runId} groups={screenshots.data?.items} loading={screenshots.isLoading} error={screenshots.error} onRetry={() => screenshots.refetch({ cancelRefetch: false })} /> :
         <div className='flex h-[min(65svh,640px)] min-h-[360px] flex-col overflow-hidden rounded-xl border border-border/70 bg-card/90 xl:h-full xl:min-h-0'>
         <div className='min-h-0 flex-1 overflow-auto' data-list-viewport='run-posts'>
           <Table className='min-w-[1050px]'>
             <TableHeader><TableRow className='bg-muted/35'><TableHead className='w-16 text-center'>序号</TableHead><TableHead>标题</TableHead><TableHead>来源</TableHead><TableHead>作者</TableHead><TableHead>发布时间</TableHead><TableHead>可见状态</TableHead><TableHead>舆情结果</TableHead><TableHead className='text-right'>评论数</TableHead><TableHead className='text-right'>点赞数</TableHead><TableHead className='text-right'>操作</TableHead></TableRow></TableHeader>
             <TableBody>
-              {posts.isLoading ? Array.from({ length: 6 }).map((_, index) => <TableRow key={index}>{Array.from({ length: 10 }).map((__, cell) => <TableCell key={cell}><Skeleton className='h-6 w-full' /></TableCell>)}</TableRow>) : posts.isError ? <TableRow><TableCell colSpan={10} className='h-56 text-center'><CircleAlert className='mx-auto mb-2 size-5 text-destructive' /><div className='text-sm font-medium'>帖子列表加载失败</div><div className='mt-1 text-xs text-muted-foreground'>{errorMessage(posts.error)}</div><Button className='mt-3' variant='outline' size='sm' onClick={() => posts.refetch()}><RefreshCw className='size-4' />重新加载</Button></TableCell></TableRow> : posts.data?.items.length ? posts.data.items.map((post, index) => {
+              {posts.isLoading ? Array.from({ length: 6 }).map((_, index) => <TableRow key={index}>{Array.from({ length: 10 }).map((__, cell) => <TableCell key={cell}><Skeleton className='h-6 w-full' /></TableCell>)}</TableRow>) : posts.isError ? <TableRow><TableCell colSpan={10} className='h-56 text-center'><CircleAlert className='mx-auto mb-2 size-5 text-destructive' /><div className='text-sm font-medium'>帖子列表加载失败</div><div className='mt-1 text-xs text-muted-foreground'>{errorMessage(posts.error)}</div><Button className='mt-3' variant='outline' size='sm' onClick={() => posts.refetch({ cancelRefetch: false })}><RefreshCw className='size-4' />重新加载</Button></TableCell></TableRow> : posts.data?.items.length ? posts.data.items.map((post, index) => {
                 const isCurrentPost = post.id === search.post
                 const isLastViewedPost = !search.post && post.id === lastViewedPostId
                 const isHighlightedPost = isCurrentPost || isLastViewedPost

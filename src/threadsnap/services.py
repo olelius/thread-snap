@@ -10,7 +10,7 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, func, or_, select
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, load_only, sessionmaker
 
 from .collectors import CollectorFailure, get_platform_spec, platform_specs
 from .errors import DomainError
@@ -1816,6 +1816,31 @@ class RunService:
             runs = list(
                 db.scalars(
                     select(ExtractionRun)
+                    .options(
+                        load_only(
+                            ExtractionRun.id,
+                            ExtractionRun.number,
+                            ExtractionRun.trigger_type,
+                            ExtractionRun.input_mode,
+                            ExtractionRun.status,
+                            ExtractionRun.related_run_id,
+                            ExtractionRun.schedule_node_id,
+                            ExtractionRun.extraction_rule_id,
+                            ExtractionRun.extraction_rule_version,
+                            ExtractionRun.config_snapshot,
+                            ExtractionRun.planned_count,
+                            ExtractionRun.completed_count,
+                            ExtractionRun.failed_count,
+                            ExtractionRun.waiting_reason,
+                            ExtractionRun.error_message,
+                            ExtractionRun.summary_version,
+                            ExtractionRun.created_at,
+                            ExtractionRun.queued_at,
+                            ExtractionRun.started_at,
+                            ExtractionRun.finished_at,
+                            raiseload=True,
+                        )
+                    )
                     .where(*conditions)
                     .order_by(ExtractionRun.created_at.desc(), ExtractionRun.id.desc())
                     .offset(offset)
@@ -1827,6 +1852,22 @@ class RunService:
                 list(
                     db.scalars(
                         select(CircleTask)
+                        .options(
+                            load_only(
+                                CircleTask.id,
+                                CircleTask.run_id,
+                                CircleTask.circle_id,
+                                CircleTask.platform_code,
+                                CircleTask.external_id,
+                                CircleTask.circle_name,
+                                CircleTask.circle_url,
+                                CircleTask.list_order,
+                                CircleTask.status,
+                                CircleTask.queue_sequence,
+                                CircleTask.config_snapshot,
+                                raiseload=True,
+                            )
+                        )
                         .where(CircleTask.run_id.in_(run_ids))
                         .order_by(CircleTask.queue_sequence)
                     )
@@ -1841,6 +1882,13 @@ class RunService:
             queued = list(
                 db.scalars(
                     select(CircleTask)
+                    .options(
+                        load_only(
+                            CircleTask.platform_code,
+                            CircleTask.queue_sequence,
+                            raiseload=True,
+                        )
+                    )
                     .where(CircleTask.status == "queued")
                     .order_by(CircleTask.platform_code, CircleTask.queue_sequence)
                 )
@@ -1854,8 +1902,9 @@ class RunService:
                     )
                     for item in runs
                 ]
-            for item, run in zip(items, runs, strict=True):
-                item["screenshot_summary"] = screenshot_summary(db, run)
+            summaries = screenshot_summaries_from_tasks(db, runs, grouped)
+            for item in items:
+                item["screenshot_summary"] = summaries[item["id"]]
             return {
                 "items": items,
                 "total": total,
@@ -2306,6 +2355,80 @@ def run_dict(db: Session, run: ExtractionRun, include_tasks: bool = False) -> di
     return result
 
 
+def screenshot_summaries_from_tasks(
+    db: Session,
+    runs: list[ExtractionRun],
+    tasks_by_run: dict[str, list[CircleTask]],
+) -> dict[str, dict[str, Any]]:
+    """复用本页任务，分层批量读取关联根和截图组，不扫描后代或任务检查点。"""
+
+    summaries: dict[str, dict[str, Any]] = {}
+    applicable: list[ExtractionRun] = []
+    for run in runs:
+        tasks = tasks_by_run.get(run.id, [])
+        if run.input_mode == "url_list" or (
+            tasks and not any(
+                bool((task.config_snapshot or {}).get("screenshot_enabled", True))
+                for task in tasks
+            )
+        ):
+            summaries[run.id] = {"status": "not_applicable", "group_count": 0, "ready_count": 0}
+        else:
+            # 空任务仍按旧摘要读取成果组，不能等同于显式关闭截图。
+            applicable.append(run)
+    if not applicable:
+        return summaries
+
+    parents = {run.id: run.related_run_id for run in runs}
+    pending = {run.id for run in applicable}
+    visited: set[str] = set()
+    missing: set[str] = set()
+    while pending:
+        visited.update(pending)
+        parent_ids = {parents[run_id] for run_id in pending if parents[run_id]}
+        unknown = parent_ids - parents.keys() - missing
+        if unknown:
+            found = dict(
+                db.execute(
+                    select(ExtractionRun.id, ExtractionRun.related_run_id)
+                    .where(ExtractionRun.id.in_(unknown))
+                ).all()
+            )
+            parents.update(found)
+            missing.update(unknown - found.keys())
+        pending = (parent_ids & parents.keys()) - visited
+
+    roots: dict[str, str] = {}
+    for run in applicable:
+        root_id = run.id
+        seen = {root_id}
+        while parents[root_id] in parents and parents[root_id] not in seen:
+            root_id = parents[root_id]
+            seen.add(root_id)
+        # 页外父节点缺失时沿用最后一个实际存在的祖先，与详情摘要一致。
+        roots[run.id] = root_id
+    groups_by_root: dict[str, list[ScreenshotArtifactGroup]] = {}
+    for group in db.scalars(
+        select(ScreenshotArtifactGroup)
+        .options(
+            load_only(
+                ScreenshotArtifactGroup.chain_root_run_id,
+                ScreenshotArtifactGroup.status,
+                ScreenshotArtifactGroup.item_count,
+                ScreenshotArtifactGroup.negative_count,
+                raiseload=True,
+            )
+        )
+        .where(ScreenshotArtifactGroup.chain_root_run_id.in_(set(roots.values())))
+    ):
+        groups_by_root.setdefault(group.chain_root_run_id, []).append(group)
+    for run in applicable:
+        summaries[run.id] = screenshot_summary_from_groups(
+            run, groups_by_root.get(roots[run.id], [])
+        )
+    return summaries
+
+
 def screenshot_summary(db: Session, run: ExtractionRun) -> dict[str, Any]:
     """返回批次列表使用的紧凑截图成果状态，不暴露文件路径。"""
 
@@ -2329,6 +2452,14 @@ def screenshot_summary(db: Session, run: ExtractionRun) -> dict[str, Any]:
             )
         )
     )
+    return screenshot_summary_from_groups(run, groups)
+
+
+def screenshot_summary_from_groups(
+    run: ExtractionRun, groups: list[ScreenshotArtifactGroup]
+) -> dict[str, Any]:
+    """从已读取成果组构造紧凑摘要，保持列表与详情的状态优先级一致。"""
+
     if not groups:
         return {
             "status": "not_collected" if run.status in TERMINAL_STATUSES else "evidence_pending",
