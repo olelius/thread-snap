@@ -245,6 +245,8 @@ sed \
   "$SCRIPT_DIR/nginx/threadsnap.conf" > "$CONFIG_DIR/nginx-site.conf"
 cp "$SCRIPT_DIR/nginx/nginx.conf" "$CONFIG_DIR/nginx.conf"
 cp "$SCRIPT_DIR/systemd/threadsnap-nginx.service" /etc/systemd/system/threadsnap-nginx.service
+cp "$SCRIPT_DIR/systemd/threadsnap-backup-retention.service" /etc/systemd/system/threadsnap-backup-retention.service
+cp "$SCRIPT_DIR/systemd/threadsnap-backup-retention.timer" /etc/systemd/system/threadsnap-backup-retention.timer
 
 if command -v getenforce >/dev/null 2>&1 && [[ "$(getenforce)" != "Disabled" ]]; then
   semanage fcontext -a -t usr_t '/opt/threadsnap/releases(/.*)?' 2>/dev/null || \
@@ -275,6 +277,7 @@ if [[ "$START_SERVICES" == true ]]; then
     fi
     exit 7
   fi
+  systemctl enable --now threadsnap-backup-retention.timer
 fi
 
 cat <<EOF

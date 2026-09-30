@@ -168,3 +168,12 @@ sudo bash /opt/threadsnap/current/deploy/restore-backup.sh \
 ### 认证驱动启动兼容性
 
 正式systemd沿用 `python -m threadsnap.cli serve`，CLI显式固定Uvicorn `loop="asyncio"`；排障手动通过uvicorn直接启动时同样指定 `--loop asyncio`。保持单应用进程，避免运行时自动选择uvloop后，在已持有curl线程资源的父进程fork清理阶段崩溃。原依赖可继续安装，无需卸载uvloop或curl。通过回环HTTP线程样本加真实Patchright/CDP画面和输入验证，平台登录不是此前置条件；上线后再由用户完成真实平台认证。
+
+
+## 固定14天保留与截图存储（2026-09-30）
+
+无新增用户配置。业务保留由应用后台在北京时间03:00后的安全空闲窗口执行，停止后台服务时不运行；按原批次＋补提/補跑链保留14×24小时，文件和DB一起清理，失败按持久意图续清。运维只读预览使用 `threadsnap retention`；`--apply`及`compact-screenshot-storage`仅在HTTP后端已停止、取得同一数据目录OS锁后执行。生产首次启用前需预览并备份过期集合及数据库，核对实际删除/保留分母。
+
+root备份回收使用 `threadsnap-backup-retention.timer`（每日03:30、Persistent），仅清理确认的过期备份并保护current/previous绑定和最近有效恢复点；同版CLI `retention-backups`默认预览，`--apply`由已加载环境的systemd服务执行。应用用户不取得删除root备份的权限，不清理离线安装包。
+
+普通圈子截图改为无框硬链接、有框独立不可变PNG，ZIP首次下载生成。回退旧应用前使用当前版 `materialize-screenshot-packages` 补齐仍保留的懒包；新 `rollback-release.sh` 已在停服后执行相同步骤。新包元数据固定、原子发布，历史PNG/ZIP不改写。恢复演练需覆盖原图路径删除但成果硬链接仍可读，以及原始数据与manifest一致。

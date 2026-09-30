@@ -42,6 +42,7 @@ from .poc.sentiment import (
 )
 from .schemas import ManualSentimentRevisionCreate, SentimentConfigUpdate
 from .session_store import SessionStore
+from .storage_activity import storage_operation
 
 HOSTED_MODEL_CODE = "qwen3.5-omni-plus-2026-03-15"
 DEEPSEEK_MODEL_CODE = "deepseek-v4-flash"
@@ -2027,6 +2028,7 @@ class SentimentWorker:
         with self.rate_limit_lock:
             self.rate_limit_until[account_id] = max(self.rate_limit_until.get(account_id, 0.0), monotonic() + delay)
 
+    @storage_operation(False)
     def process_once(self, slot: int | None = None) -> bool:
         """处理一条任务；未预期异常也必须结束当前运行态并留下诊断。"""
 

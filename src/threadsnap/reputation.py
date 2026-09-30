@@ -416,6 +416,8 @@ class ReputationService:
         self.settings = settings
         self.session_store = session_store
         self.event_publisher = event_publisher
+        # 删除 API、保留清理与失败续清共享同一串行入口，避免重复搬运隔离文件。
+        self._delete_lock = threading.RLock()
         # adapter_factory 是既有测试注入口，仅覆盖懂车帝；其他平台始终按注册表解析。
         self.adapter_factories = {
             code: spec.adapter_factory for code, spec in REPUTATION_PLATFORMS.items()
@@ -2250,19 +2252,31 @@ class ReputationService:
                 else None,
             }
 
-    def delete_official(self, run_id: str) -> dict[str, Any]:
+    def delete_official(self, run_id: str, *, allow_non_scheduled: bool = False) -> dict[str, Any]:
+        """人工入口保持正式批次边界；内部保留入口可清理真实验收和隔离测试历史。"""
+        with self._delete_lock:
+            return self._delete_official(run_id, allow_non_scheduled=allow_non_scheduled)
+
+    def _delete_official(self, run_id: str, *, allow_non_scheduled: bool) -> dict[str, Any]:
         """按关联链执行同盘隔离、数据库提交和墓碑写入。"""
 
         now = datetime.now(timezone.utc)
+        resume_job = None
         with self.sessions() as db:
             selected = db.get(ReputationRun, run_id)
             if not selected:
+                old_job = db.scalar(select(ReputationDeleteJob).where(
+                    ReputationDeleteJob.root_run_id == run_id
+                ))
+                if old_job and old_job.status in {"success", "storage_cleanup_pending"}:
+                    return self.retry_delete_cleanup(old_job.id)
                 raise DomainError(
                     "REPUTATION_RUN_NOT_FOUND", "口碑巡检运行不存在。", status_code=404
                 )
             root_id = selected.root_run_id or selected.id
             root_run = db.get(ReputationRun, root_id)
-            if not root_run or root_run.source_type != "scheduled":
+            allowed_types = {"scheduled", "real_acceptance", "synthetic"} if allow_non_scheduled else {"scheduled"}
+            if not root_run or root_run.source_type not in allowed_types:
                 raise DomainError(
                     "REPUTATION_DELETE_FORBIDDEN", "只有终态每日正式巡检批次可以整体删除。"
                 )
@@ -2275,12 +2289,19 @@ class ReputationService:
                 select(ReputationDeleteJob).where(ReputationDeleteJob.idempotency_key == job_key)
             )
             if existing:
-                return self._delete_job_dict(existing)
+                if existing.status in {"success", "storage_cleanup_pending"}:
+                    return self.retry_delete_cleanup(existing.id)
+                resume_job = existing
             chain = db.scalars(
                 select(ReputationRun).where(
                     or_(ReputationRun.id == root_id, ReputationRun.root_run_id == root_id)
                 )
             ).all()
+            if any(item.status not in {"success", "partial_success", "failed"}
+                   or item.report_status == "generating" for item in chain):
+                raise DomainError(
+                    "REPUTATION_DELETE_CHAIN_BUSY", "关联补跑或报告仍在进行，暂不能删除。", status_code=409
+                )
             result_rows = db.scalars(
                 select(ReputationResult).where(
                     ReputationResult.run_id.in_([item.id for item in chain])
@@ -2307,12 +2328,29 @@ class ReputationService:
             idempotency_key = root_run.idempotency_key or (
                 f"reputation:{planned_date}:{schedule_type}"
             )
+            scheduled = root_run.source_type == "scheduled"
 
         storage_root = self.settings.reputation_dir.resolve()
+        data_root = self.settings.data_dir.resolve()
+        if storage_root == data_root or not storage_root.is_relative_to(data_root):
+            raise ValueError("口碑清理根目录越界。")
+        if resume_job:
+            self._restore_delete_files(resume_job)
         files: list[Path] = []
+        directories: list[Path] = []
         for chain_id in chain_ids:
-            directory = (self.settings.reputation_dir / chain_id).resolve()
-            if directory.is_relative_to(storage_root) and directory.is_dir():
+            if Path(chain_id).name != chain_id or chain_id in {".", ".."}:
+                raise ValueError("口碑清理身份不是安全目录名。")
+            original_directory = self.settings.reputation_dir / chain_id
+            directory = original_directory.resolve()
+            if (original_directory.is_symlink() or directory != storage_root / chain_id
+                    or directory == storage_root or not directory.is_relative_to(storage_root)):
+                raise ValueError("口碑清理目录越界。")
+            if directory.is_dir():
+                directories.append(directory)
+                for child in directory.rglob("*"):
+                    if child.is_symlink() or not child.resolve().is_relative_to(directory):
+                        raise ValueError("口碑清理目录含越界链接。")
                 files.extend(path for path in directory.rglob("*") if path.is_file())
         manifest = [
             {
@@ -2323,11 +2361,20 @@ class ReputationService:
             }
             for path in sorted(set(files))
         ]
-        job_id = uuid7()
+        # 目录项使空目录和异常退出后的原目录也有持久清理归属。
+        manifest.extend({"path": str(path), "relative_path": path.relative_to(storage_root).as_posix(),
+                         "directory": True, "size": 0} for path in directories)
+        job_id = resume_job.id if resume_job else uuid7()
         quarantine = storage_root / ".quarantine" / job_id
         with self.sessions.begin() as db:
-            db.add(
-                ReputationDeleteJob(
+            if resume_job:
+                job = db.get(ReputationDeleteJob, job_id)
+                job.status = "deleting"
+                job.manifest = manifest
+                job.error_message = None
+                job.updated_at = now
+            else:
+                db.add(ReputationDeleteJob(
                     id=job_id,
                     root_run_id=root_id,
                     idempotency_key=job_key,
@@ -2336,12 +2383,13 @@ class ReputationService:
                     quarantine_path=str(quarantine),
                     created_at=now,
                     updated_at=now,
-                )
-            )
+                ))
 
         moved: list[tuple[Path, Path]] = []
         try:
             for item in manifest:
+                if item.get("directory"):
+                    continue
                 source = Path(item["path"]).resolve()
                 if not source.is_relative_to(storage_root) or _sha256(source) != item["sha256"]:
                     raise RuntimeError(f"删除清单校验失败：{item['relative_path']}")
@@ -2365,23 +2413,24 @@ class ReputationService:
         try:
             with self.sessions.begin() as db:
                 db.execute(delete(ReputationRun).where(ReputationRun.id.in_(chain_ids)))
-                db.add(
-                    ReputationTombstone(
-                        planned_date=planned_date,
-                        run_type=schedule_type,
-                        idempotency_key=idempotency_key,
-                        original_run_id=root_id,
-                        result_hash=result_hash,
-                        deleted_at=datetime.now(timezone.utc),
+                if scheduled:
+                    db.add(
+                        ReputationTombstone(
+                            planned_date=planned_date,
+                            run_type=schedule_type,
+                            idempotency_key=idempotency_key,
+                            original_run_id=root_id,
+                            result_hash=result_hash,
+                            deleted_at=datetime.now(timezone.utc),
+                        )
                     )
-                )
                 event = db.scalar(
                     select(ReputationScheduleEvent).where(
                         ReputationScheduleEvent.planned_date == planned_date,
                         ReputationScheduleEvent.run_type == schedule_type,
                     )
                 )
-                if event:
+                if scheduled and event:
                     event.status = "deleted"
                     event.message = "正式口碑巡检关联链已删除，日期幂等身份由墓碑保留。"
                     event.run_id = None
@@ -2402,22 +2451,7 @@ class ReputationService:
                     job.updated_at = datetime.now(timezone.utc)
             return self.get_delete_job(job_id)
 
-        cleanup_error = None
-        try:
-            if quarantine.exists():
-                shutil.rmtree(quarantine)
-            for chain_id in chain_ids:
-                shutil.rmtree(storage_root / chain_id, ignore_errors=True)
-        except Exception as error:
-            cleanup_error = str(error)
-        with self.sessions.begin() as db:
-            job = db.get(ReputationDeleteJob, job_id)
-            if job:
-                job.status = "storage_cleanup_pending" if cleanup_error else "success"
-                job.error_message = cleanup_error
-                job.updated_at = datetime.now(timezone.utc)
-                job.completed_at = None if cleanup_error else datetime.now(timezone.utc)
-        return self.get_delete_job(job_id)
+        return self.retry_delete_cleanup(job_id)
 
     def get_delete_job(self, job_id: str) -> dict[str, Any]:
         with self.sessions() as db:
@@ -2429,7 +2463,11 @@ class ReputationService:
             return self._delete_job_dict(job)
 
     def retry_delete_cleanup(self, job_id: str) -> dict[str, Any]:
-        """重试数据库提交后尚未完成的隔离区清理。"""
+        """恢复搬运中断或已提交清理；同一作业重复调用保持幂等。"""
+        with self._delete_lock:
+            return self._retry_delete_cleanup(job_id)
+
+    def _retry_delete_cleanup(self, job_id: str) -> dict[str, Any]:
 
         with self.sessions() as db:
             job = db.get(ReputationDeleteJob, job_id)
@@ -2439,16 +2477,31 @@ class ReputationService:
                 )
             if job.status == "success":
                 return self._delete_job_dict(job)
+            if job.status in {"deleting", "delete_failed"}:
+                return self.delete_official(job.root_run_id, allow_non_scheduled=True)
             if job.status != "storage_cleanup_pending":
                 raise DomainError(
                     "REPUTATION_DELETE_RETRY_NOT_READY",
                     "该删除作业不处于存储清理待重试状态。",
                     status_code=409,
                 )
-            quarantine = Path(job.quarantine_path)
+            quarantine, directories = self._delete_job_paths(job)
+            if db.scalar(select(ReputationRun.id).where(
+                ReputationRun.id.in_([directory.name for directory in directories])
+            ).limit(1)):
+                raise DomainError(
+                    "REPUTATION_DELETE_NOT_COMMITTED", "关联链仍有数据库记录，不能回收隔离文件。"
+                )
         try:
             if quarantine.exists():
                 shutil.rmtree(quarantine)
+            # 已搬运原目录应为空；意外出现新文件时不得静默删除。
+            for directory in directories:
+                if directory.exists():
+                    for child in sorted(directory.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+                        if child.is_dir():
+                            child.rmdir()
+                    directory.rmdir()
         except Exception as error:
             with self.sessions.begin() as db:
                 job = db.get(ReputationDeleteJob, job_id)
@@ -2463,13 +2516,60 @@ class ReputationService:
             job.completed_at = datetime.now(timezone.utc)
         return self.get_delete_job(job_id)
 
+    def _delete_job_paths(self, job: ReputationDeleteJob) -> tuple[Path, list[Path]]:
+        """从作业身份约束隔离区及原目录，拒绝数据库中越界或链接路径。"""
+        root = self.settings.reputation_dir.resolve()
+        data = self.settings.data_dir.resolve()
+        if root == data or not root.is_relative_to(data) or Path(job.id).name != job.id:
+            raise ValueError("口碑删除根目录或作业身份不安全。")
+        quarantine = root / ".quarantine" / job.id
+        if Path(job.quarantine_path).resolve() != quarantine or quarantine.is_symlink():
+            raise ValueError("口碑隔离区路径越界。")
+        directories = {root / job.root_run_id}
+        for item in job.manifest:
+            relative = Path(item["relative_path"])
+            source = Path(item["path"])
+            if relative.is_absolute() or ".." in relative.parts or not relative.parts:
+                raise ValueError("口碑删除清单路径越界。")
+            if relative.parts[0].startswith(".") or source.resolve() != (root / relative):
+                raise ValueError("口碑删除清单归属不一致。")
+            directories.add(root / relative.parts[0])
+        for directory in [quarantine, *directories]:
+            if directory == root or not directory.resolve().is_relative_to(root) or directory.is_symlink():
+                raise ValueError("口碑删除目录越界。")
+            if directory.exists() and any(
+                child.is_symlink() or not child.resolve().is_relative_to(directory)
+                for child in directory.rglob("*")
+            ):
+                raise ValueError("口碑删除目录含链接。")
+        return quarantine, sorted(directories)
+
+    def _restore_delete_files(self, job: ReputationDeleteJob) -> None:
+        """数据库尚未删除时先恢复隔离文件，再基于当前整链重新建立意图。"""
+        quarantine, _directories = self._delete_job_paths(job)
+        for item in job.manifest:
+            if item.get("directory"):
+                continue
+            source = Path(item["path"])
+            saved = quarantine / item["relative_path"]
+            if source.exists():
+                if _sha256(source) != item["sha256"]:
+                    raise ValueError("恢复删除作业时原文件校验失败。")
+            elif saved.is_file() and _sha256(saved) == item["sha256"]:
+                source.parent.mkdir(parents=True, exist_ok=True)
+                saved.replace(source)
+            else:
+                raise ValueError("恢复删除作业缺少已冻结文件。")
+        if quarantine.exists():
+            shutil.rmtree(quarantine)
+
     @staticmethod
     def _delete_job_dict(job: ReputationDeleteJob) -> dict[str, Any]:
         return {
             "id": job.id,
             "root_run_id": job.root_run_id,
             "status": job.status,
-            "file_count": len(job.manifest),
+            "file_count": sum(not item.get("directory") for item in job.manifest),
             "error_message": job.error_message,
             "created_at": job.created_at.isoformat(),
             "updated_at": job.updated_at.isoformat(),

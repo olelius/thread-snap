@@ -29,6 +29,7 @@ from .models import (
     ScheduleEvent,
     ScheduleNode,
     ScheduleNodeRule,
+    ScreenshotArtifactContribution,
     ScreenshotArtifactGroup,
     ValidationJob,
     Vehicle,
@@ -1963,6 +1964,31 @@ class RunService:
             ]
             db.delete(run)
             return paths
+
+    def delete_chain(self, run_ids: list[str], group_ids: list[str]) -> None:
+        """保留清理持有维护权后整链提交；文件由先行持久化的清单负责回收。"""
+
+        ids = set(run_ids)
+        if not ids:
+            raise ValueError("不能提交空的保留清理关联链。")
+        with self.factory.begin() as db:
+            rows = list(db.scalars(select(ExtractionRun).where(ExtractionRun.id.in_(ids))))
+            if len(rows) != len(ids) or any(
+                row.status not in TERMINAL_STATUSES or row.finished_at is None for row in rows
+            ):
+                raise DomainError("RETENTION_CHAIN_CHANGED", "关联链状态已变化，稍后重新核对。")
+            if set(related_run_ids(db, rows[0].id)) != ids:
+                raise DomainError("RETENTION_CHAIN_CHANGED", "关联链成员已变化，不能局部过期。")
+            if db.scalar(select(ScreenshotArtifactContribution.id).where(
+                ScreenshotArtifactContribution.group_id.in_(group_ids),
+                ScreenshotArtifactContribution.run_id.not_in(ids),
+            ).limit(1)):
+                raise DomainError("RETENTION_SHARED_ARTIFACT", "截图成果仍有保留批次引用。")
+            # 最后统一删除成果组，不逐贡献重建临时成果，也不遗留 SET NULL 的子链。
+            db.execute(delete(ExtractionRun).where(ExtractionRun.id.in_(ids)))
+            db.execute(delete(ScreenshotArtifactGroup).where(
+                ScreenshotArtifactGroup.id.in_(group_ids)
+            ))
 
     @staticmethod
     def _ranked_posts(

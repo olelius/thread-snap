@@ -2,8 +2,8 @@
 
 ## 2026-09-30 — 截图无损存储优化与固定14天保留
 **目标/基线**：按用户明确要求，不提供配置，帖子与口碑关联链默认14天；优化无框PNG与ZIP而不改变红框。fetch后的main为3b85d7e，复用已关闭部署工作树H:/ThreadSnap-deploy-runs-refresh并建立feat/storage-retention；H:/ThreadSnap原混合脏分支及其他未相关任务不动。
-**状态/证据**：范围与ADR0074、产品/技术/相关链档已同步；只读切片确认当前无框copyfile、普通ZIP预生成、普通批次单项删除与口碑子批次安全门缺口。此前远端故障已独立修复，本轮从新功能基线实现。
-**下一步**：截图和保留两个独立写目标隔离worktree实现，主线程负责生命周期门、API/后台接入、运维备份、组合验收及部署；定向回归、真实保留副本/截图像素及最终生产验收后更新本条。
+**状态/证据**：实现与Windows组合门已通过，待Linux/生产验收。截图13项既有＋17项新增、保留20项新增＋1项既有口碑生命周期、主线程租约5项和备份7项、部署静态12项通过；真实汽车之家1425×6111/30项/2红框新旧PNG逐字节相同，5源文件哈希不变。真实FastAPI/SQLite/磁盘组合确认首/末HTTP body及4后台入口在途阻止清理，释放后整链删除、保留9文件及冻结基线不变、旧资源404、重试幂等；组合发现并修正纯ASGI租约必须位于request-id BaseHTTP外侧。证据位于H:/ThreadSnap-runs-refresh-core/artifacts/runtime/screenshot-storage/{receipt.md,real-page/result.json,api-01a0f1f7-9d58-7565-a017-71f8075f1008/result.json}及H:/ThreadSnap-runs-query-core/artifacts/runtime/data-retention/receipt.md。另已固化真实FileResponse首/末块及跨进程维护锁的集成回归1项（2.290秒），运维备份/恢复/清理共锁、旧版回退先补ZIP。无新依赖或数据库迁移；TypeScript/Vite生产构建、Ruff及compileall通过。
+**下一步**：关闭root备份/回退脚本的目标Linux门；生产只读预览与一致性/文件备份后做最小更新，验证14天删除/保留集合、存量PNG共享、公网懒ZIP和后台日程，再完成PR与分支收尾。主线程独占部署与文档；两子工作树代码已整合但未提交，各回执门不机械重跑。
 **边界**：不增加保留配置、不重采历史、不改红框算法或当前平台并发，不把历史来源ID当作无限保留依赖。生产自动过期先备份并只读预览，保留在途业务、有效配置、冻结基线和恢复所需备份。
 
 ---

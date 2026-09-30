@@ -1,0 +1,10 @@
+[Unit]
+Description=ThreadSnap daily fixed backup retention
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 Asia/Shanghai
+Persistent=true
+Unit=threadsnap-backup-retention.service
+
+[Install]
+WantedBy=timers.target

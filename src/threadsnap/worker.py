@@ -33,6 +33,7 @@ from .screenshots import ScreenshotService
 from .sentiment import SentimentService, deduplicate_media_urls
 from .services import aggregate_run, related_run_ids
 from .session_store import SessionStore
+from .storage_activity import storage_operation
 
 NETWORK_RETRYABLE_FAILURE_CODE = "PLATFORM_NETWORK_ERROR"
 RATE_LIMIT_RETRYABLE_FAILURE_CODE = "PLATFORM_RATE_LIMITED"
@@ -302,6 +303,7 @@ class WorkerService:
             if not progressed:
                 self.stop_event.wait(self.poll_seconds)
 
+    @storage_operation(False)
     def process_once(self) -> bool:
         if not self._official_reputation_waiting() and self._process_validation_job():
             return True

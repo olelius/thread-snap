@@ -81,7 +81,7 @@ export function ReputationPage() {
     <div className='flex h-full min-h-0 flex-col gap-4'>
       <PageHeader
         title='口碑巡检'
-        description='独立管理垂媒车型口碑分、排名、页面证据与定时汇报，不与帖子提取批次混合。'
+        description='独立管理车型口碑与页面证据；关联批次完成后默认保留14天，到期自动清理。'
         eyebrow={<div className='mb-1 flex items-center gap-2 text-xs font-semibold tracking-[0.18em] text-primary uppercase'><ChartNoAxesCombined className='size-3.5' /> Reputation intelligence</div>}
         actions={<>
           <Button variant='outline' size='sm' onClick={() => { runs.refetch(); scope.refetch(); capabilities.refetch(); schedule.refetch() }}><RefreshCw className={`size-4 ${runs.isFetching ? 'animate-spin' : ''}`} />刷新</Button>

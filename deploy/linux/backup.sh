@@ -6,6 +6,10 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 2
 fi
 
+# 与固定保留任务互斥，正在备份或恢复时不能移除恢复点。
+exec 9>/run/lock/threadsnap-backup-maintenance.lock
+flock -x 9
+
 ENV_FILE="/etc/threadsnap/threadsnap.env"
 [[ -f "$ENV_FILE" ]] || { echo "ERROR: missing $ENV_FILE" >&2; exit 3; }
 DATA_DIR="$(sed -n 's/^THREADSNAP_DATA_DIR=//p' "$ENV_FILE" | tail -n 1)"

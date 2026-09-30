@@ -5,6 +5,10 @@ if [[ "$(id -u)" -ne 0 ]]; then
   echo "ERROR: run with sudo/root" >&2
   exit 2
 fi
+
+# 与固定保留任务互斥，正在备份或恢复时不能移除恢复点。
+exec 9>/run/lock/threadsnap-backup-maintenance.lock
+flock -x 9
 if [[ $# -ne 2 || "$2" != "--confirm" ]]; then
   echo "Usage: sudo bash deploy/restore-backup.sh BACKUP.tar.gz --confirm" >&2
   exit 2
