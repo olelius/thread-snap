@@ -14,10 +14,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
-import test_screenshots as screenshot_fixtures
 from PIL import Image, ImageDraw
 from sqlalchemy import select
 
+from tests import test_screenshots as screenshot_fixtures
 from threadsnap.errors import DomainError
 from threadsnap.models import (
     CirclePageEvidence,
