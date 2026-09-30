@@ -7,7 +7,8 @@
 **载荷**：已审核运维扩展型增量包绑定c00863a→afd7606，1,211,760字节，SHA256 `61c9b4aaeeef7049d8a0f15631691afd82f92dd654691a0e203cfb6bda5407f3`；86项应用资源逐字节等于Git，95项载荷全覆盖校验，59项前端来自已验收构建，6项部署文件差异明确列出，运行依赖不变，此为索引追加前旧载荷，不能直接部署。构建复用原缓存setuptools84隔离环境，未改共享解释器。证据H:/ThreadSnap-deploy-runs-refresh/artifacts/runtime/storage-retention-20260930/{package-result.json,linux_retention_preview.result.json,linux_backup_gate.result.json,linux_backup_roundtrip_final.result.json}。
 **性能追加**：真实生产一致性副本127333帖/353204评论/111934舆情/120399成果项，1000帖链无索引15秒中断且回滚；6索引创建0.893秒，同链删除0.131秒、FK检查空。基于实测追加d9e4b7a2c601纯索引迁移，6项定向测试覆盖整库DDL/业务行/外键升降级不变、EXPLAIN左前缀、半DDL重试与冲突拒绝、真实CASCADE/SET NULL及offline SQL；Ruff/compile通过。不改业务行，旧wheel回退已整合：仅d9e4→f3允许，未知版本拒绝；SQLite显式事务防半DDL，失败恢复新版索引且不回写旧DB，6项定向测试与静态检查通过；证据`artifacts/runtime/storage-retention-20260930/deletion_benchmark.result.json`。
 **真实现场追加**：已完整备份23217文件/34464207629字节及一致性DB。首轮150链成功、3链因root产物权限失败，自动恢复DB/文件和旧版，恢复文件全量SHA吻合；精确3口碑根325项属主修正后第二轮又发现2个manual-demo历史记录source_type错标scheduled，日期墓碑冲突，再次自动完整回退，新版写入均未开放。源码已补正式日程身份归属门，不改历史记录；6项定向生命周期测试与独立guard2项通过，Ruff/compile通过；完整生产reflink隔离副本已准备`/home/threadsnap-retention-validation-20260930`，先过全部153链与保留文件门，再复用有效备份上线。现场与两次回退证据`artifacts/runtime/storage-retention-20260930/`；325项只改owner，不改模式/字节或root备份。
-**下一步**：整合口碑日程身份修复，完整真实副本删除/保留对账通过后重建载荷再上线；PR329当前draft，未合并。
+**副本与端口门**：完整真实reflink副本已在业务UID/PrivateNetwork下通过153链/161批、39表独立预期、14636保留文件逐项SHA、553PNG共享（949400245逻辑字节）、重复清理无操作，229.385秒。正式第三轮同样通过删除/保留集合，但安装器漏传8088使verify默认探80而误失败，再次保护性恢复；正确8088/Host _命令已实测全通过。restore/rollback新增停服前从实际Nginx配置核对唯一端口并显式传参，4项Bash参数/歧义门测试及语法通过；业务源码不再变化，复用全副本证据。
+**下一步**：使用正确端口完成最后上线与公网验收，然后PR329合并收尾。
 **边界**：不增加保留配置、不重采历史、不改红框算法或当前平台并发，不把历史来源ID当作无限保留依赖。生产自动过期先备份并只读预览，保留在途业务、有效配置、冻结基线和恢复所需备份。
 
 ---

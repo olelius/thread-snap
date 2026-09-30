@@ -14,6 +14,36 @@ if [[ $# -ne 2 || "$2" != "--confirm" ]]; then
   exit 2
 fi
 
+# 停服前从已安装的单server配置读取端口；绝不默认80探测其它业务。
+LISTEN_PORT="$(python3 - /etc/threadsnap/nginx-site.conf <<'PORT_PY'
+import re
+import sys
+from pathlib import Path
+
+try:
+    source = Path(sys.argv[1]).read_text(encoding="utf-8-sig")
+except (OSError, UnicodeError) as error:
+    raise SystemExit("ERROR: cannot read installed Nginx site configuration") from error
+source = re.sub(r"#.*$", "", source, flags=re.MULTILINE)
+directives = re.findall(r"\blisten\s+([^;{}]+);", source)
+if not directives or len(directives) != len(re.findall(r"\blisten\b", source)):
+    raise SystemExit("ERROR: Nginx listen port is missing or unclear")
+ports = set()
+for directive in directives:
+    endpoint = directive.split()[0]
+    match = re.fullmatch(r"(?:([0-9]+)|(?:127\.0\.0\.1|0\.0\.0\.0|\[::\]):([0-9]+))", endpoint)
+    if not match:
+        raise SystemExit("ERROR: unsupported or implicit Nginx listen port")
+    port = int(match.group(1) or match.group(2))
+    if not 1 <= port <= 65535:
+        raise SystemExit("ERROR: Nginx listen port is out of range")
+    ports.add(port)
+if len(ports) != 1:
+    raise SystemExit("ERROR: Nginx site has multiple different listen ports")
+print(ports.pop())
+PORT_PY
+)"
+
 ARCHIVE="$(readlink -f "$1")"
 [[ -f "$ARCHIVE" ]] || { echo "ERROR: backup archive missing" >&2; exit 3; }
 [[ -f "$ARCHIVE.sha256" ]] || { echo "ERROR: checksum sidecar missing: $ARCHIVE.sha256" >&2; exit 3; }
@@ -245,7 +275,7 @@ for _ in $(seq 1 50); do
 done
 curl --fail --silent http://127.0.0.1:8000/health >/dev/null
 systemctl start threadsnap-nginx.service
-if ! bash /opt/threadsnap/current/deploy/verify.sh --quick; then
+if ! bash /opt/threadsnap/current/deploy/verify.sh --quick --listen-port "$LISTEN_PORT" --server-name _; then
   echo "ERROR: restored backup failed health verification" >&2
   exit 4
 fi

@@ -6,6 +6,36 @@ if [[ "$(id -u)" -ne 0 ]]; then
   exit 2
 fi
 
+# 停服前从已安装的单server配置读取端口；绝不默认80探测其它业务。
+LISTEN_PORT="$(python3 - /etc/threadsnap/nginx-site.conf <<'PORT_PY'
+import re
+import sys
+from pathlib import Path
+
+try:
+    source = Path(sys.argv[1]).read_text(encoding="utf-8-sig")
+except (OSError, UnicodeError) as error:
+    raise SystemExit("ERROR: cannot read installed Nginx site configuration") from error
+source = re.sub(r"#.*$", "", source, flags=re.MULTILINE)
+directives = re.findall(r"\blisten\s+([^;{}]+);", source)
+if not directives or len(directives) != len(re.findall(r"\blisten\b", source)):
+    raise SystemExit("ERROR: Nginx listen port is missing or unclear")
+ports = set()
+for directive in directives:
+    endpoint = directive.split()[0]
+    match = re.fullmatch(r"(?:([0-9]+)|(?:127\.0\.0\.1|0\.0\.0\.0|\[::\]):([0-9]+))", endpoint)
+    if not match:
+        raise SystemExit("ERROR: unsupported or implicit Nginx listen port")
+    port = int(match.group(1) or match.group(2))
+    if not 1 <= port <= 65535:
+        raise SystemExit("ERROR: Nginx listen port is out of range")
+    ports.add(port)
+if len(ports) != 1:
+    raise SystemExit("ERROR: Nginx site has multiple different listen ports")
+print(ports.pop())
+PORT_PY
+)"
+
 APP_ROOT=/opt/threadsnap
 CURRENT="$APP_ROOT/current"
 PREVIOUS="$APP_ROOT/previous"
@@ -221,7 +251,7 @@ for _ in $(seq 1 50); do
 done
 systemctl start threadsnap-nginx.service
 
-if ! bash "$CURRENT/deploy/verify.sh" --quick; then
+if ! bash "$CURRENT/deploy/verify.sh" --quick --listen-port "$LISTEN_PORT" --server-name _; then
   restore_current
 fi
 if "$previous_target/venv/bin/python" -c 'import importlib.util,sys;sys.exit(importlib.util.find_spec("threadsnap.backup_retention") is None)'; then
