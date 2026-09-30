@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from sqlalchemy import func, select, text
@@ -159,7 +160,8 @@ class RetentionTests(unittest.TestCase):
                     schedule_type="daily",
                     planned_date=finish.date().isoformat(),
                     idempotency_key=name,
-                    root_run_id=parent,
+                    # 与正式 _ensure_official_run 相同：根自指，补跑引用正式根。
+                    root_run_id=parent or (name if source == "scheduled" else None),
                     status=status,
                     created_at=finish,
                     started_at=finish,
@@ -446,6 +448,59 @@ class RetentionTests(unittest.TestCase):
         self.assertEqual(self.reputation.delete_official("old-root")["status"], "success")
         self.assertEqual(list((self.settings.reputation_dir / ".quarantine").iterdir()), [])
         self.assertFalse((self.settings.reputation_dir / "retry").exists())
+
+    def test_reputation_self_root_retry_boundary_and_frozen_baseline(self):
+        """真实自指根与补跑归为一链；子ID先排序时也不能误认根或改写保留基线。"""
+        boundary = self.now - timedelta(days=14)
+        self.reputation_run("z-root")
+        self.reputation_run("a-retry", source="retry", parent="z-root", finish=boundary)
+        self.reputation_run("retained", finish=self.now)
+        baseline = {
+            "vehicle|dongchedi": {
+                "metrics": {"score": {"raw": "4.5", "value": "4.5"}},
+                "source_run_id": "a-retry",
+            }
+        }
+        with self.factory.begin() as db:
+            self.assertEqual(db.get(ReputationRun, "z-root").root_run_id, "z-root")
+            retained = db.get(ReputationRun, "retained")
+            retained.baseline_source_run_id = "z-root"
+            retained.baseline_snapshot = baseline
+        self.assertEqual(self.service.preview(self.now - timedelta(microseconds=1))["eligible"], [])
+        eligible = self.service.preview(self.now)["eligible"]
+        self.assertEqual(len(eligible), 1)
+        self.assertEqual(eligible[0]["root_id"], "z-root")
+        self.assertEqual(eligible[0]["run_ids"], ["a-retry", "z-root"])
+        self.assertEqual(eligible[0]["expires_at"], self.now.isoformat())
+        result = self.service.process_once(self.now, force=True)
+        self.assertEqual(result["status"], "complete", result)
+        self.assertEqual(result["completed"], ["z-root"])
+        with self.factory() as db:
+            self.assertEqual(list(db.scalars(select(ReputationRun.id))), ["retained"])
+            self.assertEqual(db.get(ReputationRun, "retained").baseline_snapshot, baseline)
+            self.assertEqual(db.scalar(select(ReputationTombstone.original_run_id)), "z-root")
+            self.assertEqual(db.execute(text("PRAGMA foreign_key_check")).all(), [])
+
+    def test_chain_self_root_exception_does_not_accept_actual_cycles(self):
+        """只允许口碑根的单节点自指；普通自指和两种多节点环继续拒绝。"""
+        for parent_name, parents in (
+            ("related_run_id", {"a": "a"}),
+            ("related_run_id", {"a": "b", "b": "a"}),
+            ("root_run_id", {"a": "b", "b": "a"}),
+        ):
+            with self.subTest(parent_name=parent_name, parents=parents):
+                rows = [
+                    SimpleNamespace(id=key, **{parent_name: value})
+                    for key, value in parents.items()
+                ]
+                with self.assertRaisesRegex(ValueError, "循环"):
+                    RetentionService._chains(rows, parent_name)
+        # 记录返回顺序不构成根身份依据，子批次先于根也应归为同一组。
+        rows = [
+            SimpleNamespace(id="a-retry", root_run_id="z-root"),
+            SimpleNamespace(id="z-root", root_run_id="z-root"),
+        ]
+        self.assertEqual(RetentionService._chains(rows, "root_run_id"), [["a-retry", "z-root"]])
 
     def test_reputation_active_child_or_report_blocks_manual_and_automatic(self):
         self.reputation_run("root")

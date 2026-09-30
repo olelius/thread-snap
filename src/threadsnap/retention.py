@@ -167,6 +167,9 @@ class RetentionService:
             current = row
             seen = {row.id}
             while (parent := getattr(current, parent_name)) in by_id:
+                # 正式口碑创建时把根身份写成自身 ID；普通提取自指仍是损坏的环。
+                if parent_name == "root_run_id" and parent == current.id:
+                    break
                 if parent in seen:
                     raise ValueError("关联链出现循环，禁止自动清理。")
                 seen.add(parent)
@@ -231,7 +234,15 @@ class RetentionService:
         model = ExtractionRun if kind == "extraction" else ReputationRun
         rows = list(db.scalars(select(model).where(model.id.in_(run_ids))))
         parent_name = "related_run_id" if kind == "extraction" else "root_run_id"
-        root = next((row for row in rows if getattr(row, parent_name) not in run_ids), rows[0])
+        root = next(
+            (
+                row
+                for row in rows
+                if getattr(row, parent_name) not in run_ids
+                or (kind == "reputation" and row.root_run_id == row.id)
+            ),
+            rows[0],
+        )
         item = {
             "kind": kind,
             "root_id": root.id,

@@ -177,3 +177,7 @@ sudo bash /opt/threadsnap/current/deploy/restore-backup.sh \
 root备份回收使用 `threadsnap-backup-retention.timer`（每日03:30、Persistent），仅清理确认的过期备份并保护current/previous绑定和最近有效恢复点；同版CLI `retention-backups`默认预览，`--apply`由已加载环境的systemd服务执行。应用用户不取得删除root备份的权限，不清理离线安装包。
 
 普通圈子截图改为无框硬链接、有框独立不可变PNG，ZIP首次下载生成。回退旧应用前使用当前版 `materialize-screenshot-packages` 补齐仍保留的懒包；新 `rollback-release.sh` 已在停服后执行相同步骤。新包元数据固定、原子发布，历史PNG/ZIP不改写。恢复演练需覆盖原图路径删除但成果硬链接仍可读，以及原始数据与manifest一致。
+
+### 7.2 已审核运维脚本扩展型增量包
+
+ADR0074新增备份定时维护与硬链接备份恢复支持，因此不能声称deploy目录与旧版相同。此类包仍绑定唯一已安装基线，但须单独记录所有部署文件差异、逐文件SHA以及目标Linux Bash/systemd和备份恢复验收；Python/前端依赖、迁移、浏览器、模型、RPM及许可证闭包不变时，只更新应用wheel、已验收前端与列出的部署脚本/单元，不运行依赖解析或重装运行环境。完整离线包继续作为基础设施恢复基线。新单元只在验证通过后启用；失败恢复原单元与程序，保留可恢复数据备份。此路径不是7.1所述deploy完全不变的应用最小包。
