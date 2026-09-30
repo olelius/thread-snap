@@ -2325,10 +2325,36 @@ class ReputationService:
                 date.fromisoformat(root_run.planned_date)
             )
             planned_date = root_run.planned_date
-            idempotency_key = root_run.idempotency_key or (
-                f"reputation:{planned_date}:{schedule_type}"
+            idempotency_key = f"reputation:{planned_date}:{schedule_type}"
+            schedule_event = db.scalar(
+                select(ReputationScheduleEvent).where(
+                    ReputationScheduleEvent.planned_date == planned_date,
+                    ReputationScheduleEvent.run_type == schedule_type,
+                )
             )
-            scheduled = root_run.source_type == "scheduled"
+            # 历史manual-demo曾错标scheduled；只有日期幂等身份才能占用日程墓碑。
+            # nullable旧键只有在现有日期事件明确归属于本根时才有正式身份依据。
+            scheduled = root_run.source_type == "scheduled" and (
+                root_run.idempotency_key == idempotency_key
+                or (root_run.idempotency_key is None and schedule_event is not None
+                    and schedule_event.run_id == root_id)
+            )
+            if scheduled:
+                if schedule_event and schedule_event.run_id not in {None, root_id}:
+                    raise DomainError(
+                        "REPUTATION_SCHEDULE_IDENTITY_CONFLICT",
+                        "该日期日程属于其他批次，不能删除其事件或墓碑身份。", status_code=409,
+                    )
+                tombstone = db.scalar(select(ReputationTombstone).where(or_(
+                    (ReputationTombstone.planned_date == planned_date)
+                    & (ReputationTombstone.run_type == schedule_type),
+                    ReputationTombstone.idempotency_key == idempotency_key,
+                )))
+                if tombstone:
+                    raise DomainError(
+                        "REPUTATION_SCHEDULE_IDENTITY_CONFLICT",
+                        "该日期墓碑已存在而批次仍在，请先核对历史身份；不会覆盖旧墓碑。", status_code=409,
+                    )
 
         storage_root = self.settings.reputation_dir.resolve()
         data_root = self.settings.data_dir.resolve()
@@ -2430,7 +2456,12 @@ class ReputationService:
                         ReputationScheduleEvent.run_type == schedule_type,
                     )
                 )
-                if scheduled and event:
+                if scheduled and event and event.run_id not in {None, root_id}:
+                    raise DomainError(
+                        "REPUTATION_SCHEDULE_IDENTITY_CONFLICT",
+                        "删除期间日程归属已变化，已停止删除并恢复文件。", status_code=409,
+                    )
+                if scheduled and event and event.run_id == root_id:
                     event.status = "deleted"
                     event.message = "正式口碑巡检关联链已删除，日期幂等身份由墓碑保留。"
                     event.run_id = None

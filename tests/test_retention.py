@@ -190,9 +190,11 @@ class RetentionTests(unittest.TestCase):
         (directory / "old.png").write_bytes(b"frozen-artifact")
 
     def reputation_run(
-        self, name, *, source="scheduled", parent=None, finish=None, status="success"
+        self, name, *, source="scheduled", parent=None, finish=None, status="success", key=...
     ):
         finish = finish or self.old
+        if key is ...:
+            key = f"reputation:{finish.date().isoformat()}:daily" if source == "scheduled" else name
         with self.factory.begin() as db:
             db.add(
                 ReputationRun(
@@ -202,7 +204,7 @@ class RetentionTests(unittest.TestCase):
                     run_type="daily",
                     schedule_type="daily",
                     planned_date=finish.date().isoformat(),
-                    idempotency_key=name,
+                    idempotency_key=key,
                     # 与正式 _ensure_official_run 相同：根自指，补跑引用正式根。
                     root_run_id=parent or (name if source == "scheduled" else None),
                     status=status,
@@ -558,6 +560,80 @@ class RetentionTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, "关联补跑"):
             self.reputation.delete_official("root")
         self.assertEqual(self.service.preview(self.now)["eligible"], [])
+
+    def test_manual_demo_first_does_not_claim_or_change_real_schedule(self):
+        """错标scheduled的历史演示先删除，真实日程/批次/原文件必须保持。"""
+        self.reputation_run("official")
+        self.reputation_run("manual", key="reputation:manual-demo:manual")
+        with self.factory.begin() as db:
+            db.add(ReputationScheduleEvent(id="event", planned_date=self.old.date().isoformat(),
+                   run_type="daily", planned_at=self.old, run_id="manual", status="success", message="original"))
+        # canonical身份与事件归属冲突时，须在搬运任何文件/创建删除作业前拒绝。
+        with self.assertRaisesRegex(Exception, "其他批次"):
+            self.reputation.delete_official("official")
+        with self.factory.begin() as db:
+            self.assertEqual(db.scalar(select(func.count()).select_from(ReputationDeleteJob)), 0)
+            db.get(ReputationScheduleEvent, "event").run_id = "official"
+        original = (self.settings.reputation_dir / "official/region.png").read_bytes()
+        deleted = self.reputation.delete_official("manual")
+        self.assertEqual(deleted["status"], "success", deleted)
+        with self.factory() as db:
+            self.assertIsNone(db.get(ReputationRun, "manual"))
+            self.assertIsNotNone(db.get(ReputationRun, "official"))
+            event = db.get(ReputationScheduleEvent, "event")
+            self.assertEqual((event.run_id, event.status, event.message), ("official", "success", "original"))
+            self.assertEqual(db.scalar(select(func.count()).select_from(ReputationTombstone)), 0)
+        self.assertEqual((self.settings.reputation_dir / "official/region.png").read_bytes(), original)
+
+    def test_official_first_then_manual_preserves_existing_tombstone_and_event(self):
+        """与生产失败次序一致：正式先形成日期墓碑，随后演示只走自身删除审计。"""
+        self.reputation_run("official")
+        self.reputation_run("manual", key="reputation:manual-demo:manual")
+        with self.factory.begin() as db:
+            db.add(ReputationScheduleEvent(id="event", planned_date=self.old.date().isoformat(),
+                   run_type="daily", planned_at=self.old, run_id="official", status="success", message="original"))
+        self.assertEqual(self.reputation.delete_official("official")["status"], "success")
+        with self.factory() as db:
+            tombstone = db.scalar(select(ReputationTombstone))
+            original = (tombstone.id, tombstone.original_run_id, tombstone.idempotency_key,
+                        tombstone.result_hash, tombstone.deleted_at)
+            event = db.get(ReputationScheduleEvent, "event")
+            event_before = (event.run_id, event.status, event.message)
+        deleted = self.reputation.delete_official("manual")
+        self.assertEqual(deleted["status"], "success", deleted)
+        with self.factory() as db:
+            tombstone = db.scalar(select(ReputationTombstone))
+            self.assertEqual((tombstone.id, tombstone.original_run_id, tombstone.idempotency_key,
+                              tombstone.result_hash, tombstone.deleted_at), original)
+            event = db.get(ReputationScheduleEvent, "event")
+            self.assertEqual((event.run_id, event.status, event.message), event_before)
+            self.assertEqual(db.scalar(select(func.count()).select_from(ReputationDeleteJob)), 2)
+            self.assertEqual(db.scalar(select(func.count()).select_from(ReputationRun)), 0)
+            self.assertEqual(db.execute(text("PRAGMA foreign_key_check")).all(), [])
+
+    def test_null_key_requires_own_event_and_existing_tombstone_is_not_overwritten(self):
+        """旧空key必须有事件归属证明；无证明者不占日期，矛盾canonical行预先阻断。"""
+        self.reputation_run("legacy", key=None)
+        with self.factory.begin() as db:
+            db.add(ReputationScheduleEvent(id="event", planned_date=self.old.date().isoformat(),
+                   run_type="daily", planned_at=self.old, run_id="legacy", status="success", message="original"))
+        self.assertEqual(self.reputation.delete_official("legacy")["status"], "success")
+        with self.factory() as db:
+            stone = db.scalar(select(ReputationTombstone))
+            stone_id, frozen_hash = stone.id, stone.result_hash
+            self.assertEqual(stone.idempotency_key, f"reputation:{self.old.date().isoformat()}:daily")
+        self.reputation_run("unproven", key=None)
+        self.assertEqual(self.reputation.delete_official("unproven")["status"], "success")
+        self.reputation_run("conflicting-canonical")
+        with self.assertRaisesRegex(Exception, "墓碑已存在"):
+            self.reputation.delete_official("conflicting-canonical")
+        with self.factory() as db:
+            stone = db.scalar(select(ReputationTombstone))
+            self.assertEqual((stone.id, stone.result_hash, stone.original_run_id), (stone_id, frozen_hash, "legacy"))
+            self.assertEqual(db.scalar(select(func.count()).select_from(ReputationTombstone)), 1)
+            self.assertIsNotNone(db.get(ReputationRun, "conflicting-canonical"))
+            self.assertEqual(db.scalar(select(func.count()).select_from(ReputationDeleteJob)), 2)
+        self.assertTrue((self.settings.reputation_dir / "conflicting-canonical/region.png").is_file())
 
     def test_reputation_cleanup_failure_and_repeat_retry(self):
         self.reputation_run("root")
