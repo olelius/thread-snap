@@ -35,8 +35,12 @@ def _files(path: Path) -> list[Path]:
 def _validated(path: Path, kind: str) -> bool:
     """SQLite恢复点执行quick_check，归档必须有匹配的SHA-256侧车。"""
     if kind == "sqlite":
+        database = path / "threadsnap.db"
+        wal = Path(str(database) + "-wal")
+        if wal.exists() and wal.stat().st_size:
+            return False  # 尚依赖在途WAL的目录不是已冻结的单文件恢复点。
         with closing(sqlite3.connect(
-            (path / "threadsnap.db").as_uri() + "?mode=ro", uri=True
+            database.as_uri() + "?mode=ro&immutable=1", uri=True
         )) as db:
             db.execute("PRAGMA query_only=ON")
             return db.execute("PRAGMA quick_check").fetchone()[0] == "ok"

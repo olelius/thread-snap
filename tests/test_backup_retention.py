@@ -110,6 +110,20 @@ class BackupRetentionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.run_policy(True)
 
+    def test_sqlite_validation_does_not_create_wal_or_touch_frozen_backup(self):
+        from threadsnap.backup_retention import _validated
+
+        group = self.database("wal-mode", 20)
+        path = group / "threadsnap.db"
+        with closing(sqlite3.connect(path)) as db:
+            self.assertEqual("wal", db.execute("PRAGMA journal_mode=WAL").fetchone()[0])
+        before = {p.name: (p.stat().st_size, p.stat().st_mtime_ns) for p in group.iterdir()}
+        self.assertTrue(_validated(group, "sqlite"))
+        after = {p.name: (p.stat().st_size, p.stat().st_mtime_ns) for p in group.iterdir()}
+        self.assertEqual(before, after)
+        Path(str(path) + "-wal").write_bytes(b"pending")
+        self.assertFalse(_validated(group, "sqlite"))
+
     def test_process_lock_rejects_second_holder_then_releases(self):
         path = self.root / "application.lock"
         with StorageProcessLock(path):
