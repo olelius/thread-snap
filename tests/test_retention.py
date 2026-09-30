@@ -75,6 +75,49 @@ class RetentionTests(unittest.TestCase):
             event_publisher=lambda *args: self.events.append(args),
         )
 
+    def test_expired_reuse_origins_do_not_change_retained_sentiment_or_image(self):
+        """来源引用可置空，但保留批次的AI/人工结论和既有成果文件必须独立成立。"""
+        self.extraction("origin")
+        recent = self.now - timedelta(days=1)
+        self.extraction("kept", finish=recent)
+        self.group("kept-group", ["kept"])
+        picture = self.settings.screenshot_artifact_dir / "kept-group/old.png"
+        before = picture.read_bytes()
+        with self.factory.begin() as db:
+            for name, moment in (("origin", self.old), ("kept", recent)):
+                post = db.get(PostSnapshot, f"post-{name}")
+                post.analysis_status = "analysis_completed"
+                post.sentiment_result = "negative"
+                post.sentiment_source = "inherited_manual" if name == "kept" else "manual"
+                post.sentiment_updated_at = moment
+                db.add(SentimentAnalysis(
+                    id=f"ai-{name}", post_id=post.id, platform_code="dongchedi",
+                    platform_post_id="same-post", input_hash="a" * 64,
+                    status="analysis_completed", config_revision=1, subject_version=1,
+                    model_code="test", result="negative", summary="冻结负面结论",
+                    created_at=moment, finished_at=moment,
+                ))
+                db.add(ManualSentimentRevision(
+                    id=f"manual-{name}", post_id=post.id, action="set", result="negative",
+                    note="冻结人工结论", created_at=moment,
+                ))
+            db.flush()
+            db.get(SentimentAnalysis, "ai-kept").reused_from_analysis_id = "ai-origin"
+            db.get(ManualSentimentRevision, "manual-kept").inherited_from_revision_id = "manual-origin"
+        outcome = self.service.process_once(self.now, force=True)
+        self.assertEqual(["origin"], outcome["completed"])
+        with self.factory() as db:
+            post = db.get(PostSnapshot, "post-kept")
+            self.assertEqual(("negative", "inherited_manual"),
+                             (post.sentiment_result, post.sentiment_source))
+            analysis = db.get(SentimentAnalysis, "ai-kept")
+            self.assertEqual(("negative", "冻结负面结论"), (analysis.result, analysis.summary))
+            self.assertIsNone(analysis.reused_from_analysis_id)
+            manual = db.get(ManualSentimentRevision, "manual-kept")
+            self.assertEqual(("negative", "冻结人工结论"), (manual.result, manual.note))
+            self.assertIsNone(manual.inherited_from_revision_id)
+        self.assertEqual(before, picture.read_bytes())
+
     def extraction(self, name, *, finish=None, parent=None, status="success"):
         finish = finish or self.old
         with self.factory.begin() as db:
