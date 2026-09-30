@@ -1,0 +1,15 @@
+[Unit]
+Description=ThreadSnap fixed fourteen-day backup retention
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/threadsnap/current
+EnvironmentFile=/etc/threadsnap/threadsnap.env
+UMask=0077
+PrivateTmp=true
+PrivateNetwork=true
+NoNewPrivileges=true
+ExecStart=/opt/threadsnap/current/venv/bin/python -m threadsnap.cli retention-backups --apply
+TimeoutStartSec=10min

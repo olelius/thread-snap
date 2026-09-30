@@ -283,7 +283,10 @@ class CircleTask(Base):
 
 class PostSnapshot(Base):
     __tablename__ = "post_snapshots"
-    __table_args__ = (UniqueConstraint("circle_task_id", "platform_post_id", name="uq_task_post"),)
+    __table_args__ = (
+        UniqueConstraint("circle_task_id", "platform_post_id", name="uq_task_post"),
+        Index("ix_post_snapshots_run", "run_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
     run_id: Mapped[str] = mapped_column(
@@ -365,6 +368,7 @@ class CirclePageEvidenceItem(Base):
     __table_args__ = (
         UniqueConstraint("evidence_id", "platform_post_id", name="uq_evidence_post"),
         Index("ix_evidence_item_task_post", "circle_task_id", "platform_post_id"),
+        Index("ix_evidence_item_post_snapshot", "post_snapshot_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
@@ -489,6 +493,7 @@ class ScreenshotArtifactItem(Base):
     __tablename__ = "screenshot_artifact_items"
     __table_args__ = (
         UniqueConstraint("version_id", "platform_post_id", name="uq_version_artifact_post"),
+        Index("ix_artifact_item_post_snapshot", "post_snapshot_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
@@ -549,6 +554,7 @@ class SentimentAnalysis(Base):
         Index("ix_sentiment_analysis_queue", "status", "created_at"),
         Index("ix_sentiment_analysis_identity", "platform_code", "platform_post_id", "input_hash"),
         Index("ix_sentiment_analysis_account_queue", "account_id", "status", "created_at"),
+        Index("ix_sentiment_analysis_reused_from", "reused_from_analysis_id"),
     )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
@@ -595,7 +601,10 @@ class ManualSentimentRevision(Base):
     """人工修订追加历史；恢复 AI 也以事件记录而非删除历史。"""
 
     __tablename__ = "manual_sentiment_revisions"
-    __table_args__ = (Index("ix_manual_sentiment_post_created", "post_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_manual_sentiment_post_created", "post_id", "created_at"),
+        Index("ix_manual_sentiment_inherited_from", "inherited_from_revision_id"),
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
     post_id: Mapped[str] = mapped_column(
@@ -614,6 +623,7 @@ class ManualSentimentRevision(Base):
 
 class CommentSnapshot(Base):
     __tablename__ = "comment_snapshots"
+    __table_args__ = (Index("ix_comment_snapshots_post", "post_id"),)
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid7)
     post_id: Mapped[str] = mapped_column(

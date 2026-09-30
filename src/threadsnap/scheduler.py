@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from .models import ScheduleConfig, ScheduleEvent, ScheduleNode
 from .schedule_times import schedule_node_trigger_times
 from .services import RunService
+from .storage_activity import storage_operation
 
 
 class SchedulerService:
@@ -54,6 +55,7 @@ class SchedulerService:
                 pass
             self.stop_event.wait(self.poll_seconds)
 
+    @storage_operation(None)
     def tick(self, now: datetime | None = None) -> dict | None:
         current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         window_start = self.last_tick_at or current - timedelta(seconds=max(self.poll_seconds, 1.0))

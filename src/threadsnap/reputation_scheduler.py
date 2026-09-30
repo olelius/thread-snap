@@ -7,6 +7,7 @@ import threading
 from datetime import datetime, timezone
 
 from .reputation import ReputationService
+from .storage_activity import storage_operation
 
 LOGGER = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ class ReputationCoordinator:
             self.wake_event.wait(self.poll_seconds)
             self.wake_event.clear()
 
+    @storage_operation(None)
     def tick(self, now: datetime | None = None) -> dict:
         current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
         outcome = self.service.check_schedule(current)

@@ -277,7 +277,11 @@ class ScreenshotArtifactTests(unittest.TestCase):
                 )
             )
             self.assertEqual([item.negative_count for item in versions], [1, 2])
-            self.assertTrue(all(Path(item.package_path).is_file() for item in versions))
+            self.assertTrue(all(not Path(item.package_path).exists() for item in versions))
+            self.assertTrue(all(
+                (Path(item.package_path).parent / "manifest.json").is_file() for item in versions
+            ))
+            self.assertTrue(all(Path(tile["path"]).is_file() for item in versions for tile in item.tiles))
         second_url = self.service.list_for_run(_run_id, "/api/v1")["items"][0]["artifact"][
             "tiles"
         ][0]["image_url"]
@@ -530,8 +534,10 @@ class ScreenshotArtifactTests(unittest.TestCase):
         with Image.open(rendered["tiles"][1]["path"]) as tile:
             self.assertEqual((640, 480), tile.size)
             self.assertEqual((226, 232, 240), tile.getpixel((22, 42)))
-        with zipfile.ZipFile(rendered["package_path"]) as archive:
-            manifest = json.loads(archive.read("manifest.json"))
+        self.assertFalse(Path(rendered["package_path"]).exists())
+        manifest = json.loads(
+            (Path(rendered["package_path"]).parent / "manifest.json").read_text(encoding="utf-8")
+        )
         self.assertEqual("threadsnap.screenshot-artifact.v2", manifest["schema"])
         self.assertEqual("v8-skip-deleted-posts", manifest["renderer_version"])
 

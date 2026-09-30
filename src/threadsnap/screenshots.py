@@ -60,6 +60,16 @@ def _atomic_write(path: Path, value: bytes) -> None:
     os.replace(temporary, path)
 
 
+def _zip_member(name: str) -> zipfile.ZipInfo:
+    """冻结 ZIP 元信息，避免下载时间、PNG mtime 或操作系统改变包的字节。"""
+
+    item = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+    item.compress_type = zipfile.ZIP_STORED
+    item.create_system = 3
+    item.external_attr = 0o100644 << 16
+    return item
+
+
 def _render_card_box(source: Image.Image, item: Any, evidence: Any) -> tuple[int, int, int, int]:
     """使用证据绑定几何，图片颜色不参与任何卡片寻址。"""
 
@@ -681,8 +691,12 @@ class ScreenshotService:
             if has_negative:
                 canvas.save(tile_path, format="PNG", optimize=True)
             else:
-                # 没有负面标记时成果就是原始页面本身，直接复制文件，避免无意义重编码。
-                shutil.copyfile(source_path, tile_path)
+                # 两条独立路径共享只读原图；删除任一路径不会使另一份证据失效。
+                # 跨文件系统或不支持硬链接时退回字节复制，不改变图片与渲染合同。
+                try:
+                    os.link(source_path, tile_path)
+                except OSError:
+                    shutil.copyfile(source_path, tile_path)
             tiles.append(
                 {
                     "index": tile_index,
@@ -740,15 +754,12 @@ class ScreenshotService:
             json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8"),
         )
         package_path = output_dir / "screenshot-artifact.zip"
-        with zipfile.ZipFile(package_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
-            archive.write(manifest_path, "manifest.json")
-            for tile in tiles:
-                archive.write(tile["path"], Path(tile["path"]).name)
         return {
             "tiles": tiles,
             "items": artifact_items,
             "package_path": str(package_path.resolve()),
-            "package_sha256": _sha256_file(package_path),
+            # PNG 和清单即为冻结成果；ZIP 只在首次下载所选版本时构建。
+            "package_sha256": "",
         }
 
     def list_for_run(self, run_id: str, prefix: str) -> dict[str, Any]:
@@ -835,7 +846,9 @@ class ScreenshotService:
                 "version": version.version,
                 "created_at": version.created_at.isoformat(),
                 "package_sha256": version.package_sha256,
-                "download_url": f"{prefix}/screenshot-groups/{group.id}/download",
+                "download_url": (
+                    f"{prefix}/screenshot-groups/{group.id}/download?version={version.version}"
+                ),
                 "tiles": [
                     {
                         **{key: value for key, value in tile.items() if key != "path"},
@@ -886,27 +899,231 @@ class ScreenshotService:
                 raise DomainError("EVIDENCE_NOT_FOUND", "指定原始页面证据不存在。", status_code=404)
             return Path(evidence.screenshot_path)
 
-    def artifact_file(self, group_id: str, tile_index: int | None = None) -> Path:
-        with self.factory() as db:
+    def artifact_file(
+        self,
+        group_id: str,
+        tile_index: int | None = None,
+        *,
+        version: int | None = None,
+        sha256: str | None = None,
+    ) -> Path:
+        """取得明确版本的成果；首次下载才从冻结输入原子创建 ZIP。
+
+        调用方的生命周期读租约须持续到响应发送结束，本锁只互斥渲染与打包。
+        """
+
+        with self._rebuild_lock, self.factory() as db:
             group = db.get(ScreenshotArtifactGroup, group_id)
-            if not group or not group.current_version:
+            if not group or not (version or group.current_version):
                 raise DomainError("ARTIFACT_NOT_FOUND", "指定截图成果尚未生成。", status_code=404)
-            version = db.scalar(
+            selected = db.scalar(
                 select(ScreenshotArtifactVersion).where(
                     ScreenshotArtifactVersion.group_id == group.id,
-                    ScreenshotArtifactVersion.version == group.current_version,
+                    ScreenshotArtifactVersion.version == (
+                        version if version is not None else group.current_version
+                    ),
                 )
             )
-            if not version:
+            if not selected:
                 raise DomainError("ARTIFACT_NOT_FOUND", "指定截图成果尚未生成。", status_code=404)
+            version_root = self.settings.screenshot_artifact_dir / group.id / f"v{selected.version:04d}"
             if tile_index is None:
-                return Path(version.package_path)
-            tile = next((item for item in version.tiles if int(item["index"]) == tile_index), None)
+                path = self._package_file(selected, version_root)
+                if sha256 and sha256 != selected.package_sha256:
+                    raise DomainError(
+                        "ARTIFACT_HASH_MISMATCH", "截图成果包版本校验值不匹配。", status_code=409
+                    )
+                return path
+            tile = next((item for item in selected.tiles if int(item["index"]) == tile_index), None)
             if not tile:
                 raise DomainError(
                     "ARTIFACT_TILE_NOT_FOUND", "指定截图分片不存在。", status_code=404
                 )
-            return Path(tile["path"])
+            if sha256 and sha256 != tile["sha256"]:
+                raise DomainError(
+                    "ARTIFACT_HASH_MISMATCH", "截图成果分片版本校验值不匹配。", status_code=409
+                )
+            return self._artifact_path(tile["path"], version_root)
+
+    def _artifact_path(self, raw_path: str | Path, root: Path) -> Path:
+        """仅允许读取当前成果版本目录内的文件，不信任持久路径可任意寻址。"""
+
+        path = Path(raw_path).resolve()
+        resolved_root = root.resolve()
+        if (
+            not resolved_root.is_relative_to(self.settings.screenshot_artifact_dir.resolve())
+            or not path.is_relative_to(resolved_root)
+        ):
+            raise DomainError(
+                "ARTIFACT_PATH_INVALID", "截图成果文件路径超出允许范围。", status_code=409
+            )
+        return path
+
+    def _package_file(self, version: ScreenshotArtifactVersion, root: Path) -> Path:
+        """在重建锁内原样打包冻结清单和 PNG；失败只清理本次临时文件。"""
+
+        package_path = self._artifact_path(version.package_path, root)
+        if package_path.is_file():
+            # 已发布的旧包不重压缩、不重写，首次发布后的崩溃只补登记校验值。
+            if not version.package_sha256:
+                self._record_package_hash(version, _sha256_file(package_path))
+            return package_path
+        manifest_path = self._artifact_path(root / "manifest.json", root)
+        temporary = package_path.with_name(f".{package_path.name}.{uuid7()}.tmp")
+        try:
+            manifest_bytes = manifest_path.read_bytes()
+            manifest = json.loads(manifest_bytes)
+            if (
+                manifest.get("group", {}).get("id") != version.group_id
+                or manifest.get("version") != version.version
+                or manifest.get("tiles") != [
+                    {key: value for key, value in item.items() if key != "path"}
+                    for item in version.tiles
+                ]
+                or manifest.get("items") != version.items
+            ):
+                raise ValueError("冻结清单与所选成果版本不一致。")
+            members: set[str] = {"manifest.json"}
+            with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_STORED) as archive:
+                archive.writestr(_zip_member("manifest.json"), manifest_bytes)
+                for tile in version.tiles:
+                    path = self._artifact_path(tile["path"], root)
+                    if path.suffix.lower() != ".png" or path.name in members:
+                        raise ValueError("截图成果分片名称不合法或重复。")
+                    members.add(path.name)
+                    digest = hashlib.sha256()
+                    # 对实际写入的同一字节流求哈希，避免校验后再次读取的时差。
+                    with path.open("rb") as source, archive.open(
+                        _zip_member(path.name), "w", force_zip64=True
+                    ) as target:
+                        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                            digest.update(chunk)
+                            target.write(chunk)
+                    if digest.hexdigest() != tile["sha256"]:
+                        raise ValueError("冻结截图成果分片校验失败。")
+            package_hash = _sha256_file(temporary)
+            if version.package_sha256 and package_hash != version.package_sha256:
+                raise DomainError(
+                    "ARTIFACT_PACKAGE_MISMATCH",
+                    "缺失的历史截图包不能原样重建，请从备份恢复；未替换冻结成果。",
+                    status_code=409,
+                )
+            os.replace(temporary, package_path)
+            self._record_package_hash(version, package_hash)
+            return package_path
+        except DomainError:
+            raise
+        except (OSError, ValueError, KeyError, TypeError, zipfile.BadZipFile) as exc:
+            raise DomainError(
+                "ARTIFACT_PACKAGE_FAILED",
+                "截图成果包生成失败；冻结文件未改动，请检查存储与文件完整性。",
+                status_code=409,
+            ) from exc
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _record_package_hash(self, version: ScreenshotArtifactVersion, sha256: str) -> None:
+        """ZIP 原子发布后单独登记哈希，不占用生成期间的数据库写事务。"""
+
+        with self.factory.begin() as db:
+            current = db.get(ScreenshotArtifactVersion, version.id)
+            if not current:
+                raise DomainError("ARTIFACT_NOT_FOUND", "截图成果已不存在。", status_code=404)
+            current.package_sha256 = sha256
+        version.package_sha256 = sha256
+
+    def compact_identical_pngs(self) -> dict[str, int]:
+        """维护窗口内合并登记 PNG 的相同物理内容，保留全部路径和逻辑归属。
+
+        调用方必须取得排他生命周期门。只处理普通截图根目录内、登记哈希和实际
+        字节都相同的文件；不支持硬链接时保持原文件，不重建图片或删除 ZIP。
+        """
+
+        result = {
+            "registered_files": 0,
+            "checked_files": 0,
+            "linked_files": 0,
+            "already_linked_files": 0,
+            "skipped_files": 0,
+            "failed_files": 0,
+            "linked_logical_bytes": 0,
+        }
+        with self._rebuild_lock:
+            registered: dict[str, set[str]] = {}
+            with self.factory() as db:
+                for path, digest in db.execute(
+                    select(CirclePageEvidence.screenshot_path, CirclePageEvidence.screenshot_sha256)
+                ):
+                    registered.setdefault(path, set()).add(digest)
+                for path, digest in db.execute(
+                    select(ScreenshotArtifactTile.file_path, ScreenshotArtifactTile.file_sha256)
+                ):
+                    registered.setdefault(path, set()).add(digest)
+                for tiles in db.scalars(select(ScreenshotArtifactVersion.tiles)):
+                    for tile in tiles:
+                        registered.setdefault(tile["path"], set()).add(tile["sha256"])
+            result["registered_files"] = len(registered)
+            candidates: dict[str, list[Path]] = {}
+            roots = [
+                self.settings.screenshot_evidence_dir.resolve(),
+                self.settings.screenshot_artifact_dir.resolve(),
+            ]
+            for raw_path, hashes in registered.items():
+                path = Path(raw_path)
+                resolved = path.resolve()
+                if (
+                    len(hashes) != 1
+                    or path.is_symlink()
+                    or path.suffix.lower() != ".png"
+                    or not any(resolved.is_relative_to(root) for root in roots)
+                    or not path.is_file()
+                ):
+                    result["skipped_files"] += 1
+                    continue
+                digest = next(iter(hashes))
+                candidates.setdefault(digest, []).append(resolved)
+            for digest, paths in candidates.items():
+                if len(paths) < 2:
+                    continue
+                sources: dict[int, Path] = {}
+                for path in paths:
+                    temporary = path.with_name(f".{path.name}.{uuid7()}.link")
+                    try:
+                        result["checked_files"] += 1
+                        if _sha256_file(path) != digest:
+                            result["skipped_files"] += 1
+                            continue
+                        stat = path.stat()
+                        source = sources.get(stat.st_dev)
+                        if source is None:
+                            sources[stat.st_dev] = path
+                            continue
+                        if path.samefile(source):
+                            result["already_linked_files"] += 1
+                            continue
+                        if not self._same_file_bytes(source, path):
+                            result["skipped_files"] += 1
+                            continue
+                        os.link(source, temporary)
+                        os.replace(temporary, path)
+                        result["linked_files"] += 1
+                        # 这是复用的逻辑字节数，不宣称 XFS/reflink 实际释放空间。
+                        result["linked_logical_bytes"] += stat.st_size
+                    except OSError:
+                        result["failed_files"] += 1
+                    finally:
+                        temporary.unlink(missing_ok=True)
+        return result
+
+    @staticmethod
+    def _same_file_bytes(left: Path, right: Path) -> bool:
+        """哈希命中后仍逐块比较，存量物理合并只接受字节完全相同的输入。"""
+
+        with left.open("rb") as first, right.open("rb") as second:
+            while chunk := first.read(1024 * 1024):
+                if chunk != second.read(len(chunk)):
+                    return False
+            return not second.read(1)
 
     def prepare_run_delete(self, run_id: str) -> tuple[list[str], list[str]]:
         """在外键级联前收集需要清理的原始文件和受影响成果组。"""

@@ -112,7 +112,7 @@ function RunListPage({ kind }: { kind: RunListKind }) {
   return (
     <div className='tactile-run-list flex h-full min-h-0 flex-col gap-4 overflow-hidden'>
       <div className='shrink-0 space-y-4'>
-        <PageHeader title={recurring ? '全部循环批次' : '全部提取批次'} description={recurring ? '只查看循环计划触发的独立批次，页面能力与定时批次保持一致。' : '查看手动与定时提取批次，状态变化由 SSE 通知并回查权威接口。'} actions={recurring ? undefined : <NewExtractionSheet />} />
+        <PageHeader title={recurring ? '全部循环批次' : '全部提取批次'} description={recurring ? '循环计划触发的独立批次；关联批次完成后默认保留14天，到期自动清理。' : '查看手动与定时提取批次；关联批次完成后默认保留14天，到期自动清理。'} actions={recurring ? undefined : <NewExtractionSheet />} />
         <Card className='border-border/70 bg-card/88 py-0 shadow-sm backdrop-blur'>
           <CardContent className={`grid gap-3 p-3 md:grid-cols-2 ${recurring ? 'xl:grid-cols-3 2xl:grid-cols-[minmax(220px,1fr)_160px_160px_150px_150px_auto]' : 'xl:grid-cols-4 2xl:grid-cols-[minmax(220px,1fr)_160px_160px_160px_150px_150px_auto]'}`}>
             <Input value={search.number ?? ''} onChange={(event) => patch({ number: event.target.value || undefined, page: 1 })} placeholder='搜索批次编号' aria-label='搜索批次编号' />

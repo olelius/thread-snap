@@ -53,6 +53,7 @@ from .reputation import (
     SyntheticRunCreate,
 )
 from .reputation_scheduler import ReputationCoordinator
+from .retention import RetentionService
 from .scheduler import SchedulerService
 from .schemas import (
     CircleBatchUpdate,
@@ -70,6 +71,7 @@ from .screenshots import ScreenshotService
 from .sentiment import SentimentService, SentimentWorker
 from .services import ConfigService, RunService, bootstrap_database, validation_job_dict
 from .session_store import SessionStore
+from .storage_activity import StorageActivity, StorageActivityMiddleware, StorageProcessLock
 from .templates import TemplateService
 from .worker import WorkerService
 
@@ -147,6 +149,16 @@ class Container:
             event_publisher=self.events.publish,
         )
         self.templates = TemplateService(self.sessions, settings)
+        self.storage_activity = StorageActivity()
+        self.storage_process_lock = StorageProcessLock(settings.data_dir / "retention" / "application.lock")
+        for background in (
+            self.worker, self.sentiment_worker, self.scheduler, self.reputation_coordinator
+        ):
+            background.storage_activity = self.storage_activity
+        self.retention = RetentionService(
+            self.sessions, settings, self.runs, self.screenshots, self.reputation,
+            self.storage_activity, event_publisher=self.events.publish,
+        )
         self.auth = BrowserAuthManager(
             settings,
             self.session_store,
@@ -155,13 +167,16 @@ class Container:
         )
 
     async def start(self) -> None:
+        self.storage_process_lock.acquire()
         if self.settings.start_background_services:
             self.worker.start()
             self.sentiment_worker.start()
             self.scheduler.start()
             self.reputation_coordinator.start()
+            self.retention.start()
 
     async def stop(self) -> None:
+        self.retention.stop()
         self.reputation_coordinator.stop()
         self.scheduler.stop()
         self.sentiment_worker.stop()
@@ -170,6 +185,7 @@ class Container:
         self.local_sentiment.close()
         await self.auth.close_all()
         self.engine.dispose()
+        self.storage_process_lock.release()
 
 
 def _container(request: Request) -> Container:
@@ -650,8 +666,13 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
         return FileResponse(path, media_type="image/png", filename=path.name)
 
     @router.get("/screenshot-groups/{group_id}/tiles/{tile_index}")
-    def view_artifact_tile(group_id: str, tile_index: int, request: Request) -> FileResponse:
-        path = _container(request).screenshots.artifact_file(group_id, tile_index)
+    def view_artifact_tile(
+        group_id: str, tile_index: int, request: Request,
+        version: int | None = Query(None, ge=1), sha256: str | None = None,
+    ) -> FileResponse:
+        path = _container(request).screenshots.artifact_file(
+            group_id, tile_index, version=version, sha256=sha256
+        )
         return FileResponse(
             path,
             media_type="image/png",
@@ -659,8 +680,13 @@ def build_router(prefix: str, *, internal: bool) -> APIRouter:
         )
 
     @router.get("/screenshot-groups/{group_id}/download")
-    def download_artifact(group_id: str, request: Request) -> FileResponse:
-        path = _container(request).screenshots.artifact_file(group_id)
+    def download_artifact(
+        group_id: str, request: Request,
+        version: int | None = Query(None, ge=1), sha256: str | None = None,
+    ) -> FileResponse:
+        path = _container(request).screenshots.artifact_file(
+            group_id, version=version, sha256=sha256
+        )
         return FileResponse(path, media_type="application/zip", filename=path.name)
 
     @router.post("/screenshot-groups/{group_id}/rebuild")
@@ -973,6 +999,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         response = await call_next(request)
         response.headers["X-Request-ID"] = request.state.request_id
         return response
+
+    # 必须包在BaseHTTPMiddleware外侧，否则内层返回后文件正文可能仍在发送。
+    app.add_middleware(StorageActivityMiddleware)
 
     @app.get("/health")
     def health() -> dict[str, str]:

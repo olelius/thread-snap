@@ -283,3 +283,5 @@ artifacts/poc/
 6. 已确定当前阶段门、关键路径、写 owner 和验证路径，再判断是否需要并行；
 7. 本次代码修改会同步更新账本，对应口径修改会同步更新唯一 owner 文档；
 8. PoC 原始输入、测试包和结果仍位于 `artifacts/poc/`，runtime 证据仍位于 `artifacts/runtime/`，没有进入 Git。
+
+- ADR 0074：`docs/adr/0074-fixed-fourteen-day-retention-and-lazy-screenshot-packages.md` — 固定14天、共享PNG与按需ZIP。

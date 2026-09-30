@@ -1,5 +1,18 @@
 # WORKLOG — 唯一任务账本
 
+## 2026-09-30 — 截图无损存储优化与固定14天保留
+**目标/基线**：按用户明确要求固定14天、不增加配置；帖子与口碑完整关联链安全过期，截图无损共享、ZIP按需生成，红框与历史内容不改写。由origin/main@3b85d7e在独立feat/storage-retention实施；H:/ThreadSnap原混合脏分支及其它工作线保持不动。
+**状态**：✅ 已上线89b13038e70e；current=89b13038e70e、previous=c00863a7a38e。PR #329关联本轮代码与最终记录，业务目标和验收均已完成，最后按该PR收敛Git。应用正常后台恢复，root备份timer已启用、下次2026-10-01 03:30 CST；业务保留已记当日完成，后续每天03:00后的安全窗口执行，尚未外推为已观察到下一自然日触发。
+**实现**：固定14天整链事务＋持久文件意图、在途HTTP/后台保护、跨进程维护锁；无框PNG优先硬链接、存量相同字节共享、冻结版本ZIP懒生成及旧包不变。正式日程墓碑按真实幂等身份与事件归属判断，旧错标manual-demo不占正式日期。新增d9e4b7a2c601六项非唯一索引；回退旧wheel前补ZIP并安全降至f3b6c9d2a804，不回写开放写入前的旧DB。备份/恢复/清理共锁，恢复支持受限硬链接并保留本机backups入口。
+**验收**：相关Windows/Linux定向用例、Ruff/compile、TypeScript/Vite、Bash/systemd门通过；真实1425×6111/30项/2红框新旧PNG逐字节一致，13既有＋17截图用例、实际HTTP租约/整链API组合及15组备份恢复证据复用。真实生产副本127333帖/353204评论下1000帖删除无索引15秒中断、六索引后0.131秒；真实40业务表升降级内容不变。最终业务代码完整reflink副本在UID981/PrivateNetwork运行153链/161批清理、39表独立SQL预期、14636保留文件全量SHA、幂等与PNG共享，229.385秒通过。只追加受影响的身份6项/独立guard2项、回退6项与端口4项，不重复全库回归。
+**生产结果**：独立集合门确认153到期链（134帖子批次＋27口碑批次），删除8581文件；保留70链、62帖子批次/60694帖子/155425评论、14口碑批次。39表逐表行数/哈希等于独立预期，保留14636文件哈希不变，22正式墓碑且无待清理作业；重复清理为空。553个相同PNG物理共享949400245逻辑字节，不把该数冒充实际磁盘释放；系统盘86%→61%，可用约28GiB。已移除本轮完整测试副本、期望DB、额外检查点与两个未激活候选release，保留current/previous、完整离线包及真实恢复点。
+**公网/载荷**：正常入口50/62帖子行与14口碑行加载成功，两页14天文案可见、页面/网络错误0；PNG/旧ZIP公网200且SHA与冻结值一致、到期API404。已查看最终两页PNG；首张口碑截到loading只证明文案，已由等待14真实行后的public-reputation-loaded.png补齐。87安装资源逐字节等于wheel，59前端来自已验收同tree构建；最终包1218273字节，SHA256 `cf6b8655ee201a4d3f12864ddcf4e0bfc83f4383e9153619a6b2be522970d547`。运行依赖不重装，schema仅六索引迁移。
+**恢复与过程边界**：上线前完整备份23217文件/34464207629字节及一致性DB，保存于`/var/lib/threadsnap/backups/storage-retention/20260930-fixed14d`（实际/home分区），当前DB备份SHA256 `06ae69a0a83012f0294f730a908cbbeea0f2c10370b5253f381ce9ca52b05305`。早期三次验收因3根325项旧root属主、2条错标日程及运维误探80端口触发保护性完整恢复，新版写入均未开放；均已针对性修复，最终8088验证通过并正常启用。未重采平台、调用AI或改写保留结论；原冻结比较基线与配置/会话保留。临时副本清理后/home可用98GiB。
+**证据/下一步**：`artifacts/runtime/storage-retention-20260930/{package-result.json,full-copy-gate.json,full-copy-database-verified.json,final-probe.json,production-database-verified.json,public-verification.json,public-reputation-loaded.json,public-artifacts.json,cleanup_owned_temporary.result.json}`；两子树原回执位于H:/ThreadSnap-runs-query-core/artifacts/runtime/data-retention与H:/ThreadSnap-runs-refresh-core/artifacts/runtime/screenshot-storage。后续按固定日程运行，无需再加保留配置或重复上述验证。
+
+---
+
+
 ## 2026-09-21 — 实时刷新与列表查询最小更新上线
 **目标/基线**：用户在本地真实批次结束后明确要求“更新到服务器”，本轮恢复部署授权；从fetch后的`origin/main@c00863a`建立独立记录分支`codex/docs-deploy-runs-refresh-20260921`。只部署已合并PR #327的后端列表批量查询与前端刷新背压，包含远端已有的媒体复访修复；旧混合修改及暂停的媒体部署记录分支保持原状。
 **已有验收/状态**：本地原远端批次`20260921-123511-001`的33项冻结来源配置逐项一致，修复版新建独立`LOCAL-20260921-133355`真实采集33/33来源成功、1352条入库、来源错误0；原失败艾瑞泽8为50/50。38条差额是易车某来源仅有12条、正常耗尽。实际50行列表146次请求均200、每次6条SQL、最大在途1、中位47ms/P95 125ms、连接峰值8/结束0；未发起新的AI调用，11项AI及其关联截图汇总待选，故不外推新增AI并发负载。记录`H:/ThreadSnap/artifacts/runtime/local-remote-batch-20260921/20260921-132723/report.md`。复用这些证据及已通过的定向测试/构建，不重跑全库或整批。
