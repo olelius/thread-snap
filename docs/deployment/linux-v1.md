@@ -34,6 +34,7 @@ bash deploy/inspect-host.sh /tmp/threadsnap-host-report.txt
 | SQLite、模板、导出、加密 Profile、本地模型 | `/var/lib/threadsnap` | 持续增长的数据与模型；优先放空间充足的独立数据盘 |
 | 浏览器运行时 | `/opt/threadsnap/browsers` | 随离线包安装，不写入用户 home 缓存 |
 | 备份 | `/var/backups/threadsnap` | 最终副本应复制到另一文件系统或备份主机 |
+| 完整离线恢复包 | `/home/threadsnap-offline-packages` 或其他持久归档目录 | 保留整体和逐文件校验，并另存异机副本；不把唯一副本留在 `/tmp`、`/var/tmp` 或业务14天回收目录 |
 | 服务日志 | systemd journal | 使用 `journalctl -u threadsnap` 查询 |
 
 若 `/var` 所在文件系统空间有限，而服务器存在 `/data` 独立 SSD 挂载点，安装时使用：
@@ -151,6 +152,10 @@ sudo bash /opt/threadsnap/current/deploy/restore-backup.sh \
 程序回滚不会自动降级 Alembic 数据库；涉及不兼容迁移时使用与旧程序匹配的完整备份恢复。
 
 ### 7.1 兼容应用最小升级
+
+用户决定（2026-11-12）：原完整离线恢复包缺失时，先恢复完整离线包再执行应用更新，不采用仅静态前端发布例外。若旧文件无可用副本，重建包必须仍满足本文完整离线闭包与恢复验证要求，明确记录新来源和新校验值，不将增量包、运行目录副本或新包冒充原完整包。
+
+重建既有版本时可复用其已校验应用载荷、原始依赖wheel缓存、包内浏览器和模型副本；按现机Python发行版本冻结wheel，补齐同发行版/架构和Python主次版本兼容的RPM闭包（含Node.js）。须在断网新venv完成纯离线安装、依赖检查及包内模型/浏览器真实运行，并用空RPM安装根验证离线依赖闭包，不能由宿主已安装组件掩盖缺包。恢复验证不得运行生产安装器或改写线上数据；仅做RPM事务测试时应明确未执行新机灾备安装。归档完成后逐项回读校验，再把应用更新绑定到新完整包路径与SHA。
 
 既有服务器已经完成完整离线安装后，可以在以下条件全部成立时使用应用最小包，而不重新组装完整离线包：
 

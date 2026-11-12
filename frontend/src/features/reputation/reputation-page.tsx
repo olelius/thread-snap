@@ -7,7 +7,7 @@ import { toast } from 'sonner'
 import { PageHeader } from '@/components/page-header'
 import { StatusBadge } from '@/components/status-badge'
 import { ReputationRoleLabel } from '@/features/reputation/reputation-role-label'
-import { reputationMappingStatus, reputationMissingMappingIds, reputationValidationTargetIds } from '@/features/reputation/reputation-validation'
+import { reputationMappingStatus, reputationMissingMappingIds, reputationPlatformVehicles, reputationValidationTargetIds } from '@/features/reputation/reputation-validation'
 import { api, errorMessage, formatDate, platformName } from '@/lib/api'
 import type { PageResult, ReputationCapabilities, ReputationMappingValidation, ReputationRun, ReputationSchedule, ReputationScope, ReputationScopeVehicle } from '@/lib/types'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -301,9 +301,9 @@ function ScopePanel({ query, platforms, adapterStatus, adapterMessage }: { query
     onError: (error) => toast.error('恢复车型失败', { description: errorMessage(error) }),
   })
   const validateMutation = useMutation({
-    mutationFn: (vehicleIds?: string[]) => api<ReputationMappingValidation>('/reputation/scope/mapping-validations', {
+    mutationFn: (vehicleIds: string[]) => api<ReputationMappingValidation>('/reputation/scope/mapping-validations', {
       method: 'POST',
-      body: JSON.stringify({ revision: query.data?.revision, platform_code: platformCode, ...(vehicleIds ? { vehicle_ids: vehicleIds } : {}) }),
+      body: JSON.stringify({ revision: query.data?.revision, platform_code: platformCode, vehicle_ids: vehicleIds }),
     }, 180_000),
     onSuccess: (value) => {
       refreshScopeState(value.scope)
@@ -334,11 +334,14 @@ function ScopePanel({ query, platforms, adapterStatus, adapterMessage }: { query
   if (query.isError) return <Failure title='车型范围加载失败' detail={errorMessage(query.error)} retry={() => query.refetch()} />
   const scope = query.data!
   const activeVehicles = scope.vehicles.filter((item) => item.enabled)
-  const displayVehicles = [...scope.vehicles].sort((left, right) => Number(right.enabled) - Number(left.enabled))
+  const platformVehicles = reputationPlatformVehicles(scope.vehicles, platformCode)
+  const platformActiveVehicles = platformVehicles.filter((item) => item.enabled)
+  const displayVehicles = [...platformVehicles].sort((left, right) => Number(right.enabled) - Number(left.enabled))
   const verified = activeVehicles.filter((item) => reputationMappingStatus(item.mappings[platformCode], platformCode, selectedPlatform?.validation_contract_version) === 'verified').length
-  const validationTargetIds = reputationValidationTargetIds(activeVehicles, platformCode, selectedPlatform?.validation_contract_version)
-  const missingMappingCount = reputationMissingMappingIds(activeVehicles, platformCode).length
-  const validationBlockedByMissingMapping = missingMappingCount > 0 && validationTargetIds.length === 0
+  const validationTargetIds = reputationValidationTargetIds(platformActiveVehicles, platformCode, selectedPlatform?.validation_contract_version)
+  const missingMappingCount = reputationMissingMappingIds(platformActiveVehicles, platformCode).length
+  // 全部重验也必须限定当前平台，省略ID会让后端重新展开全局车型范围。
+  const validationAllIds = platformActiveVehicles.filter((vehicle) => reputationMappingStatus(vehicle.mappings[platformCode], platformCode) !== 'missing').map((vehicle) => vehicle.id)
   const canCreate = Object.entries(vehicleForm).every(([key, value]) => key === 'role' || value.trim())
   const vehicleFormChanged = !editTarget || JSON.stringify(vehicleForm) !== JSON.stringify(vehicleFormFrom(editTarget, platformCode))
   const canSaveVehicle = canCreate && vehicleFormChanged
@@ -353,14 +356,14 @@ function ScopePanel({ query, platforms, adapterStatus, adapterMessage }: { query
         <div className='flex min-w-0 items-center gap-3'>
           <span className='grid size-9 shrink-0 place-items-center rounded-lg bg-primary/10 text-primary'><CarFront className='size-4.5' /></span>
           <div className='min-w-0'>
-            <div className='flex flex-wrap items-center gap-2'><span className='font-semibold'>车型与映射</span><Badge variant='secondary'>{activeVehicles.length} 款启用</Badge>{scope.vehicles.length > activeVehicles.length && <Badge variant='outline'>{scope.vehicles.length - activeVehicles.length} 款停用</Badge>}</div>
-            <div className='mt-0.5 text-xs text-muted-foreground'>维护车型与平台映射；验证通过后发布生效，指标请到巡检批次查看。</div>
+            <div className='flex flex-wrap items-center gap-2'><span className='font-semibold'>车型与映射</span><Badge variant='secondary'>{platformActiveVehicles.length} 款启用</Badge>{platformVehicles.length > platformActiveVehicles.length && <Badge variant='outline'>{platformVehicles.length - platformActiveVehicles.length} 款停用</Badge>}</div>
+            <div className='mt-0.5 text-xs text-muted-foreground'>仅显示已配置{selectedPlatformName}映射的车型；验证通过后发布生效，指标请到巡检批次查看。</div>
           </div>
         </div>
         <div className='flex flex-wrap items-center justify-end gap-2'>
           <Select value={platformCode} onValueChange={(value) => { setPlatformCode(value); setPreview(undefined); setMappingText('') }}><SelectTrigger className='w-36'><SelectValue /></SelectTrigger><SelectContent>{platformOptions.map((item) => <SelectItem key={item.code} value={item.code}>{item.display_name}</SelectItem>)}</SelectContent></Select>
-          <Button variant='outline' size='sm' disabled={validateMutation.isPending || !activeVehicles.length || validationBlockedByMissingMapping} title={missingMappingCount ? `有 ${missingMappingCount} 项缺少${selectedPlatformName}映射，本次验证会跳过这些车型。` : undefined} onClick={() => validateMutation.mutate(validationTargetIds.length ? validationTargetIds : undefined)}>{validateMutation.isPending ? <Loader2 className='size-4 animate-spin' /> : <ScanSearch className='size-4' />}{validateMutation.isPending ? '正在验证…' : validationTargetIds.length ? `验证待验证（${validationTargetIds.length}）` : '重新验证全部'}</Button>
-          {missingMappingCount > 0 && <span className='text-xs text-amber-700 dark:text-amber-300'>缺少映射 {missingMappingCount} 项，本次跳过</span>}
+          <Button variant='outline' size='sm' disabled={validateMutation.isPending || !validationAllIds.length} title={missingMappingCount ? `有 ${missingMappingCount} 项${selectedPlatformName}映射字段不完整，本次验证会跳过这些车型。` : undefined} onClick={() => validateMutation.mutate(validationTargetIds.length ? validationTargetIds : validationAllIds)}>{validateMutation.isPending ? <Loader2 className='size-4 animate-spin' /> : <ScanSearch className='size-4' />}{validateMutation.isPending ? '正在验证…' : validationTargetIds.length ? `验证待验证（${validationTargetIds.length}）` : '重新验证全部'}</Button>
+          {missingMappingCount > 0 && <span className='text-xs text-amber-700 dark:text-amber-300'>{selectedPlatformName}映射字段不完整 {missingMappingCount} 项，本次跳过</span>}
           <Button variant='outline' size='sm' onClick={() => openVehicleDialog()}><Plus className='size-4' />新增车型</Button>
           <Button variant='outline' size='sm' onClick={() => setMappingOpen(true)}>批量粘贴映射</Button>
           <Button size='sm' disabled={publishDisabled} title={publishPreview?.warning} onClick={() => setPublishOpen(true)}><Rocket className='size-4' />发布变更</Button>
@@ -388,7 +391,7 @@ function ScopePanel({ query, platforms, adapterStatus, adapterMessage }: { query
               <TableCell className='text-center'>{mapping?.platform_url ? <Button asChild variant='ghost' size='icon'><a href={mapping.platform_url} target='_blank' rel='noreferrer' aria-label='打开平台页面'><ExternalLink className='size-4' /></a></Button> : '—'}</TableCell>
               <TableCell className='pr-4 text-right'><ScopeVehicleAction vehicle={vehicle} editPending={saveVehicleMutation.isPending} restorePending={restoreMutation.isPending} onEdit={() => openVehicleDialog(vehicle)} onRemove={() => setRemoveTarget(vehicle)} onRestore={() => restoreMutation.mutate(vehicle)} /></TableCell>
             </TableRow>
-          })}</TableBody>
+          })}{!displayVehicles.length && <TableRow><TableCell colSpan={10} className='h-28 text-center text-muted-foreground'>当前平台尚未配置车型，可新增车型或批量粘贴映射。</TableCell></TableRow>}</TableBody>
         </Table>
       </div>
       </Card>

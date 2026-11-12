@@ -1,5 +1,21 @@
 # WORKLOG — 唯一任务账本
 
+## ⏳ 待你裁决
+
+- ~~2026-11-12：完整离线恢复包缺失时是否允许仅静态前端发布。~~ 用户已决定：恢复完整离线包后再部署，不采用静态发布例外。
+
+---
+
+## 2026-11-12 — 车型映射按当前平台统计
+**目标/基线**：按用户要求修正远端“缺少映射30项”误导提示，并更新部署；从同步后的 `origin/main@0b390a6` 建立独立 `fix/reputation-current-platform-scope`，保留原易车实验分支与其他工作树。
+**实现/状态**：✅ 修复已上线 `c89874fd36ac`，previous保留89b；列表、启停统计及验证范围只包含当前平台已建立映射的车型，其他平台专属记录不计缺失。已有但字段不完整的映射仍提示；重新验证全部显式提交当前平台可验证ID，跨平台发布不变。
+**已有证据**：定向测试8/8、`npm ci`、`npm run check`、干净提交 `c89874f` 的生产build（2685模块/59资源）和diff-check通过。真实远端范围副本→独立SQLite/FastAPI→生产前端浏览器验证三平台分别56+12、55+12、28+0条；实际验证请求仅传当前平台ID，字段不完整和空态、跨平台发布预览通过，scope不变、页面错误0，PNG已目视。证据 `artifacts/runtime/platform-scope/{build-command-receipt.json,ui-result.json,*-scope.png}`；草稿PR #330。
+**完整包恢复**：原935b0b59…a643文件未找回；按用户决定重建89b当前程序的完整恢复包，位于 `/home/threadsnap-offline-packages/recovery-89b130-20261112/threadsnap-0.1.0-89b13038e70e-centos-stream-10-x86_64-offline-recovered.tar.gz`，1,189,001,819字节，SHA `7094dfea93ca0770e7150e28c83285965857cfe1dc328ec5241be8d550d23c91`。136原始wheel、368RPM与浏览器/双Nano模型齐全；断网新venv安装、137项版本集合、pip check、空RPM根事务测试及真实API/模型/有头浏览器通过。933归档文件回读全部等于清单；89b应用/前端/部署/许可证原字节不变，无业务数据或凭据。只对Unix socket路径过长补验浏览器，其余已通过门复用；未做新机灾备安装。证据 `artifacts/runtime/platform-scope/{recovered-package-result.json,recovery_verify_status.result.json,retry_recovery_browser.result.json}`。
+**上线/保全**：重绑定最小包SHA `028155665b5b12cc4e07d9651f3ba5a45fe283d846a9316ca6e6057bff17b254`，1,229,853字节；双空闲门、维护写入隔离、87源码与59前端核验、健康/端口检查及40业务表+Alembic全量指纹通过，schema不变，维护窗口108.729秒。后台和备份timer恢复；备份保留在 `/var/lib/threadsnap/backups/minimal-release-upgrade/20261112-platform-scope-c89874fd36ac`，写入开放后只回退程序、不覆盖新数据。公网真实浏览器三平台启停数56/12、55/12、28/0，易车仅一条银河E5且无30项误报；页面错误和写请求均0，scope revision270/已发布v21及完整JSON SHA保持不变，线上PNG已目视。
+**证据/收尾**：验收与部署回执归档 `H:/ThreadSnap/artifacts/runtime/reputation-platform-scope-20261112/`，含public-verification.json、final_probe.result.json、deployment-evidence.tar.gz（SHA d5327f1b…1eb8d2）及部署子任务回执。完整恢复包另存 `H:/ThreadSnap/artifacts/releases/recovered-baselines/`，下载后SHA与服务器相同。剩余仅PR #330记录提交合并与本任务worktree清理；不补齐映射、不重采、不发布业务范围、不修差评率解析。SSH凭据始终仅在内存使用，未输出或保存。
+
+---
+
 ## 2026-09-30 — 截图无损存储优化与固定14天保留
 **目标/基线**：按用户明确要求固定14天、不增加配置；帖子与口碑完整关联链安全过期，截图无损共享、ZIP按需生成，红框与历史内容不改写。由origin/main@3b85d7e在独立feat/storage-retention实施；H:/ThreadSnap原混合脏分支及其它工作线保持不动。
 **状态**：✅ 已上线89b13038e70e；current=89b13038e70e、previous=c00863a7a38e。PR #329关联本轮代码与最终记录，业务目标和验收均已完成，最后按该PR收敛Git。应用正常后台恢复，root备份timer已启用、下次2026-10-01 03:30 CST；业务保留已记当日完成，后续每天03:00后的安全窗口执行，尚未外推为已观察到下一自然日触发。
